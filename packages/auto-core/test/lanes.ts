@@ -67,6 +67,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/classify.test.ts",
   "test/config.test.ts",
   "test/confirm.test.ts",
+  "test/dispatch.test.ts",
   "test/docpaths.test.ts",
   "test/document-spec.test.ts",
   "test/document-state.test.ts",

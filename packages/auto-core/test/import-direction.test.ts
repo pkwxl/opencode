@@ -136,6 +136,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // all depend on it instead of on each other, which is what broke the
   // control-modules type cycle.
   "control-types": "driver",
+  // The pure dispatch plan of one prompt (plans/0061 §4.7): what a dispatch
+  // decides before anything is created — the takeover, the registry pick or
+  // its blocked outcome, the cross-agent move, the failback-scope flag.
+  // attempt is its executor; the module reaches only the selection core and
+  // the types below the session layer.
+  "engine/dispatch": "driver",
   "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -258,21 +264,25 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   protect: ["document/roles"],
 }
 
-// Session-driving chain, bottom → top (0024 §D.2): imports between ranked
-// modules must go strictly downward in rank.
-const RANK: Record<string, number> = {
-  // chain-transitions (plans/0061 §4.2) sits below every session-driving
-  // entry: watch and attempt, session and the commit boundary's resume
-  // checks all reach the chain's transitions, and it reaches none of them.
-  "chain-transitions": 0,
-  watch: 1,
-  attempt: 2,
-  session: 3,
-  artifact: 4,
-  "exec-session": 4,
-  execute: 5,
-  runner: 7,
-}
+  // Session-driving chain, bottom → top (0024 §D.2): imports between ranked
+  // modules must go strictly downward in rank.
+  const RANK: Record<string, number> = {
+    // chain-transitions (plans/0061 §4.2) sits below every session-driving
+    // entry: watch and attempt, session and the commit boundary's resume
+    // checks all reach the chain's transitions, and it reaches none of them.
+    "chain-transitions": 0,
+    // The pure dispatch plan (plans/0061 §4.7), one slot below watch: attempt
+    // executes it, and the engine modules the turn consolidation adds
+    // (engine/*) need the slots under watch beside it.
+    "engine/dispatch": 1,
+    watch: 2,
+    attempt: 3,
+    session: 4,
+    artifact: 5,
+    "exec-session": 5,
+    execute: 6,
+    runner: 8,
+  }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
 // explicit (some are implied by RANK) so the failure message carries the rationale.

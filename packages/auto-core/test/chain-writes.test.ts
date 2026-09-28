@@ -30,7 +30,7 @@ const TRANSITIONS = "chain-transitions.ts"
 // ---------------------------------------------------------------------------
 
 const CHAIN_WRITE_BUDGET: Record<string, number> = {
-  "attempt.ts": 33,
+  "attempt.ts": 0,
   "artifact.ts": 5,
   "exec-session.ts": 13,
   "execute.ts": 25,

@@ -1,9 +1,12 @@
-// The executor of a single prompt dispatch: the resumed-takeover decision
-// and session creation, model target evaluation and dispatch, progress
-// recovery-point write, stats segment close, and wiring in the event-stream
-// subscription (watch) before waiting for the session's natural finish; the
-// proxy-answer ledger writer recordDriverResolves is called only by this
-// layer, so it belongs here too.
+// The executor of a single prompt dispatch: it builds the dispatch plan's
+// facts (the takeover gate's capability, the live context windows, the
+// selection context of the run state), asks the pure planner of
+// src/engine/dispatch.ts, and executes the plan — session creation, model
+// target evaluation, progress recovery-point write, stats segment close, and
+// wiring in the event-stream subscription (watch) before waiting for the
+// session's natural finish — writing the chain only through the named
+// transitions of src/chain-transitions.ts. The proxy-answer ledger writer
+// recordDriverResolves is called only by this layer, so it belongs here too.
 // Sits below session.ts (whose runSession retry/failover ring calls this
 // function on each pass) and calls only the layers below — watch / session-api
 // / stats; **must never import session / runner back upward**.
@@ -12,32 +15,42 @@
 import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { roleOf, type SessionChain, type SessionResult } from "./chain"
-import { modelOfChain } from "./chain-transitions"
-import { clearDownMarks, failbackOverride, isModelDown, modelDownMark, stickyModel } from "./failback"
+import type { SessionChain, SessionResult } from "./chain"
+import {
+  afterTestHandover,
+  announceModel,
+  bindAgent,
+  consumeNote,
+  consumePending,
+  modelOfChain,
+  promote,
+  resetRoute,
+  restoreRetryable,
+  setRoute,
+  stepTo,
+  toAgent,
+  type ChainPrior,
+} from "./chain-transitions"
+import { clearDownMarks, failbackOverride, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
-import { formatWindowState, usableAt } from "./model-window"
-import type { ModelRegistry } from "./models"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { currentRound } from "./phases"
-import { candidateKey, nowOf, selectContext } from "./routing"
-import { candidatesOf, select } from "./select"
-import { stepForUsed, stepId } from "./model-step"
-import type { ModelEntry } from "./models"
-import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, worktreeNote, zeroUsage } from "./session-api"
+import { nowOf, selectContext } from "./routing"
+import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
-import { SWITCH_ENV, type Switches } from "./switches"
+import type { Switches } from "./switches"
+import { type Task } from "./tasks"
 import { type Steer, type TestRun } from "./testrun"
 import { strictResumeActive } from "./unit-commit"
 import { watch } from "./watch"
+import { planDispatch } from "./engine/dispatch"
 
 // H3's ledger writer: proxy answers observed during the round get their
 // task/phase/round/session filled in, then are posted to the ledger. With no
@@ -60,24 +73,6 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
   )
 }
 
-// A move's reason for the registry ◈ line (plans/0055 §6.5): the previously
-// shown model read against the registry at the dispatch's instant — outside
-// its windows ("window"), still marked down ("quota", standing for the
-// classified quota/auth/rate failures; "quota (classifier)" when the class
-// that wrote the mark came from the failure-message classifier, §7.1), or an
-// entry that is usable again, meaning the list changed underneath it (a
-// /failback or a scope boundary cleared its mark: "failback"). undefined =
-// no move, or a raw value with nothing attributable to say. A key-ring
-// rotation keeps the model, so it never shows here.
-function moveReason(registry: ModelRegistry, previous: string | undefined, now: number): string | undefined {
-  if (previous === undefined) return undefined
-  const entry = registry.models.get(previous)
-  if (entry !== undefined && !usableAt(entry, registry.tz, now)) return "window"
-  if (isModelDown(previous, now)) return modelDownMark(previous)?.classifier ? "quota (classifier)" : "quota"
-  return entry !== undefined ? "failback" : undefined
-}
-
-
 export async function attempt(
   client: ClientSource,
   task: Task,
@@ -94,39 +89,48 @@ export async function attempt(
   // session; archived history tmp/test.<n>.sh is kept).
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  // The chain's own agent decides the takeover gate's capability (the chain's
+  // session lives on it); a chain without a session — and without a pending
+  // fork — has none yet and needs no host for it (the gate only reads
+  // capabilities when a session exists).
+  const resumable = chain.id !== undefined || chain.pending !== undefined ? (await clientOf(client, chain.agent)).capabilities.resume : true
   // Registry selection runs before anything is created (plans/0055 §8.3): a
   // session never crosses agents, so the pick decides whose host serves the
   // dispatch — the client the session is created on, the host syncContext
   // reaches and the chain's agent all come from it. Without a registry the
-  // target resolves exactly as before, after the session exists (C2).
-  // The chain's own agent decides the takeover gate's capability (the chain's
-  // session lives on it); a chain without a session — and without a pending
-  // fork — has none yet and needs no host for it (the gate only reads
-  // capabilities when a session exists), so the pick below supplies the
-  // client that matters.
-  const resumable = chain.id !== undefined || chain.pending !== undefined ? (await clientOf(client, chain.agent)).capabilities.resume : true
-  // This dispatch's model, resolved before anything is created: the pick
-  // also names the agent whose host serves it. promptModel is the pick's
-  // key for the strict-resume record. (Without a registry the target stays
-  // where it always was — resolved after the session exists, below — so the
-  // session-scope failback clear still lands before it, C2.)
-  let promptModel: string | undefined
-  // The single in-chain continuation is a resumed takeover: the chain holds
-  // a recorded session and a one-shot note awaits injection (interruption
-  // recovery). Every other prompt opens a fresh session.
-  let resumed = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
-  let target: string | undefined
-  let promptVariant: string | undefined
+  // target resolves exactly as before, after the session exists (C2). The
+  // selection context is the seam the volatile run state (down marks, the
+  // /failback override, the key rings, the live windows) enters the pure
+  // planner through.
+  const limits = opts.routing !== undefined ? await contextLimitsOf(client) : undefined
+  const plan = planDispatch(chain, {
+    routing: opts.routing,
+    ctx: opts.routing !== undefined ? selectContext(opts.routing, switches, cap, limits) : undefined,
+    switches,
+    resumable,
+    label: task.id,
+    entry: opts.phase?.entry,
+  })
+  if (plan.blocked !== undefined) return plan.blocked
+  const pick = plan.pick
+  // This dispatch's model, resolved by the plan before anything was created
+  // (promptModel is the pick's key, the strict-resume record's model).
+  // (Without a registry the target stays where it always was — resolved
+  // after the session exists, below — so the session-scope failback clear
+  // still lands before it, C2.)
+  let promptModel = pick?.route.entry
+  let target = pick?.route.model
+  const promptVariant = pick?.variant
   // The watch's steer context under a registry (§4.5): the picked
   // candidate's key, its entry (when the pick is one) and the step the
-  // dispatch names — set with target below, undefined without a registry.
-  let steerKey: string | undefined
-  let steerEntry: ModelEntry | undefined
-  let steerStep: number | undefined
+  // dispatch names — all from the plan, undefined without a registry.
+  const steerKey = pick?.route.entry
+  const steerEntry = pick?.entry
+  const steerStep = pick?.route.step
   // The agent profile this dispatch's session lives on (§8.3): the pick's
   // entry profile, the default agent for a raw override value; undefined
   // without a registry — then nothing below reads it.
-  let pickAgent: string | undefined
+  const pickAgent = pick?.agent
   // The per-model/per-tier stats keys of this dispatch (plans/0055 §7.1
   // "Stats"): the pick's candidate key (an internal name, or the raw
   // `provider/model` string of an override value) and the tier the session
@@ -137,115 +141,25 @@ export async function attempt(
   // the tier summary and the display read the same dispatch the same way;
   // keying the models map alone would leave the tier summary blind to every
   // overridden session).
-  let statsModel: string | undefined
-  let statsTier: string | undefined
-  if (opts.routing) {
-    const facts = opts.routing
-    const limits = await contextLimitsOf(client)
-    const ctx = selectContext(facts, switches, cap, limits)
-    const role = roleOf(chain)
-    const list = candidatesOf(ctx, { role, entry: opts.phase?.entry, now: nowOf(facts) })
-    const decision = select(ctx, {
-      role,
-      entry: opts.phase?.entry,
-      now: nowOf(facts),
-      current: chain.modelEntry,
-      continuation: resumed || chain.pending !== undefined,
-    })
-    if (decision.kind === "empty") {
-      const detail = `${list.override ? `the ${list.override} override` : `the ${list.tier} list`}${list.route ? ` (route ${list.route.key})` : ""}`
-      return {
-        type: "blocked",
-        question: `model registry: no candidate is left for this session's routing (${detail}, agent filter ${facts.agentFilter ?? "none"}); fix the registry or the filter and re-run`,
-      }
-    }
-    if (decision.kind === "wait") {
-      // §6.3's wait: nothing is usable now, but a candidate that is not
-      // down opens later through its window. No session content exists to
-      // probe, so runSession sleeps inside the unit until the earliest
-      // opening plus hibernate's jitter and this loop dispatches again
-      // (the re-selection reads the advanced clock; a suspend that wakes
-      // past a short window simply waits for its next opening).
-      return {
-        type: "blocked",
-        question: `no usable model candidate now: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is outside its windows; waiting for the earliest opening`,
-        noModel: true,
-        windowWait: {
-          until: decision.until,
-          model: candidateKey(decision.candidate),
-          tier: list.tier,
-          opens: formatWindowState({ open: false, opens: decision.until }, facts.registry.tz, nowOf(facts)),
-        },
-      }
-    }
-    if (decision.kind === "probe") {
-      return {
-        type: "blocked",
-        question: `no usable model candidate: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is down or outside its windows; entering the wait-and-probe loop`,
-        noModel: true,
-      }
-    }
-    const picked = decision.candidate
-    // Session lifetime of a step (§4.5): a continuation of the same session
-    // keeps the step it reached (the chain's field, written by the watch
-    // that stepped up); a resumed takeover recomputes it from the context
-    // size rebuilt from the session's history (chain.used, nothing
-    // persisted); every other dispatch — a new prompt, the session after a
-    // handover, a failover onto this entry — starts at the base step.
-    let step = 0
-    if (picked.kind === "entry" && (decision.via === "continuation" || resumed)) {
-      step = resumed ? stepForUsed(picked.entry, limits, chain.used) : (chain.modelStep ?? 0)
-    }
-    const entryOf = picked.kind === "entry" ? picked.entry : undefined
-    target = picked.kind === "entry" ? (stepId(picked.entry, step) ?? picked.entry.model) : picked.model
-    promptVariant = entryOf !== undefined ? entryOf.variant : undefined
-    const key = candidateKey(picked)
-    chain.modelEntry = key
-    chain.model = target
-    chain.modelStep = entryOf !== undefined ? step : 0
-    promptModel = key
-    steerKey = key
-    steerEntry = entryOf
-    steerStep = entryOf !== undefined ? step : 0
-    pickAgent = picked.kind === "entry" ? picked.entry.agent : facts.defaultAgent
-    statsModel = key
-    statsTier = list.tier
-    // ◈ display (§6.5): the internal name with the tier, the agent and
-    // model behind it, and what routed the dispatch; a move names its
-    // reason — window, quota (the classified failures) or failback. Key
-    // rings are a later step. Like the no-registry line: every new session
-    // shows one, a resumed takeover only on a change.
-    const bracket = picked.kind === "entry" ? `${picked.entry.agent}:${picked.entry.model ?? "default"}` : `${facts.defaultAgent}:${picked.model}`
-    const routePart =
-      list.override === "env"
-        ? `override ${SWITCH_ENV.model}`
-        : list.override === "failback"
-          ? "override /failback"
-          : `route ${list.route?.key ?? roleOf(chain)}`
-    const previous = chain.modelShown !== undefined && chain.modelShown !== key ? chain.modelShown : undefined
-    const reason = moveReason(facts.registry, previous, nowOf(facts))
-    if (key !== chain.modelShown || !resumed) {
-      log(`◈ ${task.id} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`)
-      chain.modelShown = key
-    }
-    // §8.3: a session never crosses agents. A pick on another agent than
-    // the chain's live session (or its pre-created fork) cannot take this
-    // prompt: the id/pending session is left behind and the dispatch opens
-    // a blank session with the worktree-check note — both for a failover
-    // (switchModel writes this state itself) and for a takeover whose
-    // model died under it (§6.2 continuity ties move only new prompts, so
-    // the session itself is not moved).
-    if (chain.agent !== undefined && chain.agent !== pickAgent && (chain.pending !== undefined || resumed)) {
-      if (chain.pending !== undefined)
-        log(`↻ ${task.id} the pre-created session ${chain.pending} lives on agent ${chain.agent}; the dispatch moved to ${pickAgent}, so a new session opens there`)
-      chain.pending = undefined
-      chain.id = undefined
-      chain.failed = undefined
-      chain.pct = 100
-      chain.note = worktreeNote(`The dispatch moved to agent ${pickAgent} (a session never crosses agents) and did not inherit the earlier session's context`)
-      resumed = false
+  const statsModel = pick?.route.entry
+  const statsTier = pick?.tier
+  // The plan's chain writes, in its recorded order: the route the pick put
+  // the dispatch on, the ◈ announcement of the model (a continuation of the
+  // same session and model is not repeated), then the cross-agent move —
+  // whose toAgent drops the chain's session slots and cancels the takeover
+  // (the plan's resumed already accounts for it).
+  if (pick !== undefined) {
+    setRoute(chain, pick.route)
+    if (pick.announce !== undefined) {
+      log(pick.announce)
+      announceModel(chain, pick.route.entry)
     }
   }
+  if (plan.move !== undefined) {
+    if (plan.move.pendingLog !== undefined) log(plan.move.pendingLog)
+    toAgent(chain, plan.move.note)
+  }
+  const resumed = plan.resumed
   // The fallback value of the test-handover criterion (D1): a resumed
   // (recovery-takeover) session starts out carrying the chain's already-used
   // tokens, so a test request arriving before the first message.updated must
@@ -259,7 +173,7 @@ export async function attempt(
   // a transient-error retry pending is already clear, so the flow falls back
   // to the create path naturally (design §4.3).
   const forked = resumed ? undefined : chain.pending
-  chain.pending = undefined
+  consumePending(chain)
   // The client this dispatch runs on (§8.1): the pick's agent under a
   // registry, the chain's for a consumed fork or a takeover (the same agent
   // the pick kept); the no-registry source itself, unchanged.
@@ -285,10 +199,8 @@ export async function attempt(
   // failover into oscillation.
   // Registry routing: the same boundary clears the down marks (§6.4) and the
   // chain's selected entry, so the new session re-selects from the list.
-  if (session !== undefined && switches.modelFailbackScope === "session") {
-    chain.model = undefined
-    chain.modelEntry = undefined
-    chain.modelStep = 0
+  if (session !== undefined && plan.clearsFailback) {
+    resetRoute(chain)
     clearDownMarks("session", switches.modelFailbackScope)
   }
   const sessionID = forked ?? session?.value.id ?? chain.id!
@@ -300,9 +212,10 @@ export async function attempt(
   // (pending, seeded by the retry / failover / recovery paths or a fork
   // base), and a resumed takeover (chain.id from the record, which runTask
   // restored from the record's own agent) — so the binding is written here
-  // once per dispatch, before any record goes to disk. Only under a
-  // registry; without one there is no agent notion and nothing changes (C2).
-  if (opts.routing) chain.agent = pickAgent
+  // once per dispatch, before any record goes to disk. The pick exists
+  // exactly when a registry drives the run (a blocked selection returned
+  // above); without one there is no agent notion and nothing changes (C2).
+  if (pick !== undefined) bindAgent(chain, pick.agent)
   // Interactive bypass: human input goes to this session from here on (wrap-up
   // and other bypass sessions override it the same way); the sideband
   // resolves the client per session from the chain's agent (§8.1).
@@ -444,7 +357,7 @@ export async function attempt(
               : "route"
       if (target !== chain.modelShown || !resumed) {
         log(`◈ ${task.id} using model ${target} (${from})`)
-        chain.modelShown = target
+        announceModel(chain, target)
       }
     }
     // When the liveness probe's verdict — a half-open connection or the like
@@ -468,7 +381,7 @@ export async function attempt(
         ? (model) => {
             if (model !== chain.modelShown || !resumed) {
               log(`◈ ${task.id} using model ${model} (server resolved)`)
-              chain.modelShown = model
+              announceModel(chain, model)
             }
           }
         : undefined,
@@ -492,7 +405,7 @@ export async function attempt(
     // One-shot notes (interruption recovery etc.) ride the first prompt to
     // the AI and are cleared once used.
     const note = chain.note
-    chain.note = undefined
+    consumeNote(chain)
     // Stats wiring (STATS_PLAN §2, T-003): open the AI segment and associate
     // the task before the prompt is dispatched. Bypass sessions (pseudo tasks
     // PLAN/AUTO; recovery-point precedent in resume.ts) are recorded the same
@@ -545,10 +458,7 @@ export async function attempt(
     // the continuation prompt and every later steer name the id it runs on.
     // Not restored on retryable errors — the retry's fork inherits the
     // context, so it inherits the step too.
-    if (result.steppedUp !== undefined) {
-      chain.modelStep = result.steppedUp.step
-      chain.model = result.steppedUp.model
-    }
+    if (result.steppedUp !== undefined) stepTo(chain, result.steppedUp.step, result.steppedUp.model)
     // Segment-close booking (T-003): usage lands in the task/phase/round
     // buckets + per-session; the report is consumed by the ◉ session-ended
     // two lines below (cumulative elapsed / rounds / cumulative cost,
@@ -567,18 +477,13 @@ export async function attempt(
     // The chain's original state from before this round started: a retryable
     // session error must restore to this (rather than stay on the session
     // that just failed this round), so that the next retry forks again from
-    // the untouched original session.
-    const previousId = chain.id
-    const previousUsed = chain.used
-    const previousAt = chain.at
-    const previousHinted = chain.hinted
-    const previousWall = chain.wall
-    chain.id = sessionID
-    chain.pct = result.pct
-    chain.used = result.used
-    chain.at = Date.now()
-    chain.hinted = result.hinted === true
-    chain.wall = result.wall
+    // the untouched original session. The failed-session record rides along:
+    // the restore re-derives it per the replacement invariant.
+    const chainPrior: ChainPrior = { id: chain.id, used: chain.used, at: chain.at, hinted: chain.hinted, wall: chain.wall, failed: chain.failed }
+    // The promotion itself (also clearing the previous failure's
+    // failed-session record — its purpose ended with this dispatch
+    // surviving): the ◉ lines below read the promoted counters.
+    promote(chain, sessionID, result, Date.now())
     // ◉ The two session-ended lines (STATS_PLAN §4.1, T-004): printed
     // unconditionally — every session that goes through attempt (phase
     // planning / handover distillation and other bypasses included; reused
@@ -647,23 +552,12 @@ export async function attempt(
     // document and the task is already done, so no claim (see the branch
     // below).
     if (result.error && result.retryable !== false) {
-      chain.id = previousId
-      chain.used = previousUsed
-      chain.at = previousAt
-      chain.hinted = previousHinted
-      chain.wall = previousWall
       // Chain state restored, but the failed session itself is left to the
-      // retry ring as the preferred fork source (see FailedSession).
-      // A 0-token failure is a pure error stub (failed at dispatch, ran
-      // nothing out) and does not displace the still-valid content-bearing
-      // record on the chain — otherwise the next retry would lose the most
-      // valuable fork source (2026-09-17 field incident: a 41.3k failed
-      // session was displaced by its own 0-token fork copy, and later retries
-      // degenerated into cold-seeding from the base point); a failure with
-      // used > 0 is a strict superset of the old record (the fork copy
-      // carried the old prefix and ran out new content), so it displaces
-      // normally.
-      if (result.used > 0 || chain.failed === undefined) chain.failed = { id: sessionID, used: result.used }
+      // retry ring as the preferred fork source (see FailedSession; the
+      // replacement invariant — a 0-token pure-error stub keeps the prior
+      // content-bearing record, a failure with used > 0 displaces normally —
+      // lives in the transition, which reads the prior snapshot).
+      restoreRetryable(chain, chainPrior, { id: sessionID, used: result.used })
       // A 0-token stub also withdraws the claim on handover.json's nextSession
       // (the recovery anchor goes back to the previous content-bearing
       // continuation session); a failure with used > 0 keeps the claim — that
@@ -674,7 +568,9 @@ export async function attempt(
         else await forgetProgress(opts.dir)
       }
     } else {
-      chain.failed = undefined
+      // The failed-session record is already cleared — promote wrote the
+      // clear on the way in (only the retryable branch above returns through
+      // restoreRetryable, never here).
       // The 0-token restore applies to non-retryable errors too (§J.3 only
       // covers completing the retryable branch): an error stub that dies on
       // its first dispatch (nothing in the session but one user message, no
@@ -698,7 +594,7 @@ export async function attempt(
       // the process exited reused / forked into the pre-handover session
       // (fixed 2026-09-16).
       if (result.testHandover) {
-        chain.id = undefined
+        afterTestHandover(chain)
         if (opts.dir && chain.phase) {
           await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: chain.phase })
         }

@@ -13,9 +13,10 @@
 // conversion of their callers; runSession's paths (the retry ladder, the model
 // failover, the provider-key rotation, the recovery loop and the blank
 // fallbacks) write through the six below, and the dispatch-side transitions
-// arrive when their callers convert.
+// (the executor is attempt, over the pure dispatch plan of
+// src/engine/dispatch.ts) close the set.
 
-import { resolveModel, roleOf, type SessionChain } from "./chain"
+import { resolveModel, roleOf, type FailedSession, type SessionChain, type Watch } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
 import type { PhaseKey } from "./phases/registry"
 import type { Switches } from "./switches"
@@ -156,4 +157,129 @@ export function toAgent(chain: SessionChain, note: string): void {
 // seeding — see the FailedSession invariant in src/chain.ts.
 export function dropStaleFailed(chain: SessionChain, id: string): void {
   if (chain.failed?.id === id) chain.failed = undefined
+}
+
+// ---------------------------------------------------------------------------
+// The dispatch-side transitions (the executor is attempt, over the pure
+// dispatch plan of src/engine/dispatch.ts): consuming the pre-created fork,
+// binding the session's agent, the session-scope failback reset, the step a
+// session reached, and the three ends of a dispatch — promote, retryable
+// restore, test-handover discard.
+// ---------------------------------------------------------------------------
+
+// Consumes the chain's pre-created fork session: the dispatch takes it over
+// (or, when it moved the dispatch to another agent, has already dropped it
+// through toAgent above). Clearing on every dispatch is what makes a stale
+// request from an interruption-recovery or retry scenario disappear: by a
+// transient-error retry pending is already clear, so the flow falls back to
+// the create path naturally.
+export function consumePending(chain: SessionChain): void {
+  chain.pending = undefined
+}
+
+// Binds the chain's session to the agent profile this dispatch picked (a
+// session never crosses agents, and the pool runs one host per profile):
+// every way a chain acquires a session — a create, a consumed fork, a
+// resumed takeover — funnels through the dispatch, so the binding is written
+// once per dispatch, before any record goes to disk. Only under a registry;
+// without one there is no agent notion and the call is not made.
+export function bindAgent(chain: SessionChain, agent: string): void {
+  chain.agent = agent
+}
+
+// Clears the chain's route — the empty route of setRoute. The session-scope
+// failback boundary (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session): every
+// brand-new session start fails back to the preferred model, so the new
+// session re-selects from the list (the caller clears the down marks at the
+// same boundary; a resumed takeover and a consumed fork never pass here —
+// the migrated session forked out by a failover enters via pending, and
+// clearing at its dispatch would immediately undo the failover into
+// oscillation).
+export function resetRoute(chain: SessionChain): void {
+  setRoute(chain, {})
+}
+
+// The context step a session reached by stepping up in place (the steer and
+// the late step-up of a watch): the continuation prompt and every later
+// steer name the step's model id. Not restored on retryable errors — the
+// retry's fork inherits the context, so it inherits the step too.
+export function stepTo(chain: SessionChain, step: number, model: string): void {
+  chain.modelStep = step
+  chain.model = model
+}
+
+// The chain state from before a dispatch, as promote leaves it and a
+// retryable error returns to (see restoreRetryable).
+export type ChainPrior = { id?: string; used: number; at: number; hinted?: boolean; wall?: number; failed?: FailedSession }
+
+// Promotes the just-run session to the chain's session: the usage counters
+// take the session's figures, `at` the end instant, and the failed-session
+// record of the previous failure is cleared — its purpose (the retry's fork
+// source) ended with this dispatch surviving. Runs before the retryable
+// verdict is known; a retryable error then returns the chain to `prior`
+// through restoreRetryable, which re-derives the failed-session record from
+// the prior snapshot, so the early clear is unobservable on that path too
+// (nothing between the two transitions reads the record).
+export function promote(chain: SessionChain, id: string, watch: Pick<Watch, "pct" | "used" | "hinted" | "wall">, at: number): void {
+  chain.id = id
+  chain.pct = watch.pct
+  chain.used = watch.used
+  chain.at = at
+  chain.hinted = watch.hinted === true
+  chain.wall = watch.wall
+  chain.failed = undefined
+}
+
+// A retryable session error's half-rollback: the chain returns to the state
+// from before the dispatch — the original session stays there as the
+// untouched recovery point the next retry forks from again — and the failed
+// session is recorded per the replacement invariant (src/chain.ts's
+// FailedSession): only a failure that holds content (used > 0) or that meets
+// no existing record replaces it; a 0-token pure-error stub must not
+// displace the still-valid content-bearing record (2026-09-17 field fix: a
+// 41.3k session's fork source was overwritten by retry 3's stub, and later
+// retries degenerated into cold-seeding from the base point).
+export function restoreRetryable(chain: SessionChain, prior: ChainPrior, failed: FailedSession): void {
+  chain.id = prior.id
+  chain.used = prior.used
+  chain.at = prior.at
+  chain.hinted = prior.hinted
+  chain.wall = prior.wall
+  chain.failed = failed.used > 0 || prior.failed === undefined ? failed : prior.failed
+}
+
+// A test-handover finish (the session ended on a handover document, so the
+// task is done): the session is discarded together with its roles as a
+// restart-reuse and retry-fork anchor — the id clears so a later
+// continuation error never forks back into the pre-freeze session whose
+// context is exhausted. The failed record clears with it (promote already
+// cleared it on this path; the write is idempotent and keeps the transition
+// self-contained).
+export function afterTestHandover(chain: SessionChain): void {
+  chain.id = undefined
+  chain.failed = undefined
+}
+
+// Records the model the terminal was last told a session runs on (the ◈
+// line's memory): every new session announces one, a continuation prompt on
+// the same session and model does not. Memory-only, never persisted; the
+// quota-window account also reads it when the chain carries no model.
+// AUTO-DECISION: this and consumeNote below sit outside the transition
+// table the consolidation ruled (display memory and a one-shot clear, not
+// named there) — but the write ratchet holds attempt.ts at zero chain
+// writes, so the three announcement writes and the note clear need their
+// one-meaning homes like every other chain field (rejected: folding the
+// announcement into setRoute, which session.ts's failover shares and which
+// must not touch display state, and clearing the note inside consumePending,
+// which would move the clear off the prompt and lose it on early exits).
+export function announceModel(chain: SessionChain, model: string): void {
+  chain.modelShown = model
+}
+
+// Clears the one-shot note after it rode the first prompt out (interruption
+// recovery's remark and every other one-shot note). The clear happens at the
+// prompt, not at the dispatch's start, so an early exit — a failed session
+// create, a dispatch that never ran — keeps the note for the next dispatch.
+export function consumeNote(chain: SessionChain): void {
+  chain.note = undefined
 }
