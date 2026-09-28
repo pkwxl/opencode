@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DEFAULT_SCRIPT_IDLE_MS, runScript, scriptTmpDir } from "../src/script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, runScript, scriptTmpDir } from "../src/script"
 
 describe("scriptTmpDir", () => {
   test("the path is the tmp/ subdirectory under the target directory", () => {
@@ -75,17 +75,20 @@ describe("runScript", () => {
   test("the timeout kill lands on the real script: a script without the executable bit must not keep writing output once killed (2026-09-17 review H1)", async () => {
     // Without exec, the old implementation's kill only killed the outer
     // bash; the script itself became an orphan and kept running — this
-    // asserts the killed script's later echo never lands on disk.
+    // asserts the killed script's later echo never lands on disk. Millisecond
+    // watchdog values: the kill lands well inside the script's sleep 0.25
+    // window, and the read afterwards waits past the point where an orphan
+    // would have echoed.
     const script = join(dir, "orphan.sh")
-    await Bun.write(script, "echo first\nsleep 2\necho second\n")
-    const run = await runScript(dir, script, { out: outOf(), idleMs: 300, pollMs: 50 })
+    await Bun.write(script, "echo first\nsleep 0.25\necho second\n")
+    const run = await runScript(dir, script, { out: outOf(), idleMs: 120, pollMs: 15 })
     expect(run.code).toBe(124)
     expect(run.out).toContain("first")
-    // Read the file past the script's sleep 2 point: had the script become
+    // Read the file past the script's sleep 0.25 point: had the script become
     // an orphan still running, second would have been appended
-    await Bun.sleep(2500)
+    await Bun.sleep(300)
     expect(await Bun.file(outOf()).text()).not.toContain("second")
-  }, 10_000)
+  }, 5_000)
 
   test("output lands at the opts.out path (--test-by-driver's ordered archiving)", async () => {
     const script = join(dir, "check.sh")
@@ -102,23 +105,28 @@ describe("runScript", () => {
   })
 
   test("persistent silence times out and the watchdog kills it (idle), code recorded as 124", async () => {
+    // Millisecond watchdog values; the assertions hold even on a host whose
+    // process spawn outlasts the idle window (the kill then lands while the
+    // interpreter is still starting, which is still an idle kill).
     const script = join(dir, "sleep.sh")
-    await Bun.write(script, "#!/usr/bin/env bash\nsleep 30\n")
+    await Bun.write(script, "#!/usr/bin/env bash\nsleep 10\n")
     await chmod(script, 0o755)
-    const run = await runScript(dir, script, { out: outOf(), idleMs: 400, pollMs: 100 })
+    const run = await runScript(dir, script, { out: outOf(), idleMs: 120, pollMs: 20 })
     expect(run.timedOut).toBe(true)
     expect(run.timeoutReason).toBe("idle")
     expect(run.code).toBe(124)
-    expect(run.ms).toBeLessThan(10_000)
+    expect(run.ms).toBeLessThan(5_000)
   })
 
   test("continuously growing output counts as progress, not killed for the total duration", async () => {
+    // No executable bit: the script runs as bash data, so a slow first-exec
+    // host (macOS assesses each first-exec'd script path) pays no per-path
+    // penalty before the first tick — the idle window (120ms) only has to
+    // cover the plain bash spawn. 12 ticks of 30ms ≈ 360ms total, 3× the
+    // idle window, with the 30ms print gap 4× under it.
     const script = join(dir, "slow.sh")
-    await Bun.write(script, "#!/usr/bin/env bash\nfor i in $(seq 1 12); do echo tick-$i; sleep 0.2; done\nexit 0\n")
-    await chmod(script, 0o755)
-    // The total duration ~2.4s far exceeds the 700ms idleMs, but output every
-    // 200ms → it stays alive and finishes normally.
-    const run = await runScript(dir, script, { out: outOf(), idleMs: 700, pollMs: 100 })
+    await Bun.write(script, "for i in $(seq 1 12); do echo tick-$i; sleep 0.03; done\nexit 0\n")
+    const run = await runScript(dir, script, { out: outOf(), idleMs: 120, pollMs: 25 })
     expect(run.timedOut).toBe(false)
     expect(run.code).toBe(0)
     expect(run.out).toContain("tick-12")
@@ -126,9 +134,9 @@ describe("runScript", () => {
 
   test("the absolute duration cap (max) triggers the kill independently of progress signals", async () => {
     const script = join(dir, "spin.sh")
-    await Bun.write(script, "#!/usr/bin/env bash\nwhile true; do echo spin; sleep 0.1; done\n")
+    await Bun.write(script, "#!/usr/bin/env bash\nwhile true; do echo spin; sleep 0.05; done\n")
     await chmod(script, 0o755)
-    const run = await runScript(dir, script, { out: outOf(), idleMs: 60_000, maxMs: 800, pollMs: 100 })
+    const run = await runScript(dir, script, { out: outOf(), idleMs: 60_000, maxMs: 120, pollMs: 20 })
     expect(run.timedOut).toBe(true)
     expect(run.timeoutReason).toBe("max")
     expect(run.code).toBe(124)
@@ -136,5 +144,9 @@ describe("runScript", () => {
 
   test("the default no-progress window is 10 minutes", () => {
     expect(DEFAULT_SCRIPT_IDLE_MS).toBe(10 * 60 * 1000)
+  })
+
+  test("the default watchdog poll interval is 5 seconds", () => {
+    expect(DEFAULT_SCRIPT_POLL_MS).toBe(5_000)
   })
 })

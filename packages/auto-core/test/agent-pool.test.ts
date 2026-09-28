@@ -394,33 +394,40 @@ describe("the capability intersection (§8.5)", () => {
 })
 
 describe("preflight's bin check (§8.7)", () => {
-  test("a profile's bin that fails or times out is a problem naming the profile; a working bin passes", async () => {
+  // Two separate tests so only the timed-out case pays a wait: the failing
+  // bins answer at once but keep the generous timeout (macOS takes ~300ms to
+  // first-exec each distinct script path, a per-path security assessment,
+  // which would race a tight timeout), while the one bin that never answers
+  // gets a short timeout of its own.
+  test("a profile's bin that fails is a problem naming the profile; a working bin passes", async () => {
     const dir = await temp("auto-agent-pool-bin-")
     const ok = join(dir, "ok-bin")
     const dead = join(dir, "dead-bin")
-    const hang = join(dir, "hang-bin")
     await writeFile(ok, "#!/bin/sh\nexit 0\n")
     await writeFile(dead, "#!/bin/sh\nexit 3\n")
-    await writeFile(hang, "#!/bin/sh\nsleep 30\n")
-    for (const file of [ok, dead, hang]) await chmod(file, 0o755)
-    const registry = (await loadModels(dir, {
-      phaseTypes: PHASE_TYPES,
-      env: { OPENCODE_AUTO_MODELS: join(dir, "none.json") },
-      adapters: ["fake-a"],
-    }).catch(() => undefined)) ?? undefined
-    // Build the registry by hand through a file: loadModels needs a layer.
+    for (const file of [ok, dead]) await chmod(file, 0o755)
+    // Build the registry through a file: loadModels needs a layer.
     const file = join(dir, "models.json")
-    await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a", bin: dead }, b: { adapter: "fake-a", bin: hang }, c: { adapter: "fake-a", bin: ok } }, models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "prov/b" }, c1: { agent: "c", model: "prov/c" } }, tiers: { deep: ["a1", "b1", "c1"], simple: ["c1"] } }))
+    await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a", bin: dead }, b: { adapter: "fake-a", bin: ok } }, models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "prov/b" } }, tiers: { deep: ["a1", "b1"], simple: ["b1"] } }))
     const loaded = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file }, adapters: ["fake-a"] }))!
-    // 3000ms, not a few hundred: macOS takes ~300ms to first-exec each
-    // distinct script path (a per-path security assessment), which would race
-    // a tight timeout even though the bins exit instantly.
     const problems = await checkAgentBins(loaded, undefined, { timeoutMs: 3000 })
     expect(problems).toEqual([
       `agent profile a (adapter fake-a): \`${dead} --version\` exited 3; fix the executable or the profile's bin and re-run`,
-      `agent profile b (adapter fake-a): \`${hang} --version\` timed out after 3000ms; fix the executable or the profile's bin and re-run`,
     ])
-    void registry
+  })
+
+  test("a profile's bin that never answers is a problem naming the timeout it hit", async () => {
+    const dir = await temp("auto-agent-pool-bin-")
+    const hang = join(dir, "hang-bin")
+    await writeFile(hang, "#!/bin/sh\nsleep 30\n")
+    await chmod(hang, 0o755)
+    const file = join(dir, "models.json")
+    await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a", bin: hang } }, models: { a1: { agent: "a", model: "prov/a" } }, tiers: { deep: ["a1"], simple: ["a1"] } }))
+    const loaded = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file }, adapters: ["fake-a"] }))!
+    const problems = await checkAgentBins(loaded, undefined, { timeoutMs: 200 })
+    expect(problems).toEqual([
+      `agent profile a (adapter fake-a): \`${hang} --version\` timed out after 200ms; fix the executable or the profile's bin and re-run`,
+    ])
   })
 
   test("a missing bin names the spawn failure; an adapter without a default bin is skipped", async () => {

@@ -17,6 +17,18 @@ export function scriptTmpDir(dir: string): string {
 // script keeps printing, its run time is unbounded.
 export const DEFAULT_SCRIPT_IDLE_MS = 10 * 60 * 1000
 
+// Default watchdog poll interval. All watchdog timings (idleMs, maxMs, pollMs)
+// are options so tests run the watchdog on millisecond values over short
+// scripts instead of waiting on wall time.
+// AUTO-RESOLVE: the consolidation plan's seam list for this module named two
+// intervals to make options, "(poll, kill grace)" — the code has the poll
+// interval already seamed (pollMs, now with its default named here, value
+// unchanged) and no kill grace to seam (nothing runs between the timeout kill
+// and awaiting the child's exit), so no grace option was added: a
+// SIGTERM→SIGKILL escalation would change behaviour at the default option
+// values, which the unit rules out of scope, and no test needs it.
+export const DEFAULT_SCRIPT_POLL_MS = 5_000
+
 export type ScriptRunResult = {
   code: number
   ms: number
@@ -47,7 +59,7 @@ export async function runScript(
 ): Promise<ScriptRunResult> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
-  const pollMs = opts.pollMs ?? 5_000
+  const pollMs = opts.pollMs ?? DEFAULT_SCRIPT_POLL_MS
   await mkdir(scriptTmpDir(dir), { recursive: true })
   const outPath = opts.out
   await Bun.write(outPath, "")
