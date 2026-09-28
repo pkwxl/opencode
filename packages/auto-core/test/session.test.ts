@@ -1,7 +1,8 @@
-// Unit tests for src/session.ts (driven through runSession): the session-chain
-// reuse switch, the error retry ladder, the wait-and-probe loop (non-retryable /
-// ladder exhausted / candidates exhausted never exit), attempt's model-injection
-// wiring, quota failover, failback scopes and the /failback override.
+// Unit tests for src/session.ts (driven through runSession): the resumed
+// takeover of the chain's recorded session, the error retry ladder, the
+// wait-and-probe loop (non-retryable / ladder exhausted / candidates
+// exhausted never exit), attempt's model-injection wiring, quota failover,
+// failback scopes and the /failback override.
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { afterEach, describe, expect, test } from "bun:test"
@@ -24,53 +25,36 @@ import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 
-// ---- Session-chain reuse (OPENCODE_AUTO_REUSE_SESSION, default off) ----
+// ---- In-chain session takeover (interruption recovery's resumed; the reuse switch is retired) ----
 
-describe("session-chain reuse switch (OPENCODE_AUTO_REUSE_SESSION)", () => {
-  const REUSE_OFF = parseSwitches({})
-  const REUSE_ON = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-  // A chain that satisfies every reuse threshold (pct <50%, used <cap/2, idle ≤5 minutes).
-  const reusable = (): SessionChain => ({ id: "ses_new_1", pct: 10, used: 100, at: Date.now() })
+describe("interruption-recovery takeover: the chain's recorded session takes the prompt (resumed)", () => {
+  const NONE = parseSwitches({})
 
-  test("off (default): opens a new session even when every threshold is satisfied", async () => {
-    const { client, calls } = fakeClient({ current: "ses_new_1" })
-    const chain = reusable()
-    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
-    expect(calls.creates).toBe(1)
-  })
-
-  test("on: reuses the session on the chain once the thresholds are met, no new session", async () => {
-    const { client, calls } = fakeClient({ current: "ses_new_1" })
-    const chain = reusable()
-    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_ON)).type).toBe("idle")
-    expect(calls.creates).toBe(0)
-    expect(chain.id).toBe("ses_new_1")
-  })
-
-  test("◈ model announcement: not repeated when the same session is reused with the same model; announced for every new session (reuse off)", async () => {
+  test("◈ model announcement: not repeated when the recorded session is taken over (resumed) with the same model; announced for every new session", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     try {
       // No route set: the announcement comes from the model the server actually resolved, carried by a user message in the event stream.
       const fake = fakeClient({ current: "ses_new_1", events: (id) => modelThenIdle(id, "prov/default") })
-      const chain = reusable()
-      await runSession(fake.client, task, "prompt text", {}, chain, undefined, undefined, REUSE_ON)
-      // After the fake event stream settles pct=100 (limit unknown); reset back inside the reuse thresholds so only the second prompt truly reuses.
-      Object.assign(chain, { pct: 10, used: 100, at: Date.now() })
-      await runSession(fake.client, task, "prompt text 2", {}, chain, undefined, undefined, REUSE_ON)
-      await runSession(fake.client, task, "prompt text 3", {}, chain, undefined, undefined, REUSE_OFF)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      await runSession(fake.client, task, "prompt text", {}, chain, undefined, undefined, NONE)
+      // A takeover (the chain holds the session and a recovery note) continues the same session: no second announcement.
+      chain.note = "[driver] continuation after interruption"
+      await runSession(fake.client, task, "prompt text 2", {}, chain, undefined, undefined, NONE)
+      // The note consumed, the next prompt falls back to the normal rule and opens a new session: announced once more (same model).
+      await runSession(fake.client, task, "prompt text 3", {}, chain, undefined, undefined, NONE)
     } finally {
       console.log = orig
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // Reusing the same session twice announces once; with reuse off the new session announces once more (same model).
+    // Taking over the same session announces once; the new session after the note is consumed announces once more (same model).
     expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
     expect(shown[0]).toContain("server resolved")
   })
 
-  test("interruption-recovery takeover (chain holds a session and a note pending injection): re-enters the original session even with the switch off and every threshold unmet; the note clears after use", async () => {
+  test("chain holds a session and a note pending injection: re-enters the original session whatever the chain's figures; the note clears after use, the next prompt opens a new session", async () => {
     const { client, calls } = fakeClient({ current: "ses_interrupted" })
     const chain: SessionChain = {
       id: "ses_interrupted",
@@ -79,12 +63,12 @@ describe("session-chain reuse switch (OPENCODE_AUTO_REUSE_SESSION)", () => {
       at: Date.now() - 10 * 60_000,
       note: "[driver] continuation after interruption",
     }
-    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NONE)).type).toBe("idle")
     expect(calls.creates).toBe(0)
     expect(chain.id).toBe("ses_interrupted")
     expect(chain.note).toBeUndefined()
-    // The recovery note is consumed: the next prompt falls back to the normal rules (off → new session)
-    expect((await runSession(client, task, "the next prompt", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    // The recovery note is consumed: the next prompt falls back to the normal rule (a fresh session)
+    expect((await runSession(client, task, "the next prompt", {}, chain, undefined, undefined, NONE)).type).toBe("idle")
     expect(calls.creates).toBe(1)
   })
 })

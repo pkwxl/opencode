@@ -10,7 +10,7 @@
 import { dirname, join } from "node:path"
 import type { SessionChain, SessionResult } from "./chain"
 import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
-import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
+import { fileCommitted, suffixedTitle } from "./git"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
@@ -20,7 +20,6 @@ import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo
 import { COMMIT_CLARIFY } from "./resume-gate"
 import { runSession } from "./session"
 import { clientOf, forkSession, sessionAlive, sessionUsed } from "./session-api"
-import { autoSwitches } from "./switches"
 import {
   archiveHandoff,
   fillHandoffStatus,
@@ -262,22 +261,6 @@ export async function runExecSession(
     }
     handovers++
     test.handovers = handovers
-    // Concurrent-mode drift registration (E3): between the freeze and commit
-    // #2, compare **tracked** non-document changes — non-empty means the
-    // frozen snapshot this test ran against and the tree about to be
-    // committed are not the same one. Facts only: no stash, no re-run, no
-    // blocking (the re-test guard is retired, see
-    // plans/0023-test-handover-early-design.md §H). Must happen before commit
-    // #2: after the commit the diff is always empty and nothing can be seen.
-    if (autoSwitches().handoverConcurrent) {
-      const drifted = await trackedSourceChanges(dir)
-      if (drifted.length) {
-        log(
-          `⚠ ${test.label} concurrent mode: the tested content changed during handover wrapup (${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " etc." : ""}); ` +
-            `this test ran against the frozen snapshot — judge against the handover document`,
-        )
-      }
-    }
     archived = archivedTestHandoff(handoff, handovers)
     await archiveHandoff(dir, handoff, handovers)
     // Commit #2 (handover confirmation): the wrap-up's on-disk results + the
@@ -286,19 +269,15 @@ export async function runExecSession(
     const subject = suffixedTitle(test.subject, `test handover #${handovers}`)
     const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
     if (committed.type === "failed") return commitBlocked(subject, committed)
-    // Sequential mode (the default, E1): runs only after the handover
-    // close-out — what it tests is exactly the tree of commit #2. If the
-    // script itself rewrites tracked files (e.g. rustfmt apply), that stays as
-    // an uncommitted delta, absorbed by the next unit's commit.
+    // The frozen script runs only after the handover close-out — what it
+    // tests is exactly the tree of commit #2. If the script itself rewrites
+    // tracked files (e.g. rustfmt apply), that stays as an uncommitted
+    // delta, absorbed by the next unit's commit.
     let ran: TestRunInfo | undefined
     if (test.pending) {
       const pending = test.pending
       test.pending = undefined
       ran = await runTestScript(test, opts, pending.script, pending.seq)
-    } else if (autoSwitches().handoverConcurrent) {
-      // Concurrent mode: the run starts at the freeze itself; the execution
-      // result is already written to test.last at the attempt's close-out.
-      ran = test.last
     }
     // Close-out complete: the in-flight record enters the "closed out" state
     // — the pending script is consumed, the frozen anchor voided, the

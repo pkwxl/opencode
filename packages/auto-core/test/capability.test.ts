@@ -37,7 +37,6 @@ const HEADLESS: AgentCapabilities = {
 
 const ALL_ON = parseSwitches({
   [SWITCH_ENV.fork]: "on",
-  [SWITCH_ENV.reuseSession]: "on",
   [SWITCH_ENV.steer]: "on",
   [SWITCH_ENV.stuck]: "on",
   [SWITCH_ENV.ask]: "on",
@@ -69,9 +68,9 @@ describe("degrade: run-start clamp", () => {
     expect(got.notes.length).toBe(2)
   })
 
-  test("fork none or no resume: fork off; no resume: reuse off", () => {
+  test("fork none or no resume: fork off", () => {
     expect(degrade({ ...OPENCODE_CAPABILITIES, fork: "none" }, ALL_ON, {}).switches).toEqual({ fork: false })
-    expect(degrade({ ...OPENCODE_CAPABILITIES, resume: false }, ALL_ON, {}).switches).toEqual({ fork: false, reuseSession: false })
+    expect(degrade({ ...OPENCODE_CAPABILITIES, resume: false }, ALL_ON, {}).switches).toEqual({ fork: false })
   })
 
   test("fork none or no resume: auto's lead loses its split clause for the run, with a note under auto only; a forking agent keeps it (plans/0059 D7)", () => {
@@ -212,8 +211,7 @@ describe("session driving without a capability", () => {
   test("no resume: an interrupted session on the chain is not resumed", async () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { id: "ses_old", note: "resume note", pct: 10, used: 100, at: Date.now() }
-    const switches = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-    const result = await attempt(without(client, { resume: false }), task, "p", {}, chain, undefined, undefined, switches)
+    const result = await attempt(without(client, { resume: false }), task, "p", {}, chain, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("idle")
     expect(calls.creates).toBe(1)
     expect(calls.prompts[0]!.sessionID).toBe("ses_new_1")

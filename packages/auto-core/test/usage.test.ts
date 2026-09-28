@@ -1,16 +1,14 @@
 // MA.2 (plans/0038): the usage-source tiers and the behavior matrix of the
 // usage-driven mechanisms. The `events` rows are checked against the pre-MA.3
-// inline rules (testrun.ts handoverDue/testHandoverDue, attempt.ts reuse,
+// inline rules (testrun.ts handoverDue/testHandoverDue,
 // seedForkSession's guard — all restated here since MA.3 replaced them with
 // these functions), so the swap is behavior-preserving for opencode.
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
-import { REUSE_BELOW, REUSE_IDLE_MS } from "../src/chain"
 import {
   estimateTokens,
   forkBaseAllowed,
   liveUsage,
-  reuseAllowed,
   sessionHandoverDue,
   steerDue,
   testHandoverDue,
@@ -76,17 +74,6 @@ describe("behavior matrix: events row equals today", () => {
   const cap = 64_000
   const grid = [0, 1, cap / 2 - 1, cap / 2, cap - 1, cap, 2 * cap - 1, 2 * cap, 5 * cap]
 
-  test("reuse threshold", () => {
-    const now = 10 * REUSE_IDLE_MS
-    for (const used of grid)
-      for (const pct of [0, REUSE_BELOW - 1, REUSE_BELOW, 100])
-        for (const at of [now, now - REUSE_IDLE_MS, now - REUSE_IDLE_MS - 1]) {
-          // attempt.ts inline rule (reuse switch on, chain has a session, not resumed).
-          const today = pct < REUSE_BELOW && used < cap / 2 && now - at <= REUSE_IDLE_MS
-          expect(reuseAllowed({ pct, used, at }, cap, now)).toBe(today)
-        }
-  })
-
   test("steer and post-session handover check", () => {
     const steer = { limit: 2 * cap, text: "hint" }
     for (const used of grid) {
@@ -127,7 +114,6 @@ describe("behavior matrix: other tiers", () => {
     expect(steerDue("reported", 10 * cap, steer.limit)).toBe(false)
     expect(sessionHandoverDue("reported", steer, 10 * cap)).toBe(false)
     expect(testHandoverDue({ handover: true, limit: cap, startUsed: 0 }, cap)).toBe(true)
-    expect(reuseAllowed({ pct: 10, used: 1000, at: 0 }, cap, 0)).toBe(true)
   })
 
   test("estimated: in-turn triggers fire on the estimate", () => {
@@ -136,7 +122,6 @@ describe("behavior matrix: other tiers", () => {
   })
 
   test("none: unknown never carries context forward and never ends a session", () => {
-    expect(reuseAllowed({ pct: 0, used: undefined, at: 0 }, cap, 0)).toBe(false)
     expect(steerDue("none", undefined, steer.limit)).toBe(false)
     expect(sessionHandoverDue("none", steer, undefined)).toBe(false)
     expect(testHandoverDue({ handover: true, limit: cap, startUsed: undefined }, undefined)).toBe(false)

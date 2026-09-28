@@ -142,14 +142,11 @@ export type SessionResult =
 export type WindowWait = { until: number; model: string; tier: Tier; opens: string }
 
 // All sessions of a task (decompose/subtask/repair/wrap-up) chain into one
-// session chain: reuse is governed by OPENCODE_AUTO_REUSE_SESSION, default
-// off = every prompt opens a new session; when on, the previous session is
-// reused only if, at its end, the context percentage was below REUSE_BELOW,
-// the usage below half of contextLimit, and no more than REUSE_IDLE_MS has
-// passed since it ended. The initial pct=100 guarantees the first session is
-// newly created; when the model limit is unknown watch records 100, i.e.
-// always a new one. A session taken over by interruption recovery is exempt
-// from the switch and the thresholds (attempt's resumed: the chain holds a
+// session chain: every prompt opens a fresh session — in-chain threshold
+// reuse was removed together with its switch. The initial pct=100 guarantees
+// the first session is newly created; when the model limit is unknown watch
+// records 100, i.e. always a new one. The one exception is a session taken
+// over by interruption recovery (attempt's resumed: the chain holds a
 // session and a note awaits injection → the first prompt necessarily enters
 // the original session).
 // phase carries the current pipeline phase: the execution chain's sessions
@@ -464,14 +461,3 @@ export function agentGaveUp(info: ErrorInfo, policy: AgentRetryPolicy): boolean 
   if ((info.next ?? 0) > policy.backoffCapMs) return true
   return !policy.waitsOutLimit && info.terminal === true
 }
-
-// Reuse the previous session when its context percentage is below this
-// value (%) (effective only with OPENCODE_AUTO_REUSE_SESSION=on).
-export const REUSE_BELOW = 50
-
-// The interval cap for session reuse (effective only with
-// OPENCODE_AUTO_REUSE_SESSION=on): more than this since the previous
-// session ended counts as stale context (driver-side work such as
-// test-script runs can take long) — no reuse, open a new session.
-export const REUSE_IDLE_MS = 5 * 60 * 1000
-export const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000

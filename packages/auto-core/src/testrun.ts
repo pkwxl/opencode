@@ -129,19 +129,11 @@ export type TestRun = {
   handovers: number
   startUsed: number
   last?: TestRunInfo
-  // The test executing concurrently with the session wrap-up in the
-  // concurrent mode (OPENCODE_AUTO_HANDOVER_CONCURRENT=on). watch starts it;
-  // attempt closes it out after watch returns: a test process must not stay
-  // suspended across sessions (it would modify files concurrently with the
-  // new session opened right after), and test.last is the basis of the new
-  // session's continuation prompt. Cleared at close-out.
-  running?: Promise<TestRunInfo>
-  // In the sequential mode (default): the script already frozen, waiting to
-  // execute after the handover close-out (mutually exclusive with running).
-  // The marker tmp/test.sh is consumed at the very moment of the freeze —
-  // the session still has wrap-up ahead of it, and a leftover marker would be
-  // misread by the next round; execution is postponed until after commit #2
-  // and closed out by runExecSession. Cleared once executed.
+  // The script already frozen, waiting to execute after the handover
+  // close-out. The marker tmp/test.sh is consumed at the very moment of the
+  // freeze — the session still has wrap-up ahead of it, and a leftover
+  // marker would be misread by the next round; execution is postponed until
+  // after commit #2 and closed out by runExecSession. Cleared once executed.
   pending?: { script: string; seq: number }
   // One-shot flag of the "wrap-up check" state: seeded in two places — the
   // H1 branch of interruption recovery (§I; this round's session was forked
@@ -304,9 +296,9 @@ export async function cleanTestHandoffs(dir: string, task: Task): Promise<void> 
 // to the recovery state machine — deleting one equals creating a dirty area.
 
 // --test-by-driver's single test execution = consume the request marker +
-// execute. Split into two steps because the sequential mode's test handover
-// must consume the marker and pin the script down at the very moment of the
-// freeze; execution is postponed until after the handover close-out.
+// execute. Split into two steps because a test handover must consume the
+// marker and pin the script down at the very moment of the freeze; execution
+// is postponed until after the handover close-out.
 // stdout+stderr are merged and written whole to tmp/test.<n>.out (sharing the
 // idleTime/idleMax watchdog); a non-zero exit code is not judged here — the
 // verdict belongs to the AI.
@@ -331,7 +323,7 @@ export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInf
 // (2) an inline script (the fallback for when the AI did not pin the script
 // into test/ per the protocol): write the content whole to tmp/test.<n>.sh,
 // keeping the execution snapshot for audit.
-// The sequential mode calls this first at the very moment of the freeze — the
+// A test handover calls this first at the very moment of the freeze — the
 // marker must be taken away before the session continues its wrap-up
 // (otherwise a marker rewritten during wrap-up makes the driver run the wrong
 // script), and the inline form must also be materialized at the same moment
@@ -361,11 +353,10 @@ export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq
 }
 
 // The execution kernel for a known script path (called by executeTest after
-// consuming the request marker; the sequential mode's test handover also
-// calls it directly to execute the test.pending consumed at the freeze — the
-// marker was taken away long before, there is no second read). Every
-// execution takes a new archive sequence number; the output is always
-// tmp/test.<n>.out.
+// consuming the request marker; a test handover also calls it directly to
+// execute the test.pending consumed at the freeze — the marker was taken
+// away long before, there is no second read). Every execution takes a new
+// archive sequence number; the output is always tmp/test.<n>.out.
 export async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq): Promise<TestRunInfo> {
   const out = join(test.tmp, `test.${seq}.out`)
   await mkdir(test.tmp, { recursive: true })

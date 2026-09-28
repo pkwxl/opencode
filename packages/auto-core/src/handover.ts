@@ -33,9 +33,8 @@ export type Handover = {
   unit: string
   n: number
   // The pending script and archive sequence number obtained by consuming
-  // tmp/test.sh at the freeze moment; in the concurrent mode
-  // (OPENCODE_AUTO_HANDOVER_CONCURRENT=on) the run starts at the freeze itself,
-  // leaving no pending script to record.
+  // tmp/test.sh at the freeze moment; the run itself happens only after the
+  // handover close-out.
   script?: string
   seq?: number
   // The agent profile the recorded sessions live on (plans/0055 §8.2), next

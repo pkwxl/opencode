@@ -1,5 +1,6 @@
 // The core layer of session driving: running one prompt on the session chain
-// (runSession — reuse/new session, transient errors retried in a fresh
+// (runSession — a fresh session per prompt except a resumed takeover,
+// transient errors retried in a fresh
 // session, server restart on network failures, the model failover ring under
 // quota restriction with window clipping, and the wait-and-probe loop
 // awaitRecovery, the final destination of every session fault), plus fork base
@@ -231,20 +232,21 @@ function spentWindow(result: WaitCause): string | undefined {
   return result.scope === "5h" ? "five-hour" : result.scope === "7d" ? "weekly" : result.scope === "day" ? "daily" : undefined
 }
 
-// Runs one prompt on the session chain (reusing the previous session when its
-// context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
+// Runs one prompt on the session chain (a fresh session per prompt, except a
+// resumed takeover of the recorded session). Transient
 // provider failures (session.error, e.g. malformed reasoning content from a
 // gateway) are retried in a fresh session; network/server failures
 // (Internal network failure / Network error etc.) additionally restart the
 // spawned opencode server before the retry; non-retryable failures (quota
 // etc.) and ladder exhaustion fall into the recovery wait-probe loop instead
 // of blocking — a session fault never terminates the run.
-// Runs one prompt on the session chain (reuse/new session, error retry with
-// server restart, the wait-and-probe loop); exported for reuse by bypass
-// sessions. test is the --test-by-driver protocol state (passed in only by
-// execution sessions via runExecSession; bypass sessions leave it out, so the
-// protocol stays inactive); switches defaults to the parsed OPENCODE_AUTO_*
-// values (the reuse switches), injected for unit tests.
+// Runs one prompt on the session chain (a resumed takeover or a new session,
+// error retry with server restart, the wait-and-probe loop); exported for
+// reuse by bypass sessions. test is the --test-by-driver protocol state
+// (passed in only by execution sessions via runExecSession; bypass sessions
+// leave it out, so the protocol stays inactive); switches defaults to the
+// parsed OPENCODE_AUTO_* values (the experiment switches), injected for unit
+// tests.
 export async function runSession(
   client: ClientSource,
   task: Task,

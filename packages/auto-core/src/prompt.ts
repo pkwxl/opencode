@@ -172,18 +172,16 @@ export function renderTestResult(run: TestRunInfo): string {
 // remaining work that does not depend on the test result, write the
 // handover document, then end the session; the test result is left for the
 // next session to judge. The wording stays neutral about the test's timing
-// ("will be executed by the driver"): in the sequential mode the test only
-// runs after the handover close-out, in the concurrent mode
-// (OPENCODE_AUTO_HANDOVER_CONCURRENT=on) it is already running at this
-// moment — one copy holds in both modes.
+// ("will be executed by the driver"): the test runs only after the handover
+// close-out, and the session does not need to know when.
 //
 // Hard copy constraint (test-handover front-loading design D2): **must not
 // mention "context / over the limit / limit / tokens"** — once a session
 // knows its context is tight, it judges the remaining budget insufficient
 // itself and skips the write-out work it should have completed
 // (field-verified); state only the fact that "a handover is needed and the
-// session must switch". Likewise it never says "do not modify source": in
-// the sequential mode the session's wrap-up changes land in commit #2
+// session must switch". Likewise it never says "do not modify source": the
+// session's wrap-up changes land in commit #2
 // anyway and are covered by the test, so saying it would instead hint that
 // this is a boundary it may dispose of freely.
 // The document's content checklist carries one more item, "work not yet

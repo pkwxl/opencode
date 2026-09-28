@@ -54,10 +54,9 @@ import { reportResult, runWrapup } from "./wrapup"
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
 // review — checking is planned work (acceptance tasks, the v phase).
-// All execution sessions of a task share one chain: the next session reuses
-// the previous one when its context usage ended below REUSE_BELOW, its used
-// tokens below 50% of contextLimit (default 32k) and it went idle within
-// REUSE_IDLE_MS (default 5 minutes), otherwise a fresh session is created.
+// All execution sessions of a task share one chain: every prompt opens a
+// fresh session, except a session taken over by interruption recovery
+// (attempt's resumed), which continues the recorded session.
 // There is no task mirror (CURRENT.md retired, plans/0054 D3): every prompt
 // inlines the task, docs/T-NNN/todo.md and subtasks.md hold its content and
 // progress, and a blocked/incomplete exit is reported in the run log while

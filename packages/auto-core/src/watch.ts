@@ -139,8 +139,9 @@ export async function watch(
   // (+attempt/next), feeding classification and riding the error result
   // upward; undefined means no structured error signal was received this turn.
    let errorInfo: ErrorInfo | undefined = undefined
-   // Context percentage and used amount are always tracked (the input to the
-  // session-reuse decision); without a limit the percentage records 100.
+    // Context percentage and used amount are always tracked (the input to
+    // the usage-driven decisions and the chain's end record); without a
+    // limit the percentage records 100.
    // The figure comes from the usage source of the adapter's tier (plans/0038):
    // `used` mirrors it at each measurement point (a completed assistant
    // message) and stays 0 while it is unknown, as before MA.3.
@@ -433,17 +434,15 @@ export async function watch(
     // The handover decision happens at this moment (D1), before execution —
     // the criterion is already decoupled from test outcome. On a hit the
     // driver first commits the freeze to pin the script down, then dispatches
-    // the wrap-up + handover instruction; when the tests run is decided by
-    // OPENCODE_AUTO_HANDOVER_CONCURRENT (sequential by default, see E1/E2).
+    // the wrap-up + handover instruction; the test itself runs only after
+    // the handover close-out, facing exactly the close-out commit's tree.
     const now = source.used()
     if (testHandoverDue(test!, now)) {
       testHandoverAsked = true
       const n = test!.handovers + 1
       log(
         `⚠ ${test!.label} context used ${formatTokens(now !== undefined && now > 0 ? now : test!.startUsed)} tokens reached the ${formatTokens(test!.limit)} cap; ` +
-          (switches.handoverConcurrent
-            ? `tests run concurrently with the session wrapup after the frozen commit; asking for a handover document before switching to a new session`
-            : `after the frozen commit, hand over first and then run the tests; asking for a handover document before switching to a new session`),
+          `after the frozen commit, hand over first and then run the tests; asking for a handover document before switching to a new session`,
       )
       // Commit #1 (the freeze): pins the script under test and the sources.
       // The session is idle at this moment (this function is driven by the
@@ -458,24 +457,16 @@ export async function watch(
       if (pin.type === "failed") {
         return { type: "blocked", question: commitBlocked(pinSubject, pin).question }
       }
-      // Sequential mode (default): only consume the request marker and pin the
-      // script down; execution is deferred until after the handover wrap-up
-      // (runExecSession's test.pending), so the wrap-up period has no
-      // concurrent writes at all.
-      // Concurrent mode: starts without awaiting, and the close-out is done
-      // uniformly by attempt after watch returns (test.running), covering
-      // every path — normal finish / session error / stream interruption; the
-      // price is the tests face the frozen snapshot, not the final tree.
-      if (switches.handoverConcurrent) test!.running = executeTest(test!, opts)
-      else test!.pending = await resolveTestScript(test!)
+      // Only consume the request marker and pin the script down; execution
+      // is deferred until after the handover wrap-up (runExecSession's
+      // test.pending), so the wrap-up period has no concurrent writes at all
+      // and the test faces exactly the close-out commit's tree.
+      test!.pending = await resolveTestScript(test!)
       // In-flight handover record (interruption recovery §I): this moment —
       // freeze committed, wrap-up not yet started — is the only correct time
       // to record it: the pending script was just consumed (the marker is
       // gone, a re-run can never read it again), and the session anchor has
-      // not yet been buried under the wrap-up messages. In concurrent mode
-      // there is no pending script to record (the freeze starts the run), the
-      // record is still written and recovery degrades to referencing the most
-      // recent test output.
+      // not yet been buried under the wrap-up messages.
       await saveHandover(test!.dir, {
         task: test!.task.id,
         scope: relative(test!.dir, test!.handoffFile),

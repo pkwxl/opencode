@@ -96,7 +96,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Agent pool | The run's agent hosts under one control: under a model registry one lazily started host per agent profile (a profile nobody selects never spawns), the capability intersection at run start, preflight's bin check and the `models --probe` core; without one the single agent starts eagerly, exactly as before | `src/agent-pool.ts` |
 | Agent environments | An agent profile's env resolved into the overlay its host starts with (values never logged); the loopback proxy warning of preflight | `src/agent-env.ts` (0055) |
 | Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records; a fleet that cannot fork withholds auto's split clause (`leadSplit`) | `src/capability.ts` (0040, 0055, 0059 D7) |
-| Usage source | Four `UsageTier`s and their effect on reuse, handover, steer, fork | `src/usage.ts` (0038) |
+| Usage source | Four `UsageTier`s and their effect on handover, steer, fork | `src/usage.ts` (0038) |
 
 ### Model registry and routing
 
@@ -122,7 +122,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check and the driver-state filter of its changed-files list (a checklist item's title is `tasks.ts` `checklistTitle`, shared with the pipeline's subtask prompt) | `src/split.ts` (0059 D3–D5, T1) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
 | Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; a spent quota window with a stated reset skips the retry ladder; the scheduled wait (`planSleep`: the recovery sleep to a known instant — a candidate usable again, a stated or learned reset — plus jitter, `/exit` a boundary inside it); registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4, 0057 §4.1, §6) |
-| Single dispatch | Reuse-or-create, model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |
+| Single dispatch | Resumed-takeover-or-create (every prompt opens a fresh session except a recovery takeover of the recorded one), model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |
 | Event stream | Echo, usage tracking, handoff steer, stuck hints, marker collection, test requests, liveness probe (held off through an announced silence), truncation resume; context step-up steers and classifier calls beside the retry branch; the limit fields merged (stated, then wording, then classifier), quota-window lines | `src/watch.ts` (0026, 0055 §4.5, §7.1, 0057) |
 | Session chain and routing | `SessionChain` (with its `agent` and model entry), phase → role → model routing, error classification, the retry policy in force and `agentGaveUp`, resets stated in a known provider wording (`statedInWording`) | `src/chain.ts` (0017, 0055 §8.2, 0057 §4, S4a) |
 | Session helpers | Fork, usage, liveness, rename over `AgentClient`; `clientOf`/`contextLimitsOf` resolve a client or the agent pool; terminal formatting; human answers | `src/session-api.ts` |
@@ -161,7 +161,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Project config | Constitutional options fixed by init in `.opencode/auto/config.json` | `src/config.ts` (0004) |
 | Config fix | The rule table behind `fix`: fixable/manual findings over the raw config and the config-layer artifacts, planned then applied; `renderAgentContract` | `src/config-fix.ts` (0052 D10–D11) |
-| Experiment switches | `OPENCODE_AUTO_*` registry, parsed once, never persisted (the `OPENCODE_AUTO_MODELS` path variable is registered but stays out of the parsed switches) | `src/switches.ts` (0003, 0055 §9) |
+| Experiment switches | `OPENCODE_AUTO_*` registry, parsed once, never persisted (the `OPENCODE_AUTO_MODELS` path variable is registered but stays out of the parsed switches); a retired variable (`RETIRED_SWITCHES`) answers one run-start notice and is otherwise ignored | `src/switches.ts` (0003, 0055 §9) |
 | Shell profile | `setShellProfile`: program name, `configDir`, recovery hints, log audit, agent; `registerAgentAdapter` lets a shell add an agent adapter without a core change | `src/shell.ts` (0055) |
 | AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md | `src/agents-block.ts` (0054) |
 | reset command | Remove init's configuration artifacts (the project brief only while it is the untouched stub) | `src/reset.ts` |

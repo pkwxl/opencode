@@ -5,10 +5,10 @@
 // off (with one log line each) and nothing downstream needs to know why:
 //
 // | flag off          | degradation                                                           |
-// |-------------------|-----------------------------------------------------------------------|
-// | resume            | OPENCODE_AUTO_REUSE_SESSION and OPENCODE_AUTO_FORK off; sessionAlive  |
-// |                   | answers false, so recovery and base reuse start fresh (session-api); |
-// |                   | --subtask auto's lead gets no split clause (as fork "none")           |
+//|-------------------|-----------------------------------------------------------------------|
+// | resume            | OPENCODE_AUTO_FORK off; sessionAlive answers false, so recovery and  |
+// |                   | base reuse start fresh (session-api); --subtask auto's lead gets no  |
+// |                   | split clause (as fork "none")                                        |
 // | fork "none"       | OPENCODE_AUTO_FORK off; every other fork (retry, failover, shape-check |
 // |                   | re-prompt, handover pin) falls back to a new session (forkSession);  |
 // |                   | --subtask auto's lead gets no split clause: its streams are forks of |
@@ -38,7 +38,7 @@ import type { PermissionMode, SubtaskMode } from "./opts"
 import { SWITCH_ENV, type Switches } from "./switches"
 
 // The switches a missing capability can force off.
-export type DegradedSwitches = Partial<Pick<Switches, "fork" | "reuseSession" | "steer" | "stuck" | "ask">>
+export type DegradedSwitches = Partial<Pick<Switches, "fork" | "steer" | "stuck" | "ask">>
 
 export type Degradation = {
   // Switch values in force for this run instead of the configured ones.
@@ -136,10 +136,6 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
     notes.push(
       `--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does${by(forced((c) => !forksSessions(c)))}`,
     )
-  }
-  if (switches.reuseSession && !caps.resume) {
-    patch.reuseSession = false
-    notes.push(`${SWITCH_ENV.reuseSession}=on needs resumable sessions; running with reuse off${by(forced((c) => !c.resume))}`)
   }
   if (!caps.steer) {
     const named = by(forced((c) => !c.steer))

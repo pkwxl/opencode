@@ -25,14 +25,13 @@ afterAll(() => {
 })
 
 describe("parseSwitches (the experiment-switch environment layer)", () => {
-  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate unset)", () => {
+  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / stuck on / taskContext off / ask off / model off / strictResume off / hibernate unset)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
       fine: false,
       steer: true,
       step: "off",
-      reuseSession: false,
       stuck: true,
       taskContext: "off",
       ask: false,
@@ -41,13 +40,12 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
       strictResume: false,
-      handoverConcurrent: false,
       hibernate: undefined,
       agent: undefined,
     })
   })
 
-  test("an empty string counts as unset (all eighteen variables tested together)", () => {
+  test("an empty string counts as unset (all sixteen variables tested together)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -55,7 +53,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "",
         [SWITCH_ENV.steer]: "",
         [SWITCH_ENV.step]: "",
-        [SWITCH_ENV.reuseSession]: "",
         [SWITCH_ENV.stuck]: "",
         [SWITCH_ENV.taskContext]: "",
         [SWITCH_ENV.ask]: "",
@@ -65,7 +62,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.retryWaits]: "",
         [SWITCH_ENV.recoveryWait]: "",
         [SWITCH_ENV.strictResume]: "",
-        [SWITCH_ENV.handoverConcurrent]: "",
         [SWITCH_ENV.hibernate]: "",
         [SWITCH_ENV.agent]: "",
       }),
@@ -75,7 +71,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       fine: false,
       steer: true,
       step: "off",
-      reuseSession: false,
       stuck: true,
       taskContext: "off",
       ask: false,
@@ -84,7 +79,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
       strictResume: false,
-      handoverConcurrent: false,
       hibernate: undefined,
       agent: undefined,
     })
@@ -98,7 +92,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "on",
         [SWITCH_ENV.steer]: "on",
         [SWITCH_ENV.step]: "subtask",
-        [SWITCH_ENV.reuseSession]: "on",
         [SWITCH_ENV.stuck]: "off",
         [SWITCH_ENV.taskContext]: "large",
         [SWITCH_ENV.ask]: "on",
@@ -106,7 +99,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.retryWaits]: "0,3",
         [SWITCH_ENV.recoveryWait]: "5",
         [SWITCH_ENV.strictResume]: "on",
-        [SWITCH_ENV.handoverConcurrent]: "on",
         [SWITCH_ENV.hibernate]: "04:00+6",
         [SWITCH_ENV.agent]: "claude",
       }),
@@ -116,7 +108,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       fine: true,
       steer: true,
       step: "subtask",
-      reuseSession: true,
       stuck: false,
       taskContext: "large",
       ask: true,
@@ -125,7 +116,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       retryWaits: [0, 3],
       recoveryWait: 5,
       strictResume: true,
-      handoverConcurrent: true,
       hibernate: { startMin: 240, durationMin: 360 },
       agent: "claude",
     })
@@ -139,13 +129,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "off",
         [SWITCH_ENV.forkBase]: "digest",
         [SWITCH_ENV.step]: "off",
-        [SWITCH_ENV.reuseSession]: "off",
         [SWITCH_ENV.stuck]: "on",
         [SWITCH_ENV.taskContext]: "off",
         [SWITCH_ENV.ask]: "off",
         [SWITCH_ENV.modelFailbackScope]: "task",
         [SWITCH_ENV.strictResume]: "off",
-        [SWITCH_ENV.handoverConcurrent]: "off",
       }),
     ).toEqual(parseSwitches({}))
   })
@@ -183,15 +171,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "" }).strictResume).toBe(false)
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/OPENCODE_AUTO_STRICT_RESUME/)
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/default off/)
-  })
-
-  test("handoverConcurrent value domain: on/off, default off = test handover before the run (plans/0023-test-handover-early-design.md §H)", () => {
-    expect(parseSwitches({}).handoverConcurrent).toBe(false)
-    expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "on" }).handoverConcurrent).toBe(true)
-    expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "off" }).handoverConcurrent).toBe(false)
-    expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "" }).handoverConcurrent).toBe(false)
-    expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/OPENCODE_AUTO_HANDOVER_CONCURRENT/)
-    expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/default off/)
   })
 
   test("agent: opencode (default) | claude, a shell profile overrides it (MA.5, plans/0041)", () => {
@@ -237,8 +216,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/OPENCODE_AUTO_STEER/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "step" })).toThrow(/OPENCODE_AUTO_STEP/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "Step" })).toThrow(/off\|phase\|task\|subtask/)
-    expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/OPENCODE_AUTO_REUSE_SESSION/)
-    expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/OPENCODE_AUTO_STUCK/)
     expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/default on/)
     expect(() => parseSwitches({ [SWITCH_ENV.taskContext]: "big" })).toThrow(/OPENCODE_AUTO_TASK_CONTEXT/)
@@ -336,11 +313,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
-  test("the default combination is silent: non-default items undefined; the full listing names all eighteen", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all sixteen", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
   })
 
@@ -348,14 +325,12 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
     const stepped = parseSwitches({ [SWITCH_ENV.step]: "task" })
     expect(nonDefaultSwitches(stepped)).toBe("OPENCODE_AUTO_STEP=task")
-    const reused = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-    expect(nonDefaultSwitches(reused)).toBe("OPENCODE_AUTO_REUSE_SESSION=on")
     const unstuck = parseSwitches({ [SWITCH_ENV.stuck]: "off" })
     expect(nonDefaultSwitches(unstuck)).toBe("OPENCODE_AUTO_STUCK=off")
     const widened = parseSwitches({ [SWITCH_ENV.taskContext]: "medium" })
@@ -378,11 +353,6 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const strict = parseSwitches({ [SWITCH_ENV.strictResume]: "on" })
     expect(nonDefaultSwitches(strict)).toBe("OPENCODE_AUTO_STRICT_RESUME=on")
     expect(formatSwitches(strict)).toContain("OPENCODE_AUTO_STRICT_RESUME=on")
-    // test-handover timing: default off (hand over before the run) is silent, on (concurrent) stands as its own item
-    const concurrent = parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "on" })
-    expect(nonDefaultSwitches(concurrent)).toBe("OPENCODE_AUTO_HANDOVER_CONCURRENT=on")
-    expect(formatSwitches(concurrent)).toContain("OPENCODE_AUTO_HANDOVER_CONCURRENT=on")
-    expect(formatSwitches(parseSwitches({}))).toContain("OPENCODE_AUTO_HANDOVER_CONCURRENT=off")
     // hibernate window: default unset is silent; once set it stands as its own item in the canonical HH:MM+H spelling
     const hibernating = parseSwitches({ [SWITCH_ENV.hibernate]: "4:00+6.5" })
     expect(nonDefaultSwitches(hibernating)).toBe("OPENCODE_AUTO_HIBERNATE=04:00+6.5")
@@ -500,6 +470,26 @@ describe("the retired-switch registry (a removed mechanism's variable)", () => {
     expect(retiredSwitchNotes({ [NAME]: "1" })).toEqual([note])
     expect(retiredSwitchNotes({})).toEqual([])
     expect(retiredSwitchNotes({ [NAME]: "" })).toEqual([])
+  })
+
+  test("the switch-diet tranche-1 retirements: in-chain reuse and concurrent test handover", () => {
+    const entries: Record<string, string> = {
+      OPENCODE_AUTO_REUSE_SESSION: "in-chain session reuse was removed; every prompt opens a fresh session",
+      OPENCODE_AUTO_HANDOVER_CONCURRENT: "concurrent test handover was removed; the tests run after the handover close-out",
+    }
+    for (const [name, reason] of Object.entries(entries)) {
+      expect(RETIRED_SWITCHES[name]).toBe(reason)
+      // The variable no longer parses and the switch lines never list it.
+      const withRetired = parseSwitches({ [name]: "on" })
+      expect(withRetired).toEqual(parseSwitches({}))
+      expect(nonDefaultSwitches(withRetired)).toBeUndefined()
+      expect(formatSwitches(withRetired)).toBe(formatSwitches(parseSwitches({})))
+      expect(formatSwitches(withRetired)).not.toContain(name)
+      // One notice per set variable, whatever the value; unset and empty stay silent.
+      expect(retiredSwitchNotes({ [name]: "on" })).toEqual([`⚠ ${name} is retired (${reason}); the variable is ignored`])
+      expect(retiredSwitchNotes({ [name]: "1" })).toEqual([`⚠ ${name} is retired (${reason}); the variable is ignored`])
+      expect(retiredSwitchNotes({ [name]: "" })).toEqual([])
+    }
   })
 
   test("autoSwitches prints the notice at the parse, beside the switch lines", () => {

@@ -478,7 +478,7 @@ describe("◉ session-end two-line report (T-004): unconditional printing and om
     }
   })
 
-  test("reused session, round 2: line 1 carries (cumulative … / 2 rounds), cost carries (cumulative $X); single-round omission rules as the contrast", async () => {
+  test("a session's second round (a resumed takeover): line 1 carries (cumulative … / 2 rounds), cost carries (cumulative $X); single-round omission rules as the contrast", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
     try {
       // Each round's step-finish usage is driven by the outer variable
@@ -491,21 +491,20 @@ describe("◉ session-end two-line report (T-004): unconditional printing and om
             yield { type: "session.idle", properties: { sessionID: sid } }
           })(),
       })
-      const REUSE_ON = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
+      const NONE = parseSwitches({})
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const first = await captureLogs(() => runSession(client, task, "prompt", { dir, contextLimit: 100_000 }, chain, undefined, undefined, REUSE_ON))
+      const first = await captureLogs(() => runSession(client, task, "prompt", { dir, contextLimit: 100_000 }, chain, undefined, undefined, NONE))
       // Round 1 (single round): both cumulative markers are omitted.
       const [first1, first2] = endLines(first)
       expect(first1).not.toContain("(cumulative")
       expect(first2).toContain("cost $0.01")
       expect(first2).not.toContain("(cumulative")
-      // Build a reusable chain (pct<50, used<cap/2, just ended) → round 2
-      // reuses the same sessionID.
-      chain.pct = 10
-      chain.used = 100
-      chain.at = Date.now()
+      // Round 2 continues the same session through a resumed takeover (the
+      // chain holds the session and a recovery note), so the stats segment
+      // accrues a second round on the same session id.
+      chain.note = "[driver] continuation after interruption"
       roundUsage = { input: 200, output: 20, cost: 0.02 }
-      const second = await captureLogs(() => runSession(client, task, "prompt", { dir, contextLimit: 100_000 }, chain, undefined, undefined, REUSE_ON))
+      const second = await captureLogs(() => runSession(client, task, "prompt", { dir, contextLimit: 100_000 }, chain, undefined, undefined, NONE))
       const [line1, line2] = endLines(second)
       expect(line1).toMatch(/, elapsed \S+ \(cumulative \S+ \/ 2 rounds\)$/)
       expect(line2).toContain("tokens in 200 / out 20")

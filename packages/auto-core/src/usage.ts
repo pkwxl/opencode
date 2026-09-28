@@ -9,12 +9,11 @@
 //   - is it known *while the turn runs*? (`reported`: only once it ended)
 // Every decision below takes `used: number | undefined` (undefined = unknown)
 // and the tier's liveness; unknown always resolves to the side that does not
-// carry context forward (no reuse, no fork) and does not end a session on a
-// guess (no steer, no handover).
+// carry context forward (no fork) and does not end a session on a guess (no
+// steer, no handover).
 //
 // | mechanism                       | events | reported      | estimated | none        |
-// |---------------------------------|--------|---------------|-----------|-------------|
-// | reuse (pct < 50, used < cap/2)  | today  | today         | estimate  | off         |
+//|---------------------------------|--------|---------------|-----------|-------------|
 // | steer handover (used >= wall)   | today  | off (no live) | estimate  | off         |
 // | post-session handover check     | today¹ | off (no live) | estimate¹ | off         |
 // | test handover (used >= cap)     | today  | today         | estimate  | off         |
@@ -25,11 +24,10 @@
 // ¹ also due when the hint went out, whatever the final figure (plans/0040 D6)
 //
 // Wired in MA.3 (plans/0039): watch tracks the session through usageSource
-// and decides steer / test handover here, attempt decides reuse, execute the
-// post-session check, session-api the fork base guard. For opencode (`events`)
-// every decision equals the pre-MA.3 inline rules.
+// and decides steer / test handover here, execute decides the post-session
+// check, session-api the fork base guard. For opencode (`events`) every
+// decision equals the pre-MA.3 inline rules.
 import type { AgentEvent, AgentPart, UsageTier } from "./agent/types"
-import { REUSE_BELOW, REUSE_IDLE_MS } from "./chain"
 
 // A value exists while the turn runs: in-turn triggers (the steer handover
 // hint) can fire. `reported` learns the value only at turn end.
@@ -118,14 +116,6 @@ function partTokens(part: AgentPart): number {
 }
 
 // ── Decisions (one per mechanism; `events` rows equal today's inline rules) ──
-
-// Session reuse between prompts of a chain (attempt.ts; only with
-// OPENCODE_AUTO_REUSE_SESSION=on). pct is 100 whenever the context window is
-// unknown, which already turns reuse off; unknown usage does the same.
-export function reuseAllowed(prev: { pct: number; used: number | undefined; at: number }, cap: number, now: number): boolean {
-  if (prev.used === undefined) return false
-  return prev.pct < REUSE_BELOW && prev.used < cap / 2 && now - prev.at <= REUSE_IDLE_MS
-}
 
 // In-turn steer machinery (watch.ts: the milestone usage notices and the
 // hard-wall hint, both keyed on the effective wall = testrun.ts

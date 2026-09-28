@@ -3,7 +3,7 @@
 // dispatch and settle, usage and window, steer, length resume, questions,
 // permissions, error signals, retries, forks, history, liveness — runs here
 // against test/fixtures/agent.ts, under the full capability set and under the
-// barest one. The suite closes by checking that all fourteen AgentClient calls
+// barest one. The suite closes by checking that all thirteen AgentClient calls
 // were exercised.
 //
 // The opencode-shaped fakes (fixtures/runner.ts) keep covering the opencode
@@ -102,13 +102,15 @@ describe("dispatch and settle", () => {
     expect((second as { question: string }).question).toContain("task dispatch failed")
   })
 
-  test("reuse on: the chain's session takes the next prompt and is renamed to the new subject", async () => {
+  test("a resumed takeover: the chain's recorded session takes the next prompt and is renamed to the new subject", async () => {
     const agent = make()
-    const switches = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
     const chain: SessionChain = { ...fresh(), subject: "T-001 S1 first" }
-    await runSession(agent.client, task, "one", opts, chain, undefined, undefined, switches)
+    await runSession(agent.client, task, "one", opts, chain, undefined, undefined, DEFAULTS)
     chain.subject = "T-001 S2 second"
-    await runSession(agent.client, task, "two", opts, chain, undefined, undefined, switches)
+    // A recovery note on the chain's session is a takeover (resumed): the
+    // next prompt continues that session instead of creating one.
+    chain.note = "[driver] continuation after interruption"
+    await runSession(agent.client, task, "two", opts, chain, undefined, undefined, DEFAULTS)
     expect(agent.argsOf("create")).toHaveLength(1)
     expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_1"])
     expect(agent.argsOf("rename")).toEqual([["ses_1", expect.stringContaining("S2")]])
@@ -515,13 +517,12 @@ describe("the barest agent", () => {
   test("degrade clamps every switch it can, and a session still runs on create + events + prompt alone", async () => {
     const on = parseSwitches({
       [SWITCH_ENV.fork]: "on",
-      [SWITCH_ENV.reuseSession]: "on",
       [SWITCH_ENV.steer]: "on",
       [SWITCH_ENV.stuck]: "on",
       [SWITCH_ENV.ask]: "on",
     })
     const degraded = degrade(BARE_CAPABILITIES, on, {})
-    expect(degraded.switches).toEqual({ fork: false, reuseSession: false, steer: false, stuck: false, ask: false })
+    expect(degraded.switches).toEqual({ fork: false, steer: false, stuck: false, ask: false })
     expect(degraded.error).toBeUndefined()
     const switches = { ...on, ...degraded.switches }
     const agent = make({ capabilities: BARE_CAPABILITIES })
@@ -637,15 +638,16 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(next.modelEntry).toBe("a")
   })
 
-  test("a continuation keeps the chain's model while it is usable, even after the primary is eligible again", async () => {
+  test("a takeover of the same session keeps the chain's model while it is usable, even after the primary is eligible again", async () => {
     const agent = make({ turn: quotaTurn })
     const chain = deepChain()
-    const reuse = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-    await runSession(agent.client, task, "p", deep, chain, undefined, undefined, reuse)
+    await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
     clearDownMarks("task", "task")
-    // The reused session is a continuation of the same prompt line: it stays
-    // on the failover candidate although the primary is usable again.
-    await runSession(agent.client, task, "q", deep, chain, undefined, undefined, reuse)
+    // A takeover of the same session is a continuation of the same prompt
+    // line: it stays on the failover candidate although the primary is
+    // usable again.
+    chain.note = "[driver] continuation after interruption"
+    await runSession(agent.client, task, "q", deep, chain, undefined, undefined, DEFAULTS)
     expect(agent.prompts[2]).toMatchObject({ session: "ses_2", model: "prov/b" })
     expect(agent.argsOf("create")).toHaveLength(1)
   })
@@ -1113,13 +1115,13 @@ describe("context steps (plans/0055 §4.5)", () => {
         return steered === 1 ? [ev.message(ctx.session, "m2", 61_000, { model: WIDE }), ev.idle(ctx.session)] : [ev.idle(ctx.session)]
       },
     })
-    const reuse = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
     const chain = deepChain()
     await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
     expect(agent.prompts[0]).toMatchObject({ model: BASE })
-    // The chain's next prompt into the same session names the step it
-    // reached (a large cap keeps the session under the reuse thresholds).
-    await runSession(agent.client, task, "q", stepsOpts({ contextLimit: 200_000 }), chain, undefined, undefined, reuse)
+    // The chain's next prompt into the same session (a resumed takeover)
+    // names the step it reached.
+    chain.note = "[driver] continuation after interruption"
+    await runSession(agent.client, task, "q", stepsOpts({ contextLimit: 200_000 }), chain, undefined, undefined, DEFAULTS)
     expect(agent.prompts[1]).toMatchObject({ session: "ses_1", model: WIDE })
     // The next task's chain is a new prompt: a new session at the base step.
     const next = deepChain()

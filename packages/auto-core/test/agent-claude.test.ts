@@ -477,7 +477,7 @@ describe("claudeAgent: process manager", () => {
   test("capabilities as measured: resume, whole-session fork, steer, abort; no question / permission / history; usage in-turn", () => {
     expect(CLAUDE_CAPABILITIES).toEqual({ resume: true, fork: "session", steer: true, abort: true, question: false, permission: false, history: false, usage: "events" })
     // The run start degrades only what claude lacks (MA.4): ask off, notes for the preset and history.
-    const switches = parseSwitches({ [SWITCH_ENV.fork]: "on", [SWITCH_ENV.reuseSession]: "on", [SWITCH_ENV.steer]: "on", [SWITCH_ENV.ask]: "on" })
+    const switches = parseSwitches({ [SWITCH_ENV.fork]: "on", [SWITCH_ENV.steer]: "on", [SWITCH_ENV.ask]: "on" })
     const degraded = degrade(CLAUDE_CAPABILITIES, switches, { testByDriver: true })
     expect(degraded.switches).toEqual({ ask: false })
     expect(degraded.error).toBeUndefined()

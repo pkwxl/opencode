@@ -898,7 +898,7 @@ describe("Test execution protocol (--test-by-driver)", () => {
 
   test("wrap-up + handover requirements: persist the remaining work not dependent on the test + the handover document is mandatory", () => {
     const text = renderTestWrapup({ handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md" })
-    // Neutral about test timing: in the sequential mode (default) the test runs after the handover close-out; in the concurrent mode it is already running now; one wording holds for both.
+    // Neutral about test timing: the test runs after the handover close-out, and the session does not need to know when.
     expect(text).toContain("will be run by the DRIVER")
     expect(text).not.toContain("in parallel")
     expect(text).toContain("not dependent on this test run's result")

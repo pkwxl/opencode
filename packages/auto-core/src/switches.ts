@@ -20,7 +20,6 @@ export const SWITCH_ENV = {
   fine: "OPENCODE_AUTO_DECOMPOSE_FINE",
   steer: "OPENCODE_AUTO_STEER",
   step: "OPENCODE_AUTO_STEP",
-  reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
   taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
   ask: "OPENCODE_AUTO_ASK",
@@ -30,7 +29,6 @@ export const SWITCH_ENV = {
   retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
   recoveryWait: "OPENCODE_AUTO_RECOVERY_WAIT",
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
-  handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
   hibernate: "OPENCODE_AUTO_HIBERNATE",
   agent: "OPENCODE_AUTO_AGENT",
   // The operator layer of the model registry (src/models.ts): a file path, not
@@ -60,6 +58,16 @@ export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
   // reference auto-correct and the check subcommand's reference scan) was
   // removed, so the variable no longer has anything to gate.
   OPENCODE_AUTO_REF_CHECK: "the reference check was removed",
+  // In-chain session reuse: every prompt within a task opens a fresh session
+  // by design (the fresh-session-plus-handover pipeline); only interruption
+  // recovery's takeover of the recorded session remains, and it never read
+  // this switch. The default behavior (no reuse) is unchanged.
+  OPENCODE_AUTO_REUSE_SESSION: "in-chain session reuse was removed; every prompt opens a fresh session",
+  // Concurrent test handover: the tests always run after the handover
+  // close-out now, facing exactly the tree of the handover-confirmation
+  // commit instead of the frozen snapshot. The default (sequential) behavior
+  // is unchanged.
+  OPENCODE_AUTO_HANDOVER_CONCURRENT: "concurrent test handover was removed; the tests run after the handover close-out",
 }
 
 // The notice lines the retired switches produce for an environment (pure;
@@ -208,14 +216,6 @@ export type Switches = {
   // Step mode: phase/task/subtask hard-pause at the matching (and coarser) boundaries,
   // waiting for Enter to proceed.
   step: StepMode
-  // Session-chain reuse master switch (default off): off = every prompt within a task
-  // opens a new session (the chain keeps only the previous session's usage for logging
-  // and the handover decision), the threshold rules (REUSE_BELOW / half of cap /
-  // REUSE_IDLE_MS) no longer take part; on = the existing threshold reuse restored. A
-  // session taken over by interruption recovery is not bound by this switch (recovery
-  // semantics is "continue the very session that was interrupted", see attempt's
-  // resumed).
-  reuseSession: boolean
   // Stuck-loop detection (default on, see src/stuck.ts): when a session repeats the same
   // action with unchanged results, the driver proactively injects a hint via steer (at
   // most three per session, never aborts the session); off = no detection, no injection.
@@ -272,16 +272,6 @@ export type Switches = {
   // rolls back on the first invalid handover document. With the gates off (--commit
   // false/dryrun) the runner side idles it entirely (the record carries no new fields).
   strictResume: boolean
-  // Test-handover timing (default off = hand over first, run after): with off, after the
-  // freeze commit only the script gets pinned (consuming the tmp/test.sh marker), and
-  // the run happens only after session wrap-up, handover-document archiving and commit
-  // #2 are all done — what is tested is exactly the tree of commit #2, no concurrent
-  // writes during wrap-up. on restores the old true concurrency (after the freeze it
-  // dispatches wrap-up without awaiting the test); the test then faces the freeze
-  // snapshot, and if wrap-up changed the tested content it only prints one warning
-  // line — no stash, no rerun, no blocking (the retest guard was retired with this
-  // switch's introduction, see plans/0023-test-handover-early-design.md §H).
-  handoverConcurrent: boolean
   // Hibernation window (avoiding LLM high-tariff hours, plans/0027-hibernate-design.md,
   // default undefined = no hibernation, zero change from the status quo):
   // OPENCODE_AUTO_HIBERNATE="HH:MM+H" (a daily UTC window, H hours may be fractional).
@@ -313,7 +303,6 @@ const SWITCH_DEFAULTS: Switches = {
   fine: false,
   steer: true,
   step: "off",
-  reuseSession: false,
   stuck: true,
   taskContext: "off",
   ask: false,
@@ -322,7 +311,6 @@ const SWITCH_DEFAULTS: Switches = {
   retryWaits: [0, 1, 2, 4, 8],
   recoveryWait: 30,
   strictResume: false,
-  handoverConcurrent: false,
   hibernate: undefined,
   agent: undefined,
 }
@@ -541,7 +529,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     fine: onOff(SWITCH_ENV.fine, env[SWITCH_ENV.fine], SWITCH_DEFAULTS.fine),
     steer: onOff(SWITCH_ENV.steer, env[SWITCH_ENV.steer], SWITCH_DEFAULTS.steer),
     step: step as StepMode,
-    reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
     ask: onOff(SWITCH_ENV.ask, env[SWITCH_ENV.ask], SWITCH_DEFAULTS.ask),
@@ -550,7 +537,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
-    handoverConcurrent: onOff(SWITCH_ENV.handoverConcurrent, env[SWITCH_ENV.handoverConcurrent], SWITCH_DEFAULTS.handoverConcurrent),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
     agent,
   }
@@ -574,7 +560,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.fine === SWITCH_DEFAULTS.fine ? undefined : `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     switches.steer === SWITCH_DEFAULTS.steer ? undefined : `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
-    switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
     switches.ask === SWITCH_DEFAULTS.ask ? undefined : `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
@@ -589,9 +574,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     switches.recoveryWait === SWITCH_DEFAULTS.recoveryWait ? undefined : `${SWITCH_ENV.recoveryWait}=${switches.recoveryWait}`,
     switches.strictResume === SWITCH_DEFAULTS.strictResume ? undefined : `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
-    switches.handoverConcurrent === SWITCH_DEFAULTS.handoverConcurrent
-      ? undefined
-      : `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
@@ -608,7 +590,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     `${SWITCH_ENV.step}=${switches.step}`,
-    `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
     `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
@@ -618,7 +599,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     `${SWITCH_ENV.recoveryWait}=${switches.recoveryWait}`,
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
-    `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
   ].join(", ")
