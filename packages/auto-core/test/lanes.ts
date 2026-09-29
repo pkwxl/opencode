@@ -10,9 +10,9 @@
 //   timer longer than 50 ms.
 // AUTO-DECISION: borderline files are classified by what they actually do at
 // runtime, not by import graph alone — e.g. test/execute-handover.test.ts
-// drives executeWhole but passes commit:false over a plain temp directory (no
-// git, no spawn → unit), while test/script.test.ts spawns only through
-// runScript (→ repo).
+// drives executeWhole but installs the no-commit git double over a plain
+// temp directory (no git repository, no spawn → unit), while
+// test/script.test.ts spawns only through runScript (→ repo).
 import { readdirSync } from "node:fs"
 
 export type Lane = "unit" | "repo"

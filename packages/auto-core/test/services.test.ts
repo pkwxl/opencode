@@ -9,7 +9,11 @@
 // classifier run state; the control's /exit request and its sleepers)
 // exists only as methods on the constructed service — no free-function
 // delegator export anywhere else in src/, and no reset* hook for it
-// anywhere — and the callers ratchet: the ambient accessor `services()`
+// anywhere — the git seam's ratchet: the strategy's free delegates (the
+// commit-side functions the production instance is built over) stay
+// exported only from the seam's homes, git.ts and git-ops.ts, so no
+// second free entry point grows beside the holder's strategy — and the
+// callers ratchet: the ambient accessor `services()`
 // is called only by the modules SERVICE_ENTRIES lists (a comment-stripped
 // scan over all of src; the list is the documented, shrink-only
 // allowlist).
@@ -19,6 +23,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { ExitRequested } from "../src/exit"
+import { noCommitGit } from "../src/git-ops"
 import { createServices, installServices, SERVICE_ENTRIES, services, uninstallServices, type RunServices } from "../src/services"
 import type { ModelRegistry } from "../src/models"
 import { loadStats, statsTask, statsTotals } from "../src/stats"
@@ -204,6 +209,23 @@ describe("the services holder", () => {
     expect(() => control.maybeExit("task", "task T-001 the title")).not.toThrow()
   })
 
+  test("the git override carries the no-commit double, and the holder after it is the production commit side again", () => {
+    // The strategy seam has no reset hook because none is needed: the
+    // double is a whole instance a test installs through createServices'
+    // override slot (the engine then reads committing-off answers through
+    // services().git), and the surrounding fresh holder — the preload's
+    // for the next test, restored here by the uninstall — builds the
+    // production delegation again. Committing off never leaks across
+    // tests, the same fresh-instance isolation the moved state above gets.
+    const double = noCommitGit()
+    installServices(createServices({ git: double }))
+    expect(services().git).toBe(double)
+    expect(services().git.records).toBe(false)
+    uninstallServices()
+    expect(services().git).not.toBe(double)
+    expect(services().git.records).toBe(true)
+  })
+
   test("the stats clock follows the installed holder (the fold)", async () => {
     // stats is a process-level module; its timeline is the run's one clock.
     // Book a task bucket on a manual clock and read the bucket's anchor and
@@ -300,10 +322,30 @@ const MOVED_TO_ROUTER = [
 // function` declaration, so the scan does not target it.)
 const MOVED_TO_CONTROL = ["requestExit", "exitRequested", "sleepUnlessExit", "maybeExit"] as const
 
+// The git seam's free delegates — the production instance's backing
+// functions, the one service surface that is a switchable strategy rather
+// than moved state. Nothing moved: the free exports stay where they always
+// lived, because callers outside any run's services (the close command,
+// the recovery paths) keep calling the git.ts five directly, and the
+// production instance is pure delegation over them. The ratchet guarding
+// them is therefore the delegator scan below, not MOVED_STATE_MODULES: a
+// `export function <name>` outside the seam's homes would be a second
+// free entry point beside the holder's strategy, letting a caller skip
+// the instance a test replaced with the double. afterSession's home is
+// git-ops.ts, beside the two factories and the marker collection its
+// no-commit arm shares with the production body.
+const GIT_SEAM_IN_GIT = ["commitTree", "unitBaseline", "beginUnit", "commitPending", "changedFiles"] as const
+const GIT_SEAM_IN_GIT_OPS = ["afterSession"] as const
+
 // The modules whose state moved (fully or in part) into a constructed
 // service: a `reset*` export in one of them (or in a service's own home,
 // router.ts / exit.ts) would be a reset hook for the moved state, which
-// the per-test fresh holder replaces.
+// the per-test fresh holder replaces. The git seam's homes (git.ts,
+// git-ops.ts) are deliberately absent: no module state moved there — the
+// seam is a switchable strategy over free functions, the double replaces
+// the instance whole, and the fresh holder per test is the only reset the
+// strategy needs (the git override row in the holder describe above pins
+// that the production side is back with the next holder).
 const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring", "classify", "exit"]
 
 // Every src module, recursively — the moved-state and callers scans have
@@ -324,14 +366,20 @@ function srcFiles(): string[] {
   return files
 }
 
-describe("the moved-state ratchets (the moved state exists only as the constructed service)", () => {
-  test("no free-function delegator export of a moved name outside its service's home", () => {
+describe("the service-surface ratchets (moved state and the git seam's delegates exist only in their homes)", () => {
+  test("no free-function delegator export of a service name outside its service's home", () => {
     // The homes: router.ts for the routing tranches, exit.ts for the
-    // control. A delegator export anywhere else in src/ would let a caller
-    // keep the free-function shape over what is now the service's state.
+    // control, git.ts and git-ops.ts for the commit seam's delegates. A
+    // delegator export anywhere else in src/ would let a caller keep the
+    // free-function shape over what is now the service's state — or, for
+    // the git seam, over the run's strategy: a second free entry point
+    // beside the instance the holder carries (which a test may have
+    // replaced with the no-commit double).
     const scans: Array<{ home: string; names: readonly string[] }> = [
       { home: "src/router.ts", names: MOVED_TO_ROUTER },
       { home: "src/exit.ts", names: MOVED_TO_CONTROL },
+      { home: "src/git.ts", names: GIT_SEAM_IN_GIT },
+      { home: "src/git-ops.ts", names: GIT_SEAM_IN_GIT_OPS },
     ]
     const problems: string[] = []
     for (const file of srcFiles()) {
@@ -383,18 +431,23 @@ describe("the moved-state ratchets (the moved state exists only as the construct
     expect(exported).toEqual(["createControl"])
   })
 
-  test("the ratchets bite: the patterns match crafted violations and both lists track their service's real methods", () => {
+  test("the ratchets bite: the patterns match crafted violations and every list tracks its service's real surface", () => {
     // The source scans above pass on a clean tree, which says nothing about
     // a pattern that stopped matching anything. So: the same patterns must
     // catch the violations they were written for (a delegator export of a
-    // moved name, a reset* hook in a moved-state module)…
+    // moved or seam name, a reset* hook in a moved-state module)…
     const delegator = `export function ${MOVED_TO_ROUTER[0]}(router: unknown): void {}`
     expect(new RegExp(`export (async )?function ${MOVED_TO_ROUTER[0]}\\b`).test(delegator)).toBe(true)
     expect(new RegExp(`export (async )?function ${MOVED_TO_CONTROL[0]}\\b`).test(`export function ${MOVED_TO_CONTROL[0]}(): void {}`)).toBe(true)
+    // …one per git home too: an out-of-home commitTree (sync, the shape a
+    // wrapper would take) and an out-of-home afterSession (async, as the
+    // real one is declared)…
+    expect(new RegExp(`export (async )?function ${GIT_SEAM_IN_GIT[0]}\\b`).test(`export function ${GIT_SEAM_IN_GIT[0]}(dir: string): void {}`)).toBe(true)
+    expect(new RegExp(`export (async )?function ${GIT_SEAM_IN_GIT_OPS[0]}\\b`).test(`export async function ${GIT_SEAM_IN_GIT_OPS[0]}(): void {}`)).toBe(true)
     expect([...`export function resetExitRequest(): void {}`.matchAll(/export (async )?function (reset\w*)/g)].map((m) => m[2])).toEqual([
       "resetExitRequest",
     ])
-    // …and both lists track their service's real surface: every name is a
+    // …and every list tracks its service's real surface: every name is a
     // method of the constructed service, so the delegator scan covers
     // methods that exist, and a renamed one fails here rather than
     // scanning for a name nothing owns.
@@ -402,6 +455,18 @@ describe("the moved-state ratchets (the moved state exists only as the construct
     for (const name of MOVED_TO_ROUTER) expect(typeof router[name]).toBe("function")
     const control = services().control as unknown as Record<string, unknown>
     for (const name of MOVED_TO_CONTROL) expect(typeof control[name]).toBe("function")
+    // …the git lists against both instances of the seam: every name is a
+    // method of the production delegation the holder carries and of the
+    // no-commit double the tests install (the strategy marker `records`
+    // is a boolean, not a method — pinned as such, true committing on,
+    // false the double).
+    const gitNames = [...GIT_SEAM_IN_GIT, ...GIT_SEAM_IN_GIT_OPS]
+    const git = services().git as unknown as Record<string, unknown>
+    for (const name of gitNames) expect(typeof git[name]).toBe("function")
+    expect(git.records).toBe(true)
+    const double = noCommitGit() as unknown as Record<string, unknown>
+    for (const name of gitNames) expect(typeof double[name]).toBe("function")
+    expect(double.records).toBe(false)
   })
 })
 

@@ -16,12 +16,14 @@
 // the process): the run's clock, the process-level time keepers it wires
 // (the stats module), the router's decision state (the failback holders,
 // the down marks, the logged usage windows, the model-step cache claims,
-// the key rings, the classifier's answer cache and call budget) and the
-// control service's /exit request flag never leak from one test into the
-// next. A test that steers
-// time installs its own holder the same way; a test that needs fresh marks
-// or an unset /exit flag mid-way reinstalls a holder keeping the current
-// clock.
+// the key rings, the classifier's answer cache and call budget), the
+// control service's /exit request flag and the git service's strategy (a
+// test that turns committing off installs the no-commit double through its
+// own holder's override slot; the fresh holder here carries the production
+// delegation again) never leak from one test into the next. A test that
+// steers time installs its own holder the same way; a test that needs
+// fresh marks or an unset /exit flag mid-way reinstalls a holder keeping
+// the current clock.
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"

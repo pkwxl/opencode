@@ -448,9 +448,12 @@ describe("the run-start composition order (the services stage)", () => {
     expect("exit" in result).toBe(false)
     if ("exit" in result) return
     expect(result.registry?.models.has("glm")).toBe(true)
-    // The composition root's holder carries a live clock; the switches are
-    // not frozen yet — the freeze is the caller's, after the fleet's clamp.
+    // The composition root's holder carries a live clock and the production
+    // commit side (only a test overrides the git slot, installing the
+    // no-commit double through createServices); the switches are not
+    // frozen yet — the freeze is the caller's, after the fleet's clamp.
     expect(result.services.clock.now()).toBeGreaterThan(0)
+    expect(result.services.git.records).toBe(true)
     expect(Object.isFrozen(autoSwitches())).toBe(false)
   })
 
