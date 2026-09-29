@@ -162,13 +162,18 @@ const CLASSIFIED: Record<string, Domain> = {
    // only the chain types and the first-line helper below the session
    // layer.
    "engine/ladder": "driver",
-   // The turn spine (plans/0061 §4.4): the single input queue of one watch
-   // turn, the arbitration dispatch over the concerns' slices, the fx audit
-   // (the queue discipline's runtime invariants) and the finalize
-   // procedure. Types-only reach: the contract module beside it; watch is
-   // its executor, so it sits directly under watch.
-   "engine/spine": "driver",
-   "exec-session": "driver",
+    // The turn spine (plans/0061 §4.4): the single input queue of one watch
+    // turn, the arbitration dispatch over the concerns' slices, the fx audit
+    // (the queue discipline's runtime invariants) and the finalize
+    // procedure. Types-only reach: the contract module beside it; watch is
+    // its executor, so it sits directly under watch.
+    "engine/spine": "driver",
+    // The turn's synthetic-input sources (plans/0061 §4.2/§4.4): the probe
+    // timer and the classifier-answer feed that emit the spine queue's
+    // synthetic inputs. Reaches the contract and spine types, the router's
+    // answer type and session-api's probeSession; watch is its only caller.
+    "engine/sources": "driver",
+    "exec-session": "driver",
   execute: "driver",
   exit: "driver",
   failback: "driver",
@@ -331,20 +336,23 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // and watch as they land.
     "engine/contract": 3,
     // The turn spine (plans/0061 §4.4), directly under its executor: it
-    // reaches the contract module's types only. The sources the turn
-    // consolidation adds take the remaining slot under watch.
+    // reaches the contract module's types only.
     "engine/spine": 4,
     // The production TurnFx (plans/0061 §4.2/§4.3): beside the spine, under
     // watch — it reaches the contract's types and the unranked leaves below
     // the session layer (log, session-api, testrun, git, handover, stats).
     "engine/fx": 5,
-    watch: 6,
-    attempt: 7,
-    session: 8,
-    artifact: 9,
-    "exec-session": 9,
-    execute: 10,
-    runner: 11,
+    // The turn's synthetic-input sources (plans/0061 §4.2/§4.4), taking the
+    // last slot under watch: they reach the contract and spine types, the
+    // router's answer type and session-api's probeSession.
+    "engine/sources": 6,
+    watch: 7,
+    attempt: 8,
+    session: 9,
+    artifact: 10,
+    "exec-session": 10,
+    execute: 11,
+    runner: 12,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
