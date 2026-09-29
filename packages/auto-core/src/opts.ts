@@ -1,8 +1,10 @@
 // Session-level options and outcome types: the pass-through parameters shared
 // by runTask/runOnce and the bypass sessions, the unit stop-exit and
-// commit-result unions, plus the context budget constants. Pure types +
-// constants, no runtime dependencies, at the bottom of the dependency graph —
-// any module can import it without pulling in the session-driving graph.
+// commit-result unions, the context budget constants — and sessionOpts, the
+// one builder that assembles a session's options from the loop context. No
+// runtime dependencies: every import stays type-only, so the module stays at
+// the bottom of the dependency graph — any module can import it without
+// pulling in the session-driving graph.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S1, pure move).
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
@@ -228,6 +230,133 @@ export type Opts = {
   // config.scanExempt (plans/0059 X2): globs of deliverable paths the
   // subtask close-out's P1 scan and terminator scan skip.
   scanExempt?: string[]
+}
+
+// —— The session-options builder (the loop family's one Opts factory) ——
+
+// The structural context slice sessionOpts reads. A real loop context
+// (LoopCtx in src/loop-task.ts) assigns unchanged; the fields are declared
+// here instead of importing that type because a type edge opts → loop-task
+// would close a counted import cycle (loop-task reaches the task pipeline,
+// which reaches opts). `server` is ServerControl for the same structural
+// reason: the loop's AgentPool is assignable to it, exactly as the hand-built
+// literals this builder replaces already relied on.
+export type SessionCtx = {
+  directory: string
+  agentName: string
+  repl?: Interactive
+  server: ServerControl
+  routing?: import("./routing").RoutingFacts
+  router: import("./router").Router
+  control: import("./exit").Control
+  git: import("./git").GitOps
+  // false = the run's agents cannot fork, so auto's lead runs without its
+  // split clause (only the task site reads it).
+  leadSplit?: false
+  // The run-level options the builder reads: a structural subset of the
+  // preflight's run options, every field optional, so the full type assigns
+  // unchanged.
+  opts: {
+    verbose?: boolean
+    waitAnswer?: number
+    subtask?: SubtaskMode
+    contextLimit?: number
+    permission?: PermissionMode
+    idleMs?: number
+    maxMs?: number
+    testByDriver?: boolean
+    handoverTest?: boolean
+    mode?: ModeSpec
+    newSession?: boolean
+    wrapup?: boolean
+    scanExempt?: string[]
+    stopBefore?: "execute"
+  }
+}
+
+// Which loop session is asking for its options: one id per call site the
+// builder serves (phase-plan / phase-append are those sessions' resume-point
+// step names; plan-numbering / append-numbering are the numbering-record
+// restore sessions planning and appending open). The task variant carries its
+// phase as the caller-computed PhaseKey — computing it here would need the
+// phases value graph, which opts must not pull under every importer.
+export type SessionSite =
+  | { site: "task"; phase: PhaseKey }
+  | { site: "plan-numbering" }
+  | { site: "phase-plan" }
+  | { site: "append-numbering" }
+  | { site: "phase-append" }
+  | { site: "handover" }
+  | { site: "knowledge" }
+
+// Build one session's options from the loop context. Key presence reproduces
+// the seven hand-built literals it replaces: fields like interactive /
+// routing / idleMs are always set (their value may be undefined), while
+// leadSplit is set only when the fleet cannot fork. The per-site branches
+// below are the mandated compatibility state of the equivalence-first
+// introduction — each reproduces one of today's literals exactly, pinned by
+// test/session-opts.test.ts — and the ruled merge (this unit's last step:
+// every site then also carries idleMs and mode) removes the handover
+// exception, after which the builder takes no per-site exceptions.
+// AUTO-DECISION: the builder reads a structural ctx slice declared in this
+// module rather than the loop context type (a type edge back up to the loop
+// would close a counted import cycle; the slice keeps opts at the dependency
+// bottom while a real loop context still assigns unchanged).
+export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
+  if (site.site === "task") {
+    return {
+      agent: ctx.agentName,
+      dir: ctx.directory,
+      verbose: ctx.opts.verbose,
+      waitAnswer: ctx.opts.waitAnswer,
+      subtask: ctx.opts.subtask,
+      contextLimit: ctx.opts.contextLimit,
+      permission: ctx.opts.permission,
+      interactive: ctx.repl,
+      server: ctx.server,
+      idleMs: ctx.opts.idleMs,
+      maxMs: ctx.opts.maxMs,
+      testByDriver: ctx.opts.testByDriver,
+      handoverTest: ctx.opts.handoverTest,
+      mode: ctx.opts.mode,
+      newSession: ctx.opts.newSession,
+      wrapup: ctx.opts.wrapup,
+      scanExempt: ctx.opts.scanExempt,
+      phase: site.phase,
+      routing: ctx.routing,
+      router: ctx.router,
+      control: ctx.control,
+      git: ctx.git,
+      // present only when the fleet cannot fork, as in the conditional
+      // spread of the task literal this branch replaces
+      ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
+    }
+  }
+  // the bypass sessions (numbering restore, planning, appending, handover
+  // distillation, knowledge extraction) share one set: plan's stop condition
+  // makes their questions the human's, and they carry no task-execution
+  // fields — the sessions they feed take no test protocol, no wrap-up, no
+  // subtask pipeline.
+  const bypass: Opts = {
+    agent: ctx.agentName,
+    dir: ctx.directory,
+    verbose: ctx.opts.verbose,
+    waitAnswer: ctx.opts.waitAnswer,
+    humanQuestions: ctx.opts.stopBefore === "execute",
+    contextLimit: ctx.opts.contextLimit,
+    permission: ctx.opts.permission,
+    interactive: ctx.repl,
+    server: ctx.server,
+    routing: ctx.routing,
+    router: ctx.router,
+    git: ctx.git,
+  }
+  // Compatibility branch, removed by the ruled merge: the handover
+  // distillation literal is the one bypass site that does not carry mode
+  // (the handover renderer takes none; the merge adds it — inert there —
+  // together with idleMs for every site).
+  if (site.site !== "handover") bypass.mode = ctx.opts.mode
+  return bypass
 }
 
 // The default context budget baseline (tokens); overridden by --context-limit n

@@ -11,6 +11,7 @@ import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from 
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
+import { sessionOpts } from "./opts"
 import { appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
@@ -37,7 +38,7 @@ import { loadPlan } from "./tasks"
 // directly (C.2). Returns 0 = handover complete, 2 = the distillation session
 // implicitly blocked.
 export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
+  const { directory, opts, server: serverHandle } = ctx
   const state = await phaseState(directory)
   const following = state.phases[state.phases.findIndex((unit) => unit.id === phase.id) + 1]
   const next = following ? phaseTitle(following) : undefined
@@ -98,20 +99,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       serverHandle,
       distillTask,
       renderPhaseHandover({ phase: phase.entry, handover, next, acceptance, closedTasks }),
-      {
-        agent: agentName,
-        dir: directory,
-        verbose: opts.verbose,
-        waitAnswer: opts.waitAnswer,
-        humanQuestions: opts.stopBefore === "execute",
-        contextLimit: opts.contextLimit,
-        permission: opts.permission,
-        interactive: repl,
-        server: serverHandle,
-        routing: ctx.routing,
-        router: ctx.router,
-        git: ctx.git,
-      },
+      sessionOpts(ctx, { site: "handover" }),
       {
         kind: "handover distillation",
         step: { step: "phase-handover", unit: phaseKey(phase).id },
@@ -267,7 +255,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
 }
 
 async function phaseLoop(ctx: LoopCtx): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
+  const { directory, opts, server: serverHandle } = ctx
   for (;;) {
     const route = await routePhase(directory)
     if (route.type === "blocked") {
@@ -424,21 +412,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // src/phases/custom.ts), so the session choice needs no generalization.
       if (!route.phase.entry.hasTasks) {
         banner("k knowledge distillation: migration knowledge capture")
-        const extracted = await extractKnowledge(serverHandle, directory, {
-          agent: agentName,
-          dir: directory,
-          verbose: opts.verbose,
-          waitAnswer: opts.waitAnswer,
-          humanQuestions: opts.stopBefore === "execute",
-          contextLimit: opts.contextLimit,
-          permission: opts.permission,
-          interactive: repl,
-          server: serverHandle,
-        routing: ctx.routing,
-        router: ctx.router,
-        git: ctx.git,
-          mode: opts.mode,
-        }, route.phase)
+        const extracted = await extractKnowledge(serverHandle, directory, sessionOpts(ctx, { site: "knowledge" }), route.phase)
         if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)
         else if (extracted.type === "skipped") log(`↻ migration knowledge document already produced (${extracted.file}); skipping extraction, going straight to handover`)
         else if (extracted.type === "dirty") {

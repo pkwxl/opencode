@@ -106,6 +106,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/routing.test.ts",
   "test/select.test.ts",
   "test/services.test.ts",
+  "test/session-opts.test.ts",
   "test/shell.test.ts",
   "test/split.test.ts",
   "test/stats.test.ts",
