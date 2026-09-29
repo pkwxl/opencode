@@ -731,6 +731,125 @@ export async function watch(
       }
       return "consumed"
     },
+    // A session error (row: guard → failure → stepUp).
+    error: async (input, fx) => {
+      const e = input.event.error
+      guard.idleHandled = false
+      const errName = e.name ?? ""
+      const detail = e.message ?? errName
+      failure.error = failure.error ? `${failure.error}\n${detail}` : detail
+      // Pessimistic reading: once any session error explicitly carries
+      // isRetryable:false (account-level rate limiting and the like, where a
+      // re-dispatch or a fresh session fails the same way), the whole turn is
+      // judged non-retryable and never retracted by later events.
+      if (e.isRetryable === false) failure.retryable = false
+      // D.2 trigger surface 1: beyond message/retryable, carry the structured
+      // fields into the failure slice's info for classification and reporting
+      // (Watch gained errorInfo?, as retryable? did before it — the same kind
+      // of precedent). **No control-flow change** — this path never settles
+      // early for a failover; it only lets the existing error paths carry the
+      // classification up and downstream. The error name (APIError/
+      // ProviderAuthError/ContextOverflowError/…) is folded into message so
+      // the classifier can recognize the name-keyed classes like overflow/auth
+      // (design D.1; the name table is supplied by the adapter).
+      const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
+      const prev = failure.info as ErrorInfo | undefined
+      failure.info = withLimit(
+        {
+          ...(prev ?? {}),
+          message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
+          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
+          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
+          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+          // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
+          terminal: true,
+        },
+        withWording(e, clock.now()),
+      )
+      // Late step-up (§4.5, §7): an overflow below the top step means the
+      // agent compacted before the step-up steer could land — record the
+      // next step and go on observing (the compacted session continues).
+      if (classify(failure.info) === "overflow") await stepLate(fx)
+      return "consumed"
+    },
+    // A request retry (row: guard → failure → recovery → stepUp → liveness →
+    // transcript). B.4 the two signals unified / D.2 trigger surfaces 2 and
+    // 3, 0037 D4: the server itself is retrying a failed provider request.
+    // The id-carrying form comes from a retry part (self-contained
+    // structured ApiError), the id-less form from session.status retry
+    // (message/attempt/next, next being the wait until the next attempt —
+    // turning "still 40 minutes to wait" into an active decision; old
+    // servers may lack fields). Accumulate the failure slice's info first,
+    // then feed the classifier; a quota/auth/rate hit settles this turn
+    // early — the still-running old turn on the server must be aborted
+    // before returning (the same technique as the stream-interruption
+    // cleanup), otherwise it would modify files concurrently with the
+    // session forked next (D.2); overflow/transient/unknown only accumulate
+    // without settling, and observation continues (not treated as idle).
+    retry: async (input, fx) => {
+      const event = input.event
+      const e = event.error
+      guard.idleHandled = false
+      failure.retrying = true
+      // A retry means the agent works through a failure again (a later turn
+      // of this watch, say): an earlier turn's end is not this signal's.
+      const { terminal: _ended, ...before } = failure.info ?? {}
+      failure.info = withLimit(
+        {
+          ...before,
+          ...(e.message !== undefined ? { message: e.message } : {}),
+          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
+          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
+          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
+          ...(event.next !== undefined ? { next: event.next } : {}),
+        },
+        withWording(e, clock.now()),
+      )
+      // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
+      // the class now; otherwise the classifier is asked beside the stream
+      // and its answer settles the turn from the answer input while it still
+      // retries.
+      const { cls, classified } = consult("retry", failure.info, classify(failure.info))
+      // A per-minute cap the agent is still backing off from (plans/0057 §7):
+      // its own retrying cures it, so the turn does not settle before the
+      // agent gave up — quota wording on a refused request included. (A rate
+      // class already waits for agentGaveUp.)
+      const perMinute = (failure.info.scope === "request" || failure.info.scope === "token") && !agentGaveUp(failure.info, policy)
+      if ((cls === "quota" && !perMinute) || cls === "auth" || cls === "rate") {
+        await fx.abort()
+        const msg = failure.info.message ?? failure.error
+        failure.error = failure.error ? `${failure.error}\n${msg}` : msg
+        if (classified) raisedLine(cls)
+        // Only isRetryable:false (e.g. insufficient_quota) passes
+        // non-retryable down; for the other failover-eligible errors a new
+        // session is still pointless but a different model may help — left
+        // to P4 (the mapping keeps retryable undefined then).
+        return { settle: { kind: "error", cls, classified } }
+      }
+      // The same overflow read from the retry surface (the agent retried the
+      // request that overflowed before compacting): the late step-up applies
+      // here exactly as at the session-error handler above.
+      if (cls === "overflow") await stepLate(fx)
+      // An announced silence (§4.2): the agent honours a wait longer than its
+      // silence budget and says nothing more until it is over. The line names
+      // its end; the liveness probe counts no failure before it.
+      if (policy.honorsRetryAfter && event.next !== undefined && event.next > policy.silenceBudgetMs) {
+        const until = clock.now() + event.next
+        if (liveness.quietUntil === undefined || Math.abs(until - liveness.quietUntil) >= 1000) {
+          fx.log(
+            `⏳ the agent waits ${formatDuration(event.next)} before retrying${event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""} (session ${sessionID}); ` +
+              `no events are expected until ${new Date(until).toISOString()}`,
+          )
+        }
+        liveness.quietUntil = until
+      }
+      if (event.id !== undefined && !transcript.seen.has(event.id)) {
+        transcript.seen.add(event.id)
+        fx.vlog(`  ↻ request retry (attempt ${event.attempt})`)
+      }
+      return "consumed"
+    },
   }
 
   // The not-yet-cut remainder of the body: the branches whose kinds have no
@@ -874,122 +993,6 @@ export async function watch(
       // in the run log).
       await fx.abort()
       return blockedAdvice(`permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`)
-    }
-    if (event.type === "error") {
-      const e = event.error
-      guard.idleHandled = false
-      const errName = e.name ?? ""
-      const detail = e.message ?? errName
-      failure.error = failure.error ? `${failure.error}\n${detail}` : detail
-      // Pessimistic reading: once any session error explicitly carries
-      // isRetryable:false (account-level rate limiting and the like, where a
-      // re-dispatch or a fresh session fails the same way), the whole turn is
-      // judged non-retryable and never retracted by later events.
-      if (e.isRetryable === false) failure.retryable = false
-      // D.2 trigger surface 1: beyond message/retryable, carry the structured
-      // fields into the failure slice's info for classification and reporting
-      // (Watch gained errorInfo?, as retryable? did before it — the same kind
-      // of precedent). **No control-flow change** — this path never settles
-      // early for a failover; it only lets the existing error paths carry the
-      // classification up and downstream. The error name (APIError/
-      // ProviderAuthError/ContextOverflowError/…) is folded into message so
-      // the classifier can recognize the name-keyed classes like overflow/auth
-      // (design D.1; the name table is supplied by the adapter).
-      const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
-      const prev = failure.info as ErrorInfo | undefined
-      failure.info = withLimit(
-        {
-          ...(prev ?? {}),
-          message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
-          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-          // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
-          terminal: true,
-        },
-        withWording(e, clock.now()),
-      )
-      // Late step-up (§4.5, §7): an overflow below the top step means the
-      // agent compacted before the step-up steer could land — record the
-      // next step and go on observing (the compacted session continues).
-      if (classify(failure.info) === "overflow") await stepLate(fx)
-      return "consumed"
-    }
-    // retry (B.4 the two signals unified / D.2 trigger surfaces 2 and 3,
-    // 0037 D4): the server itself is retrying a failed provider request. The
-    // id-carrying form comes from a retry part (self-contained structured
-    // ApiError), the id-less form from session.status retry
-    // (message/attempt/next, next being the wait until the next attempt —
-    // turning "still 40 minutes to wait" into an active decision; old
-    // servers may lack fields). Accumulate the failure slice's info first,
-    // then feed the classifier; a quota/auth/rate hit settles this turn
-    // early — the still-running old turn on the server must be aborted
-    // before returning (the same technique as the stream-interruption
-    // cleanup), otherwise it would modify files concurrently with the
-    // session forked next (D.2); overflow/transient/unknown only accumulate
-    // without settling, and observation continues (not treated as idle).
-    if (event.type === "retry") {
-      const e = event.error
-      guard.idleHandled = false
-      failure.retrying = true
-      // A retry means the agent works through a failure again (a later turn
-      // of this watch, say): an earlier turn's end is not this signal's.
-      const { terminal: _ended, ...before } = failure.info ?? {}
-      failure.info = withLimit(
-        {
-          ...before,
-          ...(e.message !== undefined ? { message: e.message } : {}),
-          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
-          ...(event.next !== undefined ? { next: event.next } : {}),
-        },
-        withWording(e, clock.now()),
-      )
-      // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
-      // the class now; otherwise the classifier is asked beside the stream
-      // and its answer settles the turn from the answer input while it still
-      // retries.
-      const { cls, classified } = consult("retry", failure.info, classify(failure.info))
-      // A per-minute cap the agent is still backing off from (plans/0057 §7):
-      // its own retrying cures it, so the turn does not settle before the
-      // agent gave up — quota wording on a refused request included. (A rate
-      // class already waits for agentGaveUp.)
-      const perMinute = (failure.info.scope === "request" || failure.info.scope === "token") && !agentGaveUp(failure.info, policy)
-      if ((cls === "quota" && !perMinute) || cls === "auth" || cls === "rate") {
-        await fx.abort()
-        const msg = failure.info.message ?? failure.error
-        failure.error = failure.error ? `${failure.error}\n${msg}` : msg
-        if (classified) raisedLine(cls)
-        // Only isRetryable:false (e.g. insufficient_quota) passes
-        // non-retryable down; for the other failover-eligible errors a new
-        // session is still pointless but a different model may help — left
-        // to P4 (the mapping keeps retryable undefined then).
-        return { settle: { kind: "error", cls, classified } }
-      }
-      // The same overflow read from the retry surface (the agent retried the
-      // request that overflowed before compacting): the late step-up applies
-      // here exactly as at the session.error surface above.
-      if (cls === "overflow") await stepLate(fx)
-      // An announced silence (§4.2): the agent honours a wait longer than its
-      // silence budget and says nothing more until it is over. The line names
-      // its end; the liveness probe counts no failure before it.
-      if (policy.honorsRetryAfter && event.next !== undefined && event.next > policy.silenceBudgetMs) {
-        const until = clock.now() + event.next
-        if (liveness.quietUntil === undefined || Math.abs(until - liveness.quietUntil) >= 1000) {
-          fx.log(
-            `⏳ the agent waits ${formatDuration(event.next)} before retrying${event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""} (session ${sessionID}); ` +
-              `no events are expected until ${new Date(until).toISOString()}`,
-          )
-        }
-        liveness.quietUntil = until
-      }
-      if (event.id !== undefined && !transcript.seen.has(event.id)) {
-        transcript.seen.add(event.id)
-        fx.vlog(`  ↻ request retry (attempt ${event.attempt})`)
-      }
-      return "consumed"
     }
     // event.type === "idle"
     // Twin-idle dedup: one turn end settles only once. At a turn's end the
