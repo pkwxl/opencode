@@ -173,7 +173,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines | `src/lock.ts` (0053 D1–D3) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries | `src/step.ts` (0012) |
-| Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included | `src/exit.ts` (0014, 0057 §6) |
+| Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included; the request flag and its sleepers are the control service's (one per run on the services holder, the clock's `sleepUnlessExit` delegating to it) | `src/exit.ts` (0014, 0057 §6, 0061 C5) |
 | Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and 0–600 s jitter the registry window waits and the scheduled wait reuse | `src/hibernate.ts` (0027, 0055 §6.3, 0057 §6) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
 | Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` granularity and `/failback`: the pure boundary arithmetic in `src/failback.ts`, the state (sticky holder, pending order, run-time override, down marks per model and provider key) and the dual registry/no-registry failover decision behind the router service's routing fence | `src/failback.ts`, `src/router.ts` (0017, 0055, 0061 C4) |
