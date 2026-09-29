@@ -1,0 +1,37 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "⏳ the agent waits 2m 0s before retrying (attempt 2) (session s); no events are expected until 2026-09-29T00:02:00.000Z",
+    "  ↻ request retry (attempt 2)",
+    "  ↻ request retry (attempt 3)",
+    "output ends the silence",
+    "⏳ the agent waits 2m 0s before retrying (attempt 4) (session s); no events are expected until 2026-09-29T00:02:00.000Z",
+    "  ↻ request retry (attempt 4)",
+    "finally recovered",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "finally recovered",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

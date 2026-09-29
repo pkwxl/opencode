@@ -1,0 +1,41 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "unauthorized: the api key was revoked",
+    "errorInfo": {
+      "message": "unauthorized: the api key was revoked",
+      "statusCode": 401,
+      "attempt": 1
+    },
+    "errorClass": "auth",
+    "failover": true
+  }
+}

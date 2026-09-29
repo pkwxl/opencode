@@ -1,0 +1,47 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "insufficient_quota: balance empty",
+    "retryable": false,
+    "errorInfo": {
+      "message": "insufficient_quota: balance empty",
+      "isRetryable": false,
+      "attempt": 1,
+      "resetAt": 1790647200000,
+      "scope": "5h"
+    },
+    "errorClass": "quota",
+    "failover": true,
+    "resetAt": 1790647200000,
+    "scope": "5h",
+    "resetSource": "stated"
+  }
+}

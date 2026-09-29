@@ -1,0 +1,42 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "rate limit exceeded",
+    "errorInfo": {
+      "message": "rate limit exceeded",
+      "statusCode": 429,
+      "attempt": 2,
+      "next": 120000
+    },
+    "errorClass": "rate",
+    "failover": true
+  }
+}

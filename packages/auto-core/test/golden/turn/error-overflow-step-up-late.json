@@ -1,0 +1,38 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "  context: 1000 tokens",
+    "⇡ T-001 step-up late: the agent compacted the session (overflow on prov/base) before the step-up steer could land; the next prompt into this session names prov/wide"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 1000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "steppedUp": {
+      "step": 1,
+      "model": "prov/wide"
+    },
+    "error": "context overflow: prompt exceeds the window",
+    "testHandover": false,
+    "errorInfo": {
+      "message": "ContextOverflowError context overflow: prompt exceeds the window",
+      "terminal": true
+    },
+    "errorClass": "overflow"
+  }
+}

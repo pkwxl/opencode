@@ -1,0 +1,36 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "  context: 1000 tokens",
+    "⇡ T-001 step-up late: the agent compacted the session (overflow on prov/base) before the step-up steer could land; the next prompt into this session names prov/wide",
+    "  ↻ request retry (attempt 1)",
+    "the compacted session answers",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "the compacted session answers",
+    "pct": 100,
+    "used": 1000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "steppedUp": {
+      "step": 1,
+      "model": "prov/wide"
+    },
+    "error": "",
+    "testHandover": false
+  }
+}

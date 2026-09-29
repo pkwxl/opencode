@@ -776,6 +776,273 @@ const scenarios: TurnScenario[] = [
       return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build")]), h.opts)
     },
   },
+
+  // —— The `error` and `retry` rows (plans/0061 §4.5) ——
+  // Pattern verdicts only: no classifier wiring anywhere in this family
+  // (opts.routing stays unset, so classifierFor finds no registry), so no
+  // settle source exists beside the stream — the early settles below
+  // (quota/auth/rate) happen synchronously inside the loop body over the
+  // fake's immediately-resolving abort — and the queued probe timer is
+  // never fired. Neither A-3 race materializes: no pins, no exclusions.
+
+  // `error` row, failure cell: two session errors fold into error and
+  // errorInfo — the name fold (`<name> <detail>` when the detail does not
+  // name the error type), the message fold (the second classifyMsg
+  // appended), the pessimistic isRetryable:false (never retracted),
+  // terminal:true — with the limit fields arriving both ways: the first
+  // error's reset comes from its own wording (withWording reads the stated
+  // five-hour reset, +08:00 zone: 2026-09-29 10:30:00 there is
+  // TURN_EPOCH + 9_000_000 here), the second carries retryAfterMs and
+  // limitReason (withLimit lays them over the stated pair). The error path
+  // never settles early: observation ends on the natural idle, and the
+  // final Watch carries error, retryable:false, errorInfo, errorClass
+  // "quota" (isRetryable:false reads as quota) and the stated reset fields.
+  {
+    id: "error-accumulate-idle-settle",
+    kinds: ["message", "part", "error", "idle"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          ev.text("s", "t1", "partial work before the failure"),
+          ev.step("s", "stp1"),
+          ev.error("s", { name: "APIError", message: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-29 10:30:00" }),
+          ev.error("s", { name: "ProviderBoom", message: "account suspended", isRetryable: false, retryAfterMs: 45_000, limitReason: "out_of_credits" }),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `error` row, stepUp cell: an overflow session error below the top step
+  // (the agent's own overflow pattern over the folded name + message)
+  // takes the late step-up — the agent compacted before the step-up steer
+  // could land, so no steer goes out; the ⇡ … step-up late line records
+  // the move and steppedUp rides the final Watch, which also carries the
+  // overflow error fields after the natural idle.
+  {
+    id: "error-overflow-step-up-late",
+    kinds: ["message", "error", "idle"],
+    agent: { limits: { "prov/base": 100_000, "prov/wide": 200_000 }, errorPatterns: { overflow: /context overflow/i } },
+    run: async (h) => {
+      const steerContext: SteerContext = {
+        name: "big",
+        entry: turnEntry("big", "prov/base", { wider: ["prov/wide"] }),
+        step: 0,
+        model: "prov/base",
+        label: "T-001",
+      }
+      return watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          ev.error("s", { name: "ContextOverflowError", message: "context overflow: prompt exceeds the window" }),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        steerContext,
+      )
+    },
+  },
+
+  // `retry` row, guard cell: both retry signal forms — the id-carrying
+  // retry part and the id-less session.status retry (+attempt/+next) — set
+  // `retrying` and accumulate errorInfo without settling (the patterns
+  // class the wording unknown); the ↻ request retry vlog fires once per
+  // part id (the re-sent r1 is deduped by `seen`; the id-less form never
+  // logs); the next model output ends `retrying`, and the turn settles
+  // naturally on the idle with a clean Watch (a retry signal alone is no
+  // error).
+  {
+    id: "retry-forms-vlog-dedup",
+    kinds: ["message", "retry", "part", "idle"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: "blorp upstream hiccup" } },
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: "blorp upstream hiccup" } },
+          { type: "retry", session: "s", attempt: 2, next: 5000, error: { message: "blorp upstream hiccup again" } },
+          ev.text("s", "t1", "recovered after the retries"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, failure cell (quota): isRetryable:false reads as quota
+  // outright — the turn settles early: the still-running old turn is
+  // aborted first, then the fixed snapshot field set (error from the
+  // errorInfo message, retryable:false passed down, errorInfo, errorClass
+  // "quota", failover:true) plus the stated reset fields (the event's own
+  // resetAt/scope outrank every other source). The ↻ vlog never fires —
+  // the settle precedes it.
+  {
+    id: "retry-quota-early-settle",
+    kinds: ["message", "retry"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          {
+            type: "retry",
+            session: "s",
+            id: "r1",
+            attempt: 1,
+            error: { message: "insufficient_quota: balance empty", isRetryable: false, resetAt: TURN_EPOCH + 7_200_000, scope: "5h" },
+          },
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, failure cell (auth): 401 + unauthorized wording — the
+  // same early settle with retryable left undefined (only an explicit
+  // isRetryable:false passes non-retryable down) and no reset fields
+  // (nothing stated, no classifier wired).
+  {
+    id: "retry-auth-early-settle",
+    kinds: ["message", "retry"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: "unauthorized: the api key was revoked", statusCode: 401 } },
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, failure cell (rate): a 429 whose announced wait (120 s)
+  // sits over the neutral policy's backoff cap (60 s) — the agent's own
+  // retrying will not cure it (agentGaveUp), so the rate signal classes as
+  // rate and the turn settles early; below the threshold the same signal
+  // would only accumulate (that undecided case is the classifier's row).
+  {
+    id: "retry-rate-early-settle",
+    kinds: ["message", "retry"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 2, next: 120_000, error: { message: "rate limit exceeded", statusCode: 429 } },
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, failure cell (the per-minute gate): quota wording scoped
+  // to a per-minute request cap while the agent is still backing off
+  // (attempt below the policy cap, no long wait announced) does not settle
+  // — the agent's own retrying cures it; the ↻ vlog fires and observation
+  // continues to a natural idle settle.
+  {
+    id: "retry-per-minute-quota-observed",
+    kinds: ["message", "retry", "part", "idle"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          {
+            type: "retry",
+            session: "s",
+            id: "r1",
+            attempt: 1,
+            error: { message: "usage limit: too many requests this minute", scope: "request", resetAt: TURN_EPOCH + 30_000 },
+          },
+          ev.text("s", "t1", "the per-minute cap cleared"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, liveness cell: over a policy that honours retry-after
+  // (silence budget 60 s), a retry announcing a 120 s wait logs the ⏳ the
+  // agent waits … line naming the clock-derived end instant; a follow-up
+  // retry whose end lands within 1000 ms of the announced one updates
+  // quietUntil silently (the dedup); model output ends the silence, so the
+  // next long wait logs the line again. attempt and next stay below the
+  // policy's gave-up thresholds throughout, so nothing settles.
+  {
+    id: "retry-announced-silence-dedup",
+    kinds: ["message", "retry", "part", "idle"],
+    agent: { retryPolicy: { maxAttempts: 5, backoffCapMs: 300_000, honorsRetryAfter: true, waitsOutLimit: true, silenceBudgetMs: 60_000 } },
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 2, next: 120_000, error: { message: "blorp upstream hiccup" } },
+          { type: "retry", session: "s", id: "r2", attempt: 3, next: 120_500, error: { message: "blorp upstream hiccup" } },
+          ev.text("s", "t1", "output ends the silence"),
+          { type: "retry", session: "s", id: "r3", attempt: 4, next: 120_000, error: { message: "blorp upstream hiccup" } },
+          ev.text("s", "t2", "finally recovered"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `retry` row, stepUp cell: the overflow read from the retry surface
+  // (the agent retried the request that overflowed before compacting)
+  // takes the same late step-up as the session.error surface — the ⇡ line,
+  // no steer, steppedUp — and observation continues (overflow never
+  // settles early) to a natural idle.
+  {
+    id: "retry-overflow-step-up-late",
+    kinds: ["message", "retry", "part", "idle"],
+    agent: { limits: { "prov/base": 100_000, "prov/wide": 200_000 }, errorPatterns: { overflow: /context overflow/i } },
+    run: async (h) => {
+      const steerContext: SteerContext = {
+        name: "big",
+        entry: turnEntry("big", "prov/base", { wider: ["prov/wide"] }),
+        step: 0,
+        model: "prov/base",
+        label: "T-001",
+      }
+      return watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: "context overflow: the request overflowed before compaction" } },
+          ev.text("s", "t1", "the compacted session answers"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        steerContext,
+      )
+    },
+  },
 ]
 
 describe("the turn-trace oracle", () => {
