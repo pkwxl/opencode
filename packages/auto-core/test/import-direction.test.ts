@@ -177,16 +177,18 @@ const CLASSIFIED: Record<string, Domain> = {
     // concern under engine/concerns/: guard (the twin-idle dedup), windows
     // (the limit row), transcript (terminal echo and billing), stuck (the
     // loop hint), questions (the question and permission rows), failure (the
-    // error accumulator with its limit-statement helpers) and recovery (the
+    // error accumulator with its limit-statement helpers), recovery (the
     // failure-message classifier's turn: the consult, the pattern verdicts,
-    // the raised settle, the final classification and the reset fields). Each
-    // owns one slice of the turn state and reaches only the contract's types
-    // plus the unranked leaves below the session layer (session-api's
-    // describePart and isApproval, the stuck-hint template render and the
-    // detector's constants, unit-commit's autoAnswer, resolve's
-    // sameIssue/compactText, chain's statedInWording and agentGaveUp,
-    // classify's ask and merge policies, the router's answer type);
-    // watch installs them beside the remainder.
+    // the raised settle, the final classification and the reset fields) and
+    // liveness (the probe verdicts, the announced silence, the truncation
+    // continuation and the interrupted close-out). Each owns one slice of
+    // the turn state and reaches only the contract's types plus the
+    // unranked leaves below the session layer (session-api's describePart
+    // and isApproval, the stuck-hint template render and the detector's
+    // constants, unit-commit's autoAnswer, resolve's sameIssue/compactText,
+    // chain's statedInWording and agentGaveUp, classify's ask and merge
+    // policies, the router's answer type, log's formatDuration); watch
+    // installs them beside the remainder.
     "engine/concerns/guard": "driver",
     "engine/concerns/windows": "driver",
     "engine/concerns/transcript": "driver",
@@ -194,6 +196,7 @@ const CLASSIFIED: Record<string, Domain> = {
     "engine/concerns/questions": "driver",
     "engine/concerns/failure": "driver",
     "engine/concerns/recovery": "driver",
+    "engine/concerns/liveness": "driver",
     "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -379,13 +382,14 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/concerns/questions": 11,
     "engine/concerns/failure": 12,
     "engine/concerns/recovery": 13,
-    watch: 14,
-    attempt: 15,
-    session: 16,
-    artifact: 17,
-    "exec-session": 17,
-    execute: 18,
-    runner: 19,
+    "engine/concerns/liveness": 14,
+    watch: 15,
+    attempt: 16,
+    session: 17,
+    artifact: 18,
+    "exec-session": 18,
+    execute: 19,
+    runner: 20,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

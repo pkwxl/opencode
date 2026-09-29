@@ -6,7 +6,7 @@
 // driven concern reads through the spine's read-only reach. Everything a
 // concern needs arrives as arguments to its handle — no turn, stream or spine
 // is involved.
-import type { AgentClient } from "../../src/agent/types"
+import type { AgentClient, AgentRetryPolicy } from "../../src/agent/types"
 import type { ErrorClass, ErrorInfo } from "../../src/chain"
 import type { Classifier } from "../../src/classify"
 import type { LimitEvent, TurnContext, TurnFx, TurnState, TurnView } from "../../src/engine/contract"
@@ -110,14 +110,16 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
 }
 
 // A TurnContext stub: the barest type-legal context over the native fake
-// agent, with the pieces a concern may read (the run options, the stuck
-// tracker, the switches, the services — the windows concern reads the run's
-// router; the pattern classifier, the failure-message classifier's handle
-// and the steer context — the recovery concern's reads) injectable.
+// agent, with the pieces a concern may read (the run options, the retry
+// policy, the stuck tracker, the switches, the services — the windows concern
+// reads the run's router; the pattern classifier, the failure-message
+// classifier's handle and the steer context — the recovery concern's reads)
+// injectable.
 export const turnContext = (
   over: {
     client?: AgentClient
     opts?: Opts
+    policy?: AgentRetryPolicy
     switches?: Switches
     services?: RunServices
     stuck?: StuckTracker
@@ -130,7 +132,7 @@ export const turnContext = (
   sessionID: "ses_1",
   opts: over.opts ?? {},
   switches: over.switches ?? parseSwitches({}),
-  policy: { backoffCapMs: 60_000, silenceBudgetMs: 60_000, honorsRetryAfter: false, waitsOutLimit: false },
+  policy: over.policy ?? { backoffCapMs: 60_000, silenceBudgetMs: 60_000, honorsRetryAfter: false, waitsOutLimit: false },
   classify: over.classify ?? (() => "unknown"),
   source: usageSource("events"),
   services: over.services ?? createServices(),

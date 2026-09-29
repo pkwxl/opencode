@@ -15,7 +15,7 @@ import type { ForkBaseInfo, SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 import { ensureForkBase } from "../src/session"
-import { askHuman, forkSession, seedForkSession, sessionUsage } from "../src/session-api"
+import { askHuman, forkSession, probeSession, seedForkSession, sessionUsage } from "../src/session-api"
 import { createServices, installServices, uninstallServices } from "../src/services"
 import { flushStats, loadStats, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { fixedClock } from "./fixtures/clock"
@@ -377,6 +377,26 @@ describe("askHuman wait deduction (stats wiring, T-005)", () => {
       await flushStats(dir)
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// The probe body of the liveness probe (plans/0026-session-boundary-
+// hardening-design.md D3/§4.4), re-homed from test/watch-probe.test.ts when
+// the liveness concern was extracted (the concern sees only the verdict; the
+// transport is this function's, called by the turn's sources): an
+// independent short-timeout connection GETting the session's metadata — a
+// timeout without response and a request throw both count as failed, an
+// error response counts as failed, a normal response counts as live.
+describe("probeSession (the liveness probe's body)", () => {
+  test("a timeout without response and a request throw both count as failed; a normal response counts as live", async () => {
+    const hanging = opencodeAgent({ session: { get: () => new Promise(() => {}) } } as unknown as OpencodeClient)
+    expect(await probeSession(hanging, "ses_x", 20)).toBe(false)
+    const throwing = opencodeAgent({ session: { get: () => Promise.reject(new Error("boom")) } } as unknown as OpencodeClient)
+    expect(await probeSession(throwing, "ses_x", 20)).toBe(false)
+    const failing = opencodeAgent({ session: { get: async () => ({ error: { name: "UnknownError" } }) } } as unknown as OpencodeClient)
+    expect(await probeSession(failing, "ses_x", 20)).toBe(false)
+    const ok = opencodeAgent({ session: { get: async () => ({ data: { id: "ses_x" } }) } } as unknown as OpencodeClient)
+    expect(await probeSession(ok, "ses_x", 20)).toBe(true)
   })
 })
 

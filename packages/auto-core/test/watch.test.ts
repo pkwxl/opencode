@@ -1,7 +1,8 @@
 // Wiring tests for src/watch.ts (error signals / stats / the two-line report
 // driven through attempt or runSession): SSE subscription lifecycle, the
-// three trigger surfaces of error signals, session-boundary stats, the ◉
-// two-line report, proxy-answer collection. Session-failure exits (session
+// liveness probe's wiring (timer cleanup, the H7 POST abort), the three
+// trigger surfaces of error signals, session-boundary stats, the ◉ two-line
+// report, proxy-answer collection. Session-failure exits (session
 // error / dispatch failure) are driven directly through attempt — since
 // 2026-09-16 runSession no longer returns blocked for failures (it enters
 // the wait-and-probe loop, see test/session.test.ts), and attempt's return
@@ -54,6 +55,69 @@ describe("SSE subscription lifecycle (disconnected at session end)", () => {
     // macrotask before asserting the stream has wound down.
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(state.closed).toBe(true)
+  })
+})
+
+// ---- The liveness probe's wiring (re-homed from test/watch-probe.test.ts
+// when the liveness concern was extracted): the concern's mechanism — the
+// verdict counting, the quiet-window exemption, the half-open judgment, the
+// truncation continuation and the interrupted close-out — is the liveness
+// concern's, pinned in its suite (test/turn-liveness.test.ts); what stays
+// here is the wiring only an end-to-end run observes: the probe timer's
+// cleanup after the session settles (the sources' timer, torn down with the
+// turn), and the half-open verdict aborting the synchronous POST in concert
+// (H7). The probe period is shrunk to milliseconds via opts.idleMs; the
+// half-open shape is an event stream that never yields an event (no FIN/RST,
+// so the client never sees an end signal). ----
+
+describe("liveness probe wiring (timer cleanup, the H7 POST abort)", () => {
+  test("timer cleanup: no further probes after the session settles (no leak)", async () => {
+    let gets = 0
+    const { client } = fakeClient({
+      get: () => {
+        gets++
+        return { data: { id: "ses_x" } }
+      },
+    })
+    const result = await runSession(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
+    expect(result.type).toBe("idle")
+    const atSettle = gets
+    // Wait more than three probe periods; the probe count must not grow
+    // again (settling tears the chain down; late callbacks re-arm nothing).
+    await new Promise((resolve) => setTimeout(resolve, 70))
+    expect(gets).toBe(atSettle)
+  })
+
+  test("H7: when the POST hangs on a half-open connection, the probe's verdict aborts the POST in concert and settles as a session error (without waiting for TURN_TIMEOUT)", async () => {
+    const { client, calls } = fakeClient({
+      get: () => {
+        return { error: { name: "UnknownError", data: {} } }
+      },
+      // The H7 field shape: the synchronous POST and the SSE both hang on
+      // the half-open connection; neither side ever resolves.
+      prompt: () => new Promise(() => {}),
+      events: () =>
+        (async function* () {
+          await new Promise(() => {})
+        })(),
+    })
+    // If the code still bet on the POST until TURN_TIMEOUT, this case would
+    // hang to the test timeout; returning on the probe scale (~2×idleMs)
+    // proves the linkage works.
+    const result = await attempt(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
+    // Settles as the half-open session error, and must not be reported
+    // as a "task dispatch failed" (an abort echo).
+    expect(blocked.question).toContain("session error: ")
+    expect(blocked.question).toContain("half-open")
+    expect(blocked.question).not.toContain("task dispatch failed")
+    expect(blocked.retryable).not.toBe(false)
+    expect(blocked.errorClass).toBe("transient")
+    // The POST carries the abort signal and is aborted along with the
+    // half-open verdict (on a real link this cancels the underlying fetch).
+    expect(calls.promptSignals[0]?.aborted).toBe(true)
+    expect(calls.aborts).toContain("ses_new_1")
   })
 })
 
@@ -676,7 +740,12 @@ describe("proxy-answer ledger wiring (AUTO-RESOLVE, T-005)", () => {
 // cut-off point" steer lets the original session carry on; consecutive
 // truncations are capped at LENGTH_CONTINUE_MAX (3), a non-length ending
 // resets the count; once a session.error is observed there is no resume
-// (the error path wins). ----
+// (the error path wins). The continuation decision itself — the criterion,
+// the cap, the reset, the error gate, the steer text — is the liveness
+// concern's mechanism, pinned in its suite (test/turn-liveness.test.ts)
+// since the concern was extracted; these cases stay as the end-to-end
+// wiring: the steer reaching the client in the original session, and the
+// exits' session discipline. ----
 
 describe("truncated-output resume (a step ending with length is not a natural finish)", () => {
   const stepFinish = (sid: string, id: string, reason: string) => ({

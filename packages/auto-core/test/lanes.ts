@@ -53,7 +53,6 @@ export const REPO_LANE: readonly string[] = [
   "test/testrun.test.ts",
   "test/turn-trace.test.ts",
   "test/unit-commit.test.ts",
-  "test/watch-probe.test.ts",
   "test/watch.test.ts",
 ]
 
@@ -120,6 +119,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/turn-arbitration.test.ts",
   "test/turn-failure.test.ts",
   "test/turn-guard.test.ts",
+  "test/turn-liveness.test.ts",
   "test/turn-questions.test.ts",
   "test/turn-recovery.test.ts",
   "test/turn-stuck.test.ts",

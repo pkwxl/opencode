@@ -15,7 +15,7 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the concern roster — the
 // extracted concerns in src/engine/concerns/ (guard, transcript, windows,
-// stuck, questions, failure, recovery; each owning its slice's
+// stuck, questions, failure, recovery, liveness; each owning its slice's
 // construction) beside the one `remainder` concern that still holds the
 // not-yet-extracted turn code — and hands the stream to the spine
 // (src/engine/spine.ts), which owns the input queue, the arbitration
@@ -27,15 +27,17 @@
 // the extracted concerns own (the guard's resets and twin-idle stop, the
 // transcript's echo/billing/report, the windows' limit row, the stuck hint,
 // the questions' question and permission rows, the failure's error
-// accumulation, the recovery's classifier consult and verdicts). The
-// remainder's liveness entry also carries the settle procedure's liveness
-// step (the interrupted close-out) as its finalize; the recovery concern's
-// finalize holds the raised settle's abort and the final classification.
-// The probe timer and the classifier answer arrive as synthetic inputs from
-// src/engine/sources.ts; all of the body's I/O goes through the production
-// fx (src/engine/fx.ts) under the spine's audit. What remains here besides
-// the remainder is the mapping of the spine's settle and the slices back
-// into the Watch result each old exit returned.
+// accumulation, the recovery's classifier consult and verdicts, the
+// liveness's probe verdicts, announced silence, truncation continuation and
+// interrupted close-out). The settle procedure's steps are the concerns'
+// own finalize functions: the liveness concern's holds the interrupted
+// close-out (aborting the orphan turn and extending the failure record),
+// the recovery concern's the raised settle's abort and the final
+// classification. The probe timer and the classifier answer arrive as
+// synthetic inputs from src/engine/sources.ts; all of the body's I/O goes
+// through the production fx (src/engine/fx.ts) under the spine's audit.
+// What remains here besides the remainder is the mapping of the spine's
+// settle and the slices back into the Watch result each old exit returned.
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentEvent } from "./agent/types"
@@ -47,6 +49,7 @@ import { handoffComplete } from "./handover"
 import type { Advice, Concern, InputKind, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
 import { failureConcern } from "./engine/concerns/failure"
 import { guardConcern } from "./engine/concerns/guard"
+import { makeLivenessConcern } from "./engine/concerns/liveness"
 import { questionsConcern } from "./engine/concerns/questions"
 import { makeRecoveryConcern, resetFields } from "./engine/concerns/recovery"
 import { stuckConcern } from "./engine/concerns/stuck"
@@ -55,7 +58,6 @@ import { windowsConcern } from "./engine/concerns/windows"
 import { makeTurnFx } from "./engine/fx"
 import { makeTurnSources } from "./engine/sources"
 import { runTurn, TURN_ARBITRATION, type ConcernRoster } from "./engine/spine"
-import { formatDuration } from "./log"
 import type { Opts } from "./opts"
 import { renderStepUp, renderTestWrapup, renderTestResult } from "./prompt"
 import { formatTokens } from "./session-api"
@@ -65,29 +67,6 @@ import type { StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { fillUsageNote, steerWall, type Steer, type TestRun } from "./testrun"
 import { steerDue, testHandoverDue, liveUsage, usageSource } from "./usage"
-
-// Liveness probe parameters (plans/0026-session-boundary-hardening-design.md
-// D3): the interval defaults to reusing idleTime (10 minutes, same key and
-// same default as the script watchdog, config.idleTime — the timer itself
-// lives in src/engine/sources.ts now); **2 consecutive** failures are required
-// before judging half-open — to rule out misjudging transient server jitter
-// (GC pauses and the like). The short per-probe timeout (30 seconds) is
-// session-api's PROBE_TIMEOUT_MS.
-const PROBE_MAX_FAILURES = 2
-
-// Truncated-output continuation (2026-09-18, kernel-spi-nor T-030 S13 field
-// case): the last step-finish ending with reason length = the model reply was
-// truncated by the output limit (cut mid reasoning stream) while the server
-// goes idle as usual — this is not a natural finish, the session's work is
-// clearly unfinished. A short "continue from the cut-off point" steer lets the
-// same session carry on (not one bit of context lost), instead of closing out
-// as a natural finish to run shape checks/ticks and then opening a blank
-// session that re-reads everything. Consecutive truncations are capped at 3
-// (keeping the degenerate form — a single over-long message — from spinning);
-// past the cap it still closes out as a natural finish, caught by the existing
-// artifact shape-check loop; a step finishing with a reason other than length
-// (work back to normal after continuation) resets the count.
-const LENGTH_CONTINUE_MAX = 3
 
 // The per-input handler map (plans/0061 §4.5): one handler per input kind the
 // remainder still serves. An `event` input keys on its event's own type (the
@@ -102,18 +81,17 @@ type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx, view: 
 // The input kinds the remainder still serves — those whose arbitration row
 // holds a not-yet-extracted cell (limit belongs to the windows concern alone,
 // question and permission to the questions concern, answer to the recovery
-// concern, stream-end to the spine's own terminal). The arbitration suite
-// derives the same set from the table and the install's delegation set and
-// pins this list to it. The map cannot drift from the list: HandlerMap is a
-// total record over ServedKind, so a missing handler is a type error and an
-// extra one an excess-property error.
+// concern, probe to the liveness concern, stream-end to the spine's own
+// terminal). The arbitration suite derives the same set from the table and
+// the install's delegation set and pins this list to it. The map cannot
+// drift from the list: HandlerMap is a total record over ServedKind, so a
+// missing handler is a type error and an extra one an excess-property error.
 export const HANDLER_KINDS = [
   "part",
   "message",
   "error",
   "retry",
   "idle",
-  "probe",
 ] as const satisfies readonly InputKind[]
 type ServedKind = (typeof HANDLER_KINDS)[number]
 type HandlerMap = { [K in ServedKind]: KindHandler<K> }
@@ -123,7 +101,7 @@ type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 // its removal. Typed as the union's source of truth — the install below and
 // the cell routing both read it, so a stale entry is a type error, not a
 // silent mis-route.
-export const REMAINDER_KEYS = ["liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export const REMAINDER_KEYS = ["usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
 export type RemainderKey = (typeof REMAINDER_KEYS)[number]
 // The remainder's slices, pre-created by watch() (the extracted concerns own
 // their slices' construction in their own files): the fx's steer-model getter
@@ -133,17 +111,18 @@ export type RemainderState = { readonly [K in RemainderKey]: TurnState[K] }
 // The turn's concern install: the extracted concerns from their files, the
 // not-yet-extracted slices delegated to the one remainder handle. Exported
 // for the arbitration suite's shrink ratchet: slicesDelegatedTo over this
-// install reads exactly the not-yet-extracted set. The remainder's liveness
-// entry carries the settle procedure's liveness step (the interrupted
-// close-out, below) as its finalize: the procedure runs it at the liveness
-// cell's first appearance (the part row), before the recovery concern's
-// finalize (the retry row) — the order the recovery concern's final
-// classification of the extended record rests on.
+// install reads exactly the not-yet-extracted set. The liveness concern's
+// finalize holds the settle procedure's liveness step (the interrupted
+// close-out) and the recovery concern's the raised settle's abort and the
+// final classification; the procedure runs them at their first cells'
+// positions (liveness in the part row before recovery in the retry row) —
+// the order the recovery concern's final classification of the extended
+// record rests on.
 export const turnConcerns = (
   state: RemainderState,
   handle: Concern<SliceKey>["handle"],
   recovery: Concern<"recovery">,
-  livenessFinalize: Concern<"liveness">["finalize"],
+  liveness: Concern<"liveness">,
 ): ConcernRoster => ({
   guard: guardConcern,
   transcript: transcriptConcern,
@@ -152,7 +131,7 @@ export const turnConcerns = (
   questions: questionsConcern,
   failure: failureConcern,
   recovery,
-  liveness: { name: "liveness", initial: () => state.liveness, handle, finalize: livenessFinalize },
+  liveness,
   usage: { name: "usage", initial: () => state.usage, handle },
   stepUp: { name: "stepUp", initial: () => state.stepUp, handle },
   test: { name: "test", initial: () => state.test, handle },
@@ -247,15 +226,14 @@ export async function watch(
   // same live objects the roster's initials hand back; the body reads and
   // writes them through these aliases exactly where the locals stood. The
   // extracted concerns' slices (guard, transcript, windows, stuck, questions,
-  // failure, recovery) are built by their own initials inside the spine and
-  // read through the view.
+  // failure, recovery, liveness) are built by their own initials inside the
+  // spine and read through the view.
   const remainderState: RemainderState = {
-    liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
     usage: { pct: 100, used: 0, hinted: false, notes: new Set<number>() },
     stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { liveness, usage, test: testState } = remainderState
+  const { usage, test: testState } = remainderState
   // The context-step slice (the old steerModel/stepNow/reached locals).
   const steps = remainderState.stepUp
 
@@ -263,41 +241,12 @@ export async function watch(
   const fx = makeTurnFx({ ctx, steerModel: () => steps.model, onModel, onLimit })
 
   // The settle procedure's channel for the interrupted close-out's failure
-  // record (the recovery concern's deps, which names the discipline): the
-  // liveness finalize below writes the extension here, the recovery
-  // concern's final classification and the settle→Watch mapping read it.
+  // record (both concerns' deps name the discipline): the liveness concern's
+  // finalize writes the extension here, the recovery concern's final
+  // classification and the settle→Watch mapping read it.
   const extended: { error?: string; info?: ErrorInfo } = {}
   const recovery = makeRecoveryConcern({ answerWith: sources.answerWith, extended })
-  // The interrupted/half-open close-out — the settle procedure's liveness
-  // step (plans/0061 §4.4 rule 5), still the remainder's until the liveness
-  // concern lands. The finalize procedure runs it before the recovery
-  // concern's final classification (the liveness cell of the part row
-  // precedes the recovery cell of the retry row), so the classification and
-  // the snapshot read the extended record. Stream-interruption / half-open
-  // close-out: abort the orphan turn that may still be running on the
-  // server, avoiding concurrent file writes with the retried new session
-  // (abort is harmless to a finished session; with the network already down
-  // the call fails silently). The session error goes through attempt's
-  // wrapping onto the retry/blocked paths, the progress record stays active,
-  // and the next run reuses this session to continue. The probe-judged
-  // half-open (D3) and the SSE interruption get distinct messages; the
-  // half-open message carries network/timeout criteria for
-  // classifySessionError to file as transient — transport-layer faults ride
-  // the existing retry ladder and failover ring, no model switch; the
-  // failure record is extended in sync so the classification and the upward
-  // report have grounds.
-  // AUTO-DECISION: the interrupted close-out moved from the settle→Watch mapping into the remainder's liveness finalize, with the extended record channelled through the `extended` cell (the finalize procedure is the only place the spine offers between the wrapper's cleanup and recovery's finalize, and the classification must read the extended record — the mapping runs after the whole procedure; the cell is the same channel the liveness concern's own finalize will fill when it lands).
-  const livenessFinalize: Concern<"liveness">["finalize"] = async (settle, _own, view, fx) => {
-    if (settle.kind !== "interrupted") return
-    await fx.abort()
-    const msg = view.liveness.halfOpen
-      ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
-      : "event stream interrupted (no session-end event received; suspected server failure or network down)"
-    extended.error = view.failure.error ? `${view.failure.error}\n${msg}` : msg
-    extended.info = view.liveness.halfOpen
-      ? { ...(view.failure.info ?? {}), message: view.failure.info?.message ? `${view.failure.info.message}\n${msg}` : msg }
-      : view.failure.info
-  }
+  const liveness = makeLivenessConcern({ extended })
   // Turn snapshot (STATS_PLAN §2): every exit of watch carries durationMs +
   // usage + resolves uniformly, including the early-settling error/blocked
   // exits — consumption and proxy answers really happened, they are not lost.
@@ -504,82 +453,47 @@ export async function watch(
   // concerns own (the guard's resets and twin-idle stop, the transcript's
   // echo/billing/report, the windows' limit row, the stuck hint, the
   // questions' question and permission rows, the failure's error
-  // accumulation, the recovery's classifier consult and verdicts) — in its
-  // arbitration row's order, and reads/writes its own slices through the
-  // closure aliases exactly where the branch did; other concerns' slices are
-  // read through the view. The handler runs at the row's first remainder cell
-  // and answers for the whole contiguous segment. ——
+  // accumulation, the recovery's classifier consult and verdicts, the
+  // liveness's probe verdicts, announced silence and truncation
+  // continuation) — in its arbitration row's order, and reads/writes its own
+  // slices through the closure aliases exactly where the branch did; other
+  // concerns' slices are read through the view. The handler runs at the row's
+  // first remainder cell and answers for the whole contiguous segment. ——
   const handlers: HandlerMap = {
-    // —— Synthetic inputs (their rows are the concurrent ones: they run
-    // beside an in-flight fx call, so slice writes and log/vlog only — the
-    // audit's (c); a settle returned here is held to the next boundary). ——
-    // The liveness probe's verdict (the old scheduleProbe callback; the
-    // timer and the probeSession call are the sources'). A successful probe
-    // resets the count; PROBE_MAX_FAILURES consecutive failures judge
-    // half-open and settle the turn, which the close-out returns as a
-    // retryable session error (classified transient, riding the existing
-    // retry ladder and failover ring; a new connection forks onward). The
-    // halfOpen guard is the old callback's early return: a verdict landing
-    // after the judgment changes nothing more.
-    probe: async (input, fx) => {
-      if (liveness.halfOpen) return "consumed"
-      if (input.ok) {
-        liveness.probeFailures = 0
-      } else if (liveness.quietUntil !== undefined && input.at < liveness.quietUntil) {
-        // The agent announced this silence (§4.2): the verdict waits for the
-        // end it named.
-        fx.log(`⚠ connectivity probe failed (session ${sessionID}) inside the agent's announced wait; not counted before ${new Date(liveness.quietUntil).toISOString()}`)
-      } else {
-        liveness.probeFailures += 1
-        fx.log(`⚠ connectivity probe failure ${liveness.probeFailures}/${PROBE_MAX_FAILURES} (session ${sessionID}); connection suspected half-open`)
-        if (liveness.probeFailures >= PROBE_MAX_FAILURES) {
-          liveness.halfOpen = true
-          return { settle: { kind: "interrupted" } }
-        }
-      }
-      return "consumed"
-    },
-    // The classifier's answer row is the recovery concern's alone
-    // (src/engine/concerns/recovery.ts): the answer is recorded there and,
-    // while the turn still retries an undecided failure, raises the class as
-    // a held settle that preempts the event wait.
+    // The two synthetic-input rows are the concurrent ones, and both are
+    // extracted concerns' alone: the probe verdict is the liveness concern's
+    // (src/engine/concerns/liveness.ts — the counter, the quiet-window
+    // exemption and the half-open judgment; the timer and the probeSession
+    // call are the sources'), the classifier's answer the recovery concern's
+    // (the answer is recorded there and, while the turn still retries an
+    // undecided failure, raises the class as a held settle that preempts the
+    // event wait). They run beside an in-flight fx call, so slice writes and
+    // log/vlog only — the audit's (c); a settle returned there is held to
+    // the next boundary.
     // —— Event inputs: one event of the agent's stream. The session filter
     // and the usage source's observe are the spine's (they preceded every
     // branch of the old loop). ——
     // A part of the agent's output (row: guard → failure → liveness → stepUp
-    // → transcript → stuck; the failure cell before this segment is the
-    // concern's, the remainder owns the liveness and stepUp cells).
+    // → transcript → stuck; the failure and liveness cells are the concerns',
+    // the remainder owns the stepUp cell — the cache-claim check).
     part: async (input, fx) => {
       const part = input.event.part
-      // Model output after a retry (the failure concern's cell just before
-      // this segment ended retrying and dropped the stated limit fields): an
-      // announced silence is over — the agent produced output again.
-      if (part.kind !== "step-start") {
-        liveness.quietUntil = undefined
-      }
-      // step-finish increment accumulation (the transcript concern's cell,
-      // after this segment) is unrelated to the truncation-continuation
-      // criterion and the cache-claim check here: a finish other than length
-      // (work back to normal after continuation) resets the consecutive-
-      // truncation count.
-      if (part.kind === "step-finish") {
-        liveness.lastFinish = part.reason
-        if (part.reason !== "length") liveness.lengthContinued = 0
-        // Cache-claim check (§4.5): `wider` asserts the step ids share the
-        // base id's prompt cache; the first step-finish after a step-up shows
-        // whether it holds (a large cacheRead confirms it, a cacheWrite of
-        // the whole prefix contradicts it). The contradiction line fires
-        // once per entry.
-        if (steerContext?.entry !== undefined) {
-          const verdict = router.observeCacheClaim(steerContext.name, part.tokens)
-          if (verdict === "confirmed") {
-            fx.vlog(`✓ ${steerContext.name}: the wider step read ${formatTokens(part.tokens.cacheRead)} tokens from the shared prompt cache`)
-          } else if (verdict === "contradiction" && router.noteClaimContradiction(steerContext.name)) {
-            fx.log(
-              `⚠ ${steerContext.name}: the first step on the wider id wrote ${formatTokens(part.tokens.cacheWrite)} tokens of cache and read ${formatTokens(part.tokens.cacheRead)} — ` +
-                `the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids`,
-            )
-          }
+      // The liveness concern's cell before this segment cleared any
+      // announced silence (the agent produced output again) and recorded a
+      // step-finish's reason. Cache-claim check (§4.5): `wider` asserts the
+      // step ids share the base id's prompt cache; the first step-finish
+      // after a step-up shows whether it holds (a large cacheRead confirms
+      // it, a cacheWrite of the whole prefix contradicts it). The
+      // contradiction line fires once per entry.
+      if (part.kind === "step-finish" && steerContext?.entry !== undefined) {
+        const verdict = router.observeCacheClaim(steerContext.name, part.tokens)
+        if (verdict === "confirmed") {
+          fx.vlog(`✓ ${steerContext.name}: the wider step read ${formatTokens(part.tokens.cacheRead)} tokens from the shared prompt cache`)
+        } else if (verdict === "contradiction" && router.noteClaimContradiction(steerContext.name)) {
+          fx.log(
+            `⚠ ${steerContext.name}: the first step on the wider id wrote ${formatTokens(part.tokens.cacheWrite)} tokens of cache and read ${formatTokens(part.tokens.cacheRead)} — ` +
+              `the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids`,
+          )
         }
       }
       // The transcript concern's cell follows (the billing dedup, the echo
@@ -675,51 +589,40 @@ export async function watch(
       return "consumed"
     },
     // A request retry (row: guard → failure → recovery → stepUp → liveness →
-    // transcript; the failure and recovery cells are the concerns' — the
-    // failure concern accumulated the signal into the info, the recovery
-    // concern consulted the classifier and settled the turn for the classes
-    // that cure only by moving — the remainder owns the stepUp and liveness
-    // cells). B.4 the two signals unified / D.2 trigger surfaces 2 and 3,
-    // 0037 D4: the server itself is retrying a failed provider request. The
-    // id-carrying form comes from a retry part (self-contained structured
-    // ApiError), the id-less form from session.status retry
-    // (message/attempt/next, next being the wait until the next attempt —
-    // turning "still 40 minutes to wait" into an active decision; old
-    // servers may lack fields). The classes that observe on reach this
-    // segment: overflow/transient/unknown accumulate without settling, and
-    // observation continues (not treated as idle).
-    retry: async (input, fx, view) => {
-      const event = input.event
+    // transcript; the failure, recovery and liveness cells are the concerns'
+    // — the failure concern accumulated the signal into the info, the
+    // recovery concern consulted the classifier and settled the turn for the
+    // classes that cure only by moving, the liveness concern opens the
+    // announced-silence window — the remainder owns the stepUp cell). B.4
+    // the two signals unified / D.2 trigger surfaces 2 and 3, 0037 D4: the
+    // server itself is retrying a failed provider request. The id-carrying
+    // form comes from a retry part (self-contained structured ApiError), the
+    // id-less form from session.status retry (message/attempt/next, next
+    // being the wait until the next attempt — turning "still 40 minutes to
+    // wait" into an active decision; old servers may lack fields). The
+    // classes that observe on reach this segment: overflow/transient/unknown
+    // accumulate without settling, and observation continues (not treated as
+    // idle).
+    retry: async (_input, fx, view) => {
       // The same overflow read from the retry surface (the agent retried the
       // request that overflowed before compacting): the late step-up applies
       // here exactly as at the session-error handler above.
       // AUTO-DECISION: the read is the patterns' own classification, not a verdict channelled from the recovery cell (the consult's verdict is overflow exactly when the patterns' read is — an answer never raises to overflow, the reply's class union has none — so re-deriving the pattern read needs no channel and no second consult).
       if (classify(view.failure.info ?? {}) === "overflow") await stepLate(fx)
-      // An announced silence (§4.2): the agent honours a wait longer than its
-      // silence budget and says nothing more until it is over. The line names
-      // its end; the liveness probe counts no failure before it.
-      if (policy.honorsRetryAfter && event.next !== undefined && event.next > policy.silenceBudgetMs) {
-        const until = clock.now() + event.next
-        if (liveness.quietUntil === undefined || Math.abs(until - liveness.quietUntil) >= 1000) {
-          fx.log(
-            `⏳ the agent waits ${formatDuration(event.next)} before retrying${event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""} (session ${sessionID}); ` +
-              `no events are expected until ${new Date(until).toISOString()}`,
-          )
-        }
-        liveness.quietUntil = until
-      }
-      // The transcript concern's cell follows with the deduplicated retry
-      // vlog and ends the input.
+      // The liveness concern's cell follows with the announced silence, then
+      // the transcript concern's with the deduplicated retry vlog.
       return "pass"
     },
-    // The session gone idle (row: guard → test → liveness → the natural
-    // settle; the remainder owns the test and liveness cells). The guard
+    // The session gone idle (row: guard → test → liveness → the spine's own
+    // natural terminal; the remainder owns the test cell). The guard
     // concern's cell before it stopped the second idle of a twin.
     idle: async (_input, fx, view) => {
       // Test execution protocol: idle first settles any pending test request
       // (execute + steer the result / handover request) before ending; the
       // session is only truly over when there is no pending test request and
-      // no unfinished handover request.
+      // no unfinished handover request. Every protocol path that steers or
+      // settles stops the input here; "break" (nothing pending, or the
+      // handover document complete) passes the row on to the liveness cell.
       if (test) {
         const handled = await handleIdleTest(fx, view)
         if (handled.type === "continue") return "consumed"
@@ -732,31 +635,10 @@ export async function watch(
           return { settle: { kind: "blocked", question, invalid: true } }
         }
       }
-      // Truncated-output continuation (LENGTH_CONTINUE_MAX): with the last
-      // step finishing on length and no session error observed, the session's
-      // work is unfinished — a short "continue from the cut-off point" steer
-      // lets the same session carry on instead of closing out as a natural
-      // finish. Twin-idle dedup (the guard concern's cell) and the steer-turn
-      // interplay are the same as the handover/test steer paths.
-      // An agent that takes no further messages (MA.4: steer off) cannot be
-      // told to continue; the truncated turn ends as if the cap were used up.
-      if (liveness.lastFinish === "length" && !view.failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
-        liveness.lengthContinued++
-        // The continuation turn's own step-finish would refresh lastFinish;
-        // clear it first after the steer, so the corner case of a new turn
-        // with no step-finish cannot repeat the continuation against a stale
-        // criterion (the cap bounds it, at most MAX idle spins).
-        liveness.lastFinish = undefined
-        fx.log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${liveness.lengthContinued}/${LENGTH_CONTINUE_MAX})`)
-        const ok = await fx.steer(
-          "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +
-            "(do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again).",
-        )
-        if (!ok) return blockedAdvice("steer dispatch failed (length-continuation hint); cannot continue the session, see the log.")
-        return "consumed"
-      }
-      // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from this segment instead of passing the row through to the spine's own idle terminal — identical outcome, no per-input bookkeeping needed.
-      return { settle: { kind: "natural" } }
+      // The liveness concern's cell follows: the truncation continuation, or
+      // a pass that lets the spine's own idle terminal settle the turn
+      // naturally.
+      return "pass"
     },
   }
 
@@ -776,21 +658,22 @@ export async function watch(
     return handler(input, fx, view)
   }
 
-  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle, recovery, livenessFinalize), fx, attach: sources.attach })
+  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle, recovery, liveness), fx, attach: sources.attach })
 
   // —— Mapping the settle back to the Watch result each old exit returned ——
   // The settle procedure's steps already ran inside the spine (its finalize
-  // procedure): the interrupted close-out (the remainder's liveness finalize)
+  // procedure): the liveness concern's finalize (the interrupted close-out)
   // aborted the orphan turn and extended the failure record — the extension
   // is read through the same cell the recovery concern's final classification
   // read — and the recovery concern finalized the raised settle's abort and
   // the final classification (its slice's `final`). What remains here is
   // shaping the snapshot. A blocked settle's question is the Watch blocked
   // field's only varying content: the extracted concerns' blocked exits (the
-  // questions concern's blocks) carry it in the settle itself, while the
-  // remainder's blocked exits record their extras (testHandover,
-  // testHandoverInvalid) beside the settle through blockedAdvice — the side
-  // channel, when set, is the whole extra.
+  // questions concern's blocks, the liveness concern's failed continuation
+  // dispatch) carry it in the settle itself, while the remainder's blocked
+  // exits record their extras (testHandover, testHandoverInvalid) beside the
+  // settle through blockedAdvice — the side channel, when set, is the whole
+  // extra.
   const errorText = extended.error ?? view.failure.error
   const failureInfo = extended.error !== undefined ? extended.info : view.failure.info
   if (settle.kind === "blocked") return snapshot(view, blockedExtra ?? { blocked: { type: "blocked", question: settle.question } })
