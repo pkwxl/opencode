@@ -15,15 +15,15 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the slices and the one `remainder`
 // concern — every roster entry delegates to the single `handle` below, which
-// routes each input to its per-kind handler (the loop body cut one kind at a
-// time; the kinds not yet cut still share the remaining monolith) — and hands
-// the stream to the spine (src/engine/spine.ts), which owns the
-// input queue, the arbitration dispatch, the fx audit and the trip-wired
-// stream wrapper. The probe timer and the classifier answer arrive as
-// synthetic inputs from src/engine/sources.ts; all of the body's I/O goes
-// through the production fx (src/engine/fx.ts) under the spine's audit. What
-// remains here besides the body is the mapping of the spine's settle and the
-// slices back into the Watch result each old exit returned.
+// routes each input to its entry of the per-kind handler map (the loop body,
+// cut one branch per input kind) — and hands the stream to the spine
+// (src/engine/spine.ts), which owns the input queue, the arbitration
+// dispatch, the fx audit and the trip-wired stream wrapper. The probe timer
+// and the classifier answer arrive as synthetic inputs from
+// src/engine/sources.ts; all of the body's I/O goes through the production fx
+// (src/engine/fx.ts) under the spine's audit. What remains here besides the
+// body is the mapping of the spine's settle and the slices back into the
+// Watch result each old exit returned.
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
@@ -101,13 +101,13 @@ const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
 // The per-input handler map (plans/0061 §4.5): one handler per input kind.
 // An `event` input keys on its event's own type (the spine's rowOf keying),
 // so an event handler receives its AgentEvent variant and a synthetic
-// handler its probe/answer/stream-end input. The keys are optional while
-// the cut proceeds; with every key present the map is a total record and
-// "every input kind has exactly one handler" is a compile-time fact.
+// handler its probe/answer/stream-end input. The record is total over
+// InputKind: "every input kind has exactly one handler" is a compile-time
+// fact.
 type EventInput<K extends AgentEvent["type"]> = { kind: "event"; event: Extract<AgentEvent, { type: K }> }
 type KindInput<K extends InputKind> = K extends AgentEvent["type"] ? EventInput<K> : Extract<TurnInput, { kind: K }>
 type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx) => Promise<Advice>
-type HandlerMap = { [K in InputKind]?: KindHandler<K> }
+type HandlerMap = { [K in InputKind]: KindHandler<K> }
 
 export async function watch(
   client: AgentClient,
@@ -486,13 +486,10 @@ export async function watch(
     return { type: "continue" }
   }
 
-  // —— The per-input handlers (plans/0061 §4.5): the loop body, cut one
-  // branch at a time into one handler per input kind. Each handler
-  // reproduces its old branch's statements in its arbitration row's order
-  // and reads/writes the slices through the closure aliases exactly where
-  // the branch did; a kind with no entry yet falls through to the monolith
-  // below (the cut's temporary compatibility layer, gone once the map is
-  // total). ——
+  // —— The per-input handlers (plans/0061 §4.5): the loop body, cut into one
+  // handler per input kind. Each handler reproduces its old branch's
+  // statements in its arbitration row's order and reads/writes the slices
+  // through the closure aliases exactly where the branch did. ——
   const handlers: HandlerMap = {
     // —— Synthetic inputs (their rows are the concurrent ones: they run
     // beside an in-flight fx call, so slice writes and log/vlog only — the
@@ -556,7 +553,9 @@ export async function watch(
       if (router.noteWindows(client, input.event)) fx.onLimit(input.event)
       return "consumed"
     },
-    // —— Event inputs: one event of the agent's stream. ——
+    // —— Event inputs: one event of the agent's stream. The session filter
+    // and the usage source's observe are the spine's (they preceded every
+    // branch of the old loop). ——
     // A part of the agent's output (row: guard → failure → liveness → stepUp
     // → transcript → stuck).
     part: async (input, fx) => {
@@ -731,6 +730,138 @@ export async function watch(
       }
       return "consumed"
     },
+    // A question of the session (row: questions — every question path of
+    // today; may settle blocked after reject and abort).
+    question: async (input, fx) => {
+      const event = input.event
+      const text = event.questions.join("\n")
+      // The dryrun preflight session auto-answers everything, never blocking
+      // on a question.
+      const permission = opts.dryrun ? false : /\bpermission\b/i.test(text)
+      const repeated = questions.autoAnswered.some((prev) => sameIssue(prev, text))
+      // plan's sessions (opts.humanQuestions): a non-permission question is a
+      // decision for the human — plan runs for human review before execution,
+      // and the driver waits for the human answer with no timeout (-i's
+      // resident input line or stdin) and never proxy-answers (no
+      // AUTO-RESOLVE); only an unanswerable human (closed input channel) or a
+      // repeat of the same question blocks, handing it to the human.
+      if (!opts.dryrun && opts.humanQuestions && !permission) {
+        if (!repeated) {
+          questions.autoAnswered.push(text)
+          fx.log(`❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\n${text}`)
+          const human = await fx.askHuman(undefined, "no timeout and no automatic answer under plan")
+          if (human) {
+            fx.log(`→ human answer: ${human}`)
+            await fx.replyQuestion(event.request, event.questions.map(() => [human]))
+            return "consumed"
+          }
+        }
+        await fx.rejectQuestion(event.request)
+        await fx.abort()
+        return blockedAdvice(
+          repeated
+            ? `asked again about the same question after the human's answer; handle it manually outside the session, then re-run:\n${text}`
+            : `the session asked for a human decision, but no answer could be received (the input channel is closed); answer it outside the session, then re-run:\n${text}`,
+        )
+      }
+      // With --wait-answer both permission and non-permission questions first
+      // wait for a human reply; on timeout both fall back to autoAnswer and
+      // the AI decides autonomously and continues; only a permission question
+      // under the default (no --wait-answer) blocks outright (unattended, the
+      // driver cannot decide authorization in the human's stead).
+      if (!repeated && (!permission || waitAnswer > 0)) {
+        questions.autoAnswered.push(text)
+        fx.log(`❓ received a ${permission ? "permission" : "non-permission"} question:\n${text}`)
+        const human = waitAnswer > 0 ? await fx.askHuman(waitAnswer, "auto-answered on timeout") : undefined
+        const ask = autoSwitches().ask
+        const fallback = autoAnswer(ask)
+        const reply = human ?? fallback
+        // Proxy-answer observation (auto-resolve H1,
+        // plans/0020-auto-resolve-design.md §G/§H-①): only fallback auto
+        // answers count — a human reply is a real person's decision, and the
+        // dryrun preflight produces no engineering decisions. On fallback the
+        // old single-line `→ auto answer: <long text>` form is replaced by a
+        // two-line highlighted one (the full answer text demoted to verbose
+        // logging), making "the driver decided for the user" visible at a
+        // glance and countable afterwards in the session log.
+        if (human) fx.log(`→ human answer: ${human}`)
+        else if (opts.dryrun) fx.log(`→ auto answer: ${fallback}`)
+        else {
+          questions.resolves.push({ at: clock.now(), question: text, session: sessionID })
+          fx.log(`⚑ auto-answer (AUTO-RESOLVE) #${questions.resolves.length}: ${compactText(text)}`)
+          fx.log(`  → answered; ${ask ? "the driver recorded it in full; this mode does not require the session to label it separately" : "asking the session to label the decision with AUTO-RESOLVE"}`)
+          fx.vlog(`  answer content: ${fallback}`)
+        }
+        await fx.replyQuestion(event.request, event.questions.map(() => [reply]))
+        return "consumed"
+      }
+      await fx.rejectQuestion(event.request)
+      await fx.abort()
+      return blockedAdvice(permission ? text : `asked again about the same question after auto-answer; handle it manually outside the session, then re-run:\n${text}`)
+    },
+    // A permission request of the session (row: questions — the dryrun deny,
+    // auto-allow, the ask-* modes; ask-fail settles blocked after abort).
+    permission: async (input, fx) => {
+      const event = input.event
+      // dryrun preflight: auto-deny without interrupting the session, so the
+      // AI records the blocked item and goes on probing the next one.
+      if (opts.dryrun) {
+        fx.log(`🔐 preflight probe denied (recorded in the report): ${event.permission} (${event.patterns.join(", ")})`)
+        await fx.replyPermission(event.request, "reject")
+        return "consumed"
+      }
+      const desc = `${event.permission} (${event.patterns.join(", ")})`
+      const mode = opts.permission ?? "ask-deny"
+      // auto-allow: no waiting for a human, auto-approve immediately
+      // ("always" lets this request through).
+      if (mode === "auto-allow") {
+        fx.log(`🔐 permission request received; auto-allowed via --permission auto-allow: ${desc}`)
+        await fx.replyPermission(event.request, "always")
+        return "consumed"
+      }
+      // ask-*: first wait for a human (--wait-answer minutes; unset means no
+      // wait, i.e. treated as a timeout). An answer of allow/yes/y and the
+      // like confirms the authorization ("always" lets it through); any other
+      // explicit answer denies the permission without interrupting the
+      // session, and the AI works around it and continues; on timeout the
+      // mode's fallback applies — ask-allow auto-approves, ask-deny
+      // auto-denies but the session continues, ask-fail denies and exits the
+      // run.
+      let human: string | undefined
+      if (waitAnswer > 0) {
+        fx.log(`🔐 permission request received: ${desc}`)
+        human = await fx.askHuman(
+          waitAnswer,
+          `enter allow/yes/y to approve; any other answer denies the permission and continues; on timeout handled as --permission ${mode}`,
+        )
+      } else {
+        fx.log(`🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ${mode}): ${desc}`)
+      }
+      if (human && isApproval(human)) {
+        fx.log(`→ human allowed: ${human} (always)`)
+        await fx.replyPermission(event.request, "always")
+        return "consumed"
+      }
+      if (human) {
+        fx.log(`→ human denied: ${human} (permission denied; the AI continues without it)`)
+        await fx.replyPermission(event.request, "reject")
+        return "consumed"
+      }
+      if (mode === "ask-allow") {
+        fx.log(`→ wait timed out; --permission ask-allow auto-allowed: ${desc}`)
+        await fx.replyPermission(event.request, "always")
+        return "consumed"
+      }
+      await fx.replyPermission(event.request, "reject")
+      if (mode === "ask-deny") {
+        fx.log(`→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): ${desc}`)
+        return "consumed"
+      }
+      // ask-fail: deny and exit the run (blocked halt, the question recorded
+      // in the run log).
+      await fx.abort()
+      return blockedAdvice(`permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`)
+    },
     // A session error (row: guard → failure → stepUp).
     error: async (input, fx) => {
       const e = input.event.error
@@ -850,220 +981,75 @@ export async function watch(
       }
       return "consumed"
     },
-  }
-
-  // The not-yet-cut remainder of the body: the branches whose kinds have no
-  // map entry yet, in their old shape. It shrinks as the cut moves branches
-  // into the map and is deleted once the map is total. One call still
-  // handles one input from its first table cell (every roster entry
-  // delegates to the dispatching handle below), so the advice it returns
-  // decides the input: "consumed" is the old body's `continue`, a settle is
-  // one of the old early exits, and the natural idle finish names the
-  // spine's own terminal settle directly (the row running out would produce
-  // the same settle — with every cell delegating to the same handle, the
-  // explicit form saves re-entering the body for the remaining cells).
-  // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
-  const monolith = async (input: { kind: "event"; event: AgentEvent }, fx: TurnFx): Promise<Advice> => {
-    // —— External inputs: one event of the agent's stream. The session
-    // filter and the usage source's observe are the spine's (they preceded
-    // every branch of the old loop). ——
-    const event = input.event
-    if (event.type === "question") {
-      const text = event.questions.join("\n")
-      // The dryrun preflight session auto-answers everything, never blocking
-      // on a question.
-      const permission = opts.dryrun ? false : /\bpermission\b/i.test(text)
-      const repeated = questions.autoAnswered.some((prev) => sameIssue(prev, text))
-      // plan's sessions (opts.humanQuestions): a non-permission question is a
-      // decision for the human — plan runs for human review before execution,
-      // and the driver waits for the human answer with no timeout (-i's
-      // resident input line or stdin) and never proxy-answers (no
-      // AUTO-RESOLVE); only an unanswerable human (closed input channel) or a
-      // repeat of the same question blocks, handing it to the human.
-      if (!opts.dryrun && opts.humanQuestions && !permission) {
-        if (!repeated) {
-          questions.autoAnswered.push(text)
-          fx.log(`❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\n${text}`)
-          const human = await fx.askHuman(undefined, "no timeout and no automatic answer under plan")
-          if (human) {
-            fx.log(`→ human answer: ${human}`)
-            await fx.replyQuestion(event.request, event.questions.map(() => [human]))
-            return "consumed"
-          }
+    // The session gone idle (row: guard → test → liveness → settle natural).
+    idle: async (_input, fx) => {
+      // Twin-idle dedup: one turn end settles only once. At a turn's end the
+      // server emits two idle events in a row (session.status idle +
+      // session.idle); after a steer is dispatched via promptAsync (which
+      // returns immediately), the second idle arrives before the steer turn
+      // starts, and handling it would misjudge the session as finished and
+      // settle early. After one idle is handled, further idles are ignored
+      // until a new session event appears in this session (a new turn
+      // starting) re-arms acceptance.
+      if (guard.idleHandled) return "consumed"
+      guard.idleHandled = true
+      // Test execution protocol: idle first settles any pending test request
+      // (execute + steer the result / handover request) before ending; the
+      // session is only truly over when there is no pending test request and
+      // no unfinished handover request.
+      if (test) {
+        const handled = await handleIdleTest(fx)
+        if (handled.type === "continue") return "consumed"
+        if (handled.type === "blocked") return blockedAdvice(handled.question, { testHandover: testState.handover })
+        if (handled.type === "invalid") {
+          const question =
+            `test handover document ${test.handoffFile} missing or empty (strict resume: the boundary write-verify failed; no more backfill retries; ` +
+            `this unit will roll back to its baseline and redo). Last agent output:\n${transcript.lastText.trim().slice(-2000) || "(no output)"}`
+          blockedExtra = { blocked: { type: "blocked", question }, testHandoverInvalid: true }
+          return { settle: { kind: "blocked", question, invalid: true } }
         }
-        await fx.rejectQuestion(event.request)
-        await fx.abort()
-        return blockedAdvice(
-          repeated
-            ? `asked again about the same question after the human's answer; handle it manually outside the session, then re-run:\n${text}`
-            : `the session asked for a human decision, but no answer could be received (the input channel is closed); answer it outside the session, then re-run:\n${text}`,
+      }
+      // Truncated-output continuation (LENGTH_CONTINUE_MAX): with the last
+      // step finishing on length and no session error observed, the session's
+      // work is unfinished — a short "continue from the cut-off point" steer
+      // lets the same session carry on instead of closing out as a natural
+      // finish. Twin-idle dedup (the guard slice) and the steer-turn interplay
+      // are the same as the handover/test steer paths.
+      // An agent that takes no further messages (MA.4: steer off) cannot be
+      // told to continue; the truncated turn ends as if the cap were used up.
+      if (liveness.lastFinish === "length" && !failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
+        liveness.lengthContinued++
+        // The continuation turn's own step-finish would refresh lastFinish;
+        // clear it first after the steer, so the corner case of a new turn
+        // with no step-finish cannot repeat the continuation against a stale
+        // criterion (the cap bounds it, at most MAX idle spins).
+        liveness.lastFinish = undefined
+        fx.log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${liveness.lengthContinued}/${LENGTH_CONTINUE_MAX})`)
+        const ok = await fx.steer(
+          "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +
+            "(do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again).",
         )
-      }
-      // With --wait-answer both permission and non-permission questions first
-      // wait for a human reply; on timeout both fall back to autoAnswer and
-      // the AI decides autonomously and continues; only a permission question
-      // under the default (no --wait-answer) blocks outright (unattended, the
-      // driver cannot decide authorization in the human's stead).
-      if (!repeated && (!permission || waitAnswer > 0)) {
-        questions.autoAnswered.push(text)
-        fx.log(`❓ received a ${permission ? "permission" : "non-permission"} question:\n${text}`)
-        const human = waitAnswer > 0 ? await fx.askHuman(waitAnswer, "auto-answered on timeout") : undefined
-        const ask = autoSwitches().ask
-        const fallback = autoAnswer(ask)
-        const reply = human ?? fallback
-        // Proxy-answer observation (auto-resolve H1,
-        // plans/0020-auto-resolve-design.md §G/§H-①): only fallback auto
-        // answers count — a human reply is a real person's decision, and the
-        // dryrun preflight produces no engineering decisions. On fallback the
-        // old single-line `→ auto answer: <long text>` form is replaced by a
-        // two-line highlighted one (the full answer text demoted to verbose
-        // logging), making "the driver decided for the user" visible at a
-        // glance and countable afterwards in the session log.
-        if (human) fx.log(`→ human answer: ${human}`)
-        else if (opts.dryrun) fx.log(`→ auto answer: ${fallback}`)
-        else {
-          questions.resolves.push({ at: clock.now(), question: text, session: sessionID })
-          fx.log(`⚑ auto-answer (AUTO-RESOLVE) #${questions.resolves.length}: ${compactText(text)}`)
-          fx.log(`  → answered; ${ask ? "the driver recorded it in full; this mode does not require the session to label it separately" : "asking the session to label the decision with AUTO-RESOLVE"}`)
-          fx.vlog(`  answer content: ${fallback}`)
-        }
-        await fx.replyQuestion(event.request, event.questions.map(() => [reply]))
+        if (!ok) return blockedAdvice("steer dispatch failed (length-continuation hint); cannot continue the session, see the log.")
         return "consumed"
       }
-      await fx.rejectQuestion(event.request)
-      await fx.abort()
-      return blockedAdvice(permission ? text : `asked again about the same question after auto-answer; handle it manually outside the session, then re-run:\n${text}`)
-    }
-    if (event.type === "permission") {
-      // dryrun preflight: auto-deny without interrupting the session, so the
-      // AI records the blocked item and goes on probing the next one.
-      if (opts.dryrun) {
-        fx.log(`🔐 preflight probe denied (recorded in the report): ${event.permission} (${event.patterns.join(", ")})`)
-        await fx.replyPermission(event.request, "reject")
-        return "consumed"
-      }
-      const desc = `${event.permission} (${event.patterns.join(", ")})`
-      const mode = opts.permission ?? "ask-deny"
-      // auto-allow: no waiting for a human, auto-approve immediately
-      // ("always" lets this request through).
-      if (mode === "auto-allow") {
-        fx.log(`🔐 permission request received; auto-allowed via --permission auto-allow: ${desc}`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      // ask-*: first wait for a human (--wait-answer minutes; unset means no
-      // wait, i.e. treated as a timeout). An answer of allow/yes/y and the
-      // like confirms the authorization ("always" lets it through); any other
-      // explicit answer denies the permission without interrupting the
-      // session, and the AI works around it and continues; on timeout the
-      // mode's fallback applies — ask-allow auto-approves, ask-deny
-      // auto-denies but the session continues, ask-fail denies and exits the
-      // run.
-      let human: string | undefined
-      if (waitAnswer > 0) {
-        fx.log(`🔐 permission request received: ${desc}`)
-        human = await fx.askHuman(
-          waitAnswer,
-          `enter allow/yes/y to approve; any other answer denies the permission and continues; on timeout handled as --permission ${mode}`,
-        )
-      } else {
-        fx.log(`🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ${mode}): ${desc}`)
-      }
-      if (human && isApproval(human)) {
-        fx.log(`→ human allowed: ${human} (always)`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      if (human) {
-        fx.log(`→ human denied: ${human} (permission denied; the AI continues without it)`)
-        await fx.replyPermission(event.request, "reject")
-        return "consumed"
-      }
-      if (mode === "ask-allow") {
-        fx.log(`→ wait timed out; --permission ask-allow auto-allowed: ${desc}`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      await fx.replyPermission(event.request, "reject")
-      if (mode === "ask-deny") {
-        fx.log(`→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): ${desc}`)
-        return "consumed"
-      }
-      // ask-fail: deny and exit the run (blocked halt, the question recorded
-      // in the run log).
-      await fx.abort()
-      return blockedAdvice(`permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`)
-    }
-    // event.type === "idle"
-    // Twin-idle dedup: one turn end settles only once. At a turn's end the
-    // server emits two idle events in a row (session.status idle +
-    // session.idle); after a steer is dispatched via promptAsync (which
-    // returns immediately), the second idle arrives before the steer turn
-    // starts, and handling it would misjudge the session as finished and
-    // settle early. After one idle is handled, further idles are ignored
-    // until a new session event appears in this session (a new turn
-    // starting) re-arms acceptance.
-    if (guard.idleHandled) return "consumed"
-    guard.idleHandled = true
-    // Test execution protocol: idle first settles any pending test request
-    // (execute + steer the result / handover request) before ending; the
-    // session is only truly over when there is no pending test request and
-    // no unfinished handover request.
-    if (test) {
-      const handled = await handleIdleTest(fx)
-      if (handled.type === "continue") return "consumed"
-      if (handled.type === "blocked") return blockedAdvice(handled.question, { testHandover: testState.handover })
-      if (handled.type === "invalid") {
-        const question =
-          `test handover document ${test.handoffFile} missing or empty (strict resume: the boundary write-verify failed; no more backfill retries; ` +
-          `this unit will roll back to its baseline and redo). Last agent output:\n${transcript.lastText.trim().slice(-2000) || "(no output)"}`
-        blockedExtra = { blocked: { type: "blocked", question }, testHandoverInvalid: true }
-        return { settle: { kind: "blocked", question, invalid: true } }
-      }
-    }
-    // Truncated-output continuation (LENGTH_CONTINUE_MAX): with the last
-    // step finishing on length and no session error observed, the session's
-    // work is unfinished — a short "continue from the cut-off point" steer
-    // lets the same session carry on instead of closing out as a natural
-    // finish. Twin-idle dedup (the guard slice) and the steer-turn interplay
-    // are the same as the handover/test steer paths.
-    // An agent that takes no further messages (MA.4: steer off) cannot be
-    // told to continue; the truncated turn ends as if the cap were used up.
-    if (liveness.lastFinish === "length" && !failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
-      liveness.lengthContinued++
-      // The continuation turn's own step-finish would refresh lastFinish;
-      // clear it first after the steer, so the corner case of a new turn
-      // with no step-finish cannot repeat the continuation against a stale
-      // criterion (the cap bounds it, at most MAX idle spins).
-      liveness.lastFinish = undefined
-      fx.log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${liveness.lengthContinued}/${LENGTH_CONTINUE_MAX})`)
-      const ok = await fx.steer(
-        "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +
-          "(do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again).",
-      )
-      if (!ok) return blockedAdvice("steer dispatch failed (length-continuation hint); cannot continue the session, see the log.")
-      return "consumed"
-    }
-    return { settle: { kind: "natural" } }
+      // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
+      return { settle: { kind: "natural" } }
+    },
   }
 
   // The remainder concern's dispatch (plans/0061 §4.11): every roster entry
   // delegates to this one handle, which routes the input to its per-kind
-  // handler. A kind with no map entry yet falls back to the monolith — the
-  // cut's temporary compatibility layer, gone once the map is total.
+  // handler.
   const handle: Concern<SliceKey>["handle"] = async (input, _own, _view, fx): Promise<Advice> => {
     const key: InputKind = input.kind === "event" ? input.event.type : input.kind
     // The map's construction pairs each key with its payload type, which the
     // union-typed lookup cannot show; the dispatch casts once, here.
-    const handler = handlers[key] as ((input: TurnInput, fx: TurnFx) => Promise<Advice>) | undefined
-    if (handler !== undefined) return handler(input, fx)
-    // Every kind still without a map entry is an event kind, so the
-    // fallback's input always carries an event.
-    return monolith(input as { kind: "event"; event: AgentEvent }, fx)
+    const handler = handlers[key] as (input: TurnInput, fx: TurnFx) => Promise<Advice>
+    return handler(input, fx)
   }
 
   // The remainder install (plans/0061 §4.11, the D1 compatibility layer):
-  // one concern holds the whole uncut body and owns every slice — each
+  // one concern holds the whole turn body and owns every slice — each
   // roster entry hands its pre-created slice back and delegates to the
   // shared handle, so `slicesDelegatedTo` reads the full eleven until the
   // extraction units swap entries for real concerns.
