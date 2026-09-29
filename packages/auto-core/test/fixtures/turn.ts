@@ -7,7 +7,10 @@
 // concern needs arrives as arguments to its handle — no turn, stream or spine
 // is involved.
 import type { AgentClient } from "../../src/agent/types"
+import type { ErrorClass, ErrorInfo } from "../../src/chain"
+import type { Classifier } from "../../src/classify"
 import type { LimitEvent, TurnContext, TurnFx, TurnState, TurnView } from "../../src/engine/contract"
+import type { SteerContext } from "../../src/model-step"
 import type { Opts } from "../../src/opts"
 import { createServices, type RunServices } from "../../src/services"
 import { parseSwitches, type Switches } from "../../src/switches"
@@ -109,18 +112,32 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
 // A TurnContext stub: the barest type-legal context over the native fake
 // agent, with the pieces a concern may read (the run options, the stuck
 // tracker, the switches, the services — the windows concern reads the run's
-// router) injectable.
-export const turnContext = (over: { client?: AgentClient; opts?: Opts; switches?: Switches; services?: RunServices; stuck?: StuckTracker } = {}): TurnContext => ({
+// router; the pattern classifier, the failure-message classifier's handle
+// and the steer context — the recovery concern's reads) injectable.
+export const turnContext = (
+  over: {
+    client?: AgentClient
+    opts?: Opts
+    switches?: Switches
+    services?: RunServices
+    stuck?: StuckTracker
+    classify?: (info: ErrorInfo) => ErrorClass
+    classifier?: Classifier
+    steerContext?: SteerContext
+  } = {},
+): TurnContext => ({
   client: over.client ?? fakeAgent().client,
   sessionID: "ses_1",
   opts: over.opts ?? {},
   switches: over.switches ?? parseSwitches({}),
   policy: { backoffCapMs: 60_000, silenceBudgetMs: 60_000, honorsRetryAfter: false, waitsOutLimit: false },
-  classify: () => "unknown",
+  classify: over.classify ?? (() => "unknown"),
   source: usageSource("events"),
   services: over.services ?? createServices(),
   startTime: 0,
   ...(over.stuck !== undefined ? { stuck: over.stuck } : {}),
+  ...(over.classifier !== undefined ? { classifier: over.classifier } : {}),
+  ...(over.steerContext !== undefined ? { steerContext: over.steerContext } : {}),
 })
 
 // A view carrying only the slices a driven concern reads (a suite drives one

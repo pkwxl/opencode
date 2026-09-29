@@ -176,13 +176,16 @@ const CLASSIFIED: Record<string, Domain> = {
     // The extracted turn concerns (plans/0061 §4.5/§4.6), one file per
     // concern under engine/concerns/: guard (the twin-idle dedup), windows
     // (the limit row), transcript (terminal echo and billing), stuck (the
-    // loop hint), questions (the question and permission rows) and failure
-    // (the error accumulator with its limit-statement helpers). Each owns
-    // one slice of the turn state and reaches only the contract's types plus
-    // the unranked leaves below the session layer (session-api's describePart
-    // and isApproval, the stuck-hint template render and the detector's
-    // constants, unit-commit's autoAnswer, resolve's sameIssue/compactText,
-    // chain's statedInWording);
+    // loop hint), questions (the question and permission rows), failure (the
+    // error accumulator with its limit-statement helpers) and recovery (the
+    // failure-message classifier's turn: the consult, the pattern verdicts,
+    // the raised settle, the final classification and the reset fields). Each
+    // owns one slice of the turn state and reaches only the contract's types
+    // plus the unranked leaves below the session layer (session-api's
+    // describePart and isApproval, the stuck-hint template render and the
+    // detector's constants, unit-commit's autoAnswer, resolve's
+    // sameIssue/compactText, chain's statedInWording and agentGaveUp,
+    // classify's ask and merge policies, the router's answer type);
     // watch installs them beside the remainder.
     "engine/concerns/guard": "driver",
     "engine/concerns/windows": "driver",
@@ -190,6 +193,7 @@ const CLASSIFIED: Record<string, Domain> = {
     "engine/concerns/stuck": "driver",
     "engine/concerns/questions": "driver",
     "engine/concerns/failure": "driver",
+    "engine/concerns/recovery": "driver",
     "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -374,13 +378,14 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/concerns/stuck": 10,
     "engine/concerns/questions": 11,
     "engine/concerns/failure": 12,
-    watch: 13,
-    attempt: 14,
-    session: 15,
-    artifact: 16,
-    "exec-session": 16,
-    execute: 17,
-    runner: 18,
+    "engine/concerns/recovery": 13,
+    watch: 14,
+    attempt: 15,
+    session: 16,
+    artifact: 17,
+    "exec-session": 17,
+    execute: 18,
+    runner: 19,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

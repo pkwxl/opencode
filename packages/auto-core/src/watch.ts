@@ -15,35 +15,40 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the concern roster — the
 // extracted concerns in src/engine/concerns/ (guard, transcript, windows,
-// stuck, questions, failure; each owning its slice's construction) beside the
-// one `remainder` concern that still holds the not-yet-extracted turn code —
-// and hands the stream to the spine (src/engine/spine.ts), which owns the
-// input queue, the arbitration dispatch, the fx audit and the trip-wired
-// stream wrapper. The remainder serves the input kinds whose arbitration row
-// still holds one of its cells: the shared `handle` answers at the row's
-// first such cell (its cells are contiguous in every row), routing the input
-// to its entry of the per-kind handler map — the loop body, cut one branch
-// per input kind, minus what the extracted concerns own (the guard's resets
-// and twin-idle stop, the transcript's echo/billing/report, the windows'
-// limit row, the stuck hint, the questions' question and permission rows, the
-// failure's error accumulation). The
-// probe timer and the classifier answer arrive as synthetic inputs from
-// src/engine/sources.ts; all of the body's I/O goes through the production fx
-// (src/engine/fx.ts) under the spine's audit. What remains here besides the
-// remainder is the mapping of the spine's settle and the slices back into the
-// Watch result each old exit returned.
+// stuck, questions, failure, recovery; each owning its slice's
+// construction) beside the one `remainder` concern that still holds the
+// not-yet-extracted turn code — and hands the stream to the spine
+// (src/engine/spine.ts), which owns the input queue, the arbitration
+// dispatch, the fx audit and the trip-wired stream wrapper. The remainder
+// serves the input kinds whose arbitration row still holds one of its cells:
+// the shared `handle` answers at the row's first such cell (its cells are
+// contiguous in every row), routing the input to its entry of the per-kind
+// handler map — the loop body, cut one branch per input kind, minus what
+// the extracted concerns own (the guard's resets and twin-idle stop, the
+// transcript's echo/billing/report, the windows' limit row, the stuck hint,
+// the questions' question and permission rows, the failure's error
+// accumulation, the recovery's classifier consult and verdicts). The
+// remainder's liveness entry also carries the settle procedure's liveness
+// step (the interrupted close-out) as its finalize; the recovery concern's
+// finalize holds the raised settle's abort and the final classification.
+// The probe timer and the classifier answer arrive as synthetic inputs from
+// src/engine/sources.ts; all of the body's I/O goes through the production
+// fx (src/engine/fx.ts) under the spine's audit. What remains here besides
+// the remainder is the mapping of the spine's settle and the slices back
+// into the Watch result each old exit returned.
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentEvent } from "./agent/types"
-import { agentGaveUp, classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
-import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk } from "./classify"
+import { classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import { classifierFor } from "./classify"
 import { commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete } from "./handover"
-import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
+import type { Advice, Concern, InputKind, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
 import { failureConcern } from "./engine/concerns/failure"
 import { guardConcern } from "./engine/concerns/guard"
 import { questionsConcern } from "./engine/concerns/questions"
+import { makeRecoveryConcern, resetFields } from "./engine/concerns/recovery"
 import { stuckConcern } from "./engine/concerns/stuck"
 import { transcriptConcern } from "./engine/concerns/transcript"
 import { windowsConcern } from "./engine/concerns/windows"
@@ -96,11 +101,12 @@ type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx, view: 
 
 // The input kinds the remainder still serves — those whose arbitration row
 // holds a not-yet-extracted cell (limit belongs to the windows concern alone,
-// question and permission to the questions concern, stream-end to the spine's
-// own terminal). The arbitration suite derives the same set from the table and
-// the install's delegation set and pins this list to it. The map cannot drift
-// from the list: HandlerMap is a total record over ServedKind, so a missing
-// handler is a type error and an extra one an excess-property error.
+// question and permission to the questions concern, answer to the recovery
+// concern, stream-end to the spine's own terminal). The arbitration suite
+// derives the same set from the table and the install's delegation set and
+// pins this list to it. The map cannot drift from the list: HandlerMap is a
+// total record over ServedKind, so a missing handler is a type error and an
+// extra one an excess-property error.
 export const HANDLER_KINDS = [
   "part",
   "message",
@@ -108,7 +114,6 @@ export const HANDLER_KINDS = [
   "retry",
   "idle",
   "probe",
-  "answer",
 ] as const satisfies readonly InputKind[]
 type ServedKind = (typeof HANDLER_KINDS)[number]
 type HandlerMap = { [K in ServedKind]: KindHandler<K> }
@@ -118,7 +123,7 @@ type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 // its removal. Typed as the union's source of truth — the install below and
 // the cell routing both read it, so a stale entry is a type error, not a
 // silent mis-route.
-export const REMAINDER_KEYS = ["recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export const REMAINDER_KEYS = ["liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
 export type RemainderKey = (typeof REMAINDER_KEYS)[number]
 // The remainder's slices, pre-created by watch() (the extracted concerns own
 // their slices' construction in their own files): the fx's steer-model getter
@@ -128,16 +133,26 @@ export type RemainderState = { readonly [K in RemainderKey]: TurnState[K] }
 // The turn's concern install: the extracted concerns from their files, the
 // not-yet-extracted slices delegated to the one remainder handle. Exported
 // for the arbitration suite's shrink ratchet: slicesDelegatedTo over this
-// install reads exactly the not-yet-extracted set.
-export const turnConcerns = (state: RemainderState, handle: Concern<SliceKey>["handle"]): ConcernRoster => ({
+// install reads exactly the not-yet-extracted set. The remainder's liveness
+// entry carries the settle procedure's liveness step (the interrupted
+// close-out, below) as its finalize: the procedure runs it at the liveness
+// cell's first appearance (the part row), before the recovery concern's
+// finalize (the retry row) — the order the recovery concern's final
+// classification of the extended record rests on.
+export const turnConcerns = (
+  state: RemainderState,
+  handle: Concern<SliceKey>["handle"],
+  recovery: Concern<"recovery">,
+  livenessFinalize: Concern<"liveness">["finalize"],
+): ConcernRoster => ({
   guard: guardConcern,
   transcript: transcriptConcern,
   windows: windowsConcern,
   stuck: stuckConcern,
   questions: questionsConcern,
   failure: failureConcern,
-  recovery: { name: "recovery", initial: () => state.recovery, handle },
-  liveness: { name: "liveness", initial: () => state.liveness, handle },
+  recovery,
+  liveness: { name: "liveness", initial: () => state.liveness, handle, finalize: livenessFinalize },
   usage: { name: "usage", initial: () => state.usage, handle },
   stepUp: { name: "stepUp", initial: () => state.stepUp, handle },
   test: { name: "test", initial: () => state.test, handle },
@@ -201,22 +216,13 @@ export async function watch(
   const policy = retryPolicyOf(client.retryPolicy, steerContext?.entry?.retry)
   const classify = (info: ErrorInfo): ErrorClass => classifySessionError(info, client.errorPatterns, policy)
   // —— The failure-message classifier (plans/0055 §7.1) ——
-  // Under a registry with a classifier list, a failure the patterns leave
-  // undecided is read by a classifier model beside the event stream: a
-  // retry the patterns class unknown (or a rate signal below its threshold)
-  // while the agent keeps retrying, and a session error that ends unknown.
-  // The ask never holds up the turn; its answer arrives as a synthetic input
-  // (the sources' answerWith link) and, when it raises the class while the
-  // turn is still retrying, settles the turn exactly as the patterns do
-  // (abort, then the key → model → wait escalation). Answers are turn-level
-  // state of the recovery slice: `answer` is the latest one known for this
-  // turn's failure, `asked` the latest call still on its way — at the turn's
-  // end they give the escalation its reset time (resetAt) or the promise of
-  // one (pendingReset). `retrying` (the failure slice) is true from a retry
-  // event until the model produces output again (the agent's retry got
-  // through), so a late answer never aborts a turn that recovered. Without a
-  // classifier all of this stays unset and the watch is byte-identical to
-  // before (C2).
+  // The turn's handle: under a registry with a classifier list it is built
+  // here and carried on the context; without one it is undefined, nobody
+  // asks and the watch is byte-identical to before (C2). Everything the
+  // classifier does inside the turn — the consult, the pattern verdicts,
+  // the raised settle, the final classification, the reset fields — is the
+  // recovery concern's (src/engine/concerns/recovery.ts, its slice
+  // `answer`/`asked`/`raised`/`final`).
   const classifier = classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined)
 
   const ctx: TurnContext = {
@@ -241,76 +247,56 @@ export async function watch(
   // same live objects the roster's initials hand back; the body reads and
   // writes them through these aliases exactly where the locals stood. The
   // extracted concerns' slices (guard, transcript, windows, stuck, questions,
-  // failure) are built by their own initials inside the spine and read
-  // through the view.
+  // failure, recovery) are built by their own initials inside the spine and
+  // read through the view.
   const remainderState: RemainderState = {
-    recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
     usage: { pct: 100, used: 0, hinted: false, notes: new Set<number>() },
     stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { recovery, liveness, usage, test: testState } = remainderState
+  const { liveness, usage, test: testState } = remainderState
   // The context-step slice (the old steerModel/stepNow/reached locals).
   const steps = remainderState.stepUp
 
   const sources = makeTurnSources(ctx)
   const fx = makeTurnFx({ ctx, steerModel: () => steps.model, onModel, onLimit })
 
-  // An answer arriving beside the stream asks the classifier through the
-  // sources' link: the in-flight call is recorded on the recovery slice and
-  // its resolution comes back as a synthetic `answer` input. One call per
-  // failing turn (see consult).
-  const ask = (info: ErrorInfo): void => {
-    const call = classifier !== undefined ? askClassifier(classifier, info) : undefined
-    if (call === undefined) return
-    recovery.asked = call
-    sources.answerWith(call)
-  }
-  // The pattern verdict of an undecided failure, raised by a known answer:
-  // the cached answer about the same message (an earlier call), else this
-  // turn's own answer. Without one the classifier is asked — once per turn:
-  // a later undecided signal of the same turn (the next retry, the session
-  // error that ends it, whose message folds in the retries') waits for that
-  // call instead of starting another — and the verdict stands.
-  // AUTO-DECISION: one classifier call per failing turn, and the turn's answer covers every undecided signal of that turn (the retries and the closing session error of one turn are one failing request whose wording drifts — the closing error even repeats the retry messages — so a call per distinct message would spend the run's 20-call budget on one failure)
-  const consult = (surface: "retry" | "error", info: ErrorInfo, cls: ErrorClass): { cls: ErrorClass; classified: boolean } => {
-    if (classifier === undefined || !shouldAsk(surface, info, cls, client.errorPatterns)) return { cls, classified: false }
-    // The cache's owner is the classifier's router (the routing facts carry
-    // it), which is also where this turn's own ask writes.
-    const known = cachedAnswer(classifier.router, info) ?? recovery.answer
-    if (known === undefined) {
-      if (recovery.asked === undefined) ask(info)
-      return { cls, classified: false }
-    }
-    recovery.answer = known
-    const merged = mergeClass(cls, known.class, info, policy)
-    return { cls: merged, classified: merged !== cls }
-  }
-  const raisedLine = (cls: ErrorClass): void => {
-    if (classifier === undefined || recovery.answer === undefined) return
-    const label = steerContext?.label ? `${steerContext.label} ` : ""
-    fx.log(`⚖ ${label}the classifier reads the failure as ${describeAnswer(recovery.answer, classifier.registry.tz, classifier.now())}; settling the turn as ${cls}`)
-  }
-  // The reset fields a settled failure carries to the escalation: a reset the
-  // provider or the agent stated (plans/0057 §5.3, it outranks the
-  // classifier's), else the accepted reset time of the known answer, or the
-  // answer still on its way. The stated one rides without a registry too: the
-  // down marks and the wait-and-probe loop's scheduled sleep (plans/0057 §6)
-  // read it, and it carries its scope, which the escalation and the wait line
-  // read (§7). The failure info arrives as a parameter: the slice is the
-  // failure concern's (built inside the spine), and the interrupted
-  // close-out below hands this the extended record, not the raw slice.
-  const resetFields = (info: ErrorInfo | undefined): Partial<Watch> => {
-    const stated = acceptedReset(info, clock.now())
-    if (stated !== undefined) return { resetAt: stated, ...(info?.scope !== undefined ? { scope: info.scope } : {}), resetSource: "stated" }
-    if (classifier === undefined) return {}
-    if (recovery.answer !== undefined) {
-      const at = acceptedReset(recovery.answer, classifier.now())
-      return at !== undefined ? { resetAt: at, resetSource: "classifier" } : {}
-    }
-    const pending = recovery.asked
-    return pending !== undefined ? { pendingReset: pending.then((got) => acceptedReset(got, classifier.now())) } : {}
+  // The settle procedure's channel for the interrupted close-out's failure
+  // record (the recovery concern's deps, which names the discipline): the
+  // liveness finalize below writes the extension here, the recovery
+  // concern's final classification and the settle→Watch mapping read it.
+  const extended: { error?: string; info?: ErrorInfo } = {}
+  const recovery = makeRecoveryConcern({ answerWith: sources.answerWith, extended })
+  // The interrupted/half-open close-out — the settle procedure's liveness
+  // step (plans/0061 §4.4 rule 5), still the remainder's until the liveness
+  // concern lands. The finalize procedure runs it before the recovery
+  // concern's final classification (the liveness cell of the part row
+  // precedes the recovery cell of the retry row), so the classification and
+  // the snapshot read the extended record. Stream-interruption / half-open
+  // close-out: abort the orphan turn that may still be running on the
+  // server, avoiding concurrent file writes with the retried new session
+  // (abort is harmless to a finished session; with the network already down
+  // the call fails silently). The session error goes through attempt's
+  // wrapping onto the retry/blocked paths, the progress record stays active,
+  // and the next run reuses this session to continue. The probe-judged
+  // half-open (D3) and the SSE interruption get distinct messages; the
+  // half-open message carries network/timeout criteria for
+  // classifySessionError to file as transient — transport-layer faults ride
+  // the existing retry ladder and failover ring, no model switch; the
+  // failure record is extended in sync so the classification and the upward
+  // report have grounds.
+  // AUTO-DECISION: the interrupted close-out moved from the settle→Watch mapping into the remainder's liveness finalize, with the extended record channelled through the `extended` cell (the finalize procedure is the only place the spine offers between the wrapper's cleanup and recovery's finalize, and the classification must read the extended record — the mapping runs after the whole procedure; the cell is the same channel the liveness concern's own finalize will fill when it lands).
+  const livenessFinalize: Concern<"liveness">["finalize"] = async (settle, _own, view, fx) => {
+    if (settle.kind !== "interrupted") return
+    await fx.abort()
+    const msg = view.liveness.halfOpen
+      ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
+      : "event stream interrupted (no session-end event received; suspected server failure or network down)"
+    extended.error = view.failure.error ? `${view.failure.error}\n${msg}` : msg
+    extended.info = view.liveness.halfOpen
+      ? { ...(view.failure.info ?? {}), message: view.failure.info?.message ? `${view.failure.info.message}\n${msg}` : msg }
+      : view.failure.info
   }
   // Turn snapshot (STATS_PLAN §2): every exit of watch carries durationMs +
   // usage + resolves uniformly, including the early-settling error/blocked
@@ -341,12 +327,6 @@ export async function watch(
     blockedExtra = { blocked: { type: "blocked", question }, ...(extra ?? {}) }
     return { settle: { kind: "blocked", question } }
   }
-  // The settle object the answer handler returned when it raised the class,
-  // so the mapping can tell "the turn was settled by the raise" (abort still
-  // owed) apart from "a raise landed beside an early error settle that
-  // already aborted" (the old body returned the early snapshot and never
-  // consulted the raise).
-  let raisedSettle: Settle | undefined
 
   // —— Context steps (plans/0055 §4.5) ——
   // The step-up itself, at the measurement point that crossed the current
@@ -524,11 +504,11 @@ export async function watch(
   // concerns own (the guard's resets and twin-idle stop, the transcript's
   // echo/billing/report, the windows' limit row, the stuck hint, the
   // questions' question and permission rows, the failure's error
-  // accumulation) — in its arbitration row's
-  // order, and reads/writes its own slices through the closure aliases
-  // exactly where the branch did; other concerns' slices are read through
-  // the view. The handler runs at the row's first remainder cell and answers
-  // for the whole contiguous segment. ——
+  // accumulation, the recovery's classifier consult and verdicts) — in its
+  // arbitration row's order, and reads/writes its own slices through the
+  // closure aliases exactly where the branch did; other concerns' slices are
+  // read through the view. The handler runs at the row's first remainder cell
+  // and answers for the whole contiguous segment. ——
   const handlers: HandlerMap = {
     // —— Synthetic inputs (their rows are the concurrent ones: they run
     // beside an in-flight fx call, so slice writes and log/vlog only — the
@@ -559,28 +539,10 @@ export async function watch(
       }
       return "consumed"
     },
-    // The classifier's answer (the old onAnswer link): raise the class of
-    // the running turn if it is still retrying on an undecided failure; the
-    // held settle preempts the event wait (the same preemption the half-open
-    // probe uses). A resolution past the wrapper's finish never reaches here
-    // (the spine drops it — the old `consuming` guard), and a no-answer
-    // resolution is dropped here (the old early return). The settle's object
-    // identity is load-bearing: the settle→Watch mapping compares the
-    // outcome against `raisedSettle` by identity, so the object stored there
-    // is the one this handler returns.
-    answer: async (input, _fx, view) => {
-      const got = input.answer
-      if (got === undefined) return "consumed"
-      recovery.answer = got
-      if (!view.failure.retrying || view.failure.info === undefined || recovery.raised !== undefined) return "consumed"
-      const cls = classify(view.failure.info)
-      if (!shouldAsk("retry", view.failure.info, cls, client.errorPatterns)) return "consumed"
-      const merged = mergeClass(cls, got.class, view.failure.info, policy)
-      if (merged !== "quota" && merged !== "auth" && merged !== "rate") return "consumed"
-      recovery.raised = merged
-      raisedSettle = { kind: "error", cls: merged, classified: true }
-      return { settle: raisedSettle }
-    },
+    // The classifier's answer row is the recovery concern's alone
+    // (src/engine/concerns/recovery.ts): the answer is recorded there and,
+    // while the turn still retries an undecided failure, raises the class as
+    // a held settle that preempts the event wait.
     // —— Event inputs: one event of the agent's stream. The session filter
     // and the usage source's observe are the spine's (they preceded every
     // branch of the old loop). ——
@@ -713,53 +675,26 @@ export async function watch(
       return "consumed"
     },
     // A request retry (row: guard → failure → recovery → stepUp → liveness →
-    // transcript; the failure cell is the concern's, the remainder owns the
-    // middle three cells). B.4 the two
-    // signals unified / D.2 trigger surfaces 2 and 3, 0037 D4: the server
-    // itself is retrying a failed provider request. The id-carrying form
-    // comes from a retry part (self-contained structured ApiError), the
-    // id-less form from session.status retry (message/attempt/next, next
-    // being the wait until the next attempt — turning "still 40 minutes to
-    // wait" into an active decision; old servers may lack fields). The
-    // failure concern's cell accumulates the info first, then this segment
-    // feeds the classifier; a quota/auth/
-    // rate hit settles this turn early — the still-running old turn on the
-    // server must be aborted before returning (the same technique as the
-    // stream-interruption cleanup), otherwise it would modify files
-    // concurrently with the session forked next (D.2); overflow/transient/
-    // unknown only accumulate without settling, and observation continues
-    // (not treated as idle).
+    // transcript; the failure and recovery cells are the concerns' — the
+    // failure concern accumulated the signal into the info, the recovery
+    // concern consulted the classifier and settled the turn for the classes
+    // that cure only by moving — the remainder owns the stepUp and liveness
+    // cells). B.4 the two signals unified / D.2 trigger surfaces 2 and 3,
+    // 0037 D4: the server itself is retrying a failed provider request. The
+    // id-carrying form comes from a retry part (self-contained structured
+    // ApiError), the id-less form from session.status retry
+    // (message/attempt/next, next being the wait until the next attempt —
+    // turning "still 40 minutes to wait" into an active decision; old
+    // servers may lack fields). The classes that observe on reach this
+    // segment: overflow/transient/unknown accumulate without settling, and
+    // observation continues (not treated as idle).
     retry: async (input, fx, view) => {
       const event = input.event
-      // The failure concern's cell before this segment set retrying and
-      // accumulated the signal into the info (its own message replacing the
-      // earlier one, the limit statement laid over); this segment reads the
-      // record it left. (The `?? {}` is the type's default: a retry input
-      // always leaves a defined info behind.)
-      const info = view.failure.info ?? {}
-      // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
-      // the class now; otherwise the classifier is asked beside the stream
-      // and its answer settles the turn from the answer input while it still
-      // retries.
-      const { cls, classified } = consult("retry", info, classify(info))
-      // A per-minute cap the agent is still backing off from (plans/0057 §7):
-      // its own retrying cures it, so the turn does not settle before the
-      // agent gave up — quota wording on a refused request included. (A rate
-      // class already waits for agentGaveUp.)
-      const perMinute = (info.scope === "request" || info.scope === "token") && !agentGaveUp(info, policy)
-      if ((cls === "quota" && !perMinute) || cls === "auth" || cls === "rate") {
-        await fx.abort()
-        if (classified) raisedLine(cls)
-        // Only isRetryable:false (e.g. insufficient_quota) passes
-        // non-retryable down; for the other failover-eligible errors a new
-        // session is still pointless but a different model may help — left
-        // to P4 (the mapping keeps retryable undefined then).
-        return { settle: { kind: "error", cls, classified } }
-      }
       // The same overflow read from the retry surface (the agent retried the
       // request that overflowed before compacting): the late step-up applies
       // here exactly as at the session-error handler above.
-      if (cls === "overflow") await stepLate(fx)
+      // AUTO-DECISION: the read is the patterns' own classification, not a verdict channelled from the recovery cell (the consult's verdict is overflow exactly when the patterns' read is — an answer never raises to overflow, the reply's class union has none — so re-deriving the pattern read needs no channel and no second consult).
+      if (classify(view.failure.info ?? {}) === "overflow") await stepLate(fx)
       // An announced silence (§4.2): the agent honours a wait longer than its
       // silence budget and says nothing more until it is over. The line names
       // its end; the liveness probe counts no failure before it.
@@ -841,37 +776,25 @@ export async function watch(
     return handler(input, fx, view)
   }
 
-  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle), fx, attach: sources.attach })
+  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle, recovery, livenessFinalize), fx, attach: sources.attach })
 
   // —— Mapping the settle back to the Watch result each old exit returned ——
-  // The early blocked/error settles made their effects inside the handler
-  // (their aborts precede the wrapper's close-out there, as they did inside
-  // the old loop); what remains is shaping the snapshot. A blocked settle's
-  // question is the Watch blocked field's only varying content: the extracted
-  // concerns' blocked exits (the questions concern's blocks) carry it in the
-  // settle itself, while the remainder's blocked exits record their extras
-  // (testHandover, testHandoverInvalid) beside the settle through
-  // blockedAdvice — the side channel, when set, is the whole extra.
-  // The failure record this close-out reports — the slice as the failure
-  // concern left it, extended by the interrupted close-out's transport
-  // message below — is held in locals rather than written back: the slice is
-  // the concern's (its initial built it inside the spine), and the extension
-  // is the mapping's own work over the view.
-  let errorText = view.failure.error
-  let failureInfo = view.failure.info
+  // The settle procedure's steps already ran inside the spine (its finalize
+  // procedure): the interrupted close-out (the remainder's liveness finalize)
+  // aborted the orphan turn and extended the failure record — the extension
+  // is read through the same cell the recovery concern's final classification
+  // read — and the recovery concern finalized the raised settle's abort and
+  // the final classification (its slice's `final`). What remains here is
+  // shaping the snapshot. A blocked settle's question is the Watch blocked
+  // field's only varying content: the extracted concerns' blocked exits (the
+  // questions concern's blocks) carry it in the settle itself, while the
+  // remainder's blocked exits record their extras (testHandover,
+  // testHandoverInvalid) beside the settle through blockedAdvice — the side
+  // channel, when set, is the whole extra.
+  const errorText = extended.error ?? view.failure.error
+  const failureInfo = extended.error !== undefined ? extended.info : view.failure.info
   if (settle.kind === "blocked") return snapshot(view, blockedExtra ?? { blocked: { type: "blocked", question: settle.question } })
   if (settle.kind === "error") {
-    // The raised settle (a classifier answer raised the class of the
-    // retrying turn, plans/0055 §7.1): the synthetic answer handler may not
-    // abort (the audit's (c)), so the abort of the still-running old turn
-    // lands here — exactly where the old body's post-loop raised path made
-    // it, after the stream wrapper's close-out. Settle identity, not the
-    // slice's raised flag: a raise that landed beside an early error settle
-    // was never consulted by the old body either (its in-loop return won).
-    if (settle === raisedSettle) {
-      await fx.abort()
-      raisedLine(settle.cls)
-    }
     const msg = failureInfo?.message ?? errorText
     return snapshot(view, {
       error: msg,
@@ -880,43 +803,8 @@ export async function watch(
       errorClass: settle.cls,
       failover: true,
       ...(settle.classified ? { classified: true } : {}),
-      ...resetFields(failureInfo),
+      ...resetFields(view.recovery, failureInfo, ctx),
     })
-  }
-  if (settle.kind === "interrupted") {
-    // Stream-interruption / half-open close-out: abort the orphan turn that
-    // may still be running on the server, avoiding concurrent file writes
-    // with the retried new session (abort is harmless to a finished session;
-    // with the network already down the call fails silently). The session
-    // error goes through attempt's wrapping onto the retry/blocked paths, the
-    // progress record stays active, and the next run reuses this session to
-    // continue.
-    await fx.abort()
-    // The probe-judged half-open (D3) and the SSE interruption get distinct
-    // messages; the half-open message carries network/timeout criteria for
-    // classifySessionError to file as transient — transport-layer faults ride
-    // the existing retry ladder and failover ring, no model switch; the
-    // failure record above is extended in sync so the classification and the
-    // upward report have grounds.
-    const msg = liveness.halfOpen
-      ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
-      : "event stream interrupted (no session-end event received; suspected server failure or network down)"
-    errorText = errorText ? `${errorText}\n${msg}` : msg
-    if (liveness.halfOpen) failureInfo = { ...(failureInfo ?? {}), message: failureInfo?.message ? `${failureInfo.message}\n${msg}` : msg }
-  }
-  // A session error that ends unknown (plans/0055 §7.1): a cached answer
-  // raises its class; otherwise the classifier is asked now, and its answer
-  // serves the next occurrence of the message and the reset time of any
-  // down mark this failure leads to. Only provider text is asked about — a
-  // bare transport loss has no errorInfo and stays unknown.
-  let finalClass: ErrorClass | undefined
-  let finalClassified = false
-  if (errorText) {
-    const verdict = classify(failureInfo ?? {})
-    const consulted = failureInfo !== undefined ? consult("error", failureInfo, verdict) : { cls: verdict, classified: false }
-    finalClass = consulted.cls
-    finalClassified = consulted.classified
-    if (finalClassified) raisedLine(finalClass)
   }
   return snapshot(view, {
     error: errorText,
@@ -926,7 +814,17 @@ export async function watch(
     // up and downstream (no control-flow change); a normal finish carries
     // neither key, byte-for-byte equivalent to the status quo. The info may
     // be empty (e.g. a pure stream interruption) → classified unknown from
-    // the empty input.
-    ...(errorText ? { errorInfo: failureInfo, errorClass: finalClass, ...(finalClassified ? { classified: true } : {}), ...resetFields(failureInfo) } : {}),
+    // the empty input. The final classification is the recovery concern's
+    // finalize work (present exactly when the close-out had grounds — an
+    // error text — under the same gate this spread reads it).
+    ...(errorText
+      ? {
+          errorInfo: failureInfo,
+          ...(view.recovery.final !== undefined
+            ? { errorClass: view.recovery.final.cls, ...(view.recovery.final.classified ? { classified: true } : {}) }
+            : {}),
+          ...resetFields(view.recovery, failureInfo, ctx),
+        }
+      : {}),
   })
 }

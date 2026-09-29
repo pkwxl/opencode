@@ -188,12 +188,15 @@ export type Settle =
 // One concern: a slice's owner. `initial` builds the slice at the turn's
 // start; `handle` answers one input with an advice; `finalize` runs the
 // concern's steps of the settle procedure, in table order, once the turn has
-// settled.
+// settled — the settle that ended the turn is its first argument, so a step
+// that belongs to one exit (the raised settle's abort, the interrupted
+// close-out) reads it while the rest run for every settle.
+// AUTO-DECISION: `finalize` receives the settle as its first argument (the settle procedure's steps are exit-specific by §4.4 rule 5 — the recovery concern's raised settle and the liveness concern's interrupted step exist for exactly one settle kind each — and no slice may carry the distinction: the slice shapes are this contract's, and a settle-kind field would be a spine-to-concern back channel the arbitration table never declares).
 export type Concern<K extends SliceKey> = {
   name: K
   initial(ctx: TurnContext): TurnState[K]
   handle(input: TurnInput, own: TurnState[K], view: TurnView, fx: TurnFx, ctx: TurnContext): Promise<Advice>
-  finalize?(own: TurnState[K], view: TurnView, fx: TurnFx, ctx: TurnContext): Promise<void>
+  finalize?(settle: Settle, own: TurnState[K], view: TurnView, fx: TurnFx, ctx: TurnContext): Promise<void>
 }
 
 // One cell of an arbitration row: the concern the input reaches at this

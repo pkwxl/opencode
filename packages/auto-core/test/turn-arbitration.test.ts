@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
 import type { Advice, Concern, SliceKey, TurnContext, TurnFx, TurnState } from "../src/engine/contract"
+import { makeRecoveryConcern } from "../src/engine/concerns/recovery"
 import { runTurn, slicesDelegatedTo, SLICE_KEYS, TURN_ARBITRATION, type ConcernRoster, type TurnSources } from "../src/engine/spine"
 import { createServices } from "../src/services"
 import { parseSwitches } from "../src/switches"
@@ -286,23 +287,26 @@ describe("the queue discipline's terminal settles", () => {
 describe("the remainder layer's owned slices", () => {
   // The not-yet-extracted slices' initial values, as the real install reads
   // them (turnConcerns hands the objects back through the roster's
-  // initials).
+  // initials). The recovery concern is the real factory over inert deps —
+  // the ratchet reads handle identity, which the factory's own handle
+  // provides — and the liveness entry's finalize is the stub of the settle
+  // procedure's liveness step the real install attaches there.
   const remainderState = (): RemainderState => ({
-    recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
     usage: { pct: 0, used: 0, hinted: false, notes: new Set<number>() },
     stepUp: { step: 0 },
     test: { handover: false, asked: false, retried: false },
   })
+  const recoveryConcern = (): Concern<"recovery"> => makeRecoveryConcern({ answerWith: () => {}, extended: {} })
+  const livenessFinalize: Concern<"liveness">["finalize"] = async () => {}
 
   test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
     // The real install (watch's turnConcerns): guard, transcript, windows,
-    // stuck, questions and failure hold their own concerns; the five
-    // not-yet-extracted slices share the one remainder handle. Each
+    // stuck, questions, failure and recovery hold their own concerns; the
+    // four not-yet-extracted slices share the one remainder handle. Each
     // extraction unit shrinks this list, and the layer's removal empties it.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    expect(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle)).toEqual([
-      "recovery",
+    expect(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessFinalize), handle)).toEqual([
       "liveness",
       "usage",
       "stepUp",
@@ -315,12 +319,13 @@ describe("the remainder layer's owned slices", () => {
     // map itself is a watch() local — its handlers close over the turn's
     // state); pinned here against the table and the install's delegation set,
     // not a hand-written list — limit belongs to the windows concern alone,
-    // question and permission to the questions concern, stream-end to the
-    // spine's own terminal. That the dispatch reaches each handler is pinned
+    // question and permission to the questions concern, answer to the
+    // recovery concern, stream-end to the spine's own terminal. That the
+    // dispatch reaches each handler is pinned
     // by the turn-trace suite's roster case, which fires every arbitration
     // cell through watch's real install.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle))
+    const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessFinalize), handle))
     // The cast is the assertion's own claim: the table-derived kinds are the
     // kinds the remainder serves (the equality below checks it at runtime).
     const served = INPUT_KINDS.filter((kind) => TURN_ARBITRATION[kind].some((cell) => remainder.has(cell.concern))) as (typeof HANDLER_KINDS)[number][]
@@ -346,5 +351,36 @@ describe("the remainder layer's owned slices", () => {
     const install = Object.fromEntries(SLICE_KEYS.map((key) => [key, { ...base[key], finalize }])) as ConcernRoster
     await turn(install)
     expect(runs).toBe(1)
+  })
+
+  test("the finalize procedure runs each concern's finalize at its first cell's position — liveness (part row) before recovery (retry row)", async () => {
+    // The order the settle procedure's steps rest on: the interrupted
+    // close-out (liveness) extends the failure record before the recovery
+    // concern's final classification reads it, which first-cell order gives
+    // because liveness first appears in the part row and recovery in the
+    // retry row. Each finalize also receives the settle that ended the turn.
+    const order: string[] = []
+    const settles: unknown[] = []
+    const base = roster()
+    const install: ConcernRoster = {
+      ...base,
+      liveness: {
+        ...base.liveness,
+        finalize: async (settle) => {
+          settles.push(settle)
+          order.push("liveness")
+        },
+      },
+      recovery: {
+        ...base.recovery,
+        finalize: async (settle) => {
+          settles.push(settle)
+          order.push("recovery")
+        },
+      },
+    }
+    const outcome = await turn(install)
+    expect(order).toEqual(["liveness", "recovery"])
+    expect(settles).toEqual([outcome.settle, outcome.settle])
   })
 })

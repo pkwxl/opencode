@@ -44,12 +44,13 @@
 //
 // The finalize procedure runs after the turn settled: each distinct
 // finalize function runs once, in table order (the order of a concern's
-// first cell in the table's row order). The remainder install shares one
-// handle and one finalize function across its roster entries — sharing the
-// function is what makes them run once — and hands the whole close-out its
-// single execution; as concerns are extracted, their own functions take
-// their table positions. Then the caller maps the settle and the view into
-// the turn's result.
+// first cell in the table's row order), and receives the settle that ended
+// the turn. The settle procedure's named end-state sequence (the recovery
+// concern's raised settle, then the liveness step of an interrupted or
+// half-open turn, then recovery's final classification) is not expressible
+// as once-per-concern in that order — recovery first appears in the retry
+// row, liveness in the part row, so liveness's finalize runs first.
+// AUTO-DECISION: the named sequence's first two steps are resolved by first-cell order, not by splitting recovery's finalize into two invocations (the raised settle and the liveness step are mutually exclusive branches — a turn settles by the raised error or by the interruption, never both — so the two orders are behaviourally identical, and the load-bearing order, the interrupted close-out's failure-record extension before recovery's final classification, is exactly what first-cell order gives).
 //
 // The spine is drivable with injected concerns, table and fx and no real
 // stream: everything a turn needs arrives as arguments.
@@ -423,7 +424,7 @@ export async function runTurn(args: {
       const concern = concerns[cell.concern] as Concern<SliceKey>
       if (concern.finalize === undefined || finalized.has(concern.finalize)) continue
       finalized.add(concern.finalize)
-      await concern.finalize(state[cell.concern], viewFor(cell.concern), auditedFx("finalize", false), ctx)
+      await concern.finalize(settle, state[cell.concern], viewFor(cell.concern), auditedFx("finalize", false), ctx)
     }
   }
   return { settle, view: liveView }

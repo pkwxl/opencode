@@ -1,12 +1,14 @@
-// The failure-message classifier (plans/0055 §7.1, §14): when it is asked,
-// what leaves the driver (redaction and truncation), the run's cache and its
-// masked key, the 20-call limit, the reply parser, the raise-only merge, the
-// reset-time horizon, the timeout, the classifier entry's selection and its
-// own failures. The session-driving half (a retrying turn settled early, the
-// escalation's marks) is in test/agent-fake.test.ts.
+// The failure-message classifier (plans/0055 §7.1, §14): what leaves the
+// driver (redaction and truncation), the run's cache and its masked key, the
+// 20-call limit, the reply parser, the reset-time horizon, the timeout, the
+// classifier entry's selection and its own failures. The watch-side policies
+// — when the driver asks (shouldAsk) and the raise-only merge (mergeClass),
+// whose only consumer is the recovery concern — are re-homed into that
+// concern's suite (test/turn-recovery.test.ts); the session-driving half (a
+// retrying turn settled early, the escalation's marks) is in
+// test/agent-fake.test.ts.
 import { describe, expect, spyOn, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
-import type { ErrorInfo } from "../src/chain"
 import {
   acceptedReset,
   askClassifier,
@@ -18,11 +20,9 @@ import {
   classifierEntry,
   classifierFor,
   classifierInput,
-  mergeClass,
   parseClassifierReply,
   RESET_HORIZON_MS,
   redact,
-  shouldAsk,
   type Classifier,
 } from "../src/classify"
 import { isoInZone, parseWindow } from "../src/model-window"
@@ -78,33 +78,10 @@ const setup = (options: FakeAgentOptions = {}, over: Parameters<typeof facts>[0]
 // installs a fresh instance before every test, which is why no reset hook
 // appears here.
 
-describe("when it is asked", () => {
-  const info: ErrorInfo = { message: "something odd happened" }
-  test("undecided retries and session errors only; never overflow, quota, auth or a decided rate", () => {
-    expect(shouldAsk("retry", info, "unknown")).toBe(true)
-    expect(shouldAsk("error", info, "unknown")).toBe(true)
-    // A rate signal below its threshold (a single 429) classes as transient
-    // or unknown: the retry surface asks about it, the error surface not.
-    const early429: ErrorInfo = { message: "server busy, timeout", statusCode: 429, attempt: 1 }
-    expect(shouldAsk("retry", early429, "transient")).toBe(true)
-    expect(shouldAsk("error", early429, "transient")).toBe(false)
-    // A transient without a rate signal is decided.
-    expect(shouldAsk("retry", { message: "socket hang up" }, "transient")).toBe(false)
-    for (const cls of ["overflow", "quota", "auth", "rate"] as const) {
-      expect(shouldAsk("retry", early429, cls)).toBe(false)
-      expect(shouldAsk("error", info, cls)).toBe(false)
-    }
-  })
-
-  test("never about a failure whose reset the provider or the agent already stated (plans/0057 §5.3)", () => {
-    const stated = { resetAt: Date.parse("2026-09-25T12:30:00Z"), scope: "5h" as const }
-    expect(shouldAsk("retry", { ...info, ...stated }, "unknown")).toBe(false)
-    expect(shouldAsk("error", { ...info, ...stated }, "unknown")).toBe(false)
-    expect(shouldAsk("retry", { message: "server busy, timeout", statusCode: 429, attempt: 1, ...stated }, "transient")).toBe(false)
-    // A reason or a wait without a reset leaves the question open.
-    expect(shouldAsk("retry", { ...info, limitReason: "account_rate_limit", retryAfterMs: 2000 }, "unknown")).toBe(true)
-  })
-
+describe("the construction (C2)", () => {
+  // The ask policy that once sat here beside this case (shouldAsk: undecided
+  // retries and session errors only, never a stated reset) moved to the
+  // recovery concern's suite with the consult that applies it.
   test("no registry, or no classifier list, means no classifier at all (C2)", () => {
     const agent = fakeAgent()
     expect(classifierFor(agent.client, undefined)).toBeUndefined()
@@ -232,27 +209,8 @@ describe("the reply", () => {
   })
 })
 
-describe("the raise-only merge", () => {
-  const early: ErrorInfo = { message: "slow down", statusCode: 429, attempt: 1 }
-  const late: ErrorInfo = { message: "slow down", statusCode: 429, attempt: 3 }
-  test("an answer replaces unknown; a rate answer counts only once the rate threshold holds", () => {
-    expect(mergeClass("unknown", "quota", early)).toBe("quota")
-    expect(mergeClass("unknown", "auth", early)).toBe("auth")
-    expect(mergeClass("unknown", "transient", early)).toBe("transient")
-    expect(mergeClass("unknown", "unknown", early)).toBe("unknown")
-    expect(mergeClass("unknown", "rate", early)).toBe("unknown")
-    expect(mergeClass("unknown", "rate", late)).toBe("rate")
-    expect(mergeClass("unknown", "rate", { message: "x", next: 90_000 })).toBe("rate")
-  })
-
-  test("a below-threshold rate signal may be raised to quota only; nothing the patterns found is ever lowered", () => {
-    expect(mergeClass("transient", "quota", early)).toBe("quota")
-    for (const answer of ["auth", "rate", "transient", "unknown"] as const) expect(mergeClass("transient", answer, early)).toBe("transient")
-    for (const pattern of ["overflow", "quota", "auth", "rate"] as const) {
-      for (const answer of ["quota", "rate", "auth", "transient", "unknown"] as const) expect(mergeClass(pattern, answer, late)).toBe(pattern)
-    }
-  })
-})
+// The raise-only merge (mergeClass) moved to the recovery concern's suite
+// with the consult and the answer row that apply it.
 
 describe("reset times", () => {
   test("accepted only in the future and at most 7 days away", () => {
