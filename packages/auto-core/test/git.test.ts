@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { baselineIntact, beginUnit, changedFiles, commitIdentityProblem, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import { noCommitGit } from "../src/git-ops"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -222,13 +223,13 @@ describe("unitBaseline / unitViolations (unit close-out check)", () => {
 })
 
 describe("beginUnit (unit start gate)", () => {
-  test("clean → record the baseline; gate off (--commit false / dryrun) → straight through with no baseline", async () => {
+  test("clean → record the baseline; the no-commit double / dryrun → straight through with no baseline", async () => {
     const dir = await fresh()
     try {
       const gate = await beginUnit(dir, {}, task)
       expect(gate.type).toBe("ok")
       if (gate.type === "ok") expect(gate.baseline).toHaveLength(1)
-      const off = await beginUnit(dir, { commit: false }, task)
+      const off = await noCommitGit().beginUnit(dir, {}, task)
       expect(off).toEqual({ type: "ok", baseline: undefined })
       const dry = await beginUnit(dir, { dryrun: true }, task)
       expect(dry).toEqual({ type: "ok", baseline: undefined })
@@ -293,7 +294,7 @@ describe("beginUnit (unit start gate)", () => {
 })
 
 describe("commitPending (a hidden task's ③ backfill commit)", () => {
-  test("an artifact on the uncommitted list → backfill commit and return the result; not on it → clean; gate off → clean", async () => {
+  test("an artifact on the uncommitted list → backfill commit and return the result; not on it → clean; the no-commit double → clean", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
@@ -307,9 +308,9 @@ describe("commitPending (a hidden task's ③ backfill commit)", () => {
       expect(message).toContain("Auto-Stage: knowledge")
       // Already committed → clean, no action
       expect(await commitPending(dir, {}, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb.md")])).toBe("clean")
-      // Gate off → clean no-op
+      // The no-commit double → clean no-op
       await writeFile(join(dir, "docs", "kb2.md"), "knowledge 2")
-      expect(await commitPending(dir, { commit: false }, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb2.md")])).toBe("clean")
+      expect(await noCommitGit().commitPending(dir, {}, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb2.md")])).toBe("clean")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

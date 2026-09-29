@@ -8,7 +8,6 @@ import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
@@ -79,7 +78,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
   const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
   if (validHandover(await Bun.file(handoverFile).text().catch(() => "")) && !(await draftProblem(false))) {
-    const pending = await commitPending(directory, opts, distillTask, distillCommit, acceptance ? [handover, acceptance] : [handover])
+    const pending = await ctx.git.commitPending(directory, opts, distillTask, distillCommit, acceptance ? [handover, acceptance] : [handover])
     if (pending !== "clean") {
       if (!pending.ok) {
         log(`⏸ handover document make-up commit failed: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle it manually and re-run`)
@@ -105,13 +104,13 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         humanQuestions: opts.stopBefore === "execute",
-        commit: opts.commit,
         contextLimit: opts.contextLimit,
         permission: opts.permission,
         interactive: repl,
         server: serverHandle,
         routing: ctx.routing,
         router: ctx.router,
+        git: ctx.git,
       },
       {
         kind: "handover distillation",
@@ -163,23 +162,23 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     logGateStop(directory, phase, gated, acceptance)
     return 2
   }
-  if (opts.commit !== false) {
-    // the handover commit is the phase unit's close-out booking (completion
-    // rename + index tick); commit failure → exit 2 blocked for human
-    // attention: the phase is already renamed done, a re-run routes to the
-    // next phase, and the leftover uncommitted changes continue once the human
-    // has handled them (plans/0021-commit-boundary-design.md P3).
-    const settled = await commitTree(directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
-      stage: "phase-transition",
-      subject: `PLAN transition ${phaseTitle(phase)} → ${target}`,
-    })
-    if (!settled.ok) {
-      log(
-        `⏸ phase handover commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-          `The completion changes are kept in the worktree (the phase is already marked done); commit manually and re-run`,
-      )
-      return 2
-    }
+  // the handover commit is the phase unit's close-out booking (completion
+  // rename + index tick); commit failure → exit 2 blocked for human
+  // attention: the phase is already renamed done, a re-run routes to the
+  // next phase, and the leftover uncommitted changes continue once the human
+  // has handled them (plans/0021-commit-boundary-design.md P3). The run's
+  // git seam carries the strategy: on the no-commit double the ok answer
+  // keeps the failure branch dead.
+  const settled = await ctx.git.commitTree(directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
+    stage: "phase-transition",
+    subject: `PLAN transition ${phaseTitle(phase)} → ${target}`,
+  })
+  if (!settled.ok) {
+    log(
+      `⏸ phase handover commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+        `The completion changes are kept in the worktree (the phase is already marked done); commit manually and re-run`,
+    )
+    return 2
   }
   // the phase proxy-answer summary (plans/0020-auto-resolve-design.md §H-③,
   // H6): pinned above the ■ phase-close line.
@@ -431,13 +430,13 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
           verbose: opts.verbose,
           waitAnswer: opts.waitAnswer,
           humanQuestions: opts.stopBefore === "execute",
-          commit: opts.commit,
           contextLimit: opts.contextLimit,
           permission: opts.permission,
           interactive: repl,
           server: serverHandle,
         routing: ctx.routing,
         router: ctx.router,
+        git: ctx.git,
           mode: opts.mode,
         }, route.phase)
         if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)

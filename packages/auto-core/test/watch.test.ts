@@ -23,7 +23,8 @@ import { runSession } from "../src/session"
 import { flushStats, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
-import { afterSession, autoAnswer } from "../src/unit-commit"
+import { autoAnswer } from "../src/unit-commit"
+import { noCommitGit } from "../src/git-ops"
 import { task, fakeClient, freshRepo, sseClient } from "./fixtures/runner"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
@@ -677,7 +678,7 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
     expect(on).not.toContain("AUTO-RESOLVE")
   })
 
-  test("H4 session close-out scan: still collected under --commit false (collection is an audit, unaffected by the commit switch)", async () => {
+  test("H4 session close-out scan: still collected on the no-commit double (collection is an audit, unaffected by the commit strategy)", async () => {
     const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "pipe", stderr: "pipe" })
     expect(await proc.exited).toBe(0)
     await mkdir(join(dir, "docs", "R-02"), { recursive: true })
@@ -685,7 +686,7 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
       join(dir, "report.md"),
       ["## Proxy-answered questions", "", "- AUTO-RESOLVE: clean this up too -> clean this up too (same-layer dependency)", "- AUTO-DECISION: field naming takes matched (consistent with the schema)", ""].join("\n"),
     )
-    await afterSession(dir, { commit: false, phase: key("t") }, { id: "T-001", title: "sample task" }, { stage: "wrapup", subject: "T-001 wrapup sample task" })
+    await noCommitGit().afterSession(dir, { phase: key("t") }, { id: "T-001", title: "sample task" }, { stage: "wrapup", subject: "T-001 wrapup sample task" })
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ source: "agent", phase: "R-01.P01", round: 2, question: "clean this up too", file: "report.md:3" })

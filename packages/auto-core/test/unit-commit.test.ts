@@ -9,9 +9,10 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { commitTree, unitBaseline } from "../src/git"
+import { afterSession, noCommitGit } from "../src/git-ops"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
-import { afterSession, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+import { deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
 // The agent verdict lives behind the routing fence in the router's module
 // (its no-registry guard is a routing-truthiness branch).
 import { recordedAgentOk } from "../src/router"
@@ -19,7 +20,7 @@ import { services } from "../src/services"
 import { freshRepo, task } from "./fixtures/runner"
 
 describe("afterSession completion-condition gate (plans/0021-commit-boundary-design.md)", () => {
-  test("a commit failure (pre-commit rejects) → failed with the problem text; gate off (--commit false) → ok", async () => {
+  test("a commit failure (pre-commit rejects) → failed with the problem text; the no-commit double → ok", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-after-gate-"))
     try {
       await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
@@ -30,7 +31,7 @@ describe("afterSession completion-condition gate (plans/0021-commit-boundary-des
       const failed = await afterSession(dir, {}, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(failed.type).toBe("failed")
       if (failed.type === "failed") expect(failed.question).toContain("unified commit failed")
-      const off = await afterSession(dir, { commit: false }, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
+      const off = await noCommitGit().afterSession(dir, {}, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(off).toEqual({ type: "ok" })
       const none = await afterSession(undefined, {}, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(none).toEqual({ type: "ok" })

@@ -18,6 +18,7 @@ import {
   priorKnowledgeParts,
   renderDigestIndex,
 } from "../src/knowledge"
+import { noCommitGit } from "../src/git-ops"
 import { syncPhaseIndex } from "../src/phases"
 
 // A round established with phases "amk": the knowledge phase is P03.
@@ -408,14 +409,14 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
     }
   })
 
-  test("gate off (--commit false) keeps the old semantics: an existing artifact is skipped, nothing checked or committed", async () => {
+  test("the no-commit double keeps the old committing-off semantics: an existing artifact is skipped, nothing checked or committed", async () => {
     const dir = tempDir()
     try {
       await initRepo(dir)
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
       writeFileSync(join(dir, knowledgeFile(phase)), "round 1 migration knowledge")
-      const result = await extractKnowledge(client, dir, { dir, commit: false }, phase)
+      const result = await extractKnowledge(client, dir, { dir, git: noCommitGit() }, phase)
       expect(result).toEqual({ type: "skipped", file: "docs/R-01/P03-knowledge/kb.md" })
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("2")
     } finally {

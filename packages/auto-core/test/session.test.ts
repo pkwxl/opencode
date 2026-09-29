@@ -16,6 +16,7 @@ import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
 import { attempt } from "../src/attempt"
+import { noCommitGit } from "../src/git-ops"
 import { runSession } from "../src/session"
 import { services } from "../src/services"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -495,7 +496,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
     try {
       const { client } = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const result = await runSession(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await runSession(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("idle")
       expect((result as { testHandover?: boolean }).testHandover).toBe(true)
       // The frozen session's (here ses_new_1) task is complete: neither the chain nor the record claims it any more.
@@ -517,7 +518,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       // Part one: run one full test handover; the ending drops the frozen session (same as the previous case).
       const pin = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const handedOver = await runSession(pin.client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const handedOver = await runSession(pin.client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect((handedOver as { testHandover?: boolean }).testHandover).toBe(true)
       // Simulates runExecSession's handover close-out (after archiving + commit #2 + running the script, the in-flight
       // record moves to the closed-out state: the script and the frozen anchor are voided, waiting for attempt to
@@ -526,7 +527,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       // Part two: the continuation session fails retryably in all three rounds (pure error stub, no context) → ladder
       // exhausted into wait-and-probe → probe succeeds → blank new session re-dispatch succeeds.
       const retry = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"])
-      const outcome = await runSession(retry.client, task, "continuation prompt", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const outcome = await runSession(retry.client, task, "continuation prompt", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(outcome.type).toBe("idle")
       // The retry/recovery fork sources exclude the frozen session (before the fix: chain.id was restored to the frozen
       // session, which by its full context became the preferred fork source, forking the continuation prompt back into
@@ -554,7 +555,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = retryClient(["error-retryable"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
     } finally {
@@ -568,7 +569,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_old" })
       const { client } = retryClient(["error-retryable"], [41_300])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       // The failed session with 41.3k of content is worth more than the old anchor (a strict superset); the claim is not reverted.
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_1" })
@@ -586,7 +587,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = retryClient(["error-fatal"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((result as { retryable?: boolean }).retryable).toBe(false)
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
@@ -601,7 +602,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = fakeClient({ prompt: () => ({ error: { name: "UnknownError", data: { message: "boom" } } }) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((result as { question: string }).question).toContain("task dispatch failed")
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })

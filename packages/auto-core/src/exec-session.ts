@@ -12,6 +12,7 @@ import type { SessionChain, SessionResult } from "./chain"
 import { consumeNote, seedFork } from "./chain-transitions"
 import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
 import { fileCommitted, suffixedTitle } from "./git"
+import { createGitOps } from "./git-ops"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
@@ -32,7 +33,7 @@ import {
   type Steer,
   type TestRun,
 } from "./testrun"
-import { afterSession, commitBlocked } from "./unit-commit"
+import { commitBlocked } from "./unit-commit"
 // The fence's registry/no-registry agent verdict (moved out of unit-commit
 // with the routing fence: its no-registry guard is a routing-truthiness
 // branch, so it lives in the router service's module).
@@ -65,6 +66,10 @@ export async function runExecSession(
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? plan.dir
+  // The run's git service: the opts carrier the loop filled, else the
+  // holderless production fallback (a minimal test literal — committing on,
+  // exactly what such a literal did before the seam).
+  const git = opts.git ?? createGitOps()
   const tmp = scriptTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
   // Scene restoration (interruption recovery F3): handover documents already
@@ -176,7 +181,7 @@ export async function runExecSession(
         await fillHandoffStatus(join(dir, archived))
       }
       const subject = suffixedTitle(test.subject, `test handover #${closedN}`)
-      const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${closedN}`, subject })
+      const committed = await git.afterSession(dir, opts, task, { stage: `${unit} handoff-${closedN}`, subject })
       if (committed.type === "failed") return commitBlocked(subject, committed)
       log(`↻ ${test.label} resume after interruption: handover document ${archived} was fully written but not closed out; committed as backfill`)
     } else {
@@ -272,7 +277,7 @@ export async function runExecSession(
     // archived handover document are committed together. The unit is not
     // closed out yet, so no baseline is passed.
     const subject = suffixedTitle(test.subject, `test handover #${handovers}`)
-    const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
+    const committed = await git.afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
     if (committed.type === "failed") return commitBlocked(subject, committed)
     // The frozen script runs only after the handover close-out — what it
     // tests is exactly the tree of commit #2. If the script itself rewrites

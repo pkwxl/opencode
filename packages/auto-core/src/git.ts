@@ -524,9 +524,9 @@ export async function rollbackUnit(
 }
 
 // Unit start gate result: ok = the baseline is recorded (baseline undefined
-// means the gate is off — --commit false / dryrun, and the close-out check
-// skips with it); dirty = the dirty area cannot self-heal, hand it to a
-// human.
+// means the gate idled — dryrun here, or the no-commit double on the seam,
+// and the close-out check skips with it); dirty = the dirty area cannot
+// self-heal, hand it to a human.
 export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { type: "dirty"; files: string[] }
 
 // Unit start gate: a clean worktree → record the baseline and pass; a dirty
@@ -534,12 +534,8 @@ export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { ty
 // backfill commit then pass; any other dirty area → dirty (the caller blocks
 // and halts, writing no state files and making no sweeping commit — the
 // authority over git state stays with the human).
-export async function beginUnit(
-  dir: string,
-  opts: { commit?: boolean; dryrun?: boolean },
-  task: { id: string; title: string },
-): Promise<UnitGate> {
-  if (opts.commit === false || opts.dryrun) return { type: "ok", baseline: undefined }
+export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate> {
+  if (opts.dryrun) return { type: "ok", baseline: undefined }
   const dirty = await changedFiles(dir)
   if (dirty.length) {
     if (dirty.every(driverStateFile)) {
@@ -559,15 +555,16 @@ export async function beginUnit(
 // and return the result; none of them (already committed / nonexistent) →
 // "clean", no action. The completion condition = artifacts on disk and
 // committed, so a successful backfill commit counts as done. A no-op while
-// the gate is off.
+// the gate idles (dryrun; the seam's no-commit double answers "clean"
+// without reaching here).
 export async function commitPending(
   dir: string,
-  opts: { commit?: boolean; dryrun?: boolean },
+  opts: { dryrun?: boolean },
   task: { id: string; title: string },
   info: { stage: string; subject: string },
   files: string[],
 ): Promise<"clean" | CommitResult> {
-  if (opts.commit === false || opts.dryrun) return "clean"
+  if (opts.dryrun) return "clean"
   const dirty = await changedFiles(dir)
   if (!files.some((file) => dirty.includes(file))) return "clean"
   return commitTree(dir, task, info)
@@ -580,10 +577,11 @@ export async function commitPending(
 // switchable per run — the production instance (createGitOps,
 // src/git-ops.ts) delegates to the free functions above, committing
 // always on, while a test installs the no-commit double (noCommitGit) and
-// the engine runs with committing off, the exact answers the gates inside
-// these functions give under `commit: false`. The free exports stay for
-// the callers outside a run's services (the close command, the recovery
-// paths): they keep calling the functions directly.
+// the engine runs with committing off, answering exactly what the gates
+// these functions used to carry under `commit: false` answered then (the
+// commit halves are gone; the double is the off path now). The free
+// exports stay for the callers outside a run's services (the close
+// command, the recovery paths): they keep calling the functions directly.
 //
 // The opts parameters carry no commit half — only the dryrun flag remains
 // (dryrun still idles the production instance's delegated gates; the
@@ -593,7 +591,7 @@ export async function commitPending(
 // which the slice accepts structurally.
 //
 // `records` is the strategy marker the strict-resume activation and the
-// baseline-reading sites consult (the old `opts.commit !== false`
+// baseline-reading sites consult (the commit switch's former "not false"
 // conjunct): true = this instance commits and the recovery records may
 // carry their baseline/model fields; false = the double, under which they
 // stay unwritten, exactly as the gates kept them.

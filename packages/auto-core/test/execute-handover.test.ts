@@ -14,6 +14,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
 import { executeWhole } from "../src/execute"
+import { noCommitGit } from "../src/git-ops"
 import { clampSwitches } from "../src/switches"
 import { ev, fakeAgent, MODEL, type TurnScript } from "./fixtures/agent"
 import { planOf } from "./fixtures/units"
@@ -47,7 +48,7 @@ Body.
       return undefined
     })
     try {
-      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, true)).toBeUndefined()
       // Two sessions: the first handed itself over, the second continued from
       // the document and finished the task naturally.
       expect(agent.prompts).toHaveLength(2)
@@ -63,7 +64,7 @@ Body.
   test("no document written and no wall hit: a single natural session, nothing demanded", async () => {
     const { dir, plan, task, agent, chain } = await setup()
     try {
-      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, true)).toBeUndefined()
       expect(agent.prompts).toHaveLength(1)
       expect(agent.steers).toEqual([])
     } finally {
@@ -78,7 +79,7 @@ Body.
       return undefined
     })
     try {
-      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, true)).toBeUndefined()
       expect(agent.prompts).toHaveLength(1)
       expect(agent.prompts[0]!.text).not.toContain("Context-budget protocol")
       expect(agent.steers).toEqual([])
@@ -93,7 +94,7 @@ Body.
       ctx.n === 1 ? [ev.message(ctx.session, "m_big", 90_000), ev.text(ctx.session, "t1", "still working"), ev.idle(ctx.session)] : undefined,
     )
     try {
-      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, true)).toBeUndefined()
       // One steer only: the single measurement crossed the wall, so the hard-
       // wall hint went out and the notice bands were spent with it.
       expect(agent.steers).toHaveLength(1)
@@ -113,7 +114,7 @@ Body.
       { [MODEL]: 1_000_000 },
     )
     try {
-      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, true)).toBeUndefined()
       // 150k is past the 128k budget but only 60% of the 250k wall: the 50%
       // notice, no hard-wall hint, and one session with no document demanded.
       expect(agent.steers).toHaveLength(1)

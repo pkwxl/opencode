@@ -20,7 +20,8 @@ import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
-import { beginUnit, headText, removeIfUntracked, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { headText, removeIfUntracked, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { createGitOps } from "./git-ops"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
 import { checklistTitle, forkBaseFor, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
@@ -33,7 +34,7 @@ import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
 import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
-import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The execution stage for off/auto/ondemand: off finishes the whole task in
 // one session; ondemand and auto's lead (`ondemand` is true for both), when a
@@ -73,6 +74,10 @@ export async function executeWhole(
 ): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
+  // The run's git service: the opts carrier the loop filled, else the
+  // holderless production fallback (a minimal test literal — committing on,
+  // exactly what such a literal did before the seam).
+  const git = opts.git ?? createGitOps()
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
@@ -265,14 +270,14 @@ export async function executeWhole(
     // every base (plans/0055 §8.4). Recorded before the commit, so a split
     // whose commit landed names its base.
     if (verdict?.type === "taken" && chain.id) await setForkBase(planDir, task.id, chain.id, opts.routing ? chain.agent : undefined)
-    const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
+    const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     if (verdict?.type === "taken") {
       // The split point: every repository's HEAD right after the lead's
       // commit (none where nothing commits). The files a stream's
       // prerequisites change are read against it, and the record marks the
       // checklist as the lead's streams.
-      await setSplit(planDir, task.id, opts.commit !== false && !opts.dryrun ? await unitBaseline(dir) : [], verdict.used)
+      await setSplit(planDir, task.id, !opts.dryrun ? await git.unitBaseline(dir) : [], verdict.used)
       log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, each a fork of the lead`)
       return undefined
     }
@@ -364,6 +369,9 @@ export async function ensureDecomposed(
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   if (task.checklist?.length) return { type: "ok", task }
   const dir = plan.dir
+  // The run's git service (the opts carrier, else the holderless
+  // production fallback).
+  const git = opts.git ?? createGitOps()
   const contextFile = join(dir, taskDoc(task.id, "context"))
   const sharedFile = join(dir, taskDoc(task.id, "shared"))
   const subtasksFile = join(dir, taskDoc(task.id, "subtasks"))
@@ -420,7 +428,7 @@ export async function ensureDecomposed(
       // base of its own from it.
       if (chain.id) await setForkBase(dir, task.id, chain.id, opts.routing ? chain.agent : undefined)
       const fresh = await reloadTask(plan, task.id)
-      const committed = await afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
+      const committed = await git.afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
       return { type: "ok", task: fresh }
     }
@@ -551,6 +559,9 @@ export async function runSubtask(
   // candidate keeps its exact task-scoped meaning.
   if (opts.routing) resetRoute(chain)
   const dir = opts.dir ?? plan.dir
+  // The run's git service (the opts carrier, else the holderless
+  // production fallback).
+  const git = opts.git ?? createGitOps()
   // Subtask unit commit boundary: startup clean gate + SHA baseline (close-out
   // verifies the commit range is all driver commits); driver-exclusive
   // state-file leftovers self-heal through the carryover inside beginUnit. The
@@ -558,9 +569,9 @@ export async function runSubtask(
   // record, the rollback anchor).
   let baseline: UnitBaseline | undefined
   if (resumeUnit) {
-    if (opts.commit !== false && !opts.dryrun) baseline = await unitBaseline(dir)
+    if (!opts.dryrun) baseline = await git.unitBaseline(dir)
   } else {
-    const gate = await beginUnit(dir, opts, task)
+    const gate = await git.beginUnit(dir, opts, task)
     if (gate.type === "dirty") return { type: "dirty", files: gate.files }
     baseline = gate.baseline
   }
@@ -812,7 +823,7 @@ export async function runSubtask(
   // + subtask title locate it already).
   // Unit close-out: the commit range is verified against the baseline — a
   // tick not yet committed does not count as done.
-  const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
+  const committed = await git.afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
   if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined

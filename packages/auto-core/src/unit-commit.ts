@@ -3,14 +3,16 @@
 // fidelity (strict-resume activation check / model-consistency evaluation),
 // and the runner-side orchestration of the rollback to the unit baseline.
 // The session close-out itself (afterSession and its marker collection)
-// and the git service's two instances moved into src/git-ops.ts — the
-// service's opts-free home (see that file's header); afterSession stays
-// re-exported below until the callers convert to the seam.
+// and the git service's two instances live in src/git-ops.ts — the
+// service's opts-free home (see that file's header); the callers reach it
+// through the run's git service (the seam on the services holder or the
+// Opts.git carrier).
 // Design in plans/0021-commit-boundary-design.md
 // and plans/0022-session-recovery-fidelity-design.md.
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
 import { rollbackUnit, type UnitBaseline } from "./git"
+import { createGitOps } from "./git-ops"
 import { forgetHandover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
@@ -53,18 +55,6 @@ export function autoAnswer(ask: boolean): string {
   )
 }
 
-// Unified commit after a session (the AI's commit right withdrawn, see
-// src/git.ts): called once every session has ended and the driver finished
-// its state writes (ticks and the like), recursively committing all changes
-// — git history is the audit trail of AI changes, rollback granularity =
-// the session. Skipped under --commit false and dryrun. The H4 guard (the
-// marker collection is unaffected by the --commit false / dryrun early
-// return) holds in the moved body. Conversion crutch: the function moved
-// into src/git-ops.ts (the git service's opts-free home); this re-export
-// keeps every importer compiling and is removed when the callers convert
-// to the seam (the run services' git member).
-export { afterSession } from "./git-ops"
-
 // afterSession gate failure → the blocked exit (unit describes this unit,
 // e.g. "T-001 subtask 2"): a failed commit is not considered completion —
 // the blocking reason goes into the run log, loop's interrupted path retries
@@ -89,13 +79,15 @@ export async function wrapupResolves(dir: string | undefined, taskID: string): P
 
 // —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md, OPENCODE_AUTO_STRICT_RESUME) ——
 
-// Whether strict resume is active: the switch on and the commit gate in
-// place (--commit true and not dryrun). With the gate off, records carry no
-// baseline/model fields and the check and rollback both idle entirely
-// (byte-for-byte equal to the status quo). switches defaults to the parsed
+// Whether strict resume is active: the switch on, the run's git service
+// recording (the production instance; the no-commit double answers false,
+// keeping the record fields unwritten — the commit gate's former off
+// path), and not dryrun. With records off, records carry no baseline/model
+// fields and the check and rollback both idle entirely (byte-for-byte
+// equal to the status quo). switches defaults to the parsed
 // OPENCODE_AUTO_* value; injected for unit tests.
 export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches()): boolean {
-  return switches.strictResume && opts.commit !== false && !opts.dryrun
+  return switches.strictResume && (opts.git ?? createGitOps()).records && !opts.dryrun
 }
 
 // The model-consistency evaluation at resume (design 3.1 ④): the target a

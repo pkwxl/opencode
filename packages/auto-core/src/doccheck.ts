@@ -39,18 +39,18 @@ export function docShapeProblems(text: string, path: string): string[] {
 // (document/roles.ts eofScanExempt, M2.3).
 
 // Whether the D2/D4 shape check is on (session-boundary-hardening §4.3): not
-// judged under dryrun / commit gate off (`--commit false` is retired, kept
-// defensively) / non-git (no baseline); a test-handover closing session is
-// exempt — its completion criterion is testhandoff.md, already covered by the
-// handover-boundary write check (the current wiring does not leak the
-// testHandover result out of runExecSession to runSubtask, so the guard is
-// deliberately kept as designed).
+// judged under dryrun / an empty baseline (non-git, or a run on the git
+// seam's no-commit double, whose unitBaseline answers empty); a
+// test-handover closing session is exempt — its completion criterion is
+// testhandoff.md, already covered by the handover-boundary write check (the
+// current wiring does not leak the testHandover result out of runExecSession
+// to runSubtask, so the guard is deliberately kept as designed).
 export function shapeCheckOn(
-  opts: { dryrun?: boolean; commit?: boolean },
+  opts: { dryrun?: boolean },
   baseline: { length: number } | undefined,
   testHandover: boolean,
 ): boolean {
-  if (opts.dryrun || opts.commit === false) return false
+  if (opts.dryrun) return false
   if (!baseline?.length) return false
   return !testHandover
 }

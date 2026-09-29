@@ -5,8 +5,7 @@
 // reproduces the `commit: false` off-path, which tests install instead of
 // the retired option). Split out of src/unit-commit.ts, which keeps the
 // recovery-fidelity half (strict resume, model eligibility, rollback
-// orchestration) and re-exports afterSession until its callers convert to
-// the seam.
+// orchestration).
 //
 // The module's defining constraint is what it may not import: opts.ts. The
 // services holder (src/services.ts) builds the production instance as its
@@ -45,20 +44,21 @@ import { collectAgentResolves } from "./resolve"
 // src/git.ts): called once every session has ended and the driver finished
 // its state writes (ticks and the like), recursively committing all changes
 // — git history is the audit trail of AI changes, rollback granularity =
-// the session. Skipped under --commit false and dryrun (the H4 guard: the
-// marker collection below is hoisted before that early return, so it is
-// unaffected by it). opts is the session options whole; structurally this
-// reads its commit, dryrun and phase fields only.
+// the session. Skipped under dryrun (the H4 guard: the marker collection
+// below is hoisted before that early return, so it is unaffected by it);
+// the no-commit double overrides the method whole, and its body keeps the
+// collection for the same reason. opts is the session options whole;
+// structurally this reads its dryrun and phase fields only.
 export async function afterSession(
   dir: string | undefined,
-  opts: { commit?: boolean; dryrun?: boolean; phase?: PhaseKey },
+  opts: { dryrun?: boolean; phase?: PhaseKey },
   task: { id: string; title: string },
   info: { stage: string; subject: string },
   baseline?: UnitBaseline,
 ): Promise<{ type: "ok" } | { type: "failed"; question: string }> {
   if (!dir) return { type: "ok" }
   await collectSessionMarks(dir, opts.phase, task, info.stage)
-  if (opts.commit === false || opts.dryrun) return { type: "ok" }
+  if (opts.dryrun) return { type: "ok" }
   const result = await commitTree(dir, task, info)
   if (!result.ok) {
     return {
@@ -109,9 +109,8 @@ async function collectSessionMarks(
 // (no singleton moved into a closure here), so a per-test fresh holder
 // needs no reset hook for it; a test that wants committing off installs
 // the double below instead. The delegated functions keep their own gates:
-// dryrun (and, until their retirement slice, the commit key) still idle
-// beginUnit/commitPending/afterSession on this instance exactly as before
-// the seam existed.
+// dryrun still idles beginUnit/commitPending/afterSession on this
+// instance exactly as before the seam existed.
 export function createGitOps(): GitOps {
   return {
     records: true,
@@ -125,16 +124,16 @@ export function createGitOps(): GitOps {
 }
 
 // The no-commit double: every method answers what the `commit: false`
-// early returns inside the free functions answer today, so a converted
-// call site behaves identically — beginUnit ok with no baseline (the
-// close-out check skips without one), commitPending "clean", commitTree
-// ok with no failures (a gated site used not to call at all; the ok keeps
-// its failure branch and warning log dead), unitBaseline and changedFiles
-// empty (nothing to judge for the close-out and the dirty checks), and
-// records false (strict resume keeps its record fields unwritten, as it
-// did under the switch). afterSession still collects the session's
-// proxy-answer markers first (H4: the collection was hoisted before the
-// commit gate on purpose), then answers ok.
+// early returns inside the free functions answered before their removal,
+// so a converted call site behaves identically — beginUnit ok with no
+// baseline (the close-out check skips without one), commitPending "clean",
+// commitTree ok with no failures (a gated site used not to call at all;
+// the ok keeps its failure branch and warning log dead), unitBaseline and
+// changedFiles empty (nothing to judge for the close-out and the dirty
+// checks), and records false (strict resume keeps its record fields
+// unwritten, as it did under the switch). afterSession still collects the
+// session's proxy-answer markers first (H4: the collection was hoisted
+// before the commit gate on purpose), then answers ok.
 export function noCommitGit(): GitOps {
   return {
     records: false,

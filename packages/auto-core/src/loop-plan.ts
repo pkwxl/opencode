@@ -11,7 +11,6 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { projectBriefText } from "./brief"
-import { commitTree } from "./git"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
@@ -86,7 +85,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,
       humanQuestions: opts.stopBefore === "execute",
-      commit: opts.commit,
+      git: ctx.git,
       contextLimit: opts.contextLimit,
       permission: opts.permission,
       interactive: repl,
@@ -171,7 +170,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,
       humanQuestions: opts.stopBefore === "execute",
-      commit: opts.commit,
+      git: ctx.git,
       contextLimit: opts.contextLimit,
       permission: opts.permission,
       interactive: repl,
@@ -537,7 +536,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,
       humanQuestions: opts.stopBefore === "execute",
-      commit: opts.commit,
+      git: ctx.git,
       contextLimit: opts.contextLimit,
       permission: opts.permission,
       interactive: repl,
@@ -633,7 +632,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,
       humanQuestions: opts.stopBefore === "execute",
-      commit: opts.commit,
+      git: ctx.git,
       contextLimit: opts.contextLimit,
       permission: opts.permission,
       interactive: repl,
@@ -694,18 +693,19 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   const handover = phaseHandoverDoc(phase)
   if (await Bun.file(join(directory, handover)).exists()) {
     await rm(join(directory, handover))
-    if (opts.commit !== false) {
-      const settled = await commitTree(directory, { id: "PLAN", title: `phase append (${phaseTitle(phase)})` }, {
-        stage: "phase-append",
-        subject: `PLAN append ${phaseTitle(phase)}: remove the stale handover`,
-      })
-      if (!settled.ok) {
-        log(
-          `⏸ stale-handover removal commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-            `The deletion is kept in the worktree; commit manually and re-run (the append step re-enters idempotently)`,
-        )
-        return 2
-      }
+    // The run's git seam carries the strategy: on the no-commit double the
+    // ok answer keeps the failure branch dead (the removal itself still
+    // happens, as the rename does in the prior-knowledge close-out).
+    const settled = await ctx.git.commitTree(directory, { id: "PLAN", title: `phase append (${phaseTitle(phase)})` }, {
+      stage: "phase-append",
+      subject: `PLAN append ${phaseTitle(phase)}: remove the stale handover`,
+    })
+    if (!settled.ok) {
+      log(
+        `⏸ stale-handover removal commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+          `The deletion is kept in the worktree; commit manually and re-run (the append step re-enters idempotently)`,
+      )
+      return 2
     }
     log(`✓ stale handover removed: ${handover} (the phase is distilled again after the appended tasks)`)
   }

@@ -9,7 +9,8 @@
 
 import type { SessionChain } from "./chain"
 import { bindAgent, resumeSession, setRoute } from "./chain-transitions"
-import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./git"
+import { baselineIntact, type UnitBaseline } from "./git"
+import { createGitOps } from "./git-ops"
 import { log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Task } from "./tasks"
@@ -18,7 +19,7 @@ import { resumeNote } from "./resume-gate"
 import { runSession } from "./session"
 import { clientOf, formatTokens, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
-import { afterSession, commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The generic "bypass session must produce a file" skeleton (design doc A.4):
 // when a session ends with its artifact missing or invalid, retry once with
@@ -96,6 +97,10 @@ export async function requireArtifact<T>(
   switches: Switches = autoSwitches(),
 ): Promise<T | UnitStop> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, unit: spec.step.unit } : undefined
+  // The run's git service: the opts carrier the loop filled, else the
+  // holderless production fallback (a minimal test literal — committing on,
+  // exactly what such a literal did before the seam).
+  const git = opts.git ?? createGitOps()
   // Phase-step resume: the last run was interrupted in this step (driver did not
   // close it) and the original session is still reusable → the first prompt goes
   // into the original session (keeping the artifact state); otherwise treat it as
@@ -212,11 +217,11 @@ export async function requireArtifact<T>(
   // own artifact state; a fresh entry requires clean (driver-owned state file
   // leftovers self-heal). Both record the SHA baseline.
   let baseline: UnitBaseline | undefined
-  if (spec.unitStart && opts.dir && opts.commit !== false && !opts.dryrun) {
+  if (spec.unitStart && opts.dir && !opts.dryrun) {
     if (resumedSession) {
-      baseline = await unitBaseline(opts.dir)
+      baseline = await git.unitBaseline(opts.dir)
     } else {
-      const gate = await beginUnit(opts.dir, opts, task)
+      const gate = await git.beginUnit(opts.dir, opts, task)
       if (gate.type === "dirty") return { type: "dirty", files: gate.files }
       baseline = gate.baseline
     }
@@ -258,7 +263,7 @@ export async function requireArtifact<T>(
     const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)
     if (result.type === "blocked") return result
     if (spec.commit) {
-      const committed = await afterSession(opts.dir, opts, task, spec.commit, baseline)
+      const committed = await git.afterSession(opts.dir, opts, task, spec.commit, baseline)
       if (committed.type === "failed") return commitBlocked(`${task.id} ${spec.kind} session`, committed)
     }
     const value = await spec.collect()

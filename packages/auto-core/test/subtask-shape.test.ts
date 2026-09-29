@@ -86,11 +86,10 @@ describe("doccheck pure functions (non-trivial + last-line terminator)", () => {
     expect(docShapeProblems(long, "docs/a.md")).toEqual([`docs/a.md: missing last-line terminator (the last line of body text must be ${EOF_MARK})`])
   })
 
-  test("shapeCheckOn: off under dryrun / commit off / an empty baseline (non-git) / a testHandover finish", () => {
+  test("shapeCheckOn: off under dryrun / an empty baseline (non-git, or the no-commit double) / a testHandover finish", () => {
     const baseline = [{ root: "/x", sha: "abc1234" }]
-    expect(shapeCheckOn({ commit: true }, baseline, false)).toBe(true)
+    expect(shapeCheckOn({}, baseline, false)).toBe(true)
     expect(shapeCheckOn({ dryrun: true }, baseline, false)).toBe(false)
-    expect(shapeCheckOn({ commit: false }, baseline, false)).toBe(false)
     expect(shapeCheckOn({}, undefined, false)).toBe(false)
     expect(shapeCheckOn({}, [], false)).toBe(false)
     expect(shapeCheckOn({}, baseline, true)).toBe(false)

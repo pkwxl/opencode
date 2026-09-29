@@ -17,7 +17,7 @@ import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
 import { agentGaveUp, classifySessionError, retryPolicyOf, statedInWording, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk } from "./classify"
 import type { ClassifierAnswer } from "./router"
-import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
+import { autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete, saveHandover } from "./handover"
 import { formatDuration, log, vlog } from "./log"
@@ -137,12 +137,17 @@ export async function watch(
    // every timer of this watch goes through it — a run on a steered clock
    // observes a steered timeline, and the engine never reads the wall clock
    // behind the services' back.
-   const clock = services().clock
-   // The run's router (the installed services' router): the logged usage
-   // windows and the model-step cache-claim checks are run-wide decision
-   // state — the dedup map and the pending claims survive a watch that ends
-   // before the first step-finish, exactly as they did as module state.
-   const router = services().router
+    const clock = services().clock
+    // The run's router (the installed services' router): the logged usage
+    // windows and the model-step cache-claim checks are run-wide decision
+    // state — the dedup map and the pending claims survive a watch that ends
+    // before the first step-finish, exactly as they did as module state.
+    const router = services().router
+    // The run's git service (the installed services' git): the test-handover
+    // freeze pin below commits through it — the same seam every other commit
+    // boundary of the run goes through, so a run on the no-commit double
+    // keeps the marker collection and skips the commit itself.
+    const git = services().git
    // Session start timestamp, for computing duration.
    const startTime = clock.now()
   // Token increment accumulation (STATS_PLAN §2, T-003): each step-finish part
@@ -446,7 +451,7 @@ export async function watch(
       // test start for all three to be the same snapshot. The unit is not yet
       // closed out, so no baseline is passed.
       const pinSubject = suffixedTitle(test!.subject, `test handover #${n} freeze`)
-      const pin = await afterSession(test!.dir, opts, test!.task, { stage: `${test!.unit} handoff-${n}-pin`, subject: pinSubject })
+      const pin = await git.afterSession(test!.dir, opts, test!.task, { stage: `${test!.unit} handoff-${n}-pin`, subject: pinSubject })
       if (pin.type === "failed") {
         return { type: "blocked", question: commitBlocked(pinSubject, pin).question }
       }

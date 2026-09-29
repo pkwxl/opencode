@@ -6,7 +6,7 @@
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
 import type { Control } from "./exit"
-import { beginUnit, commitTree, unitBaseline, unitViolations, type GitOps, type UnitBaseline } from "./git"
+import { unitViolations, type GitOps, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
@@ -116,9 +116,9 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     {
       const recalled = await recallProgress(directory, task.id)
       if (recalled?.active === true) {
-        if (opts.commit !== false && !opts.dryrun) taskBaseline = await unitBaseline(directory)
+        if (!opts.dryrun) taskBaseline = await ctx.git.unitBaseline(directory)
       } else {
-        const gate = await beginUnit(directory, opts, task)
+        const gate = await ctx.git.beginUnit(directory, opts, task)
         if (gate.type === "dirty") {
           log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
           for (const file of gate.files) log(`  ${file}`)
@@ -140,7 +140,6 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       dir: directory,
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,
-      commit: opts.commit,
       subtask: opts.subtask,
       contextLimit: opts.contextLimit,
       permission: opts.permission,
@@ -158,6 +157,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       routing: ctx.routing,
       router: ctx.router,
       control: ctx.control,
+      git: ctx.git,
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
     })
     if (outcome.type === "dirty") {
@@ -189,11 +189,11 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       // unit's in-flight work) so it can be rolled back to.
       // Commit failure (typically the unified commit rejected by the
       // environment) is only escalated to a warning — already on the way to
-      // exit 2, changes stay in the worktree for manual handling.
-      if (opts.commit !== false) {
-        const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
-        if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
-      }
+      // exit 2, changes stay in the worktree for manual handling. The
+      // run's git seam carries the strategy: on the no-commit double the
+      // ok answer keeps this warning dead.
+      const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+      if (!settledBlocked.ok) log(`⚠ interruption-scene commit failed: ${settledBlocked.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
       return 2
     }
     if (outcome.type === "incomplete") {
@@ -204,10 +204,8 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
         log(`⏸ ${task.id} incomplete: ${lines[0]}`)
         log(lines[1])
       }
-      if (opts.commit !== false) {
-        const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
-        if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
-      }
+      const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+      if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
       return 2
     }
     {
@@ -226,28 +224,28 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // the terminal commit of task completion: the todo.md → done.md rename
     // and the tasks.md tick are booked here together (each session's output
     // was committed with its session; this is the close-out).
-    // the completion-condition gate (plans/0021-commit-boundary-design.md):
+    // the completion-condition check (plans/0021-commit-boundary-design.md):
     // terminal commit failure → exit 2 for human attention (the task mark is
     // already in the worktree; after the human commits and re-runs, the next
     // task starts on a clean baseline); after the commit succeeds, the task
     // baseline drives the close-out check (the commit range must be all driver
-    // commits, an external commit is an isolation break).
-    if (opts.commit !== false) {
-      const settled = await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
-      if (!settled.ok) {
-        log(
-          `⏸ ${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-            `The task mark is still in the worktree; commit manually and re-run`,
-        )
+    // commits, an external commit is an isolation break). The run's git seam
+    // carries the strategy: on the no-commit double the ok answer and the
+    // empty baseline keep both failure paths dead.
+    const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+    if (!settled.ok) {
+      log(
+        `⏸ ${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+          `The task mark is still in the worktree; commit manually and re-run`,
+      )
+      return 2
+    }
+    if (taskBaseline) {
+      const violations = await unitViolations(directory, taskBaseline)
+      if (violations.length) {
+        log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
+        for (const problem of violations) log(`  ${problem}`)
         return 2
-      }
-      if (taskBaseline) {
-        const violations = await unitViolations(directory, taskBaseline)
-        if (violations.length) {
-          log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
-          for (const problem of violations) log(`  ${problem}`)
-          return 2
-        }
       }
     }
     // step pause (task boundary, OPENCODE_AUTO_STEP ≥ task): a hard pause

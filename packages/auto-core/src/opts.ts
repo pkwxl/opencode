@@ -103,8 +103,11 @@ export type Opts = {
   dir?: string
   verbose?: boolean
   waitAnswer?: number
-  // --commit false: turns off the driver's post-session unified commit (on by
-  // default; the commit mechanism is src/git.ts).
+  // Ignored: committing is always on in production (a stored commit: false
+  // is a strict config failure at load; the commit-side operations live
+  // behind the git seam — Opts.git / the services holder's git member,
+  // src/git.ts). The field survives only so callers still passing
+  // commit: true keep compiling until their cleanup slice removes it.
   commit?: boolean
   subtask?: SubtaskMode
   // dryrun sessions: permission requests are denied automatically without

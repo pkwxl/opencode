@@ -17,6 +17,7 @@ import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
+import { createGitOps } from "./git-ops"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Plan, Task } from "./tasks"
@@ -24,7 +25,7 @@ import { renderWrapup } from "./prompt"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
 import { statsModelEvent } from "./stats"
-import { afterSession, commitBlocked, wrapupResolves } from "./unit-commit"
+import { commitBlocked, wrapupResolves } from "./unit-commit"
 
 // report.md shape problems (empty = pass): the path is fixed and known to the
 // driver (the wrap-up template pins docs/<id>/report.md), so no declaration is
@@ -50,6 +51,10 @@ export async function runWrapup(
   input: { solo: boolean; label: string },
 ): Promise<UnitStop | undefined> {
   const dir = opts.dir ?? plan.dir
+  // The run's git service: the opts carrier the loop filled, else the
+  // holderless production fallback (a minimal test literal — committing on,
+  // exactly what such a literal did before the seam).
+  const git = opts.git ?? createGitOps()
   autobanner(`${task.id} ${task.title}: wrap-up`)
   const subject = `${task.id} wrapup ${task.title}`
   nameSubject(chain, subject)
@@ -73,7 +78,7 @@ export async function runWrapup(
     if (result.type === "blocked") return result
     const problems = await reportProblems(dir, task)
     if (!problems.length) {
-      const committed = await afterSession(dir, opts, task, { stage: "wrapup", subject })
+      const committed = await git.afterSession(dir, opts, task, { stage: "wrapup", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} ${input.label}`, committed)
       return undefined
     }

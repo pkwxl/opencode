@@ -16,7 +16,7 @@ import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
+import { fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
 import { checkModelReferences, loadModels, type ModelRegistry } from "./models"
@@ -311,20 +311,23 @@ export async function preflight(
   // .auto/invalid-refs.md an earlier release left is removed the same way
   // (see removeRetiredInvalidRefs below).
   if (!opts.dryrun && (await removeRetiredInvalidRefs(directory))) log("removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)")
-  // the start clean gate (plans/0021-commit-boundary-design.md P3): with
-  // committing enabled the worktree must be clean — everything the execution
-  // units after it (task/subtask/hidden task) depend on is fixed by the
-  // previous commit. A dirty area left by the human blocks and goes to the
-  // human (replacing the old "⚠ will be absorbed by the next commit" notice:
-  // absorbing would mix human changes into the driver's audit trail, breaking
-  // the commit-as-isolation boundary); leftovers of driver-exclusive state
-  // files (index ticks, unit renames) self-heal through beginUnit's carryover
+  // the start clean gate (plans/0021-commit-boundary-design.md P3): the
+  // worktree must be clean — everything the execution units after it
+  // (task/subtask/hidden task) depend on is fixed by the previous commit. A
+  // dirty area left by the human blocks and goes to the human (replacing the
+  // old "⚠ will be absorbed by the next commit" notice: absorbing would mix
+  // human changes into the driver's audit trail, breaking the
+  // commit-as-isolation boundary); leftovers of driver-exclusive state files
+  // (index ticks, unit renames) self-heal through beginUnit's carryover
   // backfill commit — the previous run exiting on a non-commit path (e.g. a
   // unit gate not clean returning 2 directly) leaves their writes behind,
   // which are the driver's own bookkeeping, not human changes, and stopping
-  // here would only keep the next run from ever starting.
-  if (opts.commit !== false && !opts.dryrun) {
-    const gate = await beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
+  // here would only keep the next run from ever starting. The gate reads the
+  // holder preflight itself built (the composition root's git member —
+  // production here; a test wanting the off path installs the double on a
+  // holder of its own).
+  if (!opts.dryrun) {
+    const gate = await run.git.beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
     if (gate.type === "dirty") {
       // The round-start gate (plans/0049 G1): the command that establishes
       // the round (plan; init and continue did before their round steps
@@ -371,9 +374,11 @@ export async function preflight(
   // the housekeeping close-out commit: the writes ensurePointer/ensureGitignore
   // make are driver changes, booked at once so the worktree is clean when the
   // first execution unit starts; commit failure exits 2 as an environment
-  // block (plans/0021-commit-boundary-design.md P3). dryrun makes no commit.
-  if (opts.commit !== false && !opts.dryrun && (await changedFiles(directory)).length) {
-    const settled = await commitTree(directory, { id: "PLAN", title: "pre-run baseline close-out" }, {
+  // block (plans/0021-commit-boundary-design.md P3). dryrun makes no commit
+  // (the seam's changedFiles read is real here — preflight built the
+  // production holder, whose dirty list decides whether anything posts).
+  if (!opts.dryrun && (await run.git.changedFiles(directory)).length) {
+    const settled = await run.git.commitTree(directory, { id: "PLAN", title: "pre-run baseline close-out" }, {
       stage: "housekeeping",
       subject: "PLAN housekeeping pre-run baseline close-out (AGENTS.md pointer block/.gitignore/interrupted-state reset)",
     })

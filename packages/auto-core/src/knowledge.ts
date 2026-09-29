@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
-import { changedFiles, commitPending, commitTree } from "./git"
+import { createGitOps } from "./git-ops"
 import { formatTokens, log } from "./log"
 import { currentRound, phaseHandoverDoc, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
@@ -12,7 +12,6 @@ import { statsKnowledgePhase } from "./stats"
 import { estimateTokens } from "./usage"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
-import { afterSession } from "./unit-commit"
 
 // The k (knowledge distillation) phase claims the whole --extract-knowledge
 // design (plans/0002-fixme-knowledge-design.md §D + plans/0006-phases-design.md
@@ -66,11 +65,16 @@ export async function extractKnowledge(
 > {
   const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
+  // The run's git service: the opts carrier the loop filled, else the
+  // holderless production fallback (a minimal test literal — committing on,
+  // exactly what such a literal did before the seam; a test wanting
+  // committing off installs the no-commit double on the carrier).
+  const git = opts.git ?? createGitOps()
   const existing = await existingKnowledge(dir, phase)
   if (existing) {
     // ③ Backfill commit: the document is on disk but still on the uncommitted
     // changes list → commit, then complete.
-    const pending = await commitPending(dir, opts, task, commit, [existing])
+    const pending = await git.commitPending(dir, opts, task, commit, [existing])
     if (pending !== "clean") {
       log(pending.ok ? `✓ knowledge document was produced but not committed; committed now: ${existing}` : `⚠ knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
       if (!pending.ok) return { type: "dirty", files: [existing] }
@@ -80,8 +84,8 @@ export async function extractKnowledge(
   }
   // ④ Half-finished-site detection: artifact missing + worktree dirty → hand
   // to a person to clean up, no proactive git action.
-  if (opts.commit !== false && !opts.dryrun) {
-    const dirty = await changedFiles(dir)
+  if (!opts.dryrun) {
+    const dirty = await git.changedFiles(dir)
     if (dirty.length) return { type: "dirty", files: dirty }
   }
   const file = knowledgeFile(phase)
@@ -114,8 +118,8 @@ export async function extractKnowledge(
   if (produced.type === "dirty") return { type: "dirty", files: produced.files }
   // If the worktree is already dirty after a blocked session / no output
   // (typically: commit failure), likewise halt as dirty.
-  if (opts.commit !== false && !opts.dryrun) {
-    const dirty = await changedFiles(dir)
+  if (!opts.dryrun) {
+    const dirty = await git.changedFiles(dir)
     if (dirty.length) return { type: "dirty", files: dirty }
   }
   return { type: "failed", question: produced.question }
@@ -191,9 +195,11 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
 //    previous half-finished extraction (or manual changes): the driver does
 //    not clean up proactively (the say over git state belongs to a person),
 //    returns dirty and the caller asks a person to handle it, then re-runs.
-// ③④ take git as the authority and apply only while the unified commit is
-// enabled (opts.commit !== false); with committing off the old semantics stay
-// (document exists = complete, dirty check skipped).
+// ③④ take git as the authority and apply only while the run commits (the
+// git seam's production instance; the no-commit double answers empty from
+// changedFiles and "clean" from commitPending, keeping the old
+// committing-off semantics: document exists = complete, dirty check
+// skipped).
 // ⑤ The clean baseline this relies on is the round-start commit, which a human
 //    makes after init/continue — no shell commits it (plans/0048 R1).
 // failed (blocked session / two failures to produce) is converted by the
@@ -208,12 +214,15 @@ export async function extractPriorKnowledge(
   const round = await currentRound(dir)
   const task = { id: "PLAN", title: "prior-knowledge extraction (retrospective of existing migration results)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb prior-knowledge extraction" }
+  // The run's git service (the opts carrier, else the holderless
+  // production fallback), as in extractKnowledge above.
+  const git = opts.git ?? createGitOps()
   const existing = await existingPriorKnowledge(dir, round)
   if (existing) {
     // ③ Backfill commit: the document is on disk but still on the uncommitted
     // changes list → commit, then complete (same protocol as every hidden
     // task, helper see git.ts commitPending).
-    const pending = await commitPending(dir, opts, task, commit, [existing])
+    const pending = await git.commitPending(dir, opts, task, commit, [existing])
     if (pending !== "clean") {
       if (pending.ok) {
         log(`✓ prior-knowledge document was produced but not committed; committed now: ${existing}`)
@@ -227,9 +236,10 @@ export async function extractPriorKnowledge(
   const file = priorKnowledgeFile(round)
   const temp = tempPriorKnowledgeDoc(file)
   // ④ Half-finished-site detection: artifact missing + worktree dirty → hand
-  // to a person to clean up, no proactive git action.
-  if (opts.commit !== false) {
-    const dirty = await changedFiles(dir)
+  // to a person to clean up, no proactive git action (the no-commit double's
+  // changedFiles answers empty, so a run on it keeps the old semantics).
+  {
+    const dirty = await git.changedFiles(dir)
     if (dirty.length) return { type: "dirty", files: dirty }
   }
   const distilled = await existingDistilledDocs(dir, round)
@@ -258,11 +268,11 @@ export async function extractPriorKnowledge(
     return { type: "failed", question: produced.question }
   }
   // ② Closing mark confirmed → rename to the formal artifact and unified
-  // commit (with committing off the rename still happens, the commit is
-  // skipped); a commit failure → dirty for a person (completion condition =
-  // artifact on disk and committed, plans/0021-commit-boundary-design.md).
+  // commit (on the no-commit double the rename still happens, the commit
+  // is a silent ok); a commit failure → dirty for a person (completion
+  // condition = artifact on disk and committed, plans/0021-commit-boundary-design.md).
   await rename(join(dir, temp), join(dir, file))
-  const committed = await afterSession(dir, opts, task, commit)
+  const committed = await git.afterSession(dir, opts, task, commit)
   if (committed.type === "failed") {
     log(`⚠ prior-knowledge document was promoted but the commit failed: ${committed.question}`)
     return { type: "dirty", files: [file] }
