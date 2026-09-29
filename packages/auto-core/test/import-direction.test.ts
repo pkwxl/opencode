@@ -149,7 +149,13 @@ const CLASSIFIED: Record<string, Domain> = {
   // attempt is its executor; the module reaches only the selection core and
   // the types below the session layer.
   "engine/dispatch": "driver",
-   // The pure ladder decision of one session prompt (plans/0061 §4.7): what
+   // The production TurnFx (plans/0061 §4.2/§4.3): the one I/O path of a
+   // turn — the AgentClient calls, the testrun kernel, the git service's
+   // freeze commit, the handover record, the stats counter and the human
+   // question — built once per turn from the turn's context and driven
+   // through the spine's audit. watch is its only caller.
+   "engine/fx": "driver",
+    // The pure ladder decision of one session prompt (plans/0061 §4.7): what
    // the session-driving loop does with a dispatch's outcome — return,
    // window wait, recovery, the key→model escalation, the after-ladder
    // failover or the retry. session.ts is its executor; the module reaches
@@ -325,16 +331,20 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // and watch as they land.
     "engine/contract": 3,
     // The turn spine (plans/0061 §4.4), directly under its executor: it
-    // reaches the contract module's types only. The fx and the sources the
-    // turn consolidation adds take the remaining slots under watch.
+    // reaches the contract module's types only. The sources the turn
+    // consolidation adds take the remaining slot under watch.
     "engine/spine": 4,
-    watch: 5,
-    attempt: 6,
-    session: 7,
-    artifact: 8,
-    "exec-session": 8,
-    execute: 9,
-    runner: 10,
+    // The production TurnFx (plans/0061 §4.2/§4.3): beside the spine, under
+    // watch — it reaches the contract's types and the unranked leaves below
+    // the session layer (log, session-api, testrun, git, handover, stats).
+    "engine/fx": 5,
+    watch: 6,
+    attempt: 7,
+    session: 8,
+    artifact: 9,
+    "exec-session": 9,
+    execute: 10,
+    runner: 11,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
