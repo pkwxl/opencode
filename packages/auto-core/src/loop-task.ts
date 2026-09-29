@@ -14,6 +14,7 @@ import { waitBetweenTasks } from "./loop-progress"
 import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, formatDuration, log } from "./log"
+import { sessionOpts } from "./opts"
 import { block, loadPlan, next } from "./tasks"
 import { phaseKey, type PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
@@ -90,7 +91,7 @@ export type LoopCtx = {
 // all of this phase's tasks complete (the phase close-out is routed by
 // runPhaseLoop), 2 = blocked/incomplete (the reason is in the run log).
 export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
+  const { directory, opts, server: serverHandle, repl } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
     const task = next(plan)
@@ -135,31 +136,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // double-counts.
     await statsTask(directory, task.id)
     const start = Date.now()
-    const outcome = await runTask(serverHandle, plan, task, {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      subtask: opts.subtask,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      idleMs: opts.idleMs,
-      maxMs: opts.maxMs,
-      testByDriver: opts.testByDriver,
-      handoverTest: opts.handoverTest,
-      mode: opts.mode,
-      newSession: opts.newSession,
-      wrapup: opts.wrapup,
-      scanExempt: opts.scanExempt,
-      phase: phaseKey(phase),
-      routing: ctx.routing,
-      router: ctx.router,
-      control: ctx.control,
-      git: ctx.git,
-      ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
-    })
+    const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }))
     if (outcome.type === "dirty") {
       // Unit-startup clean gate failure (runTask inner layer): no state
       // write, no sweep-up commit — the git state decision belongs to the
