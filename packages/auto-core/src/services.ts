@@ -2,25 +2,28 @@
 // constructed object for the run-wide decision state that today lives in
 // module singletons. It carries the `Clock` — the one time source the
 // session-driving engine (watch, attempt, session) and the process-level
-// time keepers (the stats module) read — and the `Router` — the decision
+// time keepers (the stats module) read — the `Router` — the decision
 // state of routing and recovery: the failback holders (sticky, the pending
 // /failback order, the run-time model-order override), the down marks, the
 // logged usage windows, the model-step cache claims, the key rings and the
 // failure-message classifier's run state (its answer cache, in-flight calls,
-// call budget and usage sink). The remaining
-// members join with the changes that move their state in: `control` (the
-// /exit request and its sleepers) and `git` (the commit-side seam the
-// kernel and engine call) — the placeholders are the documented absence,
-// not dead fields.
+// call budget and usage sink) — and the `Control` — the /exit request and
+// its sleepers, joined as a member while its state still lives in exit.ts's
+// module flag (the unit's bridge; see that file). The remaining
+// member joins with the change that moves its state in: `git` (the
+// commit-side seam the kernel and engine call) — the placeholder is the
+// documented absence, not a dead field.
 //
 // Construction happens at the run start (preflight), in a written order:
 // the registry loads and feeds the switches (setSwitchModelRegistry) ahead
 // of their first parse; the agent fleet then starts and its degradation
 // clamp lands on the parsed switches; the switch snapshot freezes after the
-// clamp (the run's switches are read-only from there); the router, control
-// and git services read the registry and the frozen switches after the
-// freeze. runAll installs the holder for the run and uninstalls it in its
-// finally, so a run's services never leak into the next.
+// clamp (the run's switches are read-only from there); after the freeze the
+// router and the git service read the registry and the frozen switches,
+// while the control — one flag with nothing to read at construction —
+// builds with the holder beside the clock. runAll installs the holder for
+// the run and uninstalls it in its finally, so a run's services never leak
+// into the next.
 //
 // One run per process is an existing invariant (one driver, one directory,
 // one lock), so the holder is reached through an installed ambient instance
@@ -30,7 +33,7 @@
 // Process-level file mirrors (the stats handles, the tasks queue, the
 // quota-window cache, the lock, the log) stay modules by design; the holder
 // wires the ones that need the clock when an instance takes effect.
-import { sleepUnlessExit } from "./exit"
+import { createControl, type Control } from "./exit"
 import { createRouter, type Router } from "./router"
 import { useStatsClock } from "./stats"
 
@@ -46,22 +49,26 @@ export type Clock = {
   timer(ms: number, fn: () => void): () => void
 }
 
-// The services of one run. See the module header for the members that join
-// later (control, git) and why they are documented absence here.
+// The services of one run. See the module header for the member that joins
+// later (git) and why it is documented absence here.
 export type RunServices = {
   readonly clock: Clock
   readonly router: Router
+  // The /exit request and its sleepers (exit.ts is the service's home).
+  readonly control: Control
 }
 
 // The system clock: the wall clock, Bun's non-interruptible sleep, the
 // /exit-wakeable sleep and the plain timer, exactly what the call sites used
 // before the holder existed — a run without an installed holder (and the
-// process default) behave identically to the pre-holder code.
-function systemClock(): Clock {
+// process default) behave identically to the pre-holder code. The
+// /exit-wakeable sleep goes through the holder's control instance, so the
+// clock and the service read the same request.
+function systemClock(control: Control): Clock {
   return {
     now: () => Date.now(),
     sleep: (ms) => Bun.sleep(ms),
-    sleepUnlessExit: (ms) => sleepUnlessExit(ms),
+    sleepUnlessExit: (ms) => control.sleepUnlessExit(ms),
     timer: (ms, fn) => {
       const t = setTimeout(fn, ms)
       return () => clearTimeout(t)
@@ -73,9 +80,16 @@ function systemClock(): Clock {
 // back to it through `services()`) is what wires the process-level time
 // keepers to its clock. `over.clock` replaces the system clock (tests steer
 // time with a manual clock); `over.router` replaces the fresh router (tests
-// that want a named instance beside the holder they install).
+// that want a named instance beside the holder they install). The control
+// service has no override: its state is one request flag the tests reach
+// through the holder itself.
 export function createServices(over: { clock?: Clock; router?: Router } = {}): RunServices {
-  return { clock: over.clock ?? systemClock(), router: over.router ?? createRouter() }
+  const control = createControl()
+  return {
+    clock: over.clock ?? systemClock(control),
+    router: over.router ?? createRouter(),
+    control,
+  }
 }
 
 // The modules allowed to call `services()`. The list may only shrink: a

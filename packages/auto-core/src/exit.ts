@@ -12,6 +12,11 @@
 // operator most wants to stop cleanly. requestExit wakes it at once
 // (sleepUnlessExit); the loop records the session its recovery would have
 // continued before it throws.
+// This module is also the control service's home: the request and its
+// sleepers are one run-wide service instance on the services holder (the
+// Control type and createControl() at the file's end) — see the bridge
+// note there for how the state and the free functions coexist while the
+// callers convert.
 import type { Boundary } from "./control-types"
 
 // One-shot flag per process (each CLI call is its own process, so it resets
@@ -80,4 +85,31 @@ export class ExitRequested extends Error {
 // attention is needed, which /exit does not).
 export function maybeExit(boundary: Boundary, label: string): void {
   if (pending) throw new ExitRequested(boundary, label)
+}
+
+// —— The control service ——
+// This module is the service's home (the way router.ts is the router's):
+// createControl() builds the run's instance, the holder in services.ts
+// carries it as RunServices.control and the system clock's sleepUnlessExit
+// delegates to the same instance. The entry modules read it through the
+// services, and everything below them receives it as data beside the
+// router — those carrier reads land with the caller conversion.
+//
+// The methods keep the names and signatures of the free functions above,
+// so the move reads as a move.
+export type Control = {
+  requestExit(): void
+  exitRequested(): boolean
+  sleepUnlessExit(ms: number, sleep?: (ms: number) => Promise<void>): Promise<boolean>
+  maybeExit(boundary: Boundary, label: string): void
+}
+
+// AUTO-DECISION: createControl() delegates to the module-level free functions instead of closing over its own state (the in-unit conversion crutch: every caller still on the free functions — the /exit handler, the boundary sites, the tests — must stay green while the callers convert slice by slice, and a second flag would let instance and free-function reads diverge). The state moves into the closure and the free functions — with the test reset hook — are deleted in this unit's last slice, which also removes this bridge.
+export function createControl(): Control {
+  return {
+    requestExit,
+    exitRequested,
+    sleepUnlessExit,
+    maybeExit,
+  }
 }

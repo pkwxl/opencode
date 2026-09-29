@@ -164,18 +164,23 @@ export async function preflight(
   // then starts and its degradation clamp lands on the parsed switches (the
   // caller's startPool); the switch snapshot freezes right after the clamp
   // (the caller's freezeSwitches, before the routing facts below read the
-  // switches); the router, control and git services — the run-wide decision
-  // state that still lives in module singletons — join after the freeze,
-  // each with the change that moves its state in. This point ships the
-  // clock, the one time source the session-driving engine and the stats
-  // module read, and the router with the tranches that have moved in (the
-  // failback holders, the down marks, the logged usage windows, the
-  // model-step cache claims, the key rings) — a constructed object whose
-  // state reads neither the registry nor the switches at construction: the
-  // key rings take their registry input at their slot, the agent-pool fleet
-  // start (after the holder exists, through the router's activateRings),
-  // and the routing fence tranche takes its inputs at its slot after the
-  // freeze; the early build is safe because everything here depends on
+  // switches); the git service — the last run-wide decision state that
+  // still lives in a module singleton — joins after the freeze, with the
+  // change that moves its state in. This point ships the clock, the one
+  // time source the session-driving engine and the stats module read; the
+  // router with the tranches that have moved in (the failback holders, the
+  // down marks, the logged usage windows, the model-step cache claims, the
+  // key rings); and the control service — the /exit request and its
+  // sleepers — whose member joins here over this unit's bridge: the state
+  // itself is still exit.ts's module-level flag, shared by the free
+  // functions and every instance while the callers convert, and the unit's
+  // last slice moves it into the closure. All are constructed services
+  // whose state reads neither the registry nor the switches at
+  // construction: the key rings take their registry input at their slot,
+  // the agent-pool fleet start (after the holder exists, through the
+  // router's activateRings), the routing fence tranche takes its inputs at
+  // its slot after the freeze, and control is one flag with nothing to
+  // read; the early build is safe because everything here depends on
   // nothing above it, and the coverage facts below already carry the clock
   // and the router.
   const run = createServices()
