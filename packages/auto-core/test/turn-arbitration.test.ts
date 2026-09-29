@@ -5,7 +5,10 @@
 // same idle quiet point, a second steer there, anything but log/vlog from a
 // synthetic input, a cross-slice write under frozen views — and the remainder
 // layer's owned-slice set (plans/0061 §4.11: all eleven slices while nothing
-// is extracted, shrinking per extraction unit, none at the layer's removal).
+// is extracted, shrinking per extraction unit, none at the layer's removal)
+// plus its per-input handler map: exactly one handler per input kind (the
+// turn-trace suite's roster case drives every kind through the real
+// dispatch, pinning that it is reached).
 // The spine is driven with fake concerns over a fake TurnFx and a stub stream
 // — everything a turn needs arrives as runTurn's arguments.
 import { describe, expect, test } from "bun:test"
@@ -15,6 +18,7 @@ import { runTurn, slicesDelegatedTo, SLICE_KEYS, TURN_ARBITRATION, type ConcernR
 import { createServices } from "../src/services"
 import { parseSwitches } from "../src/switches"
 import { usageSource } from "../src/usage"
+import { HANDLER_KINDS } from "../src/watch"
 import { ev, fakeAgent } from "./fixtures/agent"
 
 const SESSION = "ses_1"
@@ -278,6 +282,19 @@ describe("the queue discipline's terminal settles", () => {
     // The idle was consumed, so no natural settle; the stream then
     // exhausted without another idle: interrupted.
     expect(outcome.settle).toEqual({ kind: "interrupted" })
+  })
+})
+
+describe("the remainder layer's per-input handlers", () => {
+  test("every input kind has exactly one remainder handler", () => {
+    // watch's handler map is a total record over InputKind — a missing or
+    // extra key is a compile-time error — and HANDLER_KINDS is its keys'
+    // runtime mirror; pinned here to the eleven row keys (the table test
+    // above ties them to the table). That the dispatch reaches each handler
+    // is pinned by the turn-trace suite's roster case, which fires every
+    // arbitration cell through watch's real install.
+    expect([...HANDLER_KINDS].sort()).toEqual([...INPUT_KINDS].sort())
+    expect(new Set(HANDLER_KINDS).size).toBe(INPUT_KINDS.length)
   })
 })
 

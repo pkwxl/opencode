@@ -109,6 +109,27 @@ type KindInput<K extends InputKind> = K extends AgentEvent["type"] ? EventInput<
 type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx) => Promise<Advice>
 type HandlerMap = { [K in InputKind]: KindHandler<K> }
 
+// The handler map's keys as a runtime list, exported for the arbitration
+// suite's one-handler-per-kind assertion (the map itself is a watch() local
+// — its handlers close over the turn's state — so a test cannot reach it).
+// The list cannot drift from the map: HandlerMap is a total record over
+// InputKind, so a missing map key is a type error and an extra one an
+// excess-property error; the assertion pins the list itself to the
+// arbitration table's row keys.
+export const HANDLER_KINDS: readonly InputKind[] = [
+  "probe",
+  "answer",
+  "stream-end",
+  "limit",
+  "part",
+  "message",
+  "question",
+  "permission",
+  "error",
+  "retry",
+  "idle",
+]
+
 export async function watch(
   client: AgentClient,
   sessionID: string,
