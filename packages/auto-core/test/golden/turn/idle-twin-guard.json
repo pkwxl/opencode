@@ -1,0 +1,43 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point (do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again)."
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "first chunk",
+    "  step finish (length): input 100 / output 10 tokens",
+    "⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (1/3)",
+    "finished after the continuation",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "finished after the continuation",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 200,
+      "output": 20,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.02,
+      "steps": 2
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

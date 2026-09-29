@@ -1,0 +1,44 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "⚠ connectivity probe failure 1/2 (session s); connection suspected half-open",
+    "the connection held",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "the connection held",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

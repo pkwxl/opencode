@@ -1,0 +1,54 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "work in flight",
+    "⚠ connectivity probe failure 1/2 (session s); connection suspected half-open",
+    "⚠ connectivity probe failure 2/2 (session s); connection suspected half-open"
+  ],
+  "watch": {
+    "lastText": "work in flight",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "connectivity probe failed 2 consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)",
+    "testHandover": false,
+    "errorInfo": {
+      "message": "connectivity probe failed 2 consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)"
+    },
+    "errorClass": "transient"
+  }
+}

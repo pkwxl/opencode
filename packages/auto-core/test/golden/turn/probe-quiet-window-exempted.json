@@ -1,0 +1,47 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "⏳ the agent waits 2m 0s before retrying (attempt 2) (session s); no events are expected until 2026-09-29T00:02:00.000Z",
+    "  ↻ request retry (attempt 2)",
+    "⚠ connectivity probe failed (session s) inside the agent's announced wait; not counted before 2026-09-29T00:02:00.000Z",
+    "⚠ connectivity probe failed (session s) inside the agent's announced wait; not counted before 2026-09-29T00:02:00.000Z",
+    "the wait is over",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "the wait is over",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

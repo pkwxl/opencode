@@ -30,8 +30,8 @@ import { services } from "../src/services"
 import { createStuckTracker } from "../src/stuck"
 import type { Steer } from "../src/testrun"
 import { watch } from "../src/watch"
-import { ev, type TurnScript } from "./fixtures/agent"
-import { compareTrace, flush, runScenario, TURN_EPOCH, turnEntry, until, untilPublished, type TurnScenario } from "./fixtures/turn-trace"
+import { ev, type AgentCall, type TurnScript } from "./fixtures/agent"
+import { compareTrace, fireProbe, flush, runScenario, TURN_EPOCH, turnEntry, until, untilPublished, type TurnScenario } from "./fixtures/turn-trace"
 
 // The steer literal the message-family scenarios share: the 2×64k budget
 // against the fake's 100.0k window gives an 80.0k effective wall
@@ -68,6 +68,14 @@ const answerTurn =
 // classify chain is attached before the watch's onAnswer link, so a cached
 // answer means onAnswer has already run.
 const answerCached = (message: string) => () => cachedAnswer(services().router, { message }) !== undefined
+
+// —— The probe family's shared literal ——
+// A probe verdict rides the fake's get, never a real timeout. The
+// fail-then-recover scenario needs the first probe to fail and the second to
+// succeed, and the fake consults its `fail` record at call time — so the
+// record is mutable and the scenario deletes the key mid-run (this one
+// scenario is its only user).
+const PROBE_DOWN: Partial<Record<AgentCall, unknown>> = { get: new Error("connection refused") }
 
 const scenarios: TurnScenario[] = [
   // The smoke trace: the plainest happy path — one completed assistant
@@ -1292,6 +1300,225 @@ const scenarios: TurnScenario[] = [
       wiring.release()
       await untilPublished(answerCached(UNKNOWN_WORDING), "the classifier's answer landing while the turn is not retrying")
       second.release()
+      return done
+    },
+  },
+
+  // —— The `idle`, `stream-end` and `probe` rows (plans/0061 §4.5) ——
+  // Probe verdicts ride the fake's get (a `fail: { get }` or a working one),
+  // never a real timeout, and the probe timer fires only when the scenario
+  // fires it (fireProbe), so a probe's place in the trace is fixed by the
+  // scenario's own ordering. Race standing (A-3): idle-twin-guard,
+  // stream-end-interrupted, probe-failure-then-recovered and
+  // probe-quiet-window-exempted fire their probes (if any) while the loop
+  // waits on the held stream — the event wait is no fx call, and no probe
+  // there reaches a trip — so neither interleaving materializes and nothing
+  // is declared. probe-half-open-trip pins interleaving 1 (the half-open
+  // trip preempting the held event wait); probe-during-question-wait pins
+  // interleaving 2 (the timer fired inside the awaited askHuman).
+
+  // `idle` row, guard + settle cells (the smoke's fuller sibling): the first
+  // idle of the turn end handles a length continuation (the steer goes out),
+  // and the twin idle the server emits beside it is ignored by idleHandled —
+  // had it been handled, the turn would have settled there and the
+  // post-steer events below would never enter the trace; after a new session
+  // event re-arms acceptance, the closing idle settles the turn naturally.
+  {
+    id: "idle-twin-guard",
+    kinds: ["message", "part", "idle"],
+    run: async (h) => {
+      const afterSteer = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          ev.text("s", "t1", "first chunk"),
+          ev.step("s", "stp1", "length"),
+          ev.idle("s"),
+          // The twin idle of the same turn end: consumed and ignored, it
+          // leaves no line and no call — the trace proves the guard by the
+          // turn continuing to the post-steer events instead of settling.
+          ev.idle("s"),
+          { hold: afterSteer.promise },
+          ev.text("s", "t2", "finished after the continuation"),
+          ev.step("s", "stp2"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => h.agent.argsOf("promptAsync").length >= 1, "the length-continuation steer")
+      afterSteer.release()
+      return done
+    },
+  },
+
+  // `stream-end` row: the finite stream exhausts without an idle (SSE
+  // interruption) — the loop ends unsettled, the orphan turn is aborted, and
+  // the close-out carries the stream-interrupted text with the
+  // classification over the empty errorInfo (errorClass "unknown"; the
+  // undefined errorInfo key vanishes from the serialized Watch).
+  {
+    id: "stream-end-interrupted",
+    kinds: ["message", "part", "stream-end"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "cut off mid-turn"), ev.step("s", "stp1")]),
+        h.opts,
+      ),
+  },
+
+  // `probe` row, the failure counter: with the stream held (the turn mid-
+  // flight), one failed probe logs ⚠ connectivity probe failure 1/2 and
+  // reschedules; the recovered probe then resets the count with no line —
+  // the byte-compare proves the silence. Both probes are fired and flushed
+  // while the next event sits behind the hold, so their place in the trace
+  // is fixed; one failure never trips, so no race materializes.
+  {
+    id: "probe-failure-then-recovered",
+    kinds: ["message", "part", "idle", "probe"],
+    agent: { fail: PROBE_DOWN },
+    run: async (h) => {
+      const probing = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { hold: probing.promise },
+          ev.text("s", "t1", "the connection held"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => h.agent.argsOf("contextLimits").length >= 1, "the first measurement")
+      // The events up to the hold are consumed in microtasks only (the loop
+      // parks at the hold), so a microtask flush structurally covers them.
+      await flush()
+      await fireProbe(h.clock) // get fails: ⚠ … failure 1/2, rescheduled
+      delete PROBE_DOWN.get
+      await fireProbe(h.clock) // get succeeds: the count resets, no line
+      probing.release()
+      return done
+    },
+  },
+
+  // `probe` row, the half-open exit: two consecutive failures judge the
+  // connection half-open — the ⚠ … failure 2/2 line, trip() preempting the
+  // never-yielding stream, then the interrupted close-out with the distinct
+  // half-open error text (classified transient on its network/timeout
+  // wording), the abort, and the errorInfo folded from the message.
+  {
+    id: "probe-half-open-trip",
+    kinds: ["message", "part", "probe"],
+    agent: { fail: { get: new Error("connection refused") } },
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the stream's next event sits behind a hold the scenario releases only after watch() returned, so inner.next() is pending when the half-open verdict trips the race — the settle is the only arm that can resolve",
+      },
+    ],
+    run: async (h) => {
+      const held = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "work in flight"), { hold: held.promise }, ev.idle("s")]),
+        h.opts,
+      )
+      await until(() => h.agent.argsOf("contextLimits").length >= 1, "the first measurement")
+      await flush()
+      await fireProbe(h.clock) // failure 1/2
+      await fireProbe(h.clock) // failure 2/2: half-open — trip() preempts the held event wait
+      const result = await done
+      held.release()
+      return result
+    },
+  },
+
+  // `probe` row, the named scenario (the plan's must-have): a probe verdict
+  // while a human answer is pending. The loop body awaits the gated human
+  // reply inside askHuman when the scenario fires the queued probe timer —
+  // the probe callback logs its failure beside the await and cannot move the
+  // loop (one failure never trips); the human's reply then completes the
+  // in-flight fx (the → human answer echo and replyQuestion land after the
+  // probe line) and the turn settles naturally on the idle.
+  {
+    id: "probe-during-question-wait",
+    kinds: ["question", "idle", "probe"],
+    agent: { fail: { get: new Error("connection refused") } },
+    pins: [
+      {
+        race: "probe-during-fx",
+        how: "the queued probe timer is fired while the loop body awaits the gated human reply inside askHuman — the fire happens at a chosen point inside an fx await the scenario controls (the wrapped interactive proves the await is in flight), so no other interleaving exists",
+      },
+    ],
+    run: async (h) => {
+      const io = h.interactive()
+      let asked = 0
+      h.opts.humanQuestions = true
+      h.opts.interactive = {
+        ...io.interactive,
+        question: (text, minutes) => {
+          asked++
+          return io.interactive.question(text, minutes)
+        },
+      }
+      const held = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([ev.question("s", "q1", "which db?"), { hold: held.promise }, ev.idle("s")]),
+        h.opts,
+      )
+      await until(() => asked === 1, "the loop body awaiting the human answer")
+      await fireProbe(h.clock) // the verdict lands beside the await: ⚠ … failure 1/2
+      io.reply("use postgres")
+      held.release()
+      return done
+    },
+  },
+
+  // `probe` row, the quiet-window exemption: an announced silence (a retry
+  // whose 120 s wait exceeds the 60 s silence budget — the ⏳ line naming the
+  // clock-derived end instant) suspends the failure count; two failed probes
+  // fired inside the window log the exemption line (naming quietUntil) and
+  // are not counted — had either counted, the second would have tripped the
+  // turn half-open instead of settling naturally. The 30 s probe interval
+  // (opts.idleMs) keeps the two fired deadlines (epoch +30 s, +60 s) inside
+  // the 120 s window.
+  {
+    id: "probe-quiet-window-exempted",
+    kinds: ["message", "retry", "part", "idle", "probe"],
+    agent: {
+      fail: { get: new Error("connection refused") },
+      retryPolicy: { maxAttempts: 5, backoffCapMs: 300_000, honorsRetryAfter: true, waitsOutLimit: true, silenceBudgetMs: 60_000 },
+    },
+    run: async (h) => {
+      h.opts.idleMs = 30_000
+      const output = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 2, next: 120_000, error: { message: "blorp upstream hiccup" } },
+          { hold: output.promise },
+          ev.text("s", "t1", "the wait is over"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => h.agent.argsOf("contextLimits").length >= 1, "the first measurement")
+      // The retry's consumption (the ⏳ line, quietUntil) is microtasks only.
+      await flush()
+      await fireProbe(h.clock) // fails inside the announced wait: exempted
+      await fireProbe(h.clock) // exempted again — a counted pair would have tripped
+      output.release()
       return done
     },
   },
