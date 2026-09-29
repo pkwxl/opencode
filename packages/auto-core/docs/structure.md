@@ -129,7 +129,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Bypass-session skeleton | `requireArtifact`: dispatch → collect → one retry → implicit block; hidden-unit commit boundary | `src/artifact.ts` |
 | Wrap-up | Wrap-up session, `Result: PASS\|FAIL` parsing | `src/wrapup.ts` (0044) |
 | Knowledge | Knowledge phase and prior-knowledge extraction | `src/knowledge.ts` |
-| Options and outcomes | Shared opts, `Outcome`/`UnitStop` types, context-budget constants (pure) | `src/opts.ts` |
+| Options and outcomes | Shared opts, `Outcome`/`UnitStop` types, context-budget constants, and `sessionOpts` — the one builder of the loop family's session options (a structural context slice, seven site ids, no per-site field exceptions; the module stays import-free) | `src/opts.ts` (0061 C7) |
 
 ### Task store, state, and recovery
 
