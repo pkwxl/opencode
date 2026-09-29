@@ -7,7 +7,6 @@ import { taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates } from "./document/state"
-import { maybeExit } from "./exit"
 import { failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
@@ -573,7 +572,13 @@ export async function runTask(
         // dir is passed so the pause wait is deducted from the time stats
         // (STATS_PLAN §3).
         await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
-        maybeExit("subtask", `${task.id} subtask ${index + 1}`)
+        // /exit checkpoint (subtask boundary): the request flag lives in the
+        // run's control service, which rides the session options beside the
+        // router (the pipeline sits below the services' entry modules); a
+        // caller that hands runTask no control (a minimal test literal)
+        // skips the checkpoint, as it skips the run-state half of the
+        // failback boundary below.
+        opts.control?.maybeExit("subtask", `${task.id} subtask ${index + 1}`)
         // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
         // spot to check after check-off + unified commit; sleep until wake
         // inside the window before continuing (plans/0027-hibernate-design.md).

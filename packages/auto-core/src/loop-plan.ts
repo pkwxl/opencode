@@ -11,7 +11,6 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { projectBriefText } from "./brief"
-import { maybeExit } from "./exit"
 import { commitTree } from "./git"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
@@ -326,7 +325,9 @@ export async function planWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<numb
     return 0
   }
   await stepPause("phase", `phase ${phaseTitle(phase)} planning`, { interactive: ctx.repl, dir: ctx.directory })
-  maybeExit("phase", `phase ${phaseTitle(phase)} planning`)
+  // /exit checkpoint (phase boundary): the request flag lives in the run's
+  // control service on ctx, as the router state does.
+  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} planning`)
   return 0
 }
 
@@ -756,6 +757,8 @@ export async function appendWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<nu
     return 0
   }
   await stepPause("phase", `phase ${phaseTitle(phase)} append`, { interactive: ctx.repl, dir: ctx.directory })
-  maybeExit("phase", `phase ${phaseTitle(phase)} append`)
+  // /exit checkpoint (phase boundary): the request flag lives in the run's
+  // control service on ctx, as the router state does.
+  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} append`)
   return 0
 }

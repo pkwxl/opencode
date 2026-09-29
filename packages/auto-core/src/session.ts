@@ -20,7 +20,7 @@ import { attempt } from "./attempt"
 import { nextStep, type LadderFacts, type LadderState, type WaitCause } from "./engine/ladder"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
-import { ExitRequested, exitRequested } from "./exit"
+import { ExitRequested } from "./exit"
 import { unitBaseline } from "./git"
 import { bookedSleep } from "./hibernate"
 import { ringKeyLabel } from "./keyring"
@@ -231,6 +231,11 @@ export async function runSession(
   // writes and reads; the routing facts carry the same router as data for
   // the pure selection code (selectContext).
   const router = services().router
+  // The run's control service (the installed services' control): the /exit
+  // request the wait-and-probe loop below checks at each round's head; the
+  // clock's sleepUnlessExit delegates to the same instance, so the wait's
+  // sleep and the head check see one request.
+  const control = services().control
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
   // retry ladder (the ladder's counter resets to 1 when the candidate
@@ -632,7 +637,7 @@ export async function runSession(
   // nothing usable before any session ran); each failed probe replaces it.
   const awaitRecovery = async (why: string, cause?: WaitCause): Promise<void> => {
     for (;;) {
-      if (exitRequested()) await pauseForExit()
+      if (control.exitRequested()) await pauseForExit()
       const sleep = await planSleep(cause)
       const quit = opts.interactive ? "type /exit to pause the run here, or press Ctrl+C twice to force exit" : "press Ctrl+C twice to force exit"
       log(

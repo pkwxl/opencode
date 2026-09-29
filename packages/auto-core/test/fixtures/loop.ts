@@ -288,6 +288,10 @@ export async function loopFixture(
         // services; the fixture's runs hold no routing decision state, and
         // the boundary hooks read it only through ctx).
         router: services().router,
+        // The run's control service (loop.ts fills the field the same way
+        // from the installed services): the boundary hooks read the /exit
+        // request through it.
+        control: services().control,
         // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
         ...(append ? { append: true } : {}),
       }

@@ -11,14 +11,15 @@
 import { createInterface } from "node:readline/promises"
 import type { AgentClient } from "./agent/types"
 import type { Interactive } from "./control-types"
-import { requestExit } from "./exit"
 import { log, setInput } from "./log"
 import { services } from "./services"
 
 // The interface itself lives in the control-types leaf (plans/0061 §2.2 R8:
-// defined here, its type edge to step closed a cycle with the exit/failback
-// flags this module calls); re-exported because the sideband's consumers
-// (opts, loop, loop-task, loop-progress, session-api) import it from here.
+// defined there when its type edge to step closed a cycle with the
+// exit/failback flags this module called; both requests now route through
+// the services holder, and the leaf placement stays); re-exported because
+// the sideband's consumers (opts, loop, loop-task, loop-progress,
+// session-api) import it from here.
 export type { Interactive }
 
 const PROMPT = "💬 "
@@ -88,7 +89,11 @@ export function startInteractive(
     // of whether a session is attached). A wait-and-probe loop sleeping at
     // the time wakes and pauses at once (plans/0057 §6).
     if (text === "/exit") {
-      requestExit()
+      // The request routes through the run's control service (the installed
+      // services' control): the sideband is one of the entries the services
+      // allowlist names, and the request is run-wide state — the safe
+      // boundaries and the recovery wait consume it wherever the loop stands.
+      services().control.requestExit()
       log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point, or a recovery wait); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return

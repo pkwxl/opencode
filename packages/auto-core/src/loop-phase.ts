@@ -8,7 +8,6 @@ import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { maybeExit } from "./exit"
 import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
@@ -239,7 +238,9 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   const code = await handoverPhase(ctx, phase)
   if (code !== 0) return code
   await stepPause("phase", `phase ${phaseTitle(phase)} handover`, { interactive: repl, dir: directory })
-  maybeExit("phase", `phase ${phaseTitle(phase)} handover`)
+  // /exit checkpoint (phase boundary): the request flag lives in the run's
+  // control service on ctx, as the router state beside it does.
+  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} handover`)
   // Hibernate window (phase boundary, OPENCODE_AUTO_HIBERNATE): a safe spot to
   // check after the handover (snapshot+completion+commit) completes; sleep
   // until wake inside the window before entering the next phase

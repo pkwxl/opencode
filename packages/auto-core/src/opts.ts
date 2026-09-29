@@ -199,6 +199,14 @@ export type Opts = {
   // literal), whose holders read as unset. Type-only import; opts stays a
   // pure type module.
   router?: import("./router").Router
+  // The run's control service (the /exit request and its sleepers), carried
+  // beside `router` for the readers below the services' entry modules — the
+  // subtask boundary's /exit checkpoint of the task pipeline. The loop fills
+  // it from the installed services when it builds a session's options;
+  // undefined = a run object that never knew the request (a minimal test
+  // literal), whose boundary skips the checkpoint. Type-only import; opts
+  // stays a pure type module.
+  control?: import("./exit").Control
   // false = the run's agents cannot fork a session (capability.ts
   // Degradation.leadSplit, fixed at run start over the whole fleet): auto's
   // lead runs without its split clause, since the streams of a split are

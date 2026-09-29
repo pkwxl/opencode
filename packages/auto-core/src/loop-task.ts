@@ -5,7 +5,7 @@
 // a local.
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
-import { maybeExit } from "./exit"
+import type { Control } from "./exit"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
@@ -67,6 +67,11 @@ export type LoopCtx = {
   // boundary's resume checks. The loop fills it from the installed services
   // (an entry module); the pipeline below reads it only through ctx or opts.
   router: Router
+  // The run's control service (the /exit request and its sleepers), threaded
+  // the same way: the task boundary's /exit checkpoint below calls it, and
+  // the opts literal handed to runTask carries it on to the subtask
+  // boundary's checkpoint.
+  control: Control
   // false = the run's agents cannot fork, so auto's lead runs without its
   // split clause (plans/0059 D7); set once at run start by the degradation.
   leadSplit?: false
@@ -146,6 +151,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       phase: phaseKey(phase),
       routing: ctx.routing,
       router: ctx.router,
+      control: ctx.control,
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
     })
     if (outcome.type === "dirty") {
@@ -243,7 +249,9 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // it proceed. dir is passed so the pause wait is deducted from the timing
     // stats.
     await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
-    maybeExit("task", `task ${task.id} ${task.title}`)
+    // /exit checkpoint (task boundary): the request flag lives in the run's
+    // control service on ctx, as the router state beside it does.
+    ctx.control.maybeExit("task", `task ${task.id} ${task.title}`)
     // Hibernate window (task boundary, OPENCODE_AUTO_HIBERNATE): after the
     // final commit, a safe spot to check "are we inside the window now"; if
     // so, sleep until window end + random delay before continuing

@@ -195,6 +195,10 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       // and every opts literal the loop builds carry it — the pipeline below
       // reads the routing decision state only through ctx or opts.
       router: run.router,
+      // The run's control service (the installed holder's), threaded the
+      // same way: the boundary hooks' /exit checkpoint and the sessions'
+      // recovery wait read the request only through ctx or opts.
+      control: run.control,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
     }
     return await runPhaseLoop(ctx)
