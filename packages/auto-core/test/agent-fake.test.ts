@@ -20,7 +20,7 @@ import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
-import { ExitRequested, exitRequested, requestExit, resetExitRequest } from "../src/exit"
+import { ExitRequested } from "../src/exit"
 import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
@@ -1575,7 +1575,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
           now: () => clock.now,
           sleep: advance,
           sleepUnlessExit: async (ms) => {
-            if (exitRequested()) return true
+            if (services().control.exitRequested()) return true
             await advance(ms)
             return false
           },
@@ -1631,7 +1631,6 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     dir = await mkdtemp(join(tmpdir(), "auto-wait-"))
   })
   afterEach(async () => {
-    resetExitRequest()
     uninstallServices()
     await flushStats(dir)
     await rm(dir, { recursive: true, force: true })
@@ -1861,7 +1860,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   // /exit at the wait line: the run pauses where it would have slept.
   const pauseAtWait = () =>
     capture((line) => {
-      if (line.includes("then probing service recovery")) requestExit()
+      if (line.includes("then probing service recovery")) services().control.requestExit()
     })
 
   test("a stated reset outlives the run: a re-run whose failure states none sleeps to the recorded reset (S5)", async () => {
@@ -1875,8 +1874,10 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     }
     const [entry] = await recorded()
     expect(await recorded()).toEqual([{ account: "fake", scope: "7d", resetAt, learnedAt: expect.any(Number), source: "stated", spent: true }])
-    // The re-run, a new process: its failure says nothing of the limit.
-    resetExitRequest()
+    // The re-run, a new process: its failure says nothing of the limit. A
+    // fresh services holder is the new process's fresh control (the /exit
+    // flag never clears within one instance).
+    installServices(createServices())
     resetQuotaWindows()
     const silent = make({ turn: failsFirst((session) => [limitError(session), ev.idle(session)]) })
     out = pauseAtWait()
@@ -1909,7 +1910,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     }
     let waited = 0
     const out = capture((line) => {
-      if (line.includes("then probing service recovery") && ++waited === 2) requestExit()
+      if (line.includes("then probing service recovery") && ++waited === 2) services().control.requestExit()
     })
     try {
       await expect(runSession(client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)).rejects.toBeInstanceOf(ExitRequested)
@@ -1981,7 +1982,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     const agent = make({ turn: failsFirst((session) => [limitError(session), ev.idle(session)]) })
     const chain: SessionChain = { ...fresh(), phase: { kind: "decompose" } }
     const out = capture((line) => {
-      if (line.includes("then probing service recovery")) setTimeout(requestExit, 20)
+      if (line.includes("then probing service recovery")) setTimeout(() => services().control.requestExit(), 20)
     })
     const began = Date.now()
     let caught: unknown
@@ -2009,7 +2010,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   test("an /exit already requested pauses as the wait starts; a phase-less chain keeps no record", async () => {
     const noLadder = parseSwitches({ [SWITCH_ENV.retryWaits]: "off" })
     const hiccup = failsFirst((session) => [ev.error(session, { name: "APIError", message: "upstream hiccup" }), ev.idle(session)])
-    requestExit()
+    services().control.requestExit()
     const phased = make({ turn: hiccup })
     const oneOff = make({ turn: hiccup })
     const out = capture()

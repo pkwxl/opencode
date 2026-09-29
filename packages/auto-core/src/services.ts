@@ -8,8 +8,8 @@
 // logged usage windows, the model-step cache claims, the key rings and the
 // failure-message classifier's run state (its answer cache, in-flight calls,
 // call budget and usage sink) — and the `Control` — the /exit request and
-// its sleepers, joined as a member while its state still lives in exit.ts's
-// module flag (the unit's bridge; see that file). The remaining
+// its sleepers, one instance per run with its state in exit.ts's
+// createControl closure. The remaining
 // member joins with the change that moves its state in: `git` (the
 // commit-side seam the kernel and engine call) — the placeholder is the
 // documented absence, not a dead field.

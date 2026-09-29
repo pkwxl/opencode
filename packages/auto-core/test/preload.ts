@@ -14,12 +14,14 @@
 // The preload also installs a fresh run-services instance before every test
 // (the module-level beforeEach registered here applies to every test file in
 // the process): the run's clock, the process-level time keepers it wires
-// (the stats module) and the router's decision state (the failback holders,
+// (the stats module), the router's decision state (the failback holders,
 // the down marks, the logged usage windows, the model-step cache claims,
-// the key rings, the classifier's answer cache and call budget) never leak
-// from one test into the next. A test that steers
+// the key rings, the classifier's answer cache and call budget) and the
+// control service's /exit request flag never leak from one test into the
+// next. A test that steers
 // time installs its own holder the same way; a test that needs fresh marks
-// mid-way reinstalls a holder keeping the current clock.
+// or an unset /exit flag mid-way reinstalls a holder keeping the current
+// clock.
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"

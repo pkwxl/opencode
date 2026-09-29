@@ -3,11 +3,10 @@
 // under test sleeps; `clockAt`/`fixedClock` pin the instant (a test that
 // moves it re-reads through the getter). Timers never fire on a faked clock
 // — the probe tests drive the real one — and a fake sleepUnlessExit answers
-// true only when /exit was already requested, mirroring the real entry
-// check (the fake cannot be woken mid-sleep; tests request the exit before
-// the wait starts).
-import type { Clock } from "../../src/services"
-import { exitRequested } from "../../src/exit"
+// true only when the installed services' control already holds an /exit
+// request, read at call time (the fake cannot be woken mid-sleep; tests
+// request the exit before the wait starts).
+import { services, type Clock } from "../../src/services"
 
 export type ManualClock = {
   clock: Clock
@@ -28,7 +27,7 @@ export function manualClock(at: number = Date.now()): ManualClock {
         mc.at += ms
       },
       sleepUnlessExit: async (ms) => {
-        if (exitRequested()) return true
+        if (services().control.exitRequested()) return true
         mc.at += ms
         return false
       },
@@ -45,7 +44,7 @@ export function fixedClock(read: () => number): Clock {
   return {
     now: read,
     sleep: async () => {},
-    sleepUnlessExit: async () => (exitRequested() ? true : false),
+    sleepUnlessExit: async () => (services().control.exitRequested() ? true : false),
     timer: () => () => {},
   }
 }

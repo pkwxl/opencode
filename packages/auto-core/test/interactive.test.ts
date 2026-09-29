@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
-import { exitRequested, resetExitRequest } from "../src/exit"
 import { startInteractive, type Interactive } from "../src/interactive"
 import { log } from "../src/log"
 import { services } from "../src/services"
@@ -45,18 +44,17 @@ describe("interactive", () => {
   afterEach(() => {
     repl?.close()
     repl = undefined
-    resetExitRequest()
   })
 
   test("/exit is not sent to the session; it sets the exit request", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
-    expect(exitRequested()).toBe(false)
+    expect(services().control.exitRequested()).toBe(false)
     ctx.input.write("/exit\n")
     await tick()
     expect(ctx.sent).toEqual([])
-    expect(exitRequested()).toBe(true)
+    expect(services().control.exitRequested()).toBe(true)
     // After the flag is set the input line stays usable; later messages are
     // sent as usual.
     ctx.input.write("keep sending messages\n")
@@ -69,7 +67,7 @@ describe("interactive", () => {
     repl = ctx.repl
     ctx.input.write("/exit\n")
     await tick()
-    expect(exitRequested()).toBe(true)
+    expect(services().control.exitRequested()).toBe(true)
   })
 
   test("/failback is not sent to the session; it sets the failback request", async () => {

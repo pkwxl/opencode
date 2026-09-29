@@ -13,59 +13,12 @@
 // (sleepUnlessExit); the loop records the session its recovery would have
 // continued before it throws.
 // This module is also the control service's home: the request and its
-// sleepers are one run-wide service instance on the services holder (the
-// Control type and createControl() at the file's end) — see the bridge
-// note there for how the state and the free functions coexist while the
-// callers convert.
+// sleepers are one run-wide service instance on the services holder —
+// createControl() below builds it, services.ts carries it as RunServices.control
+// and the system clock's sleepUnlessExit delegates to the same instance. The
+// entry modules read it through the services, and everything below them
+// receives it as data beside the router.
 import type { Boundary } from "./control-types"
-
-// One-shot flag per process (each CLI call is its own process, so it resets
-// naturally).
-let pending = false
-
-// The sleeps that end on /exit (sleepUnlessExit), woken by requestExit.
-const sleepers = new Set<() => void>()
-
-export function requestExit(): void {
-  pending = true
-  for (const wake of [...sleepers]) wake()
-}
-
-export function exitRequested(): boolean {
-  return pending
-}
-
-// For unit-test resets only (bun test runs many test files in one process;
-// module-level state lingers across files).
-export function resetExitRequest(): void {
-  pending = false
-}
-
-// A sleep that is a pause boundary: it ends early when /exit is requested —
-// at once when it already was — and resolves true if it did, false when it
-// slept its full length. sleep is injected for unit tests; an injected sleep
-// cannot be cut short, so the race stops waiting on it instead.
-export async function sleepUnlessExit(ms: number, sleep?: (ms: number) => Promise<void>): Promise<boolean> {
-  if (pending) return true
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let wake = () => {}
-  const exited = new Promise<boolean>((resolve) => {
-    wake = () => resolve(true)
-    sleepers.add(wake)
-  })
-  const slept =
-    sleep !== undefined
-      ? sleep(ms).then(() => false)
-      : new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), ms)
-        })
-  try {
-    return await Promise.race([slept, exited])
-  } finally {
-    clearTimeout(timer)
-    sleepers.delete(wake)
-  }
-}
 
 // The boundary an /exit took effect at: a step-mode boundary, or the
 // wait-and-probe loop's sleep ("wait").
@@ -78,25 +31,9 @@ export class ExitRequested extends Error {
   }
 }
 
-// The checkpoint shared by the three step-mode safe boundaries, triggered
-// right after the stepPause call: a hit throws, and runAll at the top of
-// loop.ts catches it uniformly and converts it to exit code 3 (not occupying
-// Outcome's blocked/incomplete channels — those two channels mean human
-// attention is needed, which /exit does not).
-export function maybeExit(boundary: Boundary, label: string): void {
-  if (pending) throw new ExitRequested(boundary, label)
-}
-
 // —— The control service ——
-// This module is the service's home (the way router.ts is the router's):
-// createControl() builds the run's instance, the holder in services.ts
-// carries it as RunServices.control and the system clock's sleepUnlessExit
-// delegates to the same instance. The entry modules read it through the
-// services, and everything below them receives it as data beside the
-// router — those carrier reads land with the caller conversion.
-//
-// The methods keep the names and signatures of the free functions above,
-// so the move reads as a move.
+// The method names and signatures are the ones the module's former free
+// functions had, so the state move reads as a move.
 export type Control = {
   requestExit(): void
   exitRequested(): boolean
@@ -104,12 +41,57 @@ export type Control = {
   maybeExit(boundary: Boundary, label: string): void
 }
 
-// AUTO-DECISION: createControl() delegates to the module-level free functions instead of closing over its own state (the in-unit conversion crutch: every caller still on the free functions — the /exit handler, the boundary sites, the tests — must stay green while the callers convert slice by slice, and a second flag would let instance and free-function reads diverge). The state moves into the closure and the free functions — with the test reset hook — are deleted in this unit's last slice, which also removes this bridge.
+// One instance per run (the holder built at the run start): the request flag
+// and its sleepers are the instance's own closure state, so one holder's /exit
+// never leaks into another in the same process — and the test suite's fresh
+// services per test start every test with the flag unset, which is why there
+// is deliberately no reset method: a fresh instance is the reset.
 export function createControl(): Control {
+  // One-shot flag (each CLI call is its own process and its own run, so it
+  // resets naturally).
+  let pending = false
+  // The sleeps that end on /exit (sleepUnlessExit), woken by requestExit.
+  const sleepers = new Set<() => void>()
   return {
-    requestExit,
-    exitRequested,
-    sleepUnlessExit,
-    maybeExit,
+    requestExit() {
+      pending = true
+      for (const wake of [...sleepers]) wake()
+    },
+    exitRequested() {
+      return pending
+    },
+    // A sleep that is a pause boundary: it ends early when /exit is requested
+    // — at once when it already was — and resolves true if it did, false when
+    // it slept its full length. sleep is injected for unit tests; an injected
+    // sleep cannot be cut short, so the race stops waiting on it instead.
+    async sleepUnlessExit(ms, sleep) {
+      if (pending) return true
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let wake = () => {}
+      const exited = new Promise<boolean>((resolve) => {
+        wake = () => resolve(true)
+        sleepers.add(wake)
+      })
+      const slept =
+        sleep !== undefined
+          ? sleep(ms).then(() => false)
+          : new Promise<boolean>((resolve) => {
+              timer = setTimeout(() => resolve(false), ms)
+            })
+      try {
+        return await Promise.race([slept, exited])
+      } finally {
+        clearTimeout(timer)
+        sleepers.delete(wake)
+      }
+    },
+    // The checkpoint shared by the three step-mode safe boundaries, triggered
+    // right after the stepPause call: a hit throws, and runAll at the top of
+    // loop.ts catches it uniformly and converts it to exit code 3 (not
+    // occupying Outcome's blocked/incomplete channels — those two channels
+    // mean human attention is needed, which /exit does not).
+    maybeExit(boundary, label) {
+      if (pending) throw new ExitRequested(boundary, label)
+    },
   }
 }

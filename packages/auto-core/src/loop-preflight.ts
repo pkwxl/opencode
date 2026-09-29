@@ -171,10 +171,7 @@ export async function preflight(
   // router with the tranches that have moved in (the failback holders, the
   // down marks, the logged usage windows, the model-step cache claims, the
   // key rings); and the control service — the /exit request and its
-  // sleepers — whose member joins here over this unit's bridge: the state
-  // itself is still exit.ts's module-level flag, shared by the free
-  // functions and every instance while the callers convert, and the unit's
-  // last slice moves it into the closure. All are constructed services
+  // sleepers. All are constructed services
   // whose state reads neither the registry nor the switches at
   // construction: the key rings take their registry input at their slot,
   // the agent-pool fleet start (after the holder exists, through the
