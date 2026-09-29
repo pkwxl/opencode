@@ -51,6 +51,7 @@ export const REPO_LANE: readonly string[] = [
   "test/subtask-shape.test.ts",
   "test/task-add.test.ts",
   "test/testrun.test.ts",
+  "test/turn-trace.test.ts",
   "test/unit-commit.test.ts",
   "test/watch-probe.test.ts",
   "test/watch.test.ts",
