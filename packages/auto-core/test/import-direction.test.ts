@@ -156,6 +156,14 @@ const CLASSIFIED: Record<string, Domain> = {
   failback: "driver",
   gitignore: "driver",
   git: "driver",
+  // The git service's home (the run services' commit-side seam): the moved
+  // session close-out afterSession with its marker collection, plus the
+  // seam's two instances — the production delegation and the no-commit
+  // double tests install. Deliberately opts-free (structural parameter
+  // slices): the services holder imports it to build the default member,
+  // and an opts import here would close opts → interactive → services →
+  // git-ops → opts in the type-counted graph.
+  "git-ops": "driver",
   handover: "driver",
   hibernate: "driver",
   interactive: "driver",

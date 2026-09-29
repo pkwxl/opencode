@@ -2,18 +2,21 @@
 // marker collection, the commit gate and unit close-out check, recovery
 // fidelity (strict-resume activation check / model-consistency evaluation),
 // and the runner-side orchestration of the rollback to the unit baseline.
+// The session close-out itself (afterSession and its marker collection)
+// and the git service's two instances moved into src/git-ops.ts — the
+// service's opts-free home (see that file's header); afterSession stays
+// re-exported below until the callers convert to the seam.
 // Design in plans/0021-commit-boundary-design.md
 // and plans/0022-session-recovery-fidelity-design.md.
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
-import { commitTree, rollbackUnit, unitViolations, type UnitBaseline } from "./git"
+import { rollbackUnit, type UnitBaseline } from "./git"
 import { forgetHandover } from "./handover"
-import { log, vlog } from "./log"
-import { DEFAULT_CONTEXT_LIMIT, type Opts, type SessionCommit, type UnitStop } from "./opts"
-import { currentRound } from "./phases"
+import { log } from "./log"
+import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
 import { createRouter, deadSessionWhy as deadWhyOf, resumeModelEligible as eligibleOf } from "./router"
 import type { Task } from "./tasks"
-import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
+import { resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
 
@@ -54,40 +57,13 @@ export function autoAnswer(ask: boolean): string {
 // src/git.ts): called once every session has ended and the driver finished
 // its state writes (ticks and the like), recursively committing all changes
 // — git history is the audit trail of AI changes, rollback granularity =
-// the session. Skipped under --commit false and dryrun. Exported for unit
-// tests (H4 guard: the marker collection is unaffected by the --commit
-// false / dryrun early return).
-export async function afterSession(
-  dir: string | undefined,
-  opts: Opts,
-  task: { id: string; title: string },
-  info: { stage: string; subject: string },
-  baseline?: UnitBaseline,
-): Promise<SessionCommit> {
-  if (!dir) return { type: "ok" }
-  // Proxy-answer marker collection (auto-resolve H4,
-  // plans/0020-auto-resolve-design.md §G): hoisted **before** the
-  // commit/dryrun early return — collection is auditing and must not depend
-  // on the commit switch; in the on mode it degrades to a backstop (the
-  // driver already logged everything on the event side), but markers the
-  // session wrote voluntarily are still collected. Scans this session's
-  // uncommitted changed files: AUTO-RESOLVE lands in the ledger,
-  // AUTO-DECISION only returns a count.
-  await collectSessionMarks(dir, opts, task, info.stage)
-  if (opts.commit === false || opts.dryrun) return { type: "ok" }
-  const result = await commitTree(dir, task, info)
-  if (!result.ok) {
-    return {
-      type: "failed",
-      question: `unified commit failed: ${result.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Changes are left in the worktree; please handle git manually and re-run.`,
-    }
-  }
-  if (baseline) {
-    const violations = await unitViolations(dir, baseline)
-    if (violations.length) return { type: "failed", question: `unit close-out check failed: ${violations.join("; ")}` }
-  }
-  return { type: "ok" }
-}
+// the session. Skipped under --commit false and dryrun. The H4 guard (the
+// marker collection is unaffected by the --commit false / dryrun early
+// return) holds in the moved body. Conversion crutch: the function moved
+// into src/git-ops.ts (the git service's opts-free home); this re-export
+// keeps every importer compiling and is removed when the callers convert
+// to the seam (the run services' git member).
+export { afterSession } from "./git-ops"
 
 // afterSession gate failure → the blocked exit (unit describes this unit,
 // e.g. "T-001 subtask 2"): a failed commit is not considered completion —
@@ -96,29 +72,6 @@ export async function afterSession(
 // for human attention (exit code 2).
 export function commitBlocked(unit: string, commit: { type: "failed"; question: string }): { type: "blocked"; question: string } {
   return { type: "blocked", question: `${unit}: output not committed, not considered complete — ${commit.question}` }
-}
-
-// The H4 collector: counts go only into the verbose log (vlog), never the
-// terminal — AUTO-DECISION never competes with AUTO-RESOLVE for layout space
-// (§H-④), while "the scan really ran, and how many markers it saw" stays
-// traceable evidence. This task's highlight block is constructed on the loop
-// side from the ledger (T-006); no terminal line is printed here. Ledger
-// write failures are fully silent and collection itself must not affect
-// flow or exit code either, hence one catch swallowing everything.
-async function collectSessionMarks(
-  dir: string,
-  opts: Opts,
-  task: { id: string },
-  stage: string,
-): Promise<void> {
-  const found = await collectAgentResolves(dir, {
-    task: task.id,
-    phase: opts.phase?.id ?? "",
-    round: await currentRound(dir).catch(() => 0),
-  }).catch(() => undefined)
-  if (!found) return
-  if (found.resolves) vlog(`⚑ ${task.id} ${stage}: collected ${found.resolves} AUTO-RESOLVE marker(s)`)
-  if (found.decisions) vlog(`ℹ ${task.id} ${stage}: recorded ${found.decisions} AUTO-DECISION entries`)
 }
 
 // The wrap-up session's proxy-answer list (auto-resolve H7,

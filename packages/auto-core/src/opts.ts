@@ -207,6 +207,16 @@ export type Opts = {
   // literal), whose boundary skips the checkpoint. Type-only import; opts
   // stays a pure type module.
   control?: import("./exit").Control
+  // The run's git service (the commit-side seam: the production delegation
+  // over the free commit functions, or a test's no-commit double), carried
+  // beside `router` and `control` for the readers below the services' entry
+  // modules — the commit boundary's checks and the loop family's commit
+  // calls. The loop fills it from the installed services when it builds a
+  // session's options; undefined = a run object that never knew the seam
+  // (a minimal test literal), whose holderless fallback is the production
+  // instance — committing on, exactly what such a literal did before the
+  // seam. Type-only import; opts stays a pure type module.
+  git?: import("./git").GitOps
   // false = the run's agents cannot fork a session (capability.ts
   // Degradation.leadSplit, fixed at run start over the whole fleet): auto's
   // lead runs without its split clause, since the streams of a split are

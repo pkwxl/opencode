@@ -292,6 +292,11 @@ export async function loopFixture(
         // from the installed services): the boundary hooks read the /exit
         // request through it.
         control: services().control,
+        // The run's git service (loop.ts fills the field the same way from
+        // the installed services): the harness runs on a real git
+        // repository precisely so the commit boundary stays live, so the
+        // production instance is the right member here.
+        git: services().git,
         // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
         ...(append ? { append: true } : {}),
       }

@@ -199,6 +199,10 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       // same way: the boundary hooks' /exit checkpoint and the sessions'
       // recovery wait read the request only through ctx or opts.
       control: run.control,
+      // The run's git service (the installed holder's), threaded the same
+      // way: the loop family's commit calls and every opts literal the
+      // loop builds read the commit side only through ctx or opts.
+      git: run.git,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
     }
     return await runPhaseLoop(ctx)

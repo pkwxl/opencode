@@ -2,6 +2,7 @@ import { readdir, realpath, rm } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import type { AddedLine } from "./document/types"
 import { log } from "./log"
+import type { PhaseKey } from "./phases/registry"
 
 // driver unified commit mechanism: revokes the commit right from AI sessions —
 // after any session ends the driver recursively commits all changes (nested
@@ -570,6 +571,62 @@ export async function commitPending(
   const dirty = await changedFiles(dir)
   if (!files.some((file) => dirty.includes(file))) return "clean"
   return commitTree(dir, task, info)
+}
+
+// —— The git service (the run services' commit-side seam) ——
+
+// The run's git service: the commit-side operations the kernel and the
+// session-driving engine call, behind one seam so the strategy is
+// switchable per run — the production instance (createGitOps,
+// src/git-ops.ts) delegates to the free functions above, committing
+// always on, while a test installs the no-commit double (noCommitGit) and
+// the engine runs with committing off, the exact answers the gates inside
+// these functions give under `commit: false`. The free exports stay for
+// the callers outside a run's services (the close command, the recovery
+// paths): they keep calling the functions directly.
+//
+// The opts parameters carry no commit half — only the dryrun flag remains
+// (dryrun still idles the production instance's delegated gates; the
+// double overrides each method whole, so the flag is inert there).
+// afterSession keeps an options slice — dryrun plus the phase its marker
+// collection keys the ledger on; callers pass the session Opts whole,
+// which the slice accepts structurally.
+//
+// `records` is the strategy marker the strict-resume activation and the
+// baseline-reading sites consult (the old `opts.commit !== false`
+// conjunct): true = this instance commits and the recovery records may
+// carry their baseline/model fields; false = the double, under which they
+// stay unwritten, exactly as the gates kept them.
+// AUTO-DECISION: the type's home is git.ts — opts.ts type-imports it for
+// the Opts.git carrier, and git.ts imports neither opts.ts nor any module
+// above it, so the type-counted import graph stays a DAG (the module is a
+// leaf beside log and the document types, so every reader may reference
+// the type cheaply). Rejected homes: unit-commit.ts and git-ops.ts (the
+// factories' home — both import modules that read run state, unit-commit
+// even opts at runtime, which the cycle rule forbids for an opts.ts
+// type-import target). afterSession's return shape is inlined structurally
+// for the same reason: importing SessionCommit from opts.ts would close
+// opts → git → opts.
+export type GitOps = {
+  readonly records: boolean
+  commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult>
+  beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate>
+  commitPending(
+    dir: string,
+    opts: { dryrun?: boolean },
+    task: { id: string; title: string },
+    info: { stage: string; subject: string },
+    files: string[],
+  ): Promise<"clean" | CommitResult>
+  afterSession(
+    dir: string | undefined,
+    opts: { dryrun?: boolean; phase?: PhaseKey },
+    task: { id: string; title: string },
+    info: { stage: string; subject: string },
+    baseline?: UnitBaseline,
+  ): Promise<{ type: "ok" } | { type: "failed"; question: string }>
+  unitBaseline(dir: string): Promise<UnitBaseline>
+  changedFiles(dir: string): Promise<string[]>
 }
 
 // The repository containing the target directory plus every nested repository

@@ -164,22 +164,25 @@ export async function preflight(
   // then starts and its degradation clamp lands on the parsed switches (the
   // caller's startPool); the switch snapshot freezes right after the clamp
   // (the caller's freezeSwitches, before the routing facts below read the
-  // switches); the git service — the last run-wide decision state that
-  // still lives in a module singleton — joins after the freeze, with the
-  // change that moves its state in. This point ships the clock, the one
+  // switches); the git service joins as a constructed member beside the
+  // rest — a switchable strategy over the free commit functions rather than
+  // moved singleton state (the production instance delegates; a test's
+  // holder installs the no-commit double through createServices). This
+  // point ships the clock, the one
   // time source the session-driving engine and the stats module read; the
   // router with the tranches that have moved in (the failback holders, the
   // down marks, the logged usage windows, the model-step cache claims, the
-  // key rings); and the control service — the /exit request and its
-  // sleepers. All are constructed services
+  // key rings); the control service — the /exit request and its
+  // sleepers; and the git service. All are constructed services
   // whose state reads neither the registry nor the switches at
   // construction: the key rings take their registry input at their slot,
   // the agent-pool fleet start (after the holder exists, through the
   // router's activateRings), the routing fence tranche takes its inputs at
-  // its slot after the freeze, and control is one flag with nothing to
-  // read; the early build is safe because everything here depends on
-  // nothing above it, and the coverage facts below already carry the clock
-  // and the router.
+  // its slot after the freeze, the git service is pure delegation whose
+  // functions take everything as call arguments, and control is one flag
+  // with nothing to read; the early build is safe because everything here
+  // depends on nothing above it, and the coverage facts below already carry
+  // the clock and the router.
   const run = createServices()
   // prompt library: load the target directory's .opencode/auto/prompts/
   // overrides (protocol-sensitive templates get a key-content check, failure

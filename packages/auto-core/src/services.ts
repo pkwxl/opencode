@@ -1,27 +1,30 @@
 // The run's service holder (the consolidation's services stage): one
-// constructed object for the run-wide decision state that today lives in
-// module singletons. It carries the `Clock` — the one time source the
+// constructed object for the run-wide state and strategies the engine
+// reads. It carries the `Clock` — the one time source the
 // session-driving engine (watch, attempt, session) and the process-level
 // time keepers (the stats module) read — the `Router` — the decision
 // state of routing and recovery: the failback holders (sticky, the pending
 // /failback order, the run-time model-order override), the down marks, the
 // logged usage windows, the model-step cache claims, the key rings and the
 // failure-message classifier's run state (its answer cache, in-flight calls,
-// call budget and usage sink) — and the `Control` — the /exit request and
-// its sleepers, one instance per run with its state in exit.ts's
-// createControl closure. The remaining
-// member joins with the change that moves its state in: `git` (the
-// commit-side seam the kernel and engine call) — the placeholder is the
-// documented absence, not a dead field.
+// call budget and usage sink) — the `Control` — the /exit request and its
+// sleepers, one instance per run with its state in exit.ts's
+// createControl closure — and the `GitOps` — the commit-side seam the
+// kernel and engine call: the production instance delegates to the free
+// commit functions (git.ts, git-ops.ts), while a test installs the
+// no-commit double and the engine runs with committing off.
 //
 // Construction happens at the run start (preflight), in a written order:
 // the registry loads and feeds the switches (setSwitchModelRegistry) ahead
 // of their first parse; the agent fleet then starts and its degradation
 // clamp lands on the parsed switches; the switch snapshot freezes after the
 // clamp (the run's switches are read-only from there); after the freeze the
-// router and the git service read the registry and the frozen switches,
-// while the control — one flag with nothing to read at construction —
-// builds with the holder beside the clock. runAll installs the holder for
+// routing facts read the registry and the frozen switches, while the
+// router, the git service and the control build with the holder beside the
+// clock — none of them reads anything at construction (the router's inputs
+// arrive at call time, its key rings at their activation slot; the git
+// service is pure delegation over functions that take everything as
+// arguments; the control is one flag). runAll installs the holder for
 // the run and uninstalls it in its finally, so a run's services never leak
 // into the next.
 //
@@ -34,6 +37,8 @@
 // quota-window cache, the lock, the log) stay modules by design; the holder
 // wires the ones that need the clock when an instance takes effect.
 import { createControl, type Control } from "./exit"
+import type { GitOps } from "./git"
+import { createGitOps } from "./git-ops"
 import { createRouter, type Router } from "./router"
 import { useStatsClock } from "./stats"
 
@@ -49,13 +54,16 @@ export type Clock = {
   timer(ms: number, fn: () => void): () => void
 }
 
-// The services of one run. See the module header for the member that joins
-// later (git) and why it is documented absence here.
+// The services of one run; each member's comment names its home.
 export type RunServices = {
   readonly clock: Clock
   readonly router: Router
   // The /exit request and its sleepers (exit.ts is the service's home).
   readonly control: Control
+  // The commit-side seam (git.ts holds the type, git-ops.ts the two
+  // instances): the production delegation over the free commit functions,
+  // or a test's no-commit double.
+  readonly git: GitOps
 }
 
 // The system clock: the wall clock, Bun's non-interruptible sleep, the
@@ -80,15 +88,17 @@ function systemClock(control: Control): Clock {
 // back to it through `services()`) is what wires the process-level time
 // keepers to its clock. `over.clock` replaces the system clock (tests steer
 // time with a manual clock); `over.router` replaces the fresh router (tests
-// that want a named instance beside the holder they install). The control
-// service has no override: its state is one request flag the tests reach
-// through the holder itself.
-export function createServices(over: { clock?: Clock; router?: Router } = {}): RunServices {
+// that want a named instance beside the holder they install); `over.git`
+// replaces the production commit side (tests install the no-commit double).
+// The control service has no override: its state is one request flag the
+// tests reach through the holder itself.
+export function createServices(over: { clock?: Clock; router?: Router; git?: GitOps } = {}): RunServices {
   const control = createControl()
   return {
     clock: over.clock ?? systemClock(control),
     router: over.router ?? createRouter(),
     control,
+    git: over.git ?? createGitOps(),
   }
 }
 

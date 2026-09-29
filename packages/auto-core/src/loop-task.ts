@@ -6,7 +6,7 @@
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
 import type { Control } from "./exit"
-import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
+import { beginUnit, commitTree, unitBaseline, unitViolations, type GitOps, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
@@ -72,6 +72,12 @@ export type LoopCtx = {
   // the opts literal handed to runTask carries it on to the subtask
   // boundary's checkpoint.
   control: Control
+  // The run's git service (the commit-side seam), threaded the same way:
+  // the loop family's unit-boundary commit calls go through it, and every
+  // opts literal the loop builds carries it on to the task pipeline's
+  // commit calls. The loop fills it from the installed services (an entry
+  // module); the pipeline below reads it only through ctx or opts.
+  git: GitOps
   // false = the run's agents cannot fork, so auto's lead runs without its
   // split clause (plans/0059 D7); set once at run start by the degradation.
   leadSplit?: false
