@@ -3,20 +3,22 @@
 // decisions under src/engine/) read time only through the installed
 // services' clock — no raw Date.now, Bun.sleep or setTimeout anywhere in
 // them — plus the holder's install/uninstall lifecycle, the stats clock
-// fold, the frozen switch snapshot's clamp invariant, and the router
-// ratchets: the state the router service moved in (the failback holders,
-// the down marks, the logged windows, the model-step cache claims, the
-// key rings, the classifier's answers, in-flight calls, budget and usage
-// sink) exists only as methods on the constructed router — no
-// free-function delegator export anywhere else in src/, and no reset*
-// hook for it anywhere.
-// The callers-within-SERVICE_ENTRIES assertion lands with the later services
-// units; the list is exported as the documented, shrink-only allowlist.
+// fold, the frozen switch snapshot's clamp invariant, the moved-state
+// ratchets: the state a service moved in (the router's failback holders,
+// down marks, logged windows, model-step cache claims, key rings and
+// classifier run state; the control's /exit request and its sleepers)
+// exists only as methods on the constructed service — no free-function
+// delegator export anywhere else in src/, and no reset* hook for it
+// anywhere — and the callers ratchet: the ambient accessor `services()`
+// is called only by the modules SERVICE_ENTRIES lists (a comment-stripped
+// scan over all of src; the list is the documented, shrink-only
+// allowlist).
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
+import { ExitRequested } from "../src/exit"
 import { createServices, installServices, SERVICE_ENTRIES, services, uninstallServices, type RunServices } from "../src/services"
 import type { ModelRegistry } from "../src/models"
 import { loadStats, statsTask, statsTotals } from "../src/stats"
@@ -99,8 +101,8 @@ describe("the services holder", () => {
   test("SERVICE_ENTRIES is the documented seed and may only shrink", () => {
     // The start list of the consolidation: the composition root, the loop,
     // the session-driving entries, the interactive sideband and the agent
-    // pool. This pins the seed; the callers assertion lands with the later
-    // services units and holds this exact shape against the source.
+    // pool. This pins the seed; the callers ratchet below holds every real
+    // `services()` caller inside this exact shape.
     expect([...SERVICE_ENTRIES]).toEqual(["loop-preflight", "loop", "session", "attempt", "watch", "interactive", "agent-pool"])
   })
 
@@ -182,6 +184,26 @@ describe("the services holder", () => {
     expect(router.classifyUsageSink()).toBeUndefined()
   })
 
+  test("the fresh holder extends to the control: an /exit one test requests never leaks to the next", () => {
+    // The pair's writer, control side: request the graceful exit through
+    // this test's instance and read it back — the flag is set and the
+    // boundary checkpoint throws (the state the deleted resetExitRequest
+    // hook used to clear between tests).
+    const control = services().control
+    control.requestExit()
+    expect(control.exitRequested()).toBe(true)
+    expect(() => control.maybeExit("task", "task T-001 the title")).toThrow(ExitRequested)
+  })
+
+  test("…and the next test's control starts with the /exit flag unset", () => {
+    // The preload's install before this test gave a fresh instance, so the
+    // previous test's request is gone with that instance: the flag has no
+    // reset method because none is needed — a fresh instance is the reset.
+    const control = services().control
+    expect(control.exitRequested()).toBe(false)
+    expect(() => control.maybeExit("task", "task T-001 the title")).not.toThrow()
+  })
+
   test("the stats clock follows the installed holder (the fold)", async () => {
     // stats is a process-level module; its timeline is the run's one clock.
     // Book a task bucket on a manual clock and read the bucket's anchor and
@@ -207,8 +229,8 @@ describe("the services holder", () => {
 })
 
 // ---------------------------------------------------------------------------
-// The router ratchets: the state that moved into the router service exists
-// only there
+// The moved-state ratchets: state that moved into a constructed service
+// exists only there
 // ---------------------------------------------------------------------------
 
 // Every free function that moved into the router (its method names). A
@@ -270,30 +292,54 @@ const MOVED_TO_ROUTER = [
   "classifyUsageSink",
 ] as const
 
-// The modules whose state moved (fully or in part) into the router: a
-// `reset*` export in one of them (or in router.ts itself) would be a reset
-// hook for the moved state, which the per-test fresh holder replaces.
-const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring", "classify"]
+// Every free function that moved into the control service (its method
+// names): the /exit request, its read, the wakeable sleep and the boundary
+// throw. A `export function <name>` anywhere outside exit.ts would be the
+// same crutch over the moved state. (`sleepUnlessExit` also stays a Clock
+// member by design: the clock's object-literal member is not an `export
+// function` declaration, so the scan does not target it.)
+const MOVED_TO_CONTROL = ["requestExit", "exitRequested", "sleepUnlessExit", "maybeExit"] as const
 
+// The modules whose state moved (fully or in part) into a constructed
+// service: a `reset*` export in one of them (or in a service's own home,
+// router.ts / exit.ts) would be a reset hook for the moved state, which
+// the per-test fresh holder replaces.
+const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring", "classify", "exit"]
+
+// Every src module, recursively — the moved-state and callers scans have
+// no directory exemptions (engine/ and agent/ are scanned like every flat
+// file); each scan's own filter (the service home, the module list, the
+// allowlist) does the narrowing.
 function srcFiles(): string[] {
-  const files = readdirSync(join(import.meta.dir, "..", "src"))
-    .filter((name) => name.endsWith(".ts"))
-    .map((name) => `src/${name}`)
-  for (const dir of readdirSync(join(import.meta.dir, "..", "src")).filter((name) => statSync(join(import.meta.dir, "..", "src", name)).isDirectory())) {
-    if (dir === "engine" || dir === "agent") continue // no state moved from there
-    for (const name of readdirSync(join(import.meta.dir, "..", "src", dir)).filter((name) => name.endsWith(".ts")))
-      files.push(`src/${dir}/${name}`)
+  const root = join(import.meta.dir, "..", "src")
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const p = join(dir, name)
+      if (statSync(p).isDirectory()) walk(p)
+      else if (name.endsWith(".ts")) files.push(`src/${relative(root, p).replaceAll("\\", "/")}`)
+    }
   }
+  walk(root)
   return files
 }
 
-describe("the router ratchets (the moved state exists only as the service)", () => {
-  test("no free-function delegator export of a moved name outside router.ts", () => {
+describe("the moved-state ratchets (the moved state exists only as the constructed service)", () => {
+  test("no free-function delegator export of a moved name outside its service's home", () => {
+    // The homes: router.ts for the routing tranches, exit.ts for the
+    // control. A delegator export anywhere else in src/ would let a caller
+    // keep the free-function shape over what is now the service's state.
+    const scans: Array<{ home: string; names: readonly string[] }> = [
+      { home: "src/router.ts", names: MOVED_TO_ROUTER },
+      { home: "src/exit.ts", names: MOVED_TO_CONTROL },
+    ]
     const problems: string[] = []
     for (const file of srcFiles()) {
-      if (file === "src/router.ts") continue
       const text = readFileSync(join(import.meta.dir, "..", file), "utf8")
-      for (const name of MOVED_TO_ROUTER) if (new RegExp(`export (async )?function ${name}\\b`).test(text)) problems.push(`${file}: ${name}`)
+      for (const { home, names } of scans) {
+        if (file === home) continue
+        for (const name of names) if (new RegExp(`export (async )?function ${name}\\b`).test(text)) problems.push(`${file}: ${name}`)
+      }
     }
     expect(problems.join("\n")).toBe("")
   })
@@ -326,22 +372,140 @@ describe("the router ratchets (the moved state exists only as the service)", () 
     expect(exported).toEqual(["buildRings", "ringKeyLabel"])
   })
 
-  test("the ratchets bite: the patterns match crafted violations and the list tracks the router's real methods", () => {
+  test("exit.ts holds only the control service's factory", () => {
+    // The /exit state's old home shrinks to the service's construction
+    // surface: the factory is the one function export (the `Control` type
+    // and the `ExitRequested` class stay as the type/throw exports the
+    // loop, the session and the tests import); a new function export there
+    // is a conscious edit to this pin, not a silent accretion.
+    const text = readFileSync(join(import.meta.dir, "..", "src", "exit.ts"), "utf8")
+    const exported = [...text.matchAll(/export (?:async )?function (\w*)/g)].map((m) => m[1])
+    expect(exported).toEqual(["createControl"])
+  })
+
+  test("the ratchets bite: the patterns match crafted violations and both lists track their service's real methods", () => {
     // The source scans above pass on a clean tree, which says nothing about
     // a pattern that stopped matching anything. So: the same patterns must
     // catch the violations they were written for (a delegator export of a
     // moved name, a reset* hook in a moved-state module)…
     const delegator = `export function ${MOVED_TO_ROUTER[0]}(router: unknown): void {}`
     expect(new RegExp(`export (async )?function ${MOVED_TO_ROUTER[0]}\\b`).test(delegator)).toBe(true)
-    expect([...`export function resetKeyring(): void {}`.matchAll(/export (async )?function (reset\w*)/g)].map((m) => m[2])).toEqual([
-      "resetKeyring",
+    expect(new RegExp(`export (async )?function ${MOVED_TO_CONTROL[0]}\\b`).test(`export function ${MOVED_TO_CONTROL[0]}(): void {}`)).toBe(true)
+    expect([...`export function resetExitRequest(): void {}`.matchAll(/export (async )?function (reset\w*)/g)].map((m) => m[2])).toEqual([
+      "resetExitRequest",
     ])
-    // …and MOVED_TO_ROUTER tracks the router's real surface: every name is a
-    // method of the constructed router, so the delegator scan covers methods
-    // that exist, and a renamed one fails here rather than scanning for a
-    // name nothing owns.
+    // …and both lists track their service's real surface: every name is a
+    // method of the constructed service, so the delegator scan covers
+    // methods that exist, and a renamed one fails here rather than
+    // scanning for a name nothing owns.
     const router = services().router as unknown as Record<string, unknown>
     for (const name of MOVED_TO_ROUTER) expect(typeof router[name]).toBe("function")
+    const control = services().control as unknown as Record<string, unknown>
+    for (const name of MOVED_TO_CONTROL) expect(typeof control[name]).toBe("function")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The callers ratchet: the ambient accessor only inside the allowlist
+// ---------------------------------------------------------------------------
+
+// Removes // and /* */ comments, string-aware: a `//` inside a quoted or
+// template string is text (a URL is not a comment), plain string bodies
+// are dropped (a "services()" between quotes is not a call) and template
+// bodies are kept (their ${…} interpolations are code). Hand-rolled
+// because the scan's one question is exactly "is this mention code?" — a
+// raw regex over the source cannot tell router.ts's header prose
+// (`services().router` in a comment) from session.ts's binding block.
+function stripComments(text: string): string {
+  let out = ""
+  let i = 0
+  while (i < text.length) {
+    const c = text[i]!
+    if (c === "/" && text[i + 1] === "/") {
+      // A line comment: gone to the end of its line.
+      while (i < text.length && text[i] !== "\n") i++
+    } else if (c === "/" && text[i + 1] === "*") {
+      // A block comment: gone to its close.
+      i += 2
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++
+      i += 2
+    } else if (c === '"' || c === "'" || c === "`") {
+      // A quoted region, consumed whole so its slashes are text: plain
+      // strings leave only their quotes, template bodies stay.
+      const quote = c
+      const keep = quote === "`"
+      i++
+      while (i < text.length) {
+        if (text[i] === "\\") {
+          if (keep) out += text[i]! + (text[i + 1] ?? "")
+          i += 2
+          continue
+        }
+        if (text[i] === quote) break
+        if (keep) out += text[i]
+        i++
+      }
+      i++
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
+}
+
+// The scan's question, as a pure function so the bite rows can feed it
+// crafted files: which of these modules call the ambient accessor? The
+// holder's own constructors (createServices, installServices…) do not
+// match — the word boundary sits inside their longer names.
+function servicesCallers(entries: Array<{ module: string; text: string }>): string[] {
+  return entries.filter((e) => /\bservices\s*\(\s*\)/.test(stripComments(e.text))).map((e) => e.module)
+}
+
+describe("the services() callers ratchet (the ambient accessor only inside the allowlist)", () => {
+  test("every services() caller in src/ is a module SERVICE_ENTRIES lists", () => {
+    // src/services.ts itself is exempt (the accessor's home). The list may
+    // only shrink: a module leaving it means its service read moved into a
+    // constructed service it receives as data.
+    const entries = srcFiles()
+      .filter((file) => file !== "src/services.ts")
+      .map((file) => ({ module: file.replace(/^src\//, "").replace(/\.ts$/, ""), text: readFileSync(join(import.meta.dir, "..", file), "utf8") }))
+    const callers = servicesCallers(entries)
+    // The scan reads real sources: the engine's entry modules do call the
+    // accessor today, so a clean pass means the allowlist holds, not that
+    // nothing matched.
+    expect(callers.length).toBeGreaterThanOrEqual(1)
+    const outside = callers.filter((m) => !(SERVICE_ENTRIES as readonly string[]).includes(m))
+    expect(outside.join(", ")).toBe("")
+  })
+
+  test("the scan reads real sources (a clean pass is never vacuous)", () => {
+    // router.ts's header names `services().router` in prose: raw, the file
+    // would read as a caller; comment-stripped, it is not — so the clean
+    // pass above proves the stripping really ran, not that the pattern
+    // matches nothing. If the prose moves, move this witness with it.
+    const raw = readFileSync(join(import.meta.dir, "..", "src", "router.ts"), "utf8")
+    expect(/\bservices\s*\(\s*\)/.test(raw)).toBe(true)
+    expect(/\bservices\s*\(\s*\)/.test(stripComments(raw))).toBe(false)
+  })
+
+  test("the callers scan bites and does not flag prose: crafted files prove both", () => {
+    // A real call in an out-of-list module is the violation the ratchet
+    // exists for…
+    expect(servicesCallers([{ module: "router", text: `const control = services().control` }])).toEqual(["router"])
+    // …prose is not a caller, in either comment shape…
+    expect(servicesCallers([{ module: "router", text: `// the entries call services().router directly\nexport const a = 1` }])).toEqual([])
+    expect(servicesCallers([{ module: "router", text: `/* services().router in a block comment */ export const a = 1` }])).toEqual([])
+    // …neither is a string body, nor a `//` inside one swallowing the code
+    // after it (the URL row: naive stripping would eat the real call)…
+    expect(servicesCallers([{ module: "router", text: `const s = "services()"` }])).toEqual([])
+    expect(servicesCallers([{ module: "session", text: `const u = "https://example.com/x"; const clock = services().clock` }])).toEqual(["session"])
+    // …nor the holder's own constructors, and an allowlisted module's call
+    // is seen exactly because the list holds it…
+    expect(servicesCallers([{ module: "router", text: `installServices(createServices())` }])).toEqual([])
+    expect(servicesCallers([{ module: "session", text: `const clock = services().clock` }])).toEqual(["session"])
+    // …while a template interpolation is code and counts as a call.
+    expect(servicesCallers([{ module: "router", text: "log(`${services().clock.now()}`)" }])).toEqual(["router"])
   })
 })
 

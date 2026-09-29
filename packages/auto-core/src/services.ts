@@ -94,8 +94,10 @@ export function createServices(over: { clock?: Clock; router?: Router } = {}): R
 
 // The modules allowed to call `services()`. The list may only shrink: a
 // module leaving it means its service read moved into a constructed service.
-// The ratchet that asserts the callers stay within the list lands with the
-// later services units; until then the list is the documented contract.
+// The callers ratchet in test/services.test.ts asserts every `services()`
+// caller in src/ stays within the list (this file itself exempt — the
+// accessor's home); a caller outside it is a conscious edit to the list,
+// never a silent one.
 export const SERVICE_ENTRIES = [
   "loop-preflight",
   "loop",
