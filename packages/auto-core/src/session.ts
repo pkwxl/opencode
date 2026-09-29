@@ -13,22 +13,20 @@
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S8, pure move).
 
 import { dirname, join } from "node:path"
-import type { AgentClient, LimitScope } from "./agent/types"
+import type { AgentClient } from "./agent/types"
 import { roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
-import { dropStaleFailed, forkSources, modelOfChain, moveOnFork, retryOnFork, setRoute, toAgent, toBlankSession } from "./chain-transitions"
+import { dropStaleFailed, forkSources, moveOnFork, retryOnFork, setRoute, toAgent, toBlankSession } from "./chain-transitions"
 import { attempt } from "./attempt"
 import { nextStep, type LadderFacts, type LadderState, type WaitCause } from "./engine/ladder"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
 import { ExitRequested, exitRequested } from "./exit"
 import { unitBaseline } from "./git"
-import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
+import { bookedSleep } from "./hibernate"
 import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
-import { formatWindowState, isoInZone } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
-import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
-import { candidatesOf, recoveryAt, select, type SelectCall, type SelectContext } from "./select"
+import { jitterOf, probeAccountChain, probeChain, registryDriven, windowWake } from "./router"
 import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
@@ -186,23 +184,6 @@ const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with j
 //    duplicating appended output and re-running finished steps (same wording as
 //    the cross-run resumeNote: check the disk state, do not redo).
 const retryNote = worktreeNote
-
-// The limits a reset instant reads as on the wait line (plans/0057 §7).
-function limitPhrase(scope: LimitScope | undefined): string {
-  switch (scope) {
-    case "5h":
-      return "the five-hour usage window"
-    case "7d":
-      return "the weekly usage window"
-    case "day":
-      return "the daily usage window"
-    case "request":
-    case "token":
-      return "the per-minute limit"
-    default:
-      return "the limit"
-  }
-}
 
 // Runs one prompt on the session chain (a fresh session per prompt, except a
 // resumed takeover of the recorded session). Transient
@@ -494,30 +475,15 @@ export async function runSession(
     toBlankSession(chain, retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but the earlier session's context could not be inherited.`))
     return true
   }
-  // The down marks one failure's escalation may write (plans/0055 §7.1):
-  // the chain's entry and, when its provider has an active ring, the key it
-  // ran on — read before the escalation moves anything.
-  const downTarget = (): { model?: string; provider?: string; key?: { ref: string; label: string } } => {
-    const model = chain.modelEntry
-    const provider = opts.routing?.registry.models.get(model ?? "")?.provider
-    const key = provider !== undefined && router.hasActiveRing(provider) ? router.currentKey(provider) : undefined
-    return { model, provider, ...(key !== undefined ? { key: { ref: key.ref, label: key.label } } : {}) }
-  }
-  // A classifier answer that arrives after the turn ended (§7.1): it can only
-  // set when this failure's down marks clear — each mark the escalation wrote
-  // and nothing cleared since then lasts until the reset time instead of the
-  // scope boundary. The class it names comes too late to change anything.
+  // The down marks one failure's escalation may write (plans/0055 §7.1)
+  // and the late classifier answer's extension of them both sit behind
+  // the router's routing fence: the registry lookup, the ring reads and
+  // the ⏲ line's guard (with its registry time zone) are the fence's
+  // `downTarget`/`lateReset`, and the facts pass in untested. The mark
+  // writes themselves go through the router methods, as before.
+  const downTarget = () => router.downTarget(opts.routing, chain)
   const lateReset = (pending: Promise<number | undefined> | undefined, target: ReturnType<typeof downTarget>): void => {
-    if (pending === undefined) return
-    void pending.then((until) => {
-      if (until === undefined) return
-      const marked: string[] = []
-      if (target.model !== undefined && router.extendModelDownMark(target.model, until)) marked.push(target.model)
-      if (target.provider !== undefined && target.key !== undefined && router.extendKeyDownMark(target.provider, target.key.ref, until))
-        marked.push(`provider ${target.provider} key ${target.key.label}`)
-      if (marked.length && opts.routing)
-        log(`⏲ ${task.id} the classifier's answer arrived after the turn ended: ${marked.join(" and ")} stay${marked.length > 1 ? "" : "s"} down until ${isoInZone(until, opts.routing.registry.tz)}`)
-    })
+    router.lateReset(opts.routing, pending, target, task.id)
   }
   // The window wait (plans/0055 §6.3): every candidate is blocked only by
   // its windows and one that is not down opens later. The dispatch sleeps
@@ -533,37 +499,25 @@ export async function runSession(
   // and a wake past a short window simply waits for its next opening — the
   // wait never exits on its own (§10 item 7).
   // AUTO-DECISION: the wait decision is honored at every selection site — the dispatch target (attempt returns the facts, this loop sleeps), the failover (switchModel below) and the probe loop (awaitRecovery below) wait and re-select in place — instead of only at the dispatch (a failover onto a window-blocked list or a probe round after the marks clear would otherwise burn wait-and-probe rounds against a closed window; the wait line keeps the designed text and adds hibernate's resuming/force-quit hint, which §6.3's force-quit promise asks to be visible)
+  // The wake computation (the facts' clock, the jitter knob) sits behind
+  // the router's routing fence — `windowWake`, with the facts passed
+  // untested and the run clock as the no-registry fallback — so the lines
+  // and the booked sleep are the site's whole remaining body.
   const waitForWindow = async (wait: WindowWait): Promise<void> => {
-    const facts = opts.routing!
-    const now = nowOf(facts)
-    const jitter = (facts.random ?? Math.random)() * HIBERNATE_JITTER_MS
-    const wakeAt = new Date(now + Math.max(0, wait.until - now) + jitter)
+    const { sleep, wakeAt } = windowWake(opts.routing, wait, clockNow)
     log(
       `⏸ ${task.id} ${roleOf(chain)} waits for a ${wait.tier} model: ${wait.model} ${wait.opens}` +
         `, resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
     )
-    await bookedSleep("window", Math.max(0, wait.until - now) + jitter, { dir: opts.dir, sleep: (ms) => clock.sleep(ms) })
+    await bookedSleep("window", sleep, { dir: opts.dir, sleep: (ms) => clock.sleep(ms) })
     log(`→ window wait over: continuing after ${wait.model} opened`)
   }
-  // The wait facts of a wait decision, for the wait line: the model that
-  // opens first, its formatted opening and the dispatch list's tier. The
-  // dispatch target itself (attempt) builds the same payload from the list
-  // it already holds; the failover and the probe loop select without one.
-  const windowWaitOf = (
-    ctx: SelectContext,
-    call: SelectCall,
-    decision: { until: number; candidate: Candidate },
-  ): WindowWait => ({
-    until: decision.until,
-    model: candidateKey(decision.candidate),
-    tier: candidatesOf(ctx, call).tier,
-    opens: formatWindowState({ open: false, opens: decision.until }, opts.routing!.registry.tz, call.now),
-  })
   // The model the chain's dispatches ran on, the way attempt records it for
   // strict resume: the selected entry under a registry, else the switch-
-  // routed model string of the no-registry priority chain (modelOfChain;
-  // undefined = the agent's own default).
-  const chainModel = (): string | undefined => (opts.routing ? chain.modelEntry : modelOfChain(chain, switches, opts.phase, router.stickyModel(), router.failbackOverride()))
+  // routed model string of the no-registry priority chain (undefined = the
+  // agent's own default) — both halves behind the router's routing fence,
+  // the facts passed untested.
+  const chainModel = (): string | undefined => router.chainModel(opts.routing, chain, switches, opts.phase)
   // The sleep of one wait-and-probe round (plans/0057 §6): until the known
   // instant plus hibernate's random delay of 0–600 s (drivers sharing an
   // account do not all probe the same second after a reset), else the
@@ -587,34 +541,26 @@ export async function runSession(
   // one's, so a probe that cannot succeed before it is not sent. The line
   // says when that reset was recorded.
   const planSleep = async (cause: WaitCause | undefined): Promise<{ ms: number; wake?: Date; reason?: string; model: string }> => {
-    const facts = opts.routing
-    const now = facts ? nowOf(facts) : clockNow()
-    let at: number | undefined
-    let reason: string | undefined
-    let model: string | undefined
-    let back: ReturnType<typeof recoveryAt>
-    if (facts) {
-      limits ??= await contextLimitsOf(client)
-      back = recoveryAt(selectContext(facts, switches, cap, limits), { role: roleOf(chain), entry: opts.phase?.entry, now, continuation: false })
-    }
-    if (back !== undefined && back.at > now) {
-      at = back.at
-      model = candidateKey(back.candidate)
-      reason = `${model} is usable again at ${isoInZone(at, facts!.registry.tz)}`
-    } else if ((facts === undefined || back !== undefined) && cause?.resetAt !== undefined) {
-      at = cause.resetAt
-      reason = `${limitPhrase(cause.scope)} resets ${new Date(at).toISOString()}`
-    } else if (facts === undefined || back !== undefined) {
-      const learned = await learnedReset(opts.dir, cause?.account ?? accountOf(chain, facts), now)
-      if (learned !== undefined) {
-        at = learned.resetAt
-        reason = `${limitPhrase(learned.scope)} resets ${new Date(at).toISOString()} (recorded ${new Date(learned.learnedAt).toISOString()})`
-      }
-    }
-    model ??= chainModel() ?? chain.modelShown ?? "(agent default)"
-    if (at === undefined || at - now > RESET_HORIZON_MS) return { ms: switches.recoveryWait * 60_000, model }
-    const ms = Math.max(0, at - now) + (facts?.random ?? Math.random)() * HIBERNATE_JITTER_MS
-    return { ms, wake: new Date(now + ms), reason, model }
+    // The sleep-source cascade (which instant the round sleeps to and why)
+    // sits behind the router's routing fence — `recoverySleep`, the facts
+    // passed untested — with this loop's own I/O handed in as callbacks:
+    // the context-window fetch (registry arm only, cached in `limits`) and
+    // the learned-window lookup (third arm only, with the account the
+    // failure or the chain names). The horizon clamp and the poll fallback
+    // stay here (RESET_HORIZON_MS is the learned-window policy, not a
+    // routing decision), as does the jitter draw on the scheduled tail.
+    const sleep = await router.recoverySleep(opts.routing, switches, {
+      chain,
+      phase: opts.phase,
+      cap,
+      loadLimits: async () => (limits ??= await contextLimitsOf(client)),
+      cause,
+      learned: (now) => learnedReset(opts.dir, cause?.account ?? accountOf(chain, opts.routing), now),
+      now: clockNow,
+    })
+    if (sleep.at === undefined || sleep.at - sleep.now > RESET_HORIZON_MS) return { ms: switches.recoveryWait * 60_000, model: sleep.model }
+    const ms = Math.max(0, sleep.at - sleep.now) + jitterOf(opts.routing)
+    return { ms, wake: new Date(sleep.now + ms), reason: sleep.reason, model: sleep.model }
   }
   // /exit inside the wait (plans/0057 §6, §11 item 9): no session is active,
   // so the wait is a safe boundary. The pause keeps what the recovery would
@@ -705,37 +651,27 @@ export async function runSession(
       if (sleep.wake !== undefined || cause?.errorClass === "quota" || cause?.errorClass === "rate")
         await statsQuotaWait(opts.dir, sleep.model, paused ? Math.min(sleep.ms, Math.max(0, clockNow() - began)) : sleep.ms)
       if (paused) await pauseForExit()
-      let probed: string | undefined
       // The probe candidate's provider, when its ring kept the candidate
       // unusable: the probe ignores the ring (§6.3), so the ring's key marks
       // clear for the probe and the key it ran on is re-marked on failure —
       // the same clear-and-re-mark the model mark gets, and the position
       // never moves.
       // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared mark (the probe ran on the current key alone; the earlier keys' marks would have cleared at the same boundaries anyway, and a wrapped rotation onto them later is the §6.4 semantics a boundary clear already has)
-      let probedProvider: string | undefined
-      if (opts.routing) {
-        limits ??= await contextLimitsOf(client)
-        const facts = opts.routing
-        const ctx = selectContext(facts, switches, cap, limits)
-        const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
-        let decision = select(ctx, call)
-        // A wait decision here (the marks cleared mid-loop — /failback, say —
-        // and what is left is window-blocked): wait for the opening rather
-        // than probe a closed window, then take the probe decision.
-        while (decision.kind === "wait") {
-          await waitForWindow(windowWaitOf(ctx, call, decision))
-          decision = select(ctx, { ...call, now: nowOf(facts) })
-        }
-        if (decision.kind === "probe") {
-          probed = candidateKey(decision.candidate)
-          router.clearModelDownMark(probed)
-          if (decision.candidate.kind === "entry" && decision.candidate.entry.provider !== undefined) {
-            probedProvider = decision.candidate.entry.provider
-            router.clearRingMarks(probedProvider)
-          }
-        }
-      }
-      const probe: SessionChain = { pct: 100, used: 0, at: 0, ...(opts.routing ? {} : { model: chain.model }), role: roleOf(chain) }
+      // The selection itself (the wait-and-reselect loop and the clear half
+      // of the mark dance) sits behind the router's routing fence —
+      // `probeSelection`, the facts passed untested, this loop's limits
+      // fetch and window sleeper handed in as callbacks; the re-mark on a
+      // failed probe runs below, after the probe session returns.
+      const probePick = await router.probeSelection(opts.routing, switches, {
+        chain,
+        phase: opts.phase,
+        cap,
+        loadLimits: async () => (limits ??= await contextLimitsOf(client)),
+        waitWindow: waitForWindow,
+      })
+      const probed = probePick?.model
+      const probedProvider = probePick?.provider
+      const probe: SessionChain = probeChain(opts.routing, chain)
       let ping: SessionResult
       try {
         // The probe chain carries no agent on purpose (§8.1): attempt's own
@@ -754,8 +690,9 @@ export async function runSession(
         continue
       }
       // The account the probe ran on: the probed candidate's under a
-      // registry, else the chain's (the probe copies its model).
-      const probeAccount = accountOf(opts.routing ? probe : chain, opts.routing)
+      // registry (the fence's chain pick — the probe's own dispatch wrote
+      // the entry onto it), else the chain's (the probe copies its model).
+      const probeAccount = accountOf(probeAccountChain(opts.routing, probe, chain), opts.routing)
       if (ping.type !== "idle") {
         await learnFailure(opts.dir, probeAccount, ping, clockNow())
         cause = { ...ping, account: probeAccount }
@@ -959,8 +896,11 @@ export async function runSession(
       result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
     }
     const account = accountOf(chain, opts.routing)
+    // The registry flag the pure ladder decision reads comes from the
+    // routing fence (the truthiness test is the fence's `registryDriven`),
+    // like every other routing branch this loop executes.
     const facts: LadderFacts = {
-      registry: opts.routing !== undefined,
+      registry: registryDriven(opts.routing),
       ringLength: fallbackRing().length,
       waits,
       server: opts.server !== undefined,
