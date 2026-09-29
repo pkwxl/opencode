@@ -40,7 +40,7 @@ import type { Steer, TestRun } from "../src/testrun"
 import { watch } from "../src/watch"
 import { ev, type AgentCall, type TurnScript } from "./fixtures/agent"
 import { freshRepo, git, task } from "./fixtures/runner"
-import { compareTrace, fireProbe, flush, runScenario, scrubTrace, TURN_EPOCH, turnEntry, until, untilPublished, type ScenarioHand, type TurnScenario } from "./fixtures/turn-trace"
+import { compareTrace, fireProbe, flush, runScenario, scrubTrace, TURN_EPOCH, TURN_TRACE_DIR, turnEntry, until, untilPublished, type InputKind, type ScenarioHand, type TurnScenario } from "./fixtures/turn-trace"
 
 // The steer literal the message-family scenarios share: the 2×64k budget
 // against the fake's 100.0k window gives an 80.0k effective wall
@@ -1924,4 +1924,126 @@ describe("the turn-trace oracle", () => {
       compareTrace(scenario, await runScenario(scenario))
     })
   }
+})
+
+// —— The roster: the arbitration table's cell → scenario map (0061 §4.5) ——
+// The §4.5 rows and their concern cells, transcribed statically, each cell
+// naming the scenarios whose family comment declares it covered. At D0 the
+// case below asserts what is statically known: every input kind fired in at
+// least one recorded trace — the kind's row names at least one scenario,
+// every named scenario is registered, declares the kind in its `kinds`, and
+// has its golden on disk — and the map cannot drift away from the recorded
+// set (every registered scenario is named at least once). The full
+// every-cell assertion completes at D9 (0061 §6.3), when the engine's table
+// exists as code and each cell's coverage is checked against it; until then
+// the cell keys are the plan's transcription, not checked artifacts.
+const ROSTER: Record<InputKind, Record<string, readonly string[]>> = {
+  limit: {
+    windows: ["limit-windows-change"],
+  },
+  part: {
+    guard: ["part-transcript-dedup"],
+    failure: ["part-output-ends-retry"],
+    liveness: ["part-length-continue-reset"],
+    stepUp: ["part-step-cache-confirmed", "part-step-cache-contradiction-once"],
+    transcript: ["part-transcript-dedup", "smoke-natural-settle"],
+    stuck: ["part-stuck-hint"],
+  },
+  message: {
+    guard: ["part-transcript-dedup"],
+    transcript: ["message-transcript-filter", "smoke-natural-settle"],
+    usage: [
+      "message-measurement-window",
+      "message-wall-steer",
+      "message-usage-notice-highest-band",
+      "message-wall-steer-failed",
+      "message-usage-notice-steer-failed",
+      "message-dual-steer-notice-step-up",
+    ],
+    stepUp: ["message-dual-steer-notice-step-up"],
+  },
+  question: {
+    questions: [
+      "question-human-answer",
+      "question-human-closed-block",
+      "question-human-repeat-block",
+      "question-wait-answer-human-reply",
+      "question-wait-answer-timeout-fallback",
+      "question-permission-word-default-block",
+      "question-dryrun-auto-answer",
+    ],
+  },
+  permission: {
+    questions: [
+      "permission-dryrun-deny",
+      "permission-auto-allow",
+      "permission-ask-allow-timeout",
+      "permission-ask-deny-timeout",
+      "permission-ask-human-allow",
+      "permission-ask-human-deny",
+      "permission-ask-fail-block",
+    ],
+  },
+  error: {
+    guard: ["error-accumulate-idle-settle"],
+    failure: ["error-accumulate-idle-settle"],
+    stepUp: ["error-overflow-step-up-late"],
+  },
+  retry: {
+    guard: ["retry-forms-vlog-dedup"],
+    failure: ["retry-forms-vlog-dedup", "retry-per-minute-quota-observed"],
+    recovery: ["retry-quota-early-settle", "retry-auth-early-settle", "retry-rate-early-settle", "retry-per-minute-quota-observed"],
+    stepUp: ["retry-overflow-step-up-late"],
+    liveness: ["retry-announced-silence-dedup"],
+    transcript: ["retry-forms-vlog-dedup"],
+  },
+  idle: {
+    guard: ["idle-twin-guard"],
+    test: [
+      "test-run-and-feedback",
+      "test-handover-freeze-and-complete",
+      "test-handover-resume-wrapup-complete",
+      "test-handover-strict-invalid",
+      "test-handover-backfill-twice-blocked",
+      "test-handover-backfill-steer-failed",
+      "test-handover-request-steer-failed",
+      "test-result-feedback-steer-failed",
+    ],
+    liveness: ["part-length-continue-reset", "part-length-continue-steer-failed"],
+    spine: ["smoke-natural-settle", "idle-twin-guard"],
+  },
+  "stream-end": {
+    spine: ["stream-end-interrupted"],
+  },
+  probe: {
+    liveness: ["probe-failure-then-recovered", "probe-half-open-trip", "probe-during-question-wait", "probe-quiet-window-exempted"],
+  },
+  answer: {
+    recovery: [
+      "answer-quota-raised-settle",
+      "answer-during-question-wait",
+      "answer-queued-event-consumed-first",
+      "answer-after-turn-ended-pending-reset",
+      "answer-cached-later-retry-settle",
+    ],
+  },
+}
+
+test("roster: every input kind fired in at least one recorded trace", () => {
+  const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]))
+  const named = new Set<string>()
+  for (const [kind, cells] of Object.entries(ROSTER) as [InputKind, Record<string, readonly string[]>][]) {
+    const ids = Object.values(cells).flat()
+    expect(ids.length, `the ${kind} row names at least one scenario`).toBeGreaterThan(0)
+    for (const id of ids) {
+      const scenario = byId.get(id)
+      expect(scenario, `roster names a registered scenario: ${id}`).toBeDefined()
+      expect(scenario!.kinds, `${id} declares the ${kind} input`).toContain(kind)
+      expect(existsSync(join(TURN_TRACE_DIR, `${id}.json`)), `the recorded trace is on disk: ${id}.json`).toBe(true)
+      named.add(id)
+    }
+  }
+  expect([...named].sort(), "every recorded scenario is named in the roster at least once").toEqual(
+    scenarios.map((scenario) => scenario.id).sort(),
+  )
 })

@@ -42,11 +42,17 @@ import { autoSwitches } from "../../src/switches"
 import { fakeAgent, type FakeAgent, type FakeAgentOptions } from "./agent"
 
 // —— The race-dependent interleavings (the oracle's termination criterion) ——
-// Two spots in today's watch() depend on real async timing. A trace is a
-// valid oracle only when its scenario forces the outcome deterministically
-// or stays away from the race entirely, so every scenario declares its
-// relationship to both races in its definition (pins and/or excludes), and
-// the runner rejects a scenario that declares the same race both ways.
+// Two spots in today's watch() depend on real async timing: the Promise.race
+// at the event boundary (the `raced` wrapper) and the probe timer's callback
+// running beside the loop body (the classifier answer's `onAnswer` link is
+// race 1's settle source, not a third spot — it only feeds trip). A trace is
+// a valid oracle only when its scenario forces the outcome deterministically
+// or stays away from the race entirely, so every scenario's relationship to
+// both races is stated: in its `pins`/`excludes` metadata when it touches
+// one (the runner rejects a scenario that declares the same race both ways),
+// and otherwise in its family comment in test/turn-trace.test.ts — why
+// neither race can materialize there (no settle source, no fired probe
+// timer).
 //
 // 1. held-settle-vs-external — a settle that preempts the event wait
 //    (`trip()`: a classifier answer raising the class of a turn that is
@@ -71,6 +77,19 @@ import { fakeAgent, type FakeAgent, type FakeAgentOptions } from "./agent"
 //    the loop inside the fx call, so no other interleaving exists. A
 //    scenario that never fires a probe while an fx call is in flight is
 //    unaffected by this race and declares nothing for it.
+//
+// The freeze census — the enumeration above is the complete one. Read
+// against today's watch(): the loop body awaits every fx call inline, so the
+// only actors that can run beside it are the probe timer's callback and the
+// classifier answer's link, and both meet external inputs only at the
+// boundary race; nothing else in the function holds two in-flight promises
+// whose resolution order is observable. Of the 58 recorded scenarios, 7 are
+// pinned by construction (six on race 1 — the answer row's five and the
+// half-open trip; one on race 2 — the probe fired inside the awaited human
+// answer) and none is excluded: every race the landed set touches could be
+// pinned honestly. A stage-D trace mismatch terminates against this list:
+// either the engine reproduces the pinned outcome, or the scenario's pin is
+// ruled wrong — never "the race went the other way".
 export type RaceKind = "held-settle-vs-external" | "probe-during-fx"
 // "how" names the construction that forces the order (which gate holds
 // which arm), so a later scenario reuses the pin instead of guessing.
