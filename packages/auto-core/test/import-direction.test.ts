@@ -176,17 +176,20 @@ const CLASSIFIED: Record<string, Domain> = {
     // The extracted turn concerns (plans/0061 §4.5/§4.6), one file per
     // concern under engine/concerns/: guard (the twin-idle dedup), windows
     // (the limit row), transcript (terminal echo and billing), stuck (the
-    // loop hint) and questions (the question and permission rows). Each owns
+    // loop hint), questions (the question and permission rows) and failure
+    // (the error accumulator with its limit-statement helpers). Each owns
     // one slice of the turn state and reaches only the contract's types plus
     // the unranked leaves below the session layer (session-api's describePart
     // and isApproval, the stuck-hint template render and the detector's
-    // constants, unit-commit's autoAnswer, resolve's sameIssue/compactText);
+    // constants, unit-commit's autoAnswer, resolve's sameIssue/compactText,
+    // chain's statedInWording);
     // watch installs them beside the remainder.
     "engine/concerns/guard": "driver",
     "engine/concerns/windows": "driver",
     "engine/concerns/transcript": "driver",
     "engine/concerns/stuck": "driver",
     "engine/concerns/questions": "driver",
+    "engine/concerns/failure": "driver",
     "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -370,13 +373,14 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/concerns/windows": 9,
     "engine/concerns/stuck": 10,
     "engine/concerns/questions": 11,
-    watch: 12,
-    attempt: 13,
-    session: 14,
-    artifact: 15,
-    "exec-session": 15,
-    execute: 16,
-    runner: 17,
+    "engine/concerns/failure": 12,
+    watch: 13,
+    attempt: 14,
+    session: 15,
+    artifact: 16,
+    "exec-session": 16,
+    execute: 17,
+    runner: 18,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

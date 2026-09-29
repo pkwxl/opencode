@@ -118,6 +118,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/template.test.ts",
   "test/tier.test.ts",
   "test/turn-arbitration.test.ts",
+  "test/turn-failure.test.ts",
   "test/turn-guard.test.ts",
   "test/turn-questions.test.ts",
   "test/turn-stuck.test.ts",

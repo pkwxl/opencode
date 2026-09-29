@@ -15,17 +15,18 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the concern roster — the
 // extracted concerns in src/engine/concerns/ (guard, transcript, windows,
-// stuck, questions; each owning its slice's construction) beside the one
-// `remainder` concern that still holds the not-yet-extracted turn code — and
-// hands the stream to the spine (src/engine/spine.ts), which owns the input
-// queue, the arbitration dispatch, the fx audit and the trip-wired stream
-// wrapper. The remainder serves the input kinds whose arbitration row still
-// holds one of its cells: the shared `handle` answers at the row's first such
-// cell (its cells are contiguous in every row), routing the input to its
-// entry of the per-kind handler map — the loop body, cut one branch per input
-// kind, minus what the extracted concerns own (the guard's resets and
-// twin-idle stop, the transcript's echo/billing/report, the windows' limit
-// row, the stuck hint, the questions' question and permission rows). The
+// stuck, questions, failure; each owning its slice's construction) beside the
+// one `remainder` concern that still holds the not-yet-extracted turn code —
+// and hands the stream to the spine (src/engine/spine.ts), which owns the
+// input queue, the arbitration dispatch, the fx audit and the trip-wired
+// stream wrapper. The remainder serves the input kinds whose arbitration row
+// still holds one of its cells: the shared `handle` answers at the row's
+// first such cell (its cells are contiguous in every row), routing the input
+// to its entry of the per-kind handler map — the loop body, cut one branch
+// per input kind, minus what the extracted concerns own (the guard's resets
+// and twin-idle stop, the transcript's echo/billing/report, the windows'
+// limit row, the stuck hint, the questions' question and permission rows, the
+// failure's error accumulation). The
 // probe timer and the classifier answer arrive as synthetic inputs from
 // src/engine/sources.ts; all of the body's I/O goes through the production fx
 // (src/engine/fx.ts) under the spine's audit. What remains here besides the
@@ -33,13 +34,14 @@
 // Watch result each old exit returned.
 
 import { join, relative } from "node:path"
-import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
-import { agentGaveUp, classifySessionError, retryPolicyOf, statedInWording, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import type { AgentClient, AgentEvent } from "./agent/types"
+import { agentGaveUp, classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk } from "./classify"
 import { commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete } from "./handover"
 import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
+import { failureConcern } from "./engine/concerns/failure"
 import { guardConcern } from "./engine/concerns/guard"
 import { questionsConcern } from "./engine/concerns/questions"
 import { stuckConcern } from "./engine/concerns/stuck"
@@ -82,33 +84,6 @@ const PROBE_MAX_FAILURES = 2
 // (work back to normal after continuation) resets the count.
 const LENGTH_CONTINUE_MAX = 3
 
-// A failure's limit statement (AgentError's limit fields, plans/0057 §5) laid
-// over the turn's record: the latest statement stands, and a stated reset
-// replaces the earlier reset together with its scope.
-function withLimit(info: ErrorInfo, e: AgentError): ErrorInfo {
-  const { resetAt, scope, ...rest } = info
-  const reset = e.resetAt !== undefined || e.scope !== undefined ? { resetAt: e.resetAt, scope: e.scope } : { resetAt, scope }
-  return {
-    ...rest,
-    ...(reset.resetAt !== undefined ? { resetAt: reset.resetAt } : {}),
-    ...(reset.scope !== undefined ? { scope: reset.scope } : {}),
-    ...(e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
-    ...(e.limitReason !== undefined ? { limitReason: e.limitReason } : {}),
-  }
-}
-
-// A failure's own words beneath its structured limit fields (plans/0057
-// S4a): a reset the provider states in a known wording (chain.ts
-// statedInWording) counts as stated when the event states no limit of its
-// own — a header- or stream-stated one outranks it.
-function withWording(e: AgentError, now: number): AgentError {
-  if (e.resetAt !== undefined || e.scope !== undefined) return e
-  const stated = statedInWording(`${e.message ?? ""}\n${e.responseBody ?? ""}`, now)
-  return stated !== undefined ? { ...e, ...stated } : e
-}
-
-const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
-
 // The per-input handler map (plans/0061 §4.5): one handler per input kind the
 // remainder still serves. An `event` input keys on its event's own type (the
 // spine's rowOf keying), so an event handler receives its AgentEvent variant
@@ -143,7 +118,7 @@ type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 // its removal. Typed as the union's source of truth — the install below and
 // the cell routing both read it, so a stale entry is a type error, not a
 // silent mis-route.
-export const REMAINDER_KEYS = ["failure", "recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export const REMAINDER_KEYS = ["recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
 export type RemainderKey = (typeof REMAINDER_KEYS)[number]
 // The remainder's slices, pre-created by watch() (the extracted concerns own
 // their slices' construction in their own files): the fx's steer-model getter
@@ -160,7 +135,7 @@ export const turnConcerns = (state: RemainderState, handle: Concern<SliceKey>["h
   windows: windowsConcern,
   stuck: stuckConcern,
   questions: questionsConcern,
-  failure: { name: "failure", initial: () => state.failure, handle },
+  failure: failureConcern,
   recovery: { name: "recovery", initial: () => state.recovery, handle },
   liveness: { name: "liveness", initial: () => state.liveness, handle },
   usage: { name: "usage", initial: () => state.usage, handle },
@@ -265,18 +240,17 @@ export async function watch(
   // the fx's steer-model getter and the settle→Watch mapping below hold the
   // same live objects the roster's initials hand back; the body reads and
   // writes them through these aliases exactly where the locals stood. The
-  // extracted concerns' slices (guard, transcript, windows, stuck, questions)
-  // are built by their own initials inside the spine and read through the
-  // view.
+  // extracted concerns' slices (guard, transcript, windows, stuck, questions,
+  // failure) are built by their own initials inside the spine and read
+  // through the view.
   const remainderState: RemainderState = {
-    failure: { error: "", retrying: false },
     recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
     usage: { pct: 100, used: 0, hinted: false, notes: new Set<number>() },
     stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { failure, recovery, liveness, usage, test: testState } = remainderState
+  const { recovery, liveness, usage, test: testState } = remainderState
   // The context-step slice (the old steerModel/stepNow/reached locals).
   const steps = remainderState.stepUp
 
@@ -324,10 +298,12 @@ export async function watch(
   // answer still on its way. The stated one rides without a registry too: the
   // down marks and the wait-and-probe loop's scheduled sleep (plans/0057 §6)
   // read it, and it carries its scope, which the escalation and the wait line
-  // read (§7).
-  const resetFields = (): Partial<Watch> => {
-    const stated = acceptedReset(failure.info, clock.now())
-    if (stated !== undefined) return { resetAt: stated, ...(failure.info?.scope !== undefined ? { scope: failure.info.scope } : {}), resetSource: "stated" }
+  // read (§7). The failure info arrives as a parameter: the slice is the
+  // failure concern's (built inside the spine), and the interrupted
+  // close-out below hands this the extended record, not the raw slice.
+  const resetFields = (info: ErrorInfo | undefined): Partial<Watch> => {
+    const stated = acceptedReset(info, clock.now())
+    if (stated !== undefined) return { resetAt: stated, ...(info?.scope !== undefined ? { scope: info.scope } : {}), resetSource: "stated" }
     if (classifier === undefined) return {}
     if (recovery.answer !== undefined) {
       const at = acceptedReset(recovery.answer, classifier.now())
@@ -547,7 +523,8 @@ export async function watch(
   // handler reproduces its old branch's statements — minus what the extracted
   // concerns own (the guard's resets and twin-idle stop, the transcript's
   // echo/billing/report, the windows' limit row, the stuck hint, the
-  // questions' question and permission rows) — in its arbitration row's
+  // questions' question and permission rows, the failure's error
+  // accumulation) — in its arbitration row's
   // order, and reads/writes its own slices through the closure aliases
   // exactly where the branch did; other concerns' slices are read through
   // the view. The handler runs at the row's first remainder cell and answers
@@ -591,14 +568,14 @@ export async function watch(
     // identity is load-bearing: the settle→Watch mapping compares the
     // outcome against `raisedSettle` by identity, so the object stored there
     // is the one this handler returns.
-    answer: async (input) => {
+    answer: async (input, _fx, view) => {
       const got = input.answer
       if (got === undefined) return "consumed"
       recovery.answer = got
-      if (!failure.retrying || failure.info === undefined || recovery.raised !== undefined) return "consumed"
-      const cls = classify(failure.info)
-      if (!shouldAsk("retry", failure.info, cls, client.errorPatterns)) return "consumed"
-      const merged = mergeClass(cls, got.class, failure.info, policy)
+      if (!view.failure.retrying || view.failure.info === undefined || recovery.raised !== undefined) return "consumed"
+      const cls = classify(view.failure.info)
+      if (!shouldAsk("retry", view.failure.info, cls, client.errorPatterns)) return "consumed"
+      const merged = mergeClass(cls, got.class, view.failure.info, policy)
       if (merged !== "quota" && merged !== "auth" && merged !== "rate") return "consumed"
       recovery.raised = merged
       raisedSettle = { kind: "error", cls: merged, classified: true }
@@ -608,20 +585,14 @@ export async function watch(
     // and the usage source's observe are the spine's (they preceded every
     // branch of the old loop). ——
     // A part of the agent's output (row: guard → failure → liveness → stepUp
-    // → transcript → stuck; the remainder owns the middle three cells).
+    // → transcript → stuck; the failure cell before this segment is the
+    // concern's, the remainder owns the liveness and stepUp cells).
     part: async (input, fx) => {
       const part = input.event.part
-      // Model output after a retry: the agent's retry got through, so a late
-      // classifier answer no longer settles this turn, an announced silence
-      // is over, and what was stated about the limit no longer applies — a
-      // later failure of this watch must not carry its reset into a down mark.
+      // Model output after a retry (the failure concern's cell just before
+      // this segment ended retrying and dropped the stated limit fields): an
+      // announced silence is over — the agent produced output again.
       if (part.kind !== "step-start") {
-        failure.retrying = false
-        const stated = failure.info as ErrorInfo | undefined
-        if (stated !== undefined && LIMIT_KEYS.some((key) => stated[key] !== undefined)) {
-          const { resetAt: _reset, scope: _scope, retryAfterMs: _wait, limitReason: _reason, ...rest } = stated
-          failure.info = rest
-        }
         liveness.quietUntil = undefined
       }
       // step-finish increment accumulation (the transcript concern's cell,
@@ -729,95 +700,55 @@ export async function watch(
     // plan-session human policy, --wait-answer with its fallback auto-answer,
     // the default permission-question block, the dryrun preflight) and every
     // permission mode (the dryrun deny, auto-allow, the ask-* triad).
-    // A session error (row: guard → failure → stepUp; the remainder owns the
-    // last two cells).
-    error: async (input, fx) => {
-      const e = input.event.error
-      const errName = e.name ?? ""
-      const detail = e.message ?? errName
-      failure.error = failure.error ? `${failure.error}\n${detail}` : detail
-      // Pessimistic reading: once any session error explicitly carries
-      // isRetryable:false (account-level rate limiting and the like, where a
-      // re-dispatch or a fresh session fails the same way), the whole turn is
-      // judged non-retryable and never retracted by later events.
-      if (e.isRetryable === false) failure.retryable = false
-      // D.2 trigger surface 1: beyond message/retryable, carry the structured
-      // fields into the failure slice's info for classification and reporting
-      // (Watch gained errorInfo?, as retryable? did before it — the same kind
-      // of precedent). **No control-flow change** — this path never settles
-      // early for a failover; it only lets the existing error paths carry the
-      // classification up and downstream. The error name (APIError/
-      // ProviderAuthError/ContextOverflowError/…) is folded into message so
-      // the classifier can recognize the name-keyed classes like overflow/auth
-      // (design D.1; the name table is supplied by the adapter).
-      const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
-      const prev = failure.info as ErrorInfo | undefined
-      failure.info = withLimit(
-        {
-          ...(prev ?? {}),
-          message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
-          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-          // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
-          terminal: true,
-        },
-        withWording(e, clock.now()),
-      )
+    // A session error (row: guard → failure → stepUp; the failure cell is
+    // the concern's, the remainder owns the last cell).
+    error: async (input, fx, view) => {
+      // The failure concern's cell before this segment accumulated the error
+      // text, the retryable pessimism and the ErrorInfo (the limit statement
+      // laid over); this cell only reads the folded info.
       // Late step-up (§4.5, §7): an overflow below the top step means the
       // agent compacted before the step-up steer could land — record the
       // next step and go on observing (the compacted session continues).
-      if (classify(failure.info) === "overflow") await stepLate(fx)
+      if (classify(view.failure.info ?? {}) === "overflow") await stepLate(fx)
       return "consumed"
     },
     // A request retry (row: guard → failure → recovery → stepUp → liveness →
-    // transcript; the remainder owns the middle four cells). B.4 the two
+    // transcript; the failure cell is the concern's, the remainder owns the
+    // middle three cells). B.4 the two
     // signals unified / D.2 trigger surfaces 2 and 3, 0037 D4: the server
     // itself is retrying a failed provider request. The id-carrying form
     // comes from a retry part (self-contained structured ApiError), the
     // id-less form from session.status retry (message/attempt/next, next
     // being the wait until the next attempt — turning "still 40 minutes to
-    // wait" into an active decision; old servers may lack fields). Accumulate
-    // the failure slice's info first, then feed the classifier; a quota/auth/
+    // wait" into an active decision; old servers may lack fields). The
+    // failure concern's cell accumulates the info first, then this segment
+    // feeds the classifier; a quota/auth/
     // rate hit settles this turn early — the still-running old turn on the
     // server must be aborted before returning (the same technique as the
     // stream-interruption cleanup), otherwise it would modify files
     // concurrently with the session forked next (D.2); overflow/transient/
     // unknown only accumulate without settling, and observation continues
     // (not treated as idle).
-    retry: async (input, fx) => {
+    retry: async (input, fx, view) => {
       const event = input.event
-      const e = event.error
-      failure.retrying = true
-      // A retry means the agent works through a failure again (a later turn
-      // of this watch, say): an earlier turn's end is not this signal's.
-      const { terminal: _ended, ...before } = failure.info ?? {}
-      failure.info = withLimit(
-        {
-          ...before,
-          ...(e.message !== undefined ? { message: e.message } : {}),
-          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
-          ...(event.next !== undefined ? { next: event.next } : {}),
-        },
-        withWording(e, clock.now()),
-      )
+      // The failure concern's cell before this segment set retrying and
+      // accumulated the signal into the info (its own message replacing the
+      // earlier one, the limit statement laid over); this segment reads the
+      // record it left. (The `?? {}` is the type's default: a retry input
+      // always leaves a defined info behind.)
+      const info = view.failure.info ?? {}
       // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
       // the class now; otherwise the classifier is asked beside the stream
       // and its answer settles the turn from the answer input while it still
       // retries.
-      const { cls, classified } = consult("retry", failure.info, classify(failure.info))
+      const { cls, classified } = consult("retry", info, classify(info))
       // A per-minute cap the agent is still backing off from (plans/0057 §7):
       // its own retrying cures it, so the turn does not settle before the
       // agent gave up — quota wording on a refused request included. (A rate
       // class already waits for agentGaveUp.)
-      const perMinute = (failure.info.scope === "request" || failure.info.scope === "token") && !agentGaveUp(failure.info, policy)
+      const perMinute = (info.scope === "request" || info.scope === "token") && !agentGaveUp(info, policy)
       if ((cls === "quota" && !perMinute) || cls === "auth" || cls === "rate") {
         await fx.abort()
-        const msg = failure.info.message ?? failure.error
-        failure.error = failure.error ? `${failure.error}\n${msg}` : msg
         if (classified) raisedLine(cls)
         // Only isRetryable:false (e.g. insufficient_quota) passes
         // non-retryable down; for the other failover-eligible errors a new
@@ -874,7 +805,7 @@ export async function watch(
       // interplay are the same as the handover/test steer paths.
       // An agent that takes no further messages (MA.4: steer off) cannot be
       // told to continue; the truncated turn ends as if the cap were used up.
-      if (liveness.lastFinish === "length" && !failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
+      if (liveness.lastFinish === "length" && !view.failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
         liveness.lengthContinued++
         // The continuation turn's own step-finish would refresh lastFinish;
         // clear it first after the steer, so the corner case of a new turn
@@ -921,6 +852,13 @@ export async function watch(
   // settle itself, while the remainder's blocked exits record their extras
   // (testHandover, testHandoverInvalid) beside the settle through
   // blockedAdvice — the side channel, when set, is the whole extra.
+  // The failure record this close-out reports — the slice as the failure
+  // concern left it, extended by the interrupted close-out's transport
+  // message below — is held in locals rather than written back: the slice is
+  // the concern's (its initial built it inside the spine), and the extension
+  // is the mapping's own work over the view.
+  let errorText = view.failure.error
+  let failureInfo = view.failure.info
   if (settle.kind === "blocked") return snapshot(view, blockedExtra ?? { blocked: { type: "blocked", question: settle.question } })
   if (settle.kind === "error") {
     // The raised settle (a classifier answer raised the class of the
@@ -934,15 +872,15 @@ export async function watch(
       await fx.abort()
       raisedLine(settle.cls)
     }
-    const msg = failure.info?.message ?? failure.error
+    const msg = failureInfo?.message ?? errorText
     return snapshot(view, {
       error: msg,
-      retryable: failure.info?.isRetryable === false ? false : undefined,
-      errorInfo: failure.info,
+      retryable: failureInfo?.isRetryable === false ? false : undefined,
+      errorInfo: failureInfo,
       errorClass: settle.cls,
       failover: true,
       ...(settle.classified ? { classified: true } : {}),
-      ...resetFields(),
+      ...resetFields(failureInfo),
     })
   }
   if (settle.kind === "interrupted") {
@@ -958,13 +896,13 @@ export async function watch(
     // messages; the half-open message carries network/timeout criteria for
     // classifySessionError to file as transient — transport-layer faults ride
     // the existing retry ladder and failover ring, no model switch; the
-    // failure slice's info is extended in sync so the classification and the
+    // failure record above is extended in sync so the classification and the
     // upward report have grounds.
     const msg = liveness.halfOpen
       ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
       : "event stream interrupted (no session-end event received; suspected server failure or network down)"
-    failure.error = failure.error ? `${failure.error}\n${msg}` : msg
-    if (liveness.halfOpen) failure.info = { ...(failure.info ?? {}), message: failure.info?.message ? `${failure.info.message}\n${msg}` : msg }
+    errorText = errorText ? `${errorText}\n${msg}` : msg
+    if (liveness.halfOpen) failureInfo = { ...(failureInfo ?? {}), message: failureInfo?.message ? `${failureInfo.message}\n${msg}` : msg }
   }
   // A session error that ends unknown (plans/0055 §7.1): a cached answer
   // raises its class; otherwise the classifier is asked now, and its answer
@@ -973,22 +911,22 @@ export async function watch(
   // bare transport loss has no errorInfo and stays unknown.
   let finalClass: ErrorClass | undefined
   let finalClassified = false
-  if (failure.error) {
-    const verdict = classify(failure.info ?? {})
-    const consulted = failure.info !== undefined ? consult("error", failure.info, verdict) : { cls: verdict, classified: false }
+  if (errorText) {
+    const verdict = classify(failureInfo ?? {})
+    const consulted = failureInfo !== undefined ? consult("error", failureInfo, verdict) : { cls: verdict, classified: false }
     finalClass = consulted.cls
     finalClassified = consulted.classified
     if (finalClassified) raisedLine(finalClass)
   }
   return snapshot(view, {
-    error: failure.error,
+    error: errorText,
     testHandover: testState.handover,
-    retryable: failure.retryable,
+    retryable: view.failure.retryable,
     // Only when there really is a session error does the classification ride
     // up and downstream (no control-flow change); a normal finish carries
     // neither key, byte-for-byte equivalent to the status quo. The info may
     // be empty (e.g. a pure stream interruption) → classified unknown from
     // the empty input.
-    ...(failure.error ? { errorInfo: failure.info, errorClass: finalClass, ...(finalClassified ? { classified: true } : {}), ...resetFields() } : {}),
+    ...(errorText ? { errorInfo: failureInfo, errorClass: finalClass, ...(finalClassified ? { classified: true } : {}), ...resetFields(failureInfo) } : {}),
   })
 }

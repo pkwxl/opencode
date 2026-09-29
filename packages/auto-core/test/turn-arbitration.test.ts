@@ -288,7 +288,6 @@ describe("the remainder layer's owned slices", () => {
   // them (turnConcerns hands the objects back through the roster's
   // initials).
   const remainderState = (): RemainderState => ({
-    failure: { error: "", retrying: false },
     recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
     usage: { pct: 0, used: 0, hinted: false, notes: new Set<number>() },
@@ -298,12 +297,11 @@ describe("the remainder layer's owned slices", () => {
 
   test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
     // The real install (watch's turnConcerns): guard, transcript, windows,
-    // stuck and questions hold their own concerns; the six not-yet-extracted
-    // slices share the one remainder handle. Each extraction unit shrinks
-    // this list, and the layer's removal empties it.
+    // stuck, questions and failure hold their own concerns; the five
+    // not-yet-extracted slices share the one remainder handle. Each
+    // extraction unit shrinks this list, and the layer's removal empties it.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
     expect(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle)).toEqual([
-      "failure",
       "recovery",
       "liveness",
       "usage",

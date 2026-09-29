@@ -58,6 +58,13 @@ describe("SSE subscription lifecycle (disconnected at session end)", () => {
 })
 
 // ---- error-signal wiring → attempt exits (plans/0017-model-routing-design.md D.2/CRITICAL invariant, P3) ----
+// The accumulation itself — the error text fold, the retryable pessimism,
+// the ErrorInfo with the limit statement laid over (withLimit/withWording),
+// the retrying lifecycle — is the failure concern's mechanism, pinned in its
+// concern suite (test/turn-failure.test.ts) since the concern was extracted.
+// What stays here is the wiring the exits and books need: the marks riding
+// attempt's returns (failover, errorClass, retryable), the abort-before-
+// settle ordering, and the no-early-settle paths' session discipline.
 describe("error-signal wiring: watch's three trigger surfaces → attempt exits (P3 classifies and marks only, makes no candidate decisions)", () => {
   // Zero-wait ladder: this block only checks error classification and exit
   // marks; retry backoff must not drag it out to minutes.
