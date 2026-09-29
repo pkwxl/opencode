@@ -137,6 +137,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // all depend on it instead of on each other, which is what broke the
   // control-modules type cycle.
   "control-types": "driver",
+  // The turn engine's contract (plans/0061 §4.3): the input union of the
+  // spine's single queue, the per-concern state slices and the read-only
+  // view, the immutable per-turn facts, the audited fx surface, and the
+  // concern / advice / arbitration types. Types only — no runtime import,
+  // so any layer may depend on it without closing a cycle.
+  "engine/contract": "driver",
   // The pure dispatch plan of one prompt (plans/0061 §4.7): what a dispatch
   // decides before anything is created — the takeover, the registry pick or
   // its blocked outcome, the cross-agent move, the failback-scope flag.
@@ -308,13 +314,17 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // the slots under watch beside them.
     "engine/dispatch": 1,
     "engine/ladder": 2,
-    watch: 3,
-    attempt: 4,
-    session: 5,
-    artifact: 6,
-    "exec-session": 6,
-    execute: 7,
-    runner: 8,
+    // The turn engine's contract (plans/0061 §4.3): types only; the spine,
+    // fx and sources the turn consolidation adds take the slots between it
+    // and watch as they land.
+    "engine/contract": 3,
+    watch: 4,
+    attempt: 5,
+    session: 6,
+    artifact: 7,
+    "exec-session": 7,
+    execute: 8,
+    runner: 9,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
