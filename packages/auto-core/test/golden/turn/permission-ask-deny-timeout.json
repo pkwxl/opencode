@@ -1,0 +1,32 @@
+{
+  "calls": [
+    {
+      "name": "replyPermission",
+      "args": [
+        "p1",
+        "reject"
+      ]
+    }
+  ],
+  "lines": [
+    "🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ask-deny): bash (rm -rf build)",
+    "→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): bash (rm -rf build)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

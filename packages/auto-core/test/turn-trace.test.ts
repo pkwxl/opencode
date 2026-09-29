@@ -557,6 +557,225 @@ const scenarios: TurnScenario[] = [
     run: async (h) =>
       watch(h.agent.client, "s", h.script([ev.message("s", "m1", 45_000)]), h.opts, usageSteer()),
   },
+
+  // —— The `question` row (plans/0061 §4.5) ——
+  // Same race standing as the families above: no settle source exists (no
+  // classifier wiring, and the queued probe timer is never fired), so
+  // neither A-3 race materializes and no pins or exclusions are declared.
+  // The gated interactive's reply is queued before watch() starts (early
+  // replies stand), so the awaited askHuman resolves in microtasks — the
+  // loop body never suspends on anything the scenario does not control.
+
+  // `question` row, the plan-session policy (opts.humanQuestions): a
+  // non-permission question waits for the human with no timeout — the ❓
+  // line, the → human answer echo, replyQuestion with the human's text,
+  // and no proxy answer (resolves stays empty); the turn settles
+  // naturally on the following idle.
+  {
+    id: "question-human-answer",
+    kinds: ["question", "idle"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply("use postgres")
+      h.opts.humanQuestions = true
+      h.opts.interactive = io.interactive
+      return watch(h.agent.client, "s", h.script([ev.question("s", "q1", "which db?"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `question` row, the plan-session closed-input block: the human's
+  // input channel answers with the closed shape (undefined), so the
+  // question cannot be answered — rejectQuestion + abort, and the
+  // blocked return carrying the closed-input wording and the question.
+  {
+    id: "question-human-closed-block",
+    kinds: ["question"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply(undefined)
+      h.opts.humanQuestions = true
+      h.opts.interactive = io.interactive
+      return watch(h.agent.client, "s", h.script([ev.question("s", "q1", "which db?")]), h.opts)
+    },
+  },
+
+  // `question` row, the plan-session repeat block: the same question
+  // after the human's answer (sameIssue over the normalized text) never
+  // waits again — replyQuestion for the first, then rejectQuestion +
+  // abort + the blocked return naming the repeat.
+  {
+    id: "question-human-repeat-block",
+    kinds: ["question"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply("use postgres")
+      h.opts.humanQuestions = true
+      h.opts.interactive = io.interactive
+      return watch(
+        h.agent.client,
+        "s",
+        h.script([ev.question("s", "q1", "which db?"), ev.question("s", "q2", "which db?")]),
+        h.opts,
+      )
+    },
+  },
+
+  // `question` row, --wait-answer with a human reply inside the window:
+  // the → human answer echo and replyQuestion carry the human's text; a
+  // real person's decision is no proxy answer, so resolves stays empty.
+  {
+    id: "question-wait-answer-human-reply",
+    kinds: ["question", "idle"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply("backfill the old rows")
+      h.opts.waitAnswer = 5
+      h.opts.interactive = io.interactive
+      return watch(h.agent.client, "s", h.script([ev.question("s", "q1", "backfill the old rows first?"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `question` row, --wait-answer timing out: the window closes with no
+  // human reply, so the driver answers on the user's behalf — the ⚑
+  // auto-answer (AUTO-RESOLVE) two-line report, the resolve recorded at
+  // the clock's instant, replyQuestion carrying the fallback text, and
+  // the turn continuing to a natural settle.
+  {
+    id: "question-wait-answer-timeout-fallback",
+    kinds: ["question", "idle"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply(undefined)
+      h.opts.waitAnswer = 5
+      h.opts.interactive = io.interactive
+      return watch(
+        h.agent.client,
+        "s",
+        h.script([ev.question("s", "q1", "rename the module or keep the old name?"), ev.idle("s")]),
+        h.opts,
+      )
+    },
+  },
+
+  // `question` row, the default permission-question block: a question
+  // whose text names a permission and no --wait-answer — the driver
+  // cannot decide authorization in the human's stead, so it rejects,
+  // aborts, and blocks with the raw question text.
+  {
+    id: "question-permission-word-default-block",
+    kinds: ["question"],
+    run: async (h) =>
+      watch(h.agent.client, "s", h.script([ev.question("s", "q1", "May I have permission to wipe the build directory?")]), h.opts),
+  },
+
+  // `question` row, the dryrun preflight: every question is auto-answered
+  // (the → auto answer line), never blocking and never a proxy answer —
+  // the preflight only probes, so resolves stays empty.
+  {
+    id: "question-dryrun-auto-answer",
+    kinds: ["question", "idle"],
+    run: async (h) => {
+      h.opts.dryrun = true
+      return watch(h.agent.client, "s", h.script([ev.question("s", "q1", "apply the migration now?"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // —— The `permission` row (plans/0061 §4.5) ——
+  // Same race standing as the question scenarios above: no settle
+  // source, the queued probe timer is never fired, and every human
+  // answer is pre-queued — no pins, no exclusions.
+
+  // `permission` row, the dryrun preflight: the request is denied
+  // without interrupting the session (the 🔐 preflight probe denied
+  // line, replyPermission "reject"), and the turn settles naturally.
+  {
+    id: "permission-dryrun-deny",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      h.opts.dryrun = true
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, --permission auto-allow: no human is waited for;
+  // the request is approved immediately ("always").
+  {
+    id: "permission-auto-allow",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      h.opts.permission = "auto-allow"
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, ask-allow with --wait-answer unset: not waiting is
+  // the timeout, and the mode's fallback auto-approves ("always"); the
+  // session continues to a natural settle.
+  {
+    id: "permission-ask-allow-timeout",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      h.opts.permission = "ask-allow"
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, ask-deny with --wait-answer unset: the timeout
+  // fallback denies (replyPermission "reject") but the session continues
+  // — the AI works around the denied permission and the turn settles
+  // naturally on the following idle.
+  {
+    id: "permission-ask-deny-timeout",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      h.opts.permission = "ask-deny"
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, a human allow under ask-*: the reply matches the
+  // approval wording, so the request is granted ("always") and the turn
+  // settles naturally.
+  {
+    id: "permission-ask-human-allow",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply("allow")
+      h.opts.permission = "ask-deny"
+      h.opts.waitAnswer = 5
+      h.opts.interactive = io.interactive
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, a human deny under ask-*: any non-approval reply
+  // denies the request without interrupting the session — the AI
+  // continues without it to a natural settle.
+  {
+    id: "permission-ask-human-deny",
+    kinds: ["permission", "idle"],
+    run: async (h) => {
+      const io = h.interactive()
+      io.reply("not this one")
+      h.opts.permission = "ask-allow"
+      h.opts.waitAnswer = 5
+      h.opts.interactive = io.interactive
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build"), ev.idle("s")]), h.opts)
+    },
+  },
+
+  // `permission` row, the ask-fail exit: the timeout fallback denies
+  // (replyPermission "reject"), aborts the session, and blocks with the
+  // guidance naming the target directory's opencode.json.
+  {
+    id: "permission-ask-fail-block",
+    kinds: ["permission"],
+    run: async (h) => {
+      h.opts.permission = "ask-fail"
+      return watch(h.agent.client, "s", h.script([ev.permission("s", "p1", "bash", "rm -rf build")]), h.opts)
+    },
+  },
 ]
 
 describe("the turn-trace oracle", () => {

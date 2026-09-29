@@ -1,0 +1,36 @@
+{
+  "calls": [
+    {
+      "name": "rejectQuestion",
+      "args": [
+        "q1"
+      ]
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "blocked": {
+      "type": "blocked",
+      "question": "May I have permission to wipe the build directory?"
+    }
+  }
+}

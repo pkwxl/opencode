@@ -1,0 +1,36 @@
+{
+  "calls": [
+    {
+      "name": "replyQuestion",
+      "args": [
+        "q1",
+        [
+          [
+            "use postgres"
+          ]
+        ]
+      ]
+    }
+  ],
+  "lines": [
+    "❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\nwhich db?",
+    "→ human answer: use postgres"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

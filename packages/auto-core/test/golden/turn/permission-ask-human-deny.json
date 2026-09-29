@@ -1,0 +1,32 @@
+{
+  "calls": [
+    {
+      "name": "replyPermission",
+      "args": [
+        "p1",
+        "reject"
+      ]
+    }
+  ],
+  "lines": [
+    "🔐 permission request received: bash (rm -rf build)",
+    "→ human denied: not this one (permission denied; the AI continues without it)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

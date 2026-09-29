@@ -1,0 +1,32 @@
+{
+  "calls": [
+    {
+      "name": "replyPermission",
+      "args": [
+        "p1",
+        "always"
+      ]
+    }
+  ],
+  "lines": [
+    "🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ask-allow): bash (rm -rf build)",
+    "→ wait timed out; --permission ask-allow auto-allowed: bash (rm -rf build)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

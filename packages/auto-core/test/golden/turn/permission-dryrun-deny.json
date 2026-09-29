@@ -1,0 +1,31 @@
+{
+  "calls": [
+    {
+      "name": "replyPermission",
+      "args": [
+        "p1",
+        "reject"
+      ]
+    }
+  ],
+  "lines": [
+    "🔐 preflight probe denied (recorded in the report): bash (rm -rf build)"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 100,
+    "used": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}
