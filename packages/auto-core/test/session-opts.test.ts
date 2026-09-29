@@ -1,9 +1,8 @@
-// The sessionOpts equivalence pin: one row per call site of the loop family's
-// options builder, holding it to the exact field sets of the seven hand-built
-// Opts literals it replaces — key presence included (the "reproduced, not
-// normalized" case). When the ruled merge lands (every site then also carries
-// idleMs and mode), the expected sets change in the same diff; until then any
-// extra, missing or renamed field fails here.
+// The sessionOpts field-set pin: one row per call site of the loop family's
+// options builder, holding it to the exact merged field sets — key presence
+// included (the "reproduced, not normalized" case). Since the ruled merge
+// every site carries idleMs and mode (the one per-site omission it removed
+// was handover's mode); any extra, missing or renamed field fails here.
 import { describe, expect, test } from "bun:test"
 import { createControl } from "../src/exit"
 import { noCommitGit } from "../src/git-ops"
@@ -50,9 +49,9 @@ const degraded: SessionCtx = { ...ctx, leadSplit: false }
 // a stand-in is enough, the builder threads it through untouched.
 const phase = { id: "R-03.P02" } as PhaseKey
 
-// The full execution set (today's task-loop literal): the only site that
-// carries idleMs and mode today, and the only one with control and the
-// task-execution fields.
+// The full execution set: the only site with control and the task-execution
+// fields (subtask pipeline, test protocol, wrap-up); idleMs and mode it
+// shares with every site since the merge.
 const taskSet = (c: SessionCtx): Opts => ({
   agent: c.agentName,
   dir: c.directory,
@@ -78,9 +77,12 @@ const taskSet = (c: SessionCtx): Opts => ({
   git: c.git,
 })
 
-// The shared bypass set (the four planning-family literals and the knowledge
-// literal): plan's stop condition owns their questions; no task-execution
-// fields, no phase, no control.
+// The shared bypass set (numbering restore, planning, appending, handover
+// distillation, knowledge extraction): plan's stop condition owns their
+// questions; no task-execution fields, no phase, no control. idleMs and mode
+// ride on every site per the ruled merge — the probe interval follows the
+// configured idleTime (default fallback in src/watch.ts), and mode is inert
+// on every bypass renderer but the ones that take one.
 const bypassSet = (c: SessionCtx): Opts => ({
   agent: c.agentName,
   dir: c.directory,
@@ -91,30 +93,14 @@ const bypassSet = (c: SessionCtx): Opts => ({
   permission: c.opts.permission,
   interactive: c.repl,
   server: c.server,
+  idleMs: c.opts.idleMs,
   routing: c.routing,
   router: c.router,
   git: c.git,
   mode: c.opts.mode,
 })
 
-// The handover-distillation set: the one bypass literal without mode (the
-// handover renderer takes none).
-const handoverSet = (c: SessionCtx): Opts => ({
-  agent: c.agentName,
-  dir: c.directory,
-  verbose: c.opts.verbose,
-  waitAnswer: c.opts.waitAnswer,
-  humanQuestions: c.opts.stopBefore === "execute",
-  contextLimit: c.opts.contextLimit,
-  permission: c.opts.permission,
-  interactive: c.repl,
-  server: c.server,
-  routing: c.routing,
-  router: c.router,
-  git: c.git,
-})
-
-describe("sessionOpts (the seven-site equivalence pin)", () => {
+describe("sessionOpts (the seven-site field-set pin)", () => {
   test("task site: the full execution set, leadSplit absent while the fleet can fork", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
   })
@@ -139,10 +125,10 @@ describe("sessionOpts (the seven-site equivalence pin)", () => {
     expect(sessionOpts(ctx, { site: "phase-append" })).toStrictEqual(bypassSet(ctx))
   })
 
-  test("handover site: the one bypass set without mode", () => {
+  test("handover site: carries mode since the ruled merge (the one omission it removed)", () => {
     const built = sessionOpts(ctx, { site: "handover" })
-    expect("mode" in built).toBe(false)
-    expect(built).toStrictEqual(handoverSet(ctx))
+    expect("mode" in built).toBe(true)
+    expect(built).toStrictEqual(bypassSet(ctx))
   })
 
   test("knowledge site (the k-phase extraction session)", () => {
@@ -156,12 +142,27 @@ describe("sessionOpts (the seven-site equivalence pin)", () => {
     expect(bypass.interactive).toBeUndefined()
     expect("routing" in bypass).toBe(true)
     expect(bypass.routing).toBeUndefined()
-    // fields no bypass literal carries today stay absent
-    expect("idleMs" in bypass).toBe(false)
+    // fields no bypass set carries stay absent
     expect("phase" in bypass).toBe(false)
     expect("control" in bypass).toBe(false)
     expect("humanQuestions" in sessionOpts(ctx, { site: "task", phase })).toBe(false)
     expect("leadSplit" in sessionOpts(ctx, { site: "task", phase })).toBe(false)
+  })
+
+  test("idleMs and mode stay present when the run sets neither", () => {
+    // the merge made both keys unconditional: an unset run leaves them
+    // present with undefined (the probe then falls back to the 10-minute
+    // default), never absent — on the handover site too, whose former
+    // mode omission the merge removed
+    const bare: SessionCtx = { ...ctx, opts: {} }
+    const bypass = sessionOpts(bare, { site: "handover" })
+    expect("idleMs" in bypass).toBe(true)
+    expect(bypass.idleMs).toBeUndefined()
+    expect("mode" in bypass).toBe(true)
+    expect(bypass.mode).toBeUndefined()
+    const task = sessionOpts(bare, { site: "task", phase })
+    expect("idleMs" in task).toBe(true)
+    expect("mode" in task).toBe(true)
   })
 
   test("service references thread from the context untouched", () => {

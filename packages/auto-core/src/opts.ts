@@ -289,15 +289,17 @@ export type SessionSite =
   | { site: "handover" }
   | { site: "knowledge" }
 
-// Build one session's options from the loop context. Key presence reproduces
-// the seven hand-built literals it replaces: fields like interactive /
-// routing / idleMs are always set (their value may be undefined), while
-// leadSplit is set only when the fleet cannot fork. The per-site branches
-// below are the mandated compatibility state of the equivalence-first
-// introduction — each reproduces one of today's literals exactly, pinned by
-// test/session-opts.test.ts — and the ruled merge (this unit's last step:
-// every site then also carries idleMs and mode) removes the handover
-// exception, after which the builder takes no per-site exceptions.
+// Build one session's options from the loop context. Every site carries
+// idleMs and mode (key always set, value possibly undefined): the session's
+// probe interval then follows the run's configured idleTime (falling back to
+// the 10-minute default in src/watch.ts when unset), and mode reaches only
+// the renderers that take one — the handover renderer does not, so it is
+// inert on that path. Other keys like interactive / routing are likewise
+// always set, while leadSplit is set only when the fleet cannot fork. The
+// builder takes no per-site exceptions: the task and bypass branches differ
+// by data (the task site's phase and execution fields vs the bypass set),
+// never by field omissions; every field set is pinned by
+// test/session-opts.test.ts.
 // AUTO-DECISION: the builder reads a structural ctx slice declared in this
 // module rather than the loop context type (a type edge back up to the loop
 // would close a counted import cycle; the slice keeps opts at the dependency
@@ -327,8 +329,7 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       router: ctx.router,
       control: ctx.control,
       git: ctx.git,
-      // present only when the fleet cannot fork, as in the conditional
-      // spread of the task literal this branch replaces
+      // present only when the fleet cannot fork
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
     }
   }
@@ -336,7 +337,10 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
   // distillation, knowledge extraction) share one set: plan's stop condition
   // makes their questions the human's, and they carry no task-execution
   // fields — the sessions they feed take no test protocol, no wrap-up, no
-  // subtask pipeline.
+  // subtask pipeline. idleMs and mode ride on every site per the ruled
+  // merge (the probe interval follows the configured idleTime; mode reaches
+  // only the renderers that take one, and the handover renderer takes
+  // none).
   const bypass: Opts = {
     agent: ctx.agentName,
     dir: ctx.directory,
@@ -347,15 +351,12 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
     permission: ctx.opts.permission,
     interactive: ctx.repl,
     server: ctx.server,
+    idleMs: ctx.opts.idleMs,
     routing: ctx.routing,
     router: ctx.router,
     git: ctx.git,
+    mode: ctx.opts.mode,
   }
-  // Compatibility branch, removed by the ruled merge: the handover
-  // distillation literal is the one bypass site that does not carry mode
-  // (the handover renderer takes none; the merge adds it — inert there —
-  // together with idleMs for every site).
-  if (site.site !== "handover") bypass.mode = ctx.opts.mode
   return bypass
 }
 
