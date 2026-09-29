@@ -1,0 +1,44 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] wall hint: write the handover document"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 80.0k/100.0k tokens (80%)",
+    "⚠ context used 80.0k tokens reached the wall 80.0k; inserting the handover hint",
+    "⚠ steer dispatch failed: promptAsync failed"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 80,
+    "used": 80000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "hinted": true,
+    "wall": 80000,
+    "blocked": {
+      "type": "blocked",
+      "question": "steer dispatch failed (handover hint); cannot continue the session, see the log."
+    }
+  }
+}

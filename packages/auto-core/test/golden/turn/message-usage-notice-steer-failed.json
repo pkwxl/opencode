@@ -1,0 +1,43 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "note-info used=45.0k pct=56 wall=80.0k"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 45.0k/100.0k tokens (45%)",
+    "• context used 45.0k tokens (56% of the wall 80.0k); steering a usage notice",
+    "⚠ steer dispatch failed: promptAsync failed"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 45,
+    "used": 45000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "wall": 80000,
+    "blocked": {
+      "type": "blocked",
+      "question": "steer dispatch failed (usage notice); cannot continue the session, see the log."
+    }
+  }
+}

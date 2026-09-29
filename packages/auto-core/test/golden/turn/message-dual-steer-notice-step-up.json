@@ -1,0 +1,70 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "note-info used=45.0k pct=56 wall=80.0k",
+          "model": "prov/base"
+        }
+      ]
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "note-winddown used=70.0k pct=88 wall=80.0k",
+          "model": "prov/base"
+        }
+      ]
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Context note: this session's context reached the step-up point of its current model prov/base; from the next provider turn on, the session runs on prov/wide (same session, same history, shared prompt cache, larger context window). Keep working exactly where you left off; nothing else changes.",
+          "model": "prov/wide"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 45.0k/100.0k tokens (45%)",
+    "• context used 45.0k tokens (56% of the wall 80.0k); steering a usage notice",
+    "  context: 70.0k/100.0k tokens (70%)",
+    "• context used 70.0k tokens (88% of the wall 80.0k); steering a usage notice",
+    "⇡ T-001 context 70.0k reached the step-up point of big (prov/base); continuing the same session on prov/wide",
+    "  context: 90.0k/200.0k tokens (45%)",
+    "done after the dual steer"
+  ],
+  "watch": {
+    "lastText": "done after the dual steer",
+    "pct": 45,
+    "used": 90000,
+    "limit": 200000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "wall": 128000,
+    "steppedUp": {
+      "step": 1,
+      "model": "prov/wide"
+    },
+    "error": "",
+    "testHandover": false
+  }
+}

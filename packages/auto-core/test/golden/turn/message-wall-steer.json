@@ -1,0 +1,45 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] wall hint: write the handover document"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 30.0k/100.0k tokens (30%)",
+    "  context: 80.0k/100.0k tokens (80%)",
+    "⚠ context used 80.0k tokens reached the wall 80.0k; inserting the handover hint",
+    "  context: 85.0k/100.0k tokens (85%)",
+    "done past the wall",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "done past the wall",
+    "pct": 85,
+    "used": 85000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "hinted": true,
+    "wall": 80000,
+    "error": "",
+    "testHandover": false
+  }
+}

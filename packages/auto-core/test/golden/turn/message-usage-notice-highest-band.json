@@ -1,0 +1,44 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "note-winddown used=70.0k pct=88 wall=80.0k"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 30.0k/100.0k tokens (30%)",
+    "  context: 70.0k/100.0k tokens (70%)",
+    "• context used 70.0k tokens (88% of the wall 80.0k); steering a usage notice",
+    "  context: 75.0k/100.0k tokens (75%)",
+    "done after the notice",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "done after the notice",
+    "pct": 75,
+    "used": 75000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "wall": 80000,
+    "error": "",
+    "testHandover": false
+  }
+}

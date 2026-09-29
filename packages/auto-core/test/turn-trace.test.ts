@@ -26,9 +26,26 @@ import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
 import type { SteerContext } from "../src/model-step"
 import { createStuckTracker } from "../src/stuck"
+import type { Steer } from "../src/testrun"
 import { watch } from "../src/watch"
 import { ev } from "./fixtures/agent"
 import { compareTrace, runScenario, TURN_EPOCH, turnEntry, until, type TurnScenario } from "./fixtures/turn-trace"
+
+// The steer literal the message-family scenarios share: the 2×64k budget
+// against the fake's 100.0k window gives an 80.0k effective wall
+// (steerWall clamps the budget to 80% of the window), so the 0.5 band sits
+// at 40.0k and the 0.85 band at 68.0k. The note texts carry the literal
+// {{used}}/{{pct}}/{{wall}} slots that fillUsageNote resolves at send time.
+function usageSteer(): Steer {
+  return {
+    limit: 128_000,
+    text: "[DRIVER] wall hint: write the handover document",
+    notes: [
+      { at: 0.5, text: "note-info used={{used}} pct={{pct}} wall={{wall}}" },
+      { at: 0.85, text: "note-winddown used={{used}} pct={{pct}} wall={{wall}}" },
+    ],
+  }
+}
 
 const scenarios: TurnScenario[] = [
   // The smoke trace: the plainest happy path — one completed assistant
@@ -330,6 +347,215 @@ const scenarios: TurnScenario[] = [
         undefined,
         createStuckTracker(),
       ),
+  },
+
+  // —— The `message` row (plans/0061 §4.5) ——
+  // Same race standing as the part/limit family: no settle source exists
+  // (no classifier wiring, and the queued probe timer is never fired), so
+  // neither A-3 race materializes and no pins or exclusions are declared.
+  // The holds below gate post-steer event arrivals — the §4.4 queue
+  // discipline (external inputs run to completion), not a race pin.
+
+  // `message` row, transcript cell: onModel fires once, on the first
+  // message carrying a model (here a user message — the model the server
+  // resolved for the turn) and never again; an incomplete assistant
+  // message and a re-sent completed one (same id, deduped by `seen`) pass
+  // the guard but not the filter, so neither is a measurement point (the
+  // re-sent 2000 updates the source's figure yet the turn's used stays at
+  // the last measurement). lastMessage tracks every message of the session
+  // (its observable reader is the test protocol's freeze record, S08's
+  // batch). onModel is neither an AgentClient call nor a log line, so the
+  // firing is asserted inside the run, as onLimit was.
+  {
+    id: "message-transcript-filter",
+    kinds: ["message", "part", "idle"],
+    run: async (h) => {
+      const reported: string[] = []
+      const result = await watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "u1", undefined, { role: "user", model: "prov/resolved" }),
+          ev.message("s", "m1", 5000, { completed: false }),
+          ev.message("s", "m2", 1000),
+          ev.message("s", "m2", 2000),
+          ev.text("s", "t1", "done: the transcript turn"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (model) => reported.push(model),
+      )
+      expect(reported, "onModel fires once, on the first message carrying a model").toEqual(["prov/resolved"])
+      return result
+    },
+  },
+
+  // `message` row, usage cell (the measurement vlog over
+  // client.contextLimits): a message naming a model with a known window
+  // measures with limit and pct; one naming an unknown model id loses the
+  // window (limit stays undefined, pct records 100, the line carries no
+  // `/…`); one naming no model at all (a synthetic error message) runs
+  // under the window already in effect. contextLimits is fetched once, at
+  // the first measurement.
+  {
+    id: "message-measurement-window",
+    kinds: ["message", "part", "idle"],
+    run: async (h) =>
+      watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          ev.message("s", "m2", 2000, { model: "prov/unknown" }),
+          ev.message("s", "m3", 3000, { model: undefined }),
+          ev.text("s", "t1", "done: the measurement turn"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      ),
+  },
+
+  // `message` row, usage cell (the hard wall): a measurement at the
+  // effective wall (80.0k = the budget clamped to 80% of the 100.0k
+  // window) sends the one hard-wall steer — the ⚠ … reached the wall
+  // line, the steer call, both notice bands spent with it — and the turn
+  // continues to a natural settle; a later measurement past the wall
+  // sends nothing again (steerSent).
+  {
+    id: "message-wall-steer",
+    kinds: ["message", "part", "idle"],
+    run: async (h) => {
+      const afterWall = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 30_000),
+          ev.message("s", "m2", 80_000),
+          { hold: afterWall.promise },
+          ev.message("s", "m3", 85_000),
+          ev.text("s", "t1", "done past the wall"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        usageSteer(),
+      )
+      await until(() => h.agent.argsOf("promptAsync").length >= 1, "the hard-wall steer")
+      afterWall.release()
+      return done
+    },
+  },
+
+  // `message` row, usage cell (the milestone notices): a jump crossing
+  // two bands sends only the highest new one — the winddown note of the
+  // 0.85 band, its figure slots filled at send time — and the crossed
+  // lower band counts as spent, so a later measurement steers nothing.
+  {
+    id: "message-usage-notice-highest-band",
+    kinds: ["message", "part", "idle"],
+    run: async (h) => {
+      const afterNotice = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 30_000),
+          ev.message("s", "m2", 70_000),
+          { hold: afterNotice.promise },
+          ev.message("s", "m3", 75_000),
+          ev.text("s", "t1", "done after the notice"),
+          ev.step("s", "stp1"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        usageSteer(),
+      )
+      await until(() => h.agent.argsOf("promptAsync").length >= 1, "the usage notice")
+      afterNotice.release()
+      return done
+    },
+  },
+
+  // The dual steer at one measurement point (the plan's named scenario;
+  // `message` row, usage + stepUp cells): over a registry SteerContext
+  // with a `wider` step, a first measurement crossing the 0.5 band sends
+  // the info notice (naming the base id); a later measurement crossing
+  // the 0.85 band and the step-up point (52.0k of the 100.0k window)
+  // sends both steers from the one measurement — the winddown notice
+  // first (notices do not suppress the step-up check), then the ⇡ line
+  // and the step-up steer naming the next step id, steppedUp recorded.
+  // The next measurement runs on the wider id's 200.0k window: the wall
+  // recomputes to 128.0k and nothing fires.
+  {
+    id: "message-dual-steer-notice-step-up",
+    kinds: ["message", "part", "idle"],
+    agent: { limits: { "prov/base": 100_000, "prov/wide": 200_000 } },
+    run: async (h) => {
+      const steerContext: SteerContext = {
+        name: "big",
+        entry: turnEntry("big", "prov/base", { wider: ["prov/wide"] }),
+        step: 0,
+        model: "prov/base",
+        label: "T-001",
+      }
+      const afterNotice = h.gate()
+      const afterDual = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 45_000, { model: "prov/base" }),
+          { hold: afterNotice.promise },
+          ev.message("s", "m2", 70_000, { model: "prov/base" }),
+          { hold: afterDual.promise },
+          ev.message("s", "m3", 90_000, { model: "prov/wide" }),
+          ev.text("s", "t1", "done after the dual steer"),
+          ev.idle("s"),
+        ]),
+        h.opts,
+        usageSteer(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        steerContext,
+      )
+      await until(() => h.agent.argsOf("promptAsync").length >= 1, "the 0.5-band notice")
+      afterNotice.release()
+      await until(() => h.agent.argsOf("promptAsync").length >= 3, "the notice and the step-up of the dual measurement")
+      afterDual.release()
+      return done
+    },
+  },
+
+  // The steer-dispatch-failed blocked exit at the hard wall (the fixed
+  // handover-hint question text): the wall measurement logs the ⚠ steer
+  // dispatch failed line and settles blocked, the bands spent and the
+  // hint marked sent in the snapshot.
+  {
+    id: "message-wall-steer-failed",
+    kinds: ["message", "part", "idle"],
+    agent: { fail: { promptAsync: undefined } },
+    run: async (h) =>
+      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 80_000)]), h.opts, usageSteer()),
+  },
+
+  // The steer-dispatch-failed blocked exit at a usage notice (the fixed
+  // usage-notice question text): the 0.5-band measurement logs the ⚠
+  // steer dispatch failed line and settles blocked; no hint was sent.
+  {
+    id: "message-usage-notice-steer-failed",
+    kinds: ["message", "part", "idle"],
+    agent: { fail: { promptAsync: undefined } },
+    run: async (h) =>
+      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 45_000)]), h.opts, usageSteer()),
   },
 ]
 
