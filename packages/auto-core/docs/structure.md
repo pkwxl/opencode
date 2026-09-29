@@ -82,7 +82,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Run entry | `runAll`: preflight, agent start, interactive input, Ctrl+C handling, exit codes | `src/loop.ts` |
-| Preflight | Prompt library, agent-contract check, model registry (load, validation, reference check, project-layer git check, per-profile bins, loopback proxy warning), stats, read-only guard, handover restore, retired-`CURRENT.md` cleanup, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` (0054, 0055) |
+| Preflight | Prompt library, agent-contract check, model registry (load, validation, reference check, project-layer git check, per-profile bins, loopback proxy warning), stats, read-only guard, handover restore, retired-`CURRENT.md` cleanup, clean gate, housekeeping commit; builds the run's services holder (clock, router, control, git — the git member installs the commit side's seam, production by default); `RunAllOpts` (no commit switch: committing is always on, only dryrun and the double idle it) | `src/loop-preflight.ts` (0054, 0055, 0061 C6) |
 | Phase loop | Phase handover, phase routing; plan's stop condition (`stopBefore`) | `src/loop-phase.ts` (0006, 0047, 0053) |
 | Phase planning | The one planner: phased and m-mode planning sessions, their plan-review pause, and the append step `appendPlan` (snapshot → reset → collect, stale-handover removal); the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Planning input | A phase's `plan-input.md`: read, persist, and commit before the planning unit | `src/plan-input.ts` (0053 D9) |
@@ -149,8 +149,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Unified commit | Recursive driver commits (nested repos first), `Auto-Stage` trailer, clean gate, SHA baseline, rollback primitives | `src/git.ts` (0021) |
-| Unit commit | Post-session commit, close-out checks, strict-resume fidelity, unit rollback | `src/unit-commit.ts` (0021, 0022) |
+| Unified commit | Recursive driver commits (nested repos first), `Auto-Stage` trailer, clean gate, SHA baseline, rollback primitives; the `GitOps` seam type — the run's git service, whose production instance delegates to these functions and whose no-commit double is what tests install where committing must idle (the retired `commit: false` path's replacement) | `src/git.ts`, `src/git-ops.ts` (0021, 0061 C6) |
+| Unit commit | Post-session commit, close-out checks, strict-resume fidelity (activated only when the git service's `records` marker is true — never under the no-commit double), unit rollback; the session close-out `afterSession` with its marker collection and the git service's two instances live in the seam's home `src/git-ops.ts` | `src/unit-commit.ts`, `src/git-ops.ts` (0021, 0022, 0061 C6) |
 | Driver scripts | `tmp/test.sh` request marker, output capture, watchdog | `src/script.ts` |
 | Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`: 2×cap raised to a quarter of a large window, capped at 80% of it) (no session imports) | `src/testrun.ts` (0023, 0056, 0059 D6) |
 | .gitignore | Driver work-directory entries | `src/gitignore.ts` |
