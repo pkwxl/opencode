@@ -289,18 +289,26 @@ export async function runTurn(args: {
   // other inputs on their kind.
   const rowOf = (input: TurnInput): readonly ArbitrationRow[] => (input.kind === "event" ? table[input.event.type] : table[input.kind])
 
-  // Runs one row. The first consumed or settle advice ends the input; a
-  // synthetic input reaches only the cells declared concurrent. The roster
-  // pairs each concern with its own slice by construction — the dispatch
-  // reads that pairing back through the key union, which the compiler
-  // cannot see, hence the one cast.
-  const runRow = async (input: TurnInput, origin: "external" | "synthetic"): Promise<Settle | undefined> => {
+  // Runs one row. A settle advice ends the turn; "consumed" stops the input
+  // with no settle (later cells do not run — the row was stopped, so the
+  // spine's own terminal does not apply: an idle that steered and continues
+  // the turn answers consumed, today's `continue`); undefined means the row
+  // ran out with every cell passing. A synthetic input reaches only the
+  // cells declared concurrent. The roster pairs each concern with its own
+  // slice by construction — the dispatch reads that pairing back through the
+  // key union, which the compiler cannot see, hence the one cast.
+  const runRow = async (input: TurnInput, origin: "external" | "synthetic"): Promise<Settle | "consumed" | undefined> => {
     const quiet = origin === "external" && input.kind === "event" && input.event.type === "idle"
+    // One audited wrapper for the input's whole row: the quiet-point flags
+    // span every cell the input visits, so a concern that steers at idle and
+    // lets the row run on trips the audit when a later cell steers again or
+    // calls a kernel fx (the table's steer-placement rule, plans/0061 §4.5).
+    const rowFx = auditedFx(origin, quiet)
     for (const cell of rowOf(input)) {
       if (origin === "synthetic" && cell.concurrent !== true) continue
       const concern = concerns[cell.concern] as Concern<SliceKey>
-      const advice: Advice = await concern.handle(input, state[cell.concern], viewFor(cell.concern), auditedFx(origin, quiet), ctx)
-      if (advice === "consumed") return undefined
+      const advice: Advice = await concern.handle(input, state[cell.concern], viewFor(cell.concern), rowFx, ctx)
+      if (advice === "consumed") return "consumed"
       if (advice !== "pass") return advice.settle
     }
     return undefined
@@ -314,7 +322,11 @@ export async function runTurn(args: {
     if (input.kind === "stream-end") return { kind: "interrupted" }
     return undefined
   }
-  const runExternal = async (input: TurnInput): Promise<Settle | undefined> => (await runRow(input, "external")) ?? spineSettle(input)
+  const runExternal = async (input: TurnInput): Promise<Settle | undefined> => {
+    const outcome = await runRow(input, "external")
+    if (outcome === "consumed") return undefined
+    return outcome ?? spineSettle(input)
+  }
 
   // The held settle of a synthetic input, and the trip that preempts the
   // wrapper's wait. Emissions past the wrapper's finish are dropped —
@@ -330,9 +342,9 @@ export async function runTurn(args: {
     // An audit throw here rejects the chain — an unhandled rejection, as
     // loud as the programming error it is.
     emissions = emissions.then(async () => {
-      const settle = await runRow(input, "synthetic")
-      if (settle !== undefined && held === undefined) {
-        held = settle
+      const outcome = await runRow(input, "synthetic")
+      if (outcome !== undefined && outcome !== "consumed" && held === undefined) {
+        held = outcome
         trip()
       }
     })
