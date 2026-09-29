@@ -168,6 +168,20 @@ export async function fireProbe(clock: ScenarioClock): Promise<void> {
   await flush()
 }
 
+// Pump microtasks until the condition holds: the deterministic stand-in for
+// "wait until the turn reached this point" — the condition reads the fake's
+// call record (or any other trace-observable state), which only the turn
+// itself advances, and everything an in-memory scenario awaits resolves in
+// microtasks (no real timers anywhere). Throws rather than hanging when the
+// turn never gets there.
+export async function until(cond: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 10_000; i++) {
+    if (cond()) return
+    await Promise.resolve()
+  }
+  throw new Error(`until: ${what} never happened`)
+}
+
 // ---------------------------------------------------------------------------
 // Gates: releasable one-shot promises every pinning construction uses
 // ---------------------------------------------------------------------------

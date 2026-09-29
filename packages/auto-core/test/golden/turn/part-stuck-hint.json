@@ -1,0 +1,45 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Loop detected: the tool read has now returned exactly the same result 4 times for the same arguments.\n\n- Tool: read\n- Arguments: {\"path\":\"/a.ts\"}\n- Output: the same contents\n\nRepeating the same action will not produce a different result; this route is a dead end.\nStop and check your premises before acting again: do the path and the file really exist? Is the file's current content what you believe it to be (read it before changing it)? Are the command, the arguments and the dependencies usable? Then switch means — use another tool, locate things another way (search by content rather than by line number), split a large change into small steps, or supply the missing precondition first. Do not repeat the same call with the same arguments.\n"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "  tool read: read",
+    "  tool read: read",
+    "  tool read: read",
+    "  tool read: read",
+    "⚠ repetitive action detected: read has 4 consecutive identical calls with identical results; inserting a hint (level 1/3)",
+    "done after the hint",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "done after the hint",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}

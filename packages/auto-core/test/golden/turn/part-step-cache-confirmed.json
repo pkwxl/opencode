@@ -1,0 +1,46 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Context note: this session's context reached the step-up point of its current model prov/base; from the next provider turn on, the session runs on prov/wide (same session, same history, shared prompt cache, larger context window). Keep working exactly where you left off; nothing else changes.",
+          "model": "prov/wide"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 60.0k tokens",
+    "⇡ T-001 context 60.0k reached the step-up point of big (prov/base); continuing the same session on prov/wide",
+    "✓ big: the wider step read 40.0k tokens from the shared prompt cache",
+    "  step finish (stop): input 200 / output 10 tokens",
+    "done on the wider id"
+  ],
+  "watch": {
+    "lastText": "done on the wider id",
+    "pct": 100,
+    "used": 60000,
+    "usage": {
+      "input": 200,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 40000,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "steppedUp": {
+      "step": 1,
+      "model": "prov/wide"
+    },
+    "error": "",
+    "testHandover": false
+  }
+}

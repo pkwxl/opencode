@@ -1,0 +1,59 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Context note: this session's context reached the step-up point of its current model prov/base; from the next provider turn on, the session runs on prov/wide (same session, same history, shared prompt cache, larger context window). Keep working exactly where you left off; nothing else changes.",
+          "model": "prov/wide"
+        }
+      ]
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] Context note: this session's context reached the step-up point of its current model prov/wide; from the next provider turn on, the session runs on prov/wider (same session, same history, shared prompt cache, larger context window). Keep working exactly where you left off; nothing else changes.",
+          "model": "prov/wider"
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 60.0k tokens",
+    "⇡ T-001 context 60.0k reached the step-up point of big (prov/base); continuing the same session on prov/wide",
+    "⚠ big: the first step on the wider id wrote 35.0k tokens of cache and read 1000 — the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids",
+    "  step finish (stop): input 200 / output 10 tokens",
+    "  context: 160.0k tokens",
+    "⇡ T-001 context 160.0k reached the step-up point of big (prov/wide); continuing the same session on prov/wider",
+    "  step finish (stop): input 300 / output 10 tokens",
+    "done on the widest id"
+  ],
+  "watch": {
+    "lastText": "done on the widest id",
+    "pct": 100,
+    "used": 160000,
+    "usage": {
+      "input": 500,
+      "output": 20,
+      "reasoning": 0,
+      "cacheRead": 6000,
+      "cacheWrite": 125000,
+      "cost": 0.02,
+      "steps": 2
+    },
+    "resolves": [],
+    "steppedUp": {
+      "step": 2,
+      "model": "prov/wider"
+    },
+    "error": "",
+    "testHandover": false
+  }
+}

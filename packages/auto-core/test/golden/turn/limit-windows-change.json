@@ -1,0 +1,33 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "ℹ usage windows (session s): 5h 40% used, resets 2026-09-29T05:00:00.000Z",
+    "⚠ a usage window is spent (session s): 5h 100% used, resets 2026-09-29T05:00:00.000Z",
+    "  context: 1000/100.0k tokens (1%)",
+    "done: the windows turn",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "done: the windows turn",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": false
+  }
+}
