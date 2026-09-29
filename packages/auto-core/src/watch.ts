@@ -15,30 +15,33 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the concern roster — the
 // extracted concerns in src/engine/concerns/ (guard, transcript, windows,
-// stuck; each owning its slice's construction) beside the one `remainder`
-// concern that still holds the not-yet-extracted turn code — and hands the
-// stream to the spine (src/engine/spine.ts), which owns the input queue, the
-// arbitration dispatch, the fx audit and the trip-wired stream wrapper. The
-// remainder serves the input kinds whose arbitration row still holds one of
-// its cells: the shared `handle` answers at the row's first such cell (its
-// cells are contiguous in every row), routing the input to its entry of the
-// per-kind handler map — the loop body, cut one branch per input kind, minus
-// what the extracted concerns own. The probe timer and the classifier answer
-// arrive as synthetic inputs from src/engine/sources.ts; all of the body's
-// I/O goes through the production fx (src/engine/fx.ts) under the spine's
-// audit. What remains here besides the remainder is the mapping of the
-// spine's settle and the slices back into the Watch result each old exit
-// returned.
+// stuck, questions; each owning its slice's construction) beside the one
+// `remainder` concern that still holds the not-yet-extracted turn code — and
+// hands the stream to the spine (src/engine/spine.ts), which owns the input
+// queue, the arbitration dispatch, the fx audit and the trip-wired stream
+// wrapper. The remainder serves the input kinds whose arbitration row still
+// holds one of its cells: the shared `handle` answers at the row's first such
+// cell (its cells are contiguous in every row), routing the input to its
+// entry of the per-kind handler map — the loop body, cut one branch per input
+// kind, minus what the extracted concerns own (the guard's resets and
+// twin-idle stop, the transcript's echo/billing/report, the windows' limit
+// row, the stuck hint, the questions' question and permission rows). The
+// probe timer and the classifier answer arrive as synthetic inputs from
+// src/engine/sources.ts; all of the body's I/O goes through the production fx
+// (src/engine/fx.ts) under the spine's audit. What remains here besides the
+// remainder is the mapping of the spine's settle and the slices back into the
+// Watch result each old exit returned.
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
 import { agentGaveUp, classifySessionError, retryPolicyOf, statedInWording, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk } from "./classify"
-import { autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
+import { commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete } from "./handover"
 import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
 import { guardConcern } from "./engine/concerns/guard"
+import { questionsConcern } from "./engine/concerns/questions"
 import { stuckConcern } from "./engine/concerns/stuck"
 import { transcriptConcern } from "./engine/concerns/transcript"
 import { windowsConcern } from "./engine/concerns/windows"
@@ -48,8 +51,7 @@ import { runTurn, TURN_ARBITRATION, type ConcernRoster } from "./engine/spine"
 import { formatDuration } from "./log"
 import type { Opts } from "./opts"
 import { renderStepUp, renderTestWrapup, renderTestResult } from "./prompt"
-import { compactText, sameIssue } from "./resolve"
-import { formatTokens, isApproval } from "./session-api"
+import { formatTokens } from "./session-api"
 import { enabledSteps, stepId, stepUpPoint, type SteerContext } from "./model-step"
 import { services } from "./services"
 import type { StuckTracker } from "./stuck"
@@ -119,16 +121,14 @@ type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx, view: 
 
 // The input kinds the remainder still serves — those whose arbitration row
 // holds a not-yet-extracted cell (limit belongs to the windows concern alone,
-// stream-end to the spine's own terminal). The arbitration suite derives the
-// same set from the table and the install's delegation set and pins this list
-// to it. The map cannot drift from the list: HandlerMap is a total record
-// over ServedKind, so a missing handler is a type error and an extra one an
-// excess-property error.
+// question and permission to the questions concern, stream-end to the spine's
+// own terminal). The arbitration suite derives the same set from the table and
+// the install's delegation set and pins this list to it. The map cannot drift
+// from the list: HandlerMap is a total record over ServedKind, so a missing
+// handler is a type error and an extra one an excess-property error.
 export const HANDLER_KINDS = [
   "part",
   "message",
-  "question",
-  "permission",
   "error",
   "retry",
   "idle",
@@ -143,7 +143,7 @@ type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 // its removal. Typed as the union's source of truth — the install below and
 // the cell routing both read it, so a stale entry is a type error, not a
 // silent mis-route.
-export const REMAINDER_KEYS = ["questions", "failure", "recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export const REMAINDER_KEYS = ["failure", "recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
 export type RemainderKey = (typeof REMAINDER_KEYS)[number]
 // The remainder's slices, pre-created by watch() (the extracted concerns own
 // their slices' construction in their own files): the fx's steer-model getter
@@ -159,7 +159,7 @@ export const turnConcerns = (state: RemainderState, handle: Concern<SliceKey>["h
   transcript: transcriptConcern,
   windows: windowsConcern,
   stuck: stuckConcern,
-  questions: { name: "questions", initial: () => state.questions, handle },
+  questions: questionsConcern,
   failure: { name: "failure", initial: () => state.failure, handle },
   recovery: { name: "recovery", initial: () => state.recovery, handle },
   liveness: { name: "liveness", initial: () => state.liveness, handle },
@@ -203,7 +203,6 @@ export async function watch(
   // §5.2): attempt records it for the chain's account (§8).
   onLimit?: (event: Extract<AgentEvent, { type: "limit" }>) => void,
 ): Promise<Watch> {
-  const waitAnswer = opts.waitAnswer ?? 0
   // The run's services (the installed holder): every time read and every
   // timer of this turn goes through its clock — a run on a steered clock
   // observes a steered timeline, and the engine never reads the wall clock
@@ -266,10 +265,10 @@ export async function watch(
   // the fx's steer-model getter and the settle→Watch mapping below hold the
   // same live objects the roster's initials hand back; the body reads and
   // writes them through these aliases exactly where the locals stood. The
-  // extracted concerns' slices (guard, transcript, windows, stuck) are built
-  // by their own initials inside the spine and read through the view.
+  // extracted concerns' slices (guard, transcript, windows, stuck, questions)
+  // are built by their own initials inside the spine and read through the
+  // view.
   const remainderState: RemainderState = {
-    questions: { autoAnswered: [], resolves: [] },
     failure: { error: "", retrying: false },
     recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
@@ -277,7 +276,7 @@ export async function watch(
     stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { questions, failure, recovery, liveness, usage, test: testState } = remainderState
+  const { failure, recovery, liveness, usage, test: testState } = remainderState
   // The context-step slice (the old steerModel/stepNow/reached locals).
   const steps = remainderState.stepUp
 
@@ -547,11 +546,12 @@ export async function watch(
   // cut into one handler per input kind the remainder still serves. Each
   // handler reproduces its old branch's statements — minus what the extracted
   // concerns own (the guard's resets and twin-idle stop, the transcript's
-  // echo/billing/report, the windows' limit row, the stuck hint) — in its
-  // arbitration row's order, and reads/writes its own slices through the
-  // closure aliases exactly where the branch did; other concerns' slices are
-  // read through the view. The handler runs at the row's first remainder cell
-  // and answers for the whole contiguous segment. ——
+  // echo/billing/report, the windows' limit row, the stuck hint, the
+  // questions' question and permission rows) — in its arbitration row's
+  // order, and reads/writes its own slices through the closure aliases
+  // exactly where the branch did; other concerns' slices are read through
+  // the view. The handler runs at the row's first remainder cell and answers
+  // for the whole contiguous segment. ——
   const handlers: HandlerMap = {
     // —— Synthetic inputs (their rows are the concurrent ones: they run
     // beside an in-flight fx call, so slice writes and log/vlog only — the
@@ -724,138 +724,11 @@ export async function watch(
       }
       return "consumed"
     },
-    // A question of the session (row: questions — every question path of
-    // today; may settle blocked after reject and abort).
-    question: async (input, fx) => {
-      const event = input.event
-      const text = event.questions.join("\n")
-      // The dryrun preflight session auto-answers everything, never blocking
-      // on a question.
-      const permission = opts.dryrun ? false : /\bpermission\b/i.test(text)
-      const repeated = questions.autoAnswered.some((prev) => sameIssue(prev, text))
-      // plan's sessions (opts.humanQuestions): a non-permission question is a
-      // decision for the human — plan runs for human review before execution,
-      // and the driver waits for the human answer with no timeout (-i's
-      // resident input line or stdin) and never proxy-answers (no
-      // AUTO-RESOLVE); only an unanswerable human (closed input channel) or a
-      // repeat of the same question blocks, handing it to the human.
-      if (!opts.dryrun && opts.humanQuestions && !permission) {
-        if (!repeated) {
-          questions.autoAnswered.push(text)
-          fx.log(`❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\n${text}`)
-          const human = await fx.askHuman(undefined, "no timeout and no automatic answer under plan")
-          if (human) {
-            fx.log(`→ human answer: ${human}`)
-            await fx.replyQuestion(event.request, event.questions.map(() => [human]))
-            return "consumed"
-          }
-        }
-        await fx.rejectQuestion(event.request)
-        await fx.abort()
-        return blockedAdvice(
-          repeated
-            ? `asked again about the same question after the human's answer; handle it manually outside the session, then re-run:\n${text}`
-            : `the session asked for a human decision, but no answer could be received (the input channel is closed); answer it outside the session, then re-run:\n${text}`,
-        )
-      }
-      // With --wait-answer both permission and non-permission questions first
-      // wait for a human reply; on timeout both fall back to autoAnswer and
-      // the AI decides autonomously and continues; only a permission question
-      // under the default (no --wait-answer) blocks outright (unattended, the
-      // driver cannot decide authorization in the human's stead).
-      if (!repeated && (!permission || waitAnswer > 0)) {
-        questions.autoAnswered.push(text)
-        fx.log(`❓ received a ${permission ? "permission" : "non-permission"} question:\n${text}`)
-        const human = waitAnswer > 0 ? await fx.askHuman(waitAnswer, "auto-answered on timeout") : undefined
-        const ask = autoSwitches().ask
-        const fallback = autoAnswer(ask)
-        const reply = human ?? fallback
-        // Proxy-answer observation (auto-resolve H1,
-        // plans/0020-auto-resolve-design.md §G/§H-①): only fallback auto
-        // answers count — a human reply is a real person's decision, and the
-        // dryrun preflight produces no engineering decisions. On fallback the
-        // old single-line `→ auto answer: <long text>` form is replaced by a
-        // two-line highlighted one (the full answer text demoted to verbose
-        // logging), making "the driver decided for the user" visible at a
-        // glance and countable afterwards in the session log.
-        if (human) fx.log(`→ human answer: ${human}`)
-        else if (opts.dryrun) fx.log(`→ auto answer: ${fallback}`)
-        else {
-          questions.resolves.push({ at: clock.now(), question: text, session: sessionID })
-          fx.log(`⚑ auto-answer (AUTO-RESOLVE) #${questions.resolves.length}: ${compactText(text)}`)
-          fx.log(`  → answered; ${ask ? "the driver recorded it in full; this mode does not require the session to label it separately" : "asking the session to label the decision with AUTO-RESOLVE"}`)
-          fx.vlog(`  answer content: ${fallback}`)
-        }
-        await fx.replyQuestion(event.request, event.questions.map(() => [reply]))
-        return "consumed"
-      }
-      await fx.rejectQuestion(event.request)
-      await fx.abort()
-      return blockedAdvice(permission ? text : `asked again about the same question after auto-answer; handle it manually outside the session, then re-run:\n${text}`)
-    },
-    // A permission request of the session (row: questions — the dryrun deny,
-    // auto-allow, the ask-* modes; ask-fail settles blocked after abort).
-    permission: async (input, fx) => {
-      const event = input.event
-      // dryrun preflight: auto-deny without interrupting the session, so the
-      // AI records the blocked item and goes on probing the next one.
-      if (opts.dryrun) {
-        fx.log(`🔐 preflight probe denied (recorded in the report): ${event.permission} (${event.patterns.join(", ")})`)
-        await fx.replyPermission(event.request, "reject")
-        return "consumed"
-      }
-      const desc = `${event.permission} (${event.patterns.join(", ")})`
-      const mode = opts.permission ?? "ask-deny"
-      // auto-allow: no waiting for a human, auto-approve immediately
-      // ("always" lets this request through).
-      if (mode === "auto-allow") {
-        fx.log(`🔐 permission request received; auto-allowed via --permission auto-allow: ${desc}`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      // ask-*: first wait for a human (--wait-answer minutes; unset means no
-      // wait, i.e. treated as a timeout). An answer of allow/yes/y and the
-      // like confirms the authorization ("always" lets it through); any other
-      // explicit answer denies the permission without interrupting the
-      // session, and the AI works around it and continues; on timeout the
-      // mode's fallback applies — ask-allow auto-approves, ask-deny
-      // auto-denies but the session continues, ask-fail denies and exits the
-      // run.
-      let human: string | undefined
-      if (waitAnswer > 0) {
-        fx.log(`🔐 permission request received: ${desc}`)
-        human = await fx.askHuman(
-          waitAnswer,
-          `enter allow/yes/y to approve; any other answer denies the permission and continues; on timeout handled as --permission ${mode}`,
-        )
-      } else {
-        fx.log(`🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ${mode}): ${desc}`)
-      }
-      if (human && isApproval(human)) {
-        fx.log(`→ human allowed: ${human} (always)`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      if (human) {
-        fx.log(`→ human denied: ${human} (permission denied; the AI continues without it)`)
-        await fx.replyPermission(event.request, "reject")
-        return "consumed"
-      }
-      if (mode === "ask-allow") {
-        fx.log(`→ wait timed out; --permission ask-allow auto-allowed: ${desc}`)
-        await fx.replyPermission(event.request, "always")
-        return "consumed"
-      }
-      await fx.replyPermission(event.request, "reject")
-      if (mode === "ask-deny") {
-        fx.log(`→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): ${desc}`)
-        return "consumed"
-      }
-      // ask-fail: deny and exit the run (blocked halt, the question recorded
-      // in the run log).
-      await fx.abort()
-      return blockedAdvice(`permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`)
-    },
+    // A question or permission of the session is the questions concern's row
+    // alone (src/engine/concerns/questions.ts): every question path (the
+    // plan-session human policy, --wait-answer with its fallback auto-answer,
+    // the default permission-question block, the dryrun preflight) and every
+    // permission mode (the dryrun deny, auto-allow, the ask-* triad).
     // A session error (row: guard → failure → stepUp; the remainder owns the
     // last two cells).
     error: async (input, fx) => {
@@ -1042,8 +915,13 @@ export async function watch(
   // —— Mapping the settle back to the Watch result each old exit returned ——
   // The early blocked/error settles made their effects inside the handler
   // (their aborts precede the wrapper's close-out there, as they did inside
-  // the old loop); what remains is shaping the snapshot.
-  if (settle.kind === "blocked") return snapshot(view, blockedExtra)
+  // the old loop); what remains is shaping the snapshot. A blocked settle's
+  // question is the Watch blocked field's only varying content: the extracted
+  // concerns' blocked exits (the questions concern's blocks) carry it in the
+  // settle itself, while the remainder's blocked exits record their extras
+  // (testHandover, testHandoverInvalid) beside the settle through
+  // blockedAdvice — the side channel, when set, is the whole extra.
+  if (settle.kind === "blocked") return snapshot(view, blockedExtra ?? { blocked: { type: "blocked", question: settle.question } })
   if (settle.kind === "error") {
     // The raised settle (a classifier answer raised the class of the
     // retrying turn, plans/0055 §7.1): the synthetic answer handler may not

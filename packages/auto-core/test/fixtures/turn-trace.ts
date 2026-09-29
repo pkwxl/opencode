@@ -464,8 +464,9 @@ export async function runScenario(scenario: TurnScenario): Promise<TurnTrace> {
   installServices(createServices({ clock: clock.clock, git: noCommitGit() }))
   // Warm the switch memo outside the capture: watch's `switches` parameter
   // defaults to the process-memoized autoSwitches(), whose first call in a
-  // process prints the startup switch listing (a vlog), and the question
-  // branch later reads the memo's `ask`. Parsing once here — with the
+  // process prints the startup switch listing (a vlog), and the turn's
+  // frozen switches — the snapshot the question paths read — carry that
+  // memo's values. Parsing once here — with the
   // ambient OPENCODE_AUTO_* layer scrubbed for the call — keeps the startup
   // listing off every trace and pins `ask` at its default, whatever the
   // surrounding shell exported (the suite's standing premise is an unset

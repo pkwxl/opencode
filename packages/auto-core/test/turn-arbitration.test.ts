@@ -288,7 +288,6 @@ describe("the remainder layer's owned slices", () => {
   // them (turnConcerns hands the objects back through the roster's
   // initials).
   const remainderState = (): RemainderState => ({
-    questions: { autoAnswered: [], resolves: [] },
     failure: { error: "", retrying: false },
     recovery: {},
     liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
@@ -298,13 +297,12 @@ describe("the remainder layer's owned slices", () => {
   })
 
   test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
-    // The real install (watch's turnConcerns): guard, transcript, windows and
-    // stuck hold their own concerns; the seven not-yet-extracted slices share
-    // the one remainder handle. Each extraction unit shrinks this list, and
-    // the layer's removal empties it.
+    // The real install (watch's turnConcerns): guard, transcript, windows,
+    // stuck and questions hold their own concerns; the six not-yet-extracted
+    // slices share the one remainder handle. Each extraction unit shrinks
+    // this list, and the layer's removal empties it.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
     expect(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle)).toEqual([
-      "questions",
       "failure",
       "recovery",
       "liveness",
@@ -319,9 +317,10 @@ describe("the remainder layer's owned slices", () => {
     // map itself is a watch() local — its handlers close over the turn's
     // state); pinned here against the table and the install's delegation set,
     // not a hand-written list — limit belongs to the windows concern alone,
-    // stream-end to the spine's own terminal. That the dispatch reaches each
-    // handler is pinned by the turn-trace suite's roster case, which fires
-    // every arbitration cell through watch's real install.
+    // question and permission to the questions concern, stream-end to the
+    // spine's own terminal. That the dispatch reaches each handler is pinned
+    // by the turn-trace suite's roster case, which fires every arbitration
+    // cell through watch's real install.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
     const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle))
     // The cast is the assertion's own claim: the table-derived kinds are the

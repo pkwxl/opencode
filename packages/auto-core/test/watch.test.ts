@@ -501,27 +501,17 @@ describe("◉ session-end two-line report (T-004): unconditional printing and om
   })
 })
 
-// ---- driver-side proxy-answer collection wiring (plans/0020-auto-resolve-design.md §G, T-005): H1..H4 ----
-// H1 observation (question.asked falls back to auto-answer) → H2 out of
-// every exit with the snapshot → H3 booking when the segment closes (fills
-// in task/phase/round/session) → H4 session close-out scan of agent
-// markers. The ledger is read back via resolvesOf; the module's own unit
-// tests live in test/resolve.test.ts.
-describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
-  async function captureLogs(fn: () => Promise<unknown>): Promise<string[]> {
-    const lines: string[] = []
-    const orig = console.log
-    console.log = (...args: unknown[]) => {
-      lines.push(args.map(String).join(" "))
-    }
-    try {
-      await fn()
-    } finally {
-      console.log = orig
-    }
-    return lines
-  }
-
+// ---- driver-side proxy-answer ledger wiring (plans/0020-auto-resolve-design.md §G, T-005) ----
+// The H1 observation — which answers count as proxy answers, the ⚑ report
+// lines, the fallback wording and the reply decisions — lives in the
+// questions concern (src/engine/concerns/questions.ts) and its suite
+// (test/turn-questions.test.ts) since the concern was extracted. What stays
+// here is the wiring the books need: H2 the resolves ride the Watch snapshot
+// out of every exit (the blocked exit included), H3 the booking when the
+// segment closes (fills in task/phase/round/session), H4 the session
+// close-out scan of agent markers. The ledger is read back via resolvesOf;
+// the module's own unit tests live in test/resolve.test.ts.
+describe("proxy-answer ledger wiring (AUTO-RESOLVE, T-005)", () => {
   // One question.asked event (a non-permission question: the text does not
   // contain "permission").
   const question = (sid: string, id: string, text: string) => ({
@@ -549,7 +539,10 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("fallback auto-answer: booked into the driver ledger (bucket identity + session id) with the ⚑ two lines; the full answer text is demoted to detail logging", async () => {
+  test("fallback auto-answer: booked into the driver ledger with the bucket identity (task/phase/round/session); the reply goes out", async () => {
+    // The ⚑ report lines, the vlog demotion and the reply content are the
+    // questions concern's mechanics — re-homed into its concern suite
+    // (test/turn-questions.test.ts) when the concern was extracted.
     // The round number takes the target directory's derived value
     // (docs/R-03 → round 3); the phase letter comes in via opts.phase.
     await mkdir(join(dir, "docs", "R-03"), { recursive: true })
@@ -560,7 +553,7 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const lines = await captureLogs(() => runSession(client, task, "prompt", { dir, phase: key("m") }, { pct: 100, used: 0, at: 0 }))
+    await runSession(client, task, "prompt", { dir, phase: key("m") }, { pct: 100, used: 0, at: 0 })
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({
@@ -571,16 +564,12 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
       session: "ses_new_1",
       question: Q1,
     })
-    expect(lines.some((l) => l.startsWith(`⚑ auto-answer (AUTO-RESOLVE) #1: ${Q1}`))).toBe(true)
-    expect(lines.some((l) => l.includes("asking the session to label the decision with AUTO-RESOLVE"))).toBe(true)
-    // The old `→ auto answer: <long text>` no longer reaches the terminal
-    // (demoted to vlog), but the reply itself is still sent.
-    expect(lines.some((l) => l.startsWith("→ auto answer"))).toBe(false)
     expect(calls.replies).toHaveLength(1)
-    expect(calls.replies[0]).toContain("AUTO-RESOLVE")
   })
 
-  test("two different questions in one turn: the count increments, two ledger entries (bucketed by the round/phase defaults)", async () => {
+  test("two different questions in one turn: two ledger entries (bucketed by the round/phase defaults)", async () => {
+    // The ⚑ counter increments — the questions concern's mechanism — is
+    // pinned in the concern suite; this case pins the booking only.
     const { client } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -589,15 +578,17 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const lines = await captureLogs(() => runSession(client, task, "prompt", { dir }, { pct: 100, used: 0, at: 0 }))
+    await runSession(client, task, "prompt", { dir }, { pct: 100, used: 0, at: 0 })
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items.map((item) => item.question)).toEqual([Q1, Q2])
     expect(items.every((item) => item.phase === "" && item.round === 1)).toBe(true)
-    expect(lines.some((l) => l.startsWith("⚑ auto-answer (AUTO-RESOLVE) #2"))).toBe(true)
   })
 
   test("a repeated question blocks (blocked exit): the first auto-answered entry is not lost; the second is not booked again", async () => {
-    const { client, calls } = fakeClient({
+    // The repeat-block decision (reject + abort + the blocked settle) is the
+    // questions concern's mechanism, pinned in its concern suite; this case
+    // pins that the blocked exit still books what happened before it.
+    const { client } = fakeClient({
       events: (sid) =>
         (async function* () {
           yield question(sid, "req_1", Q1)
@@ -605,16 +596,12 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const result = await captureLogs(async () => {
-      const outcome = await runSession(client, task, "prompt", { dir }, { pct: 100, used: 0, at: 0 })
-      expect(outcome.type).toBe("blocked")
-    })
-    expect(result.length).toBeGreaterThan(0)
-    expect(calls.rejects).toEqual(["req_2"])
+    const outcome = await runSession(client, task, "prompt", { dir }, { pct: 100, used: 0, at: 0 })
+    expect(outcome.type).toBe("blocked")
     expect(await resolvesOf(dir, "task", "T-001")).toHaveLength(1)
   })
 
-  test("a human really answered within --wait-answer: not counted as a proxy answer (a real person made that decision)", async () => {
+  test("a human really answered within --wait-answer: the answer reaches the reply through the interactive channel, and nothing is booked (a real person made that decision)", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -622,22 +609,18 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const lines = await captureLogs(() =>
-      runSession(
-        client,
-        task,
-        "prompt",
-        { dir, waitAnswer: 5, interactive: fakeInteractive("go with plan A") },
-        { pct: 100, used: 0, at: 0 },
-      ),
+    await runSession(
+      client,
+      task,
+      "prompt",
+      { dir, waitAnswer: 5, interactive: fakeInteractive("go with plan A") },
+      { pct: 100, used: 0, at: 0 },
     )
     expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
-    expect(lines.some((l) => l.startsWith("→ human answer: go with plan A"))).toBe(true)
-    expect(lines.some((l) => l.startsWith("⚑ auto-answer"))).toBe(false)
     expect(calls.replies[0]).toBe("go with plan A")
   })
 
-  test("dryrun preflight session: the auto-answer happens as usual but is not counted as a proxy answer (the preflight only probes permissions)", async () => {
+  test("dryrun preflight session: the auto-answer reply goes out, but nothing is booked (the preflight only probes permissions)", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -645,9 +628,8 @@ describe("proxy-answer collection wiring (AUTO-RESOLVE, T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const lines = await captureLogs(() => runSession(client, task, "prompt", { dir, dryrun: true }, { pct: 100, used: 0, at: 0 }))
+    await runSession(client, task, "prompt", { dir, dryrun: true }, { pct: 100, used: 0, at: 0 })
     expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
-    expect(lines.some((l) => l.startsWith("→ auto answer:"))).toBe(true)
     expect(calls.replies).toHaveLength(1)
   })
 

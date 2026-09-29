@@ -8,6 +8,7 @@
 // is involved.
 import type { AgentClient } from "../../src/agent/types"
 import type { LimitEvent, TurnContext, TurnFx, TurnState, TurnView } from "../../src/engine/contract"
+import type { Opts } from "../../src/opts"
 import { createServices, type RunServices } from "../../src/services"
 import { parseSwitches, type Switches } from "../../src/switches"
 import type { StuckTracker } from "../../src/stuck"
@@ -15,14 +16,20 @@ import { usageSource } from "../../src/usage"
 import { fakeAgent } from "./agent"
 
 // A TurnFx double: every member records and resolves trivially. `steerOk`
-// steers the steer answer, so a suite can pin the failure-ignored paths.
-export const fakeTurnFx = (over: { steerOk?: boolean } = {}): TurnFx & {
+// steers the steer answer and `human` the askHuman answer (undefined = the
+// timeout / closed-channel resolution), so a suite can pin the
+// failure-ignored paths and the human-vs-fallback decisions.
+export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): TurnFx & {
   calls: string[]
   lines: string[]
   vlogs: string[]
   steers: string[]
   models: string[]
   limits: LimitEvent[]
+  humanAsks: { timeoutMin: number | undefined; hint: string }[]
+  questionReplies: { request: string; answers: string[][] }[]
+  questionRejects: string[]
+  permissionReplies: { request: string; reply: "always" | "reject" }[]
 } => {
   const calls: string[] = []
   const lines: string[] = []
@@ -30,6 +37,10 @@ export const fakeTurnFx = (over: { steerOk?: boolean } = {}): TurnFx & {
   const steers: string[] = []
   const models: string[] = []
   const limits: LimitEvent[] = []
+  const humanAsks: { timeoutMin: number | undefined; hint: string }[] = []
+  const questionReplies: { request: string; answers: string[][] }[] = []
+  const questionRejects: string[] = []
+  const permissionReplies: { request: string; reply: "always" | "reject" }[] = []
   const rec = (name: string): void => {
     calls.push(name)
   }
@@ -40,16 +51,33 @@ export const fakeTurnFx = (over: { steerOk?: boolean } = {}): TurnFx & {
     steers,
     models,
     limits,
+    humanAsks,
+    questionReplies,
+    questionRejects,
+    permissionReplies,
     steer: async (text) => {
       rec("steer")
       steers.push(text)
       return over.steerOk ?? true
     },
-    replyQuestion: async () => rec("replyQuestion"),
-    rejectQuestion: async () => rec("rejectQuestion"),
-    replyPermission: async () => rec("replyPermission"),
+    replyQuestion: async (request, answers) => {
+      rec("replyQuestion")
+      questionReplies.push({ request, answers })
+    },
+    rejectQuestion: async (request) => {
+      rec("rejectQuestion")
+      questionRejects.push(request)
+    },
+    replyPermission: async (request, reply) => {
+      rec("replyPermission")
+      permissionReplies.push({ request, reply })
+    },
     abort: async () => rec("abort"),
-    askHuman: async () => (rec("askHuman"), undefined),
+    askHuman: async (timeoutMin, hint) => {
+      rec("askHuman")
+      humanAsks.push({ timeoutMin, hint })
+      return over.human
+    },
     contextLimits: async () => (rec("contextLimits"), new Map<string, number>()),
     readText: async () => (rec("readText"), ""),
     exists: async () => (rec("exists"), false),
@@ -79,12 +107,13 @@ export const fakeTurnFx = (over: { steerOk?: boolean } = {}): TurnFx & {
 }
 
 // A TurnContext stub: the barest type-legal context over the native fake
-// agent, with the pieces a concern may read (the stuck tracker, the switches,
-// the services — the windows concern reads the run's router) injectable.
-export const turnContext = (over: { client?: AgentClient; switches?: Switches; services?: RunServices; stuck?: StuckTracker } = {}): TurnContext => ({
+// agent, with the pieces a concern may read (the run options, the stuck
+// tracker, the switches, the services — the windows concern reads the run's
+// router) injectable.
+export const turnContext = (over: { client?: AgentClient; opts?: Opts; switches?: Switches; services?: RunServices; stuck?: StuckTracker } = {}): TurnContext => ({
   client: over.client ?? fakeAgent().client,
   sessionID: "ses_1",
-  opts: {},
+  opts: over.opts ?? {},
   switches: over.switches ?? parseSwitches({}),
   policy: { backoffCapMs: 60_000, silenceBudgetMs: 60_000, honorsRetryAfter: false, waitsOutLimit: false },
   classify: () => "unknown",
