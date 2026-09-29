@@ -149,14 +149,20 @@ const CLASSIFIED: Record<string, Domain> = {
   // attempt is its executor; the module reaches only the selection core and
   // the types below the session layer.
   "engine/dispatch": "driver",
-  // The pure ladder decision of one session prompt (plans/0061 §4.7): what
-  // the session-driving loop does with a dispatch's outcome — return,
-  // window wait, recovery, the key→model escalation, the after-ladder
-  // failover or the retry. session.ts is its executor; the module reaches
-  // only the chain types and the first-line helper below the session
-  // layer.
-  "engine/ladder": "driver",
-  "exec-session": "driver",
+   // The pure ladder decision of one session prompt (plans/0061 §4.7): what
+   // the session-driving loop does with a dispatch's outcome — return,
+   // window wait, recovery, the key→model escalation, the after-ladder
+   // failover or the retry. session.ts is its executor; the module reaches
+   // only the chain types and the first-line helper below the session
+   // layer.
+   "engine/ladder": "driver",
+   // The turn spine (plans/0061 §4.4): the single input queue of one watch
+   // turn, the arbitration dispatch over the concerns' slices, the fx audit
+   // (the queue discipline's runtime invariants) and the finalize
+   // procedure. Types-only reach: the contract module beside it; watch is
+   // its executor, so it sits directly under watch.
+   "engine/spine": "driver",
+   "exec-session": "driver",
   execute: "driver",
   exit: "driver",
   failback: "driver",
@@ -318,13 +324,17 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // fx and sources the turn consolidation adds take the slots between it
     // and watch as they land.
     "engine/contract": 3,
-    watch: 4,
-    attempt: 5,
-    session: 6,
-    artifact: 7,
-    "exec-session": 7,
-    execute: 8,
-    runner: 9,
+    // The turn spine (plans/0061 §4.4), directly under its executor: it
+    // reaches the contract module's types only. The fx and the sources the
+    // turn consolidation adds take the remaining slots under watch.
+    "engine/spine": 4,
+    watch: 5,
+    attempt: 6,
+    session: 7,
+    artifact: 8,
+    "exec-session": 8,
+    execute: 9,
+    runner: 10,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
