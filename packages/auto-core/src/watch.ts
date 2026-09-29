@@ -15,8 +15,9 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the slices and the one `remainder`
 // concern — every roster entry delegates to the single `handle` below, which
-// holds the loop body uncut (the per-input cut is a later consolidation step)
-// — and hands the stream to the spine (src/engine/spine.ts), which owns the
+// routes each input to its per-kind handler (the loop body cut one kind at a
+// time; the kinds not yet cut still share the remaining monolith) — and hands
+// the stream to the spine (src/engine/spine.ts), which owns the
 // input queue, the arbitration dispatch, the fx audit and the trip-wired
 // stream wrapper. The probe timer and the classifier answer arrive as
 // synthetic inputs from src/engine/sources.ts; all of the body's I/O goes
@@ -31,7 +32,7 @@ import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnsw
 import { autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete } from "./handover"
-import type { Advice, Concern, Settle, SliceKey, TurnContext, TurnFx, TurnState } from "./engine/contract"
+import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState } from "./engine/contract"
 import { makeTurnFx } from "./engine/fx"
 import { makeTurnSources } from "./engine/sources"
 import { runTurn, type ConcernRoster } from "./engine/spine"
@@ -96,6 +97,17 @@ function withWording(e: AgentError, now: number): AgentError {
 }
 
 const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
+
+// The per-input handler map (plans/0061 §4.5): one handler per input kind.
+// An `event` input keys on its event's own type (the spine's rowOf keying),
+// so an event handler receives its AgentEvent variant and a synthetic
+// handler its probe/answer/stream-end input. The keys are optional while
+// the cut proceeds; with every key present the map is a total record and
+// "every input kind has exactly one handler" is a compile-time fact.
+type EventInput<K extends AgentEvent["type"]> = { kind: "event"; event: Extract<AgentEvent, { type: K }> }
+type KindInput<K extends InputKind> = K extends AgentEvent["type"] ? EventInput<K> : Extract<TurnInput, { kind: K }>
+type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx) => Promise<Advice>
+type HandlerMap = { [K in InputKind]?: KindHandler<K> }
 
 export async function watch(
   client: AgentClient,
@@ -474,29 +486,26 @@ export async function watch(
     return { type: "continue" }
   }
 
-  // The remainder concern's handler (plans/0061 §4.11): today's loop body,
-  // uncut, behind the spine's input dispatch. One call handles one input
-  // from its first table cell — every roster entry delegates here, so the
-  // advice it returns at the first cell decides the input: "consumed" is the
-  // old body's `continue`, a settle is one of the old early exits, and the
-  // natural idle finish names the spine's own terminal settle directly (the
-  // row running out would produce the same settle — with every cell
-  // delegating here, the explicit form saves re-entering the body for the
-  // remaining cells).
-  // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells are this same handler), no per-input bookkeeping needed.
-  const handle: Concern<SliceKey>["handle"] = async (input, _own, _view, fx): Promise<Advice> => {
-    // —— Synthetic inputs (their rows are the concurrent ones: this runs
+  // —— The per-input handlers (plans/0061 §4.5): the loop body, cut one
+  // branch at a time into one handler per input kind. Each handler
+  // reproduces its old branch's statements in its arbitration row's order
+  // and reads/writes the slices through the closure aliases exactly where
+  // the branch did; a kind with no entry yet falls through to the monolith
+  // below (the cut's temporary compatibility layer, gone once the map is
+  // total). ——
+  const handlers: HandlerMap = {
+    // —— Synthetic inputs (their rows are the concurrent ones: they run
     // beside an in-flight fx call, so slice writes and log/vlog only — the
     // audit's (c); a settle returned here is held to the next boundary). ——
-    if (input.kind === "probe") {
-      // The liveness probe's verdict (the old scheduleProbe callback; the
-      // timer and the probeSession call are the sources'). A successful
-      // probe resets the count; PROBE_MAX_FAILURES consecutive failures
-      // judge half-open and settle the turn, which the close-out returns as
-      // a retryable session error (classified transient, riding the existing
-      // retry ladder and failover ring; a new connection forks onward). The
-      // halfOpen guard is the old callback's early return: a verdict landing
-      // after the judgment changes nothing more.
+    // The liveness probe's verdict (the old scheduleProbe callback; the
+    // timer and the probeSession call are the sources'). A successful probe
+    // resets the count; PROBE_MAX_FAILURES consecutive failures judge
+    // half-open and settle the turn, which the close-out returns as a
+    // retryable session error (classified transient, riding the existing
+    // retry ladder and failover ring; a new connection forks onward). The
+    // halfOpen guard is the old callback's early return: a verdict landing
+    // after the judgment changes nothing more.
+    probe: async (input, fx) => {
       if (liveness.halfOpen) return "consumed"
       if (input.ok) {
         liveness.probeFailures = 0
@@ -513,14 +522,17 @@ export async function watch(
         }
       }
       return "consumed"
-    }
-    if (input.kind === "answer") {
-      // The classifier's answer (the old onAnswer link): raise the class of
-      // the running turn if it is still retrying on an undecided failure;
-      // the held settle preempts the event wait (the same preemption the
-      // half-open probe uses). A resolution past the wrapper's finish never
-      // reaches here (the spine drops it — the old `consuming` guard), and a
-      // no-answer resolution is dropped here (the old early return).
+    },
+    // The classifier's answer (the old onAnswer link): raise the class of
+    // the running turn if it is still retrying on an undecided failure; the
+    // held settle preempts the event wait (the same preemption the half-open
+    // probe uses). A resolution past the wrapper's finish never reaches here
+    // (the spine drops it — the old `consuming` guard), and a no-answer
+    // resolution is dropped here (the old early return). The settle's object
+    // identity is load-bearing: the settle→Watch mapping compares the
+    // outcome against `raisedSettle` by identity, so the object stored there
+    // is the one this handler returns.
+    answer: async (input) => {
       const got = input.answer
       if (got === undefined) return "consumed"
       recovery.answer = got
@@ -532,20 +544,36 @@ export async function watch(
       recovery.raised = merged
       raisedSettle = { kind: "error", cls: merged, classified: true }
       return { settle: raisedSettle }
-    }
-    if (input.kind === "stream-end") return "pass" // an empty row; the spine settles it
+    },
+    // An empty row: no cell dispatches it, the spine's own terminal settles
+    // an exhausted stream interrupted. The entry stands so the finished map
+    // is total over every input kind.
+    "stream-end": async () => "pass",
+    // The account's usage windows (plans/0057 §5.2): logged and recorded (§8)
+    // when they change, nothing else — not a turn event, so the twin-idle
+    // guard is untouched.
+    limit: async (input, fx) => {
+      if (router.noteWindows(client, input.event)) fx.onLimit(input.event)
+      return "consumed"
+    },
+  }
 
+  // The not-yet-cut remainder of the body: the branches whose kinds have no
+  // map entry yet, in their old shape. It shrinks as the cut moves branches
+  // into the map and is deleted once the map is total. One call still
+  // handles one input from its first table cell (every roster entry
+  // delegates to the dispatching handle below), so the advice it returns
+  // decides the input: "consumed" is the old body's `continue`, a settle is
+  // one of the old early exits, and the natural idle finish names the
+  // spine's own terminal settle directly (the row running out would produce
+  // the same settle — with every cell delegating to the same handle, the
+  // explicit form saves re-entering the body for the remaining cells).
+  // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
+  const monolith = async (input: { kind: "event"; event: AgentEvent }, fx: TurnFx): Promise<Advice> => {
     // —— External inputs: one event of the agent's stream. The session
     // filter and the usage source's observe are the spine's (they preceded
     // every branch of the old loop). ——
     const event = input.event
-    // The account's usage windows (plans/0057 §5.2): logged and recorded (§8)
-    // when they change, nothing else — not a turn event, so the twin-idle
-    // guard is untouched.
-    if (event.type === "limit") {
-      if (router.noteWindows(client, event)) fx.onLimit(event)
-      return "consumed"
-    }
     if (event.type === "part") {
       const part = event.part
       guard.idleHandled = false
@@ -1010,6 +1038,21 @@ export async function watch(
       return "consumed"
     }
     return { settle: { kind: "natural" } }
+  }
+
+  // The remainder concern's dispatch (plans/0061 §4.11): every roster entry
+  // delegates to this one handle, which routes the input to its per-kind
+  // handler. A kind with no map entry yet falls back to the monolith — the
+  // cut's temporary compatibility layer, gone once the map is total.
+  const handle: Concern<SliceKey>["handle"] = async (input, _own, _view, fx): Promise<Advice> => {
+    const key: InputKind = input.kind === "event" ? input.event.type : input.kind
+    // The map's construction pairs each key with its payload type, which the
+    // union-typed lookup cannot show; the dispatch casts once, here.
+    const handler = handlers[key] as ((input: TurnInput, fx: TurnFx) => Promise<Advice>) | undefined
+    if (handler !== undefined) return handler(input, fx)
+    // Every kind still without a map entry is an event kind, so the
+    // fallback's input always carries an event.
+    return monolith(input as { kind: "event"; event: AgentEvent }, fx)
   }
 
   // The remainder install (plans/0061 §4.11, the D1 compatibility layer):
