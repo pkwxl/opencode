@@ -24,7 +24,7 @@ import { roundBriefText } from "./round-brief"
 import { statsDigest } from "./stats"
 import { stepPause } from "./step"
 import { estimateTokens } from "./usage"
-import { DEFAULT_CONTEXT_LIMIT } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, sessionOpts } from "./opts"
 import {
   doneTaskIds,
   loadPlan,
@@ -64,7 +64,7 @@ export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(
 // numbered after the highest taken id. Returns 0 = planning complete, 1 = m
 // mode with no planning input.
 export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
+  const { directory, opts, server: serverHandle } = ctx
   // The phase loop routes m mode here only with an input, new or persisted;
   // checked first, so a missing one starts no numbering-restore session.
   if (ctx.manual && !ctx.input && !(await readPlanInput(directory, phase))?.trim()) {
@@ -79,21 +79,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // (stage=numbering), ahead of the planning session.
   let numberStart: number | undefined
   if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle, directory, {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      humanQuestions: opts.stopBefore === "execute",
-      git: ctx.git,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      routing: ctx.routing,
-      router: ctx.router,
-      mode: opts.mode,
-    })
+    const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "plan-numbering" }))
     if (numbering.type === "dirty") {
       log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
       for (const file of numbering.files) log(`  ${file}`)
@@ -164,21 +150,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     serverHandle,
     { id: "PLAN", title: `phase planning (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     prompt,
-    {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      humanQuestions: opts.stopBefore === "execute",
-      git: ctx.git,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      routing: ctx.routing,
-      router: ctx.router,
-      mode: opts.mode,
-    },
+    sessionOpts(ctx, { site: "phase-plan" }),
     {
       kind: "phase planning",
       step: { step: "phase-plan", unit: phaseKey(phase).id },
@@ -518,7 +490,7 @@ export async function resetAppend(dir: string, phase: PlanPhase, snap: AppendSna
 // append template is new surface, so no legacy implement-scan routing applies
 // to it; declaring one would only fork the mapping.
 export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
+  const { directory, opts, server: serverHandle } = ctx
   // Appending plans against a planning input, checked first so a missing one
   // starts no numbering-restore session (the prelude and the shell check this
   // first; this backstops other shells and a deleted input file).
@@ -530,21 +502,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // blocked restore exits 2).
   let numberStart: number | undefined
   if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle, directory, {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      humanQuestions: opts.stopBefore === "execute",
-      git: ctx.git,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      routing: ctx.routing,
-      router: ctx.router,
-      mode: opts.mode,
-    })
+    const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "append-numbering" }))
     if (numbering.type === "dirty") {
       log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
       for (const file of numbering.files) log(`  ${file}`)
@@ -626,21 +584,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     serverHandle,
     { id: "PLAN", title: `phase append (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     prompt,
-    {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      humanQuestions: opts.stopBefore === "execute",
-      git: ctx.git,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      routing: ctx.routing,
-      router: ctx.router,
-      mode: opts.mode,
-    },
+    sessionOpts(ctx, { site: "phase-append" }),
     {
       kind: "task appending",
       step: { step: "phase-append", unit: phaseKey(phase).id },
