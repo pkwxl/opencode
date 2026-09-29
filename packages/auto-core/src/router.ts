@@ -1099,7 +1099,9 @@ export function createRouter(): Router {
 // and `downTarget`, `lateReset`, `chainModel`, `recoverySleep` and
 // `probeSelection` its recovery-wait neighbourhood as methods (the
 // instance supplies the holders and marks those decisions read and
-// write).
+// write), and the record-side remainder — the fork base's agent and
+// role verdicts beside the record agent field — as the free functions
+// below.
 
 // The structural slice of the run's routing facts the fence reads. The
 // run's RoutingFacts (src/routing.ts) satisfies it field for field; the
@@ -1313,6 +1315,51 @@ export function probeAccountChain(
 // untested.
 export function registryDriven(facts: RouteFacts | undefined): boolean {
   return facts !== undefined
+}
+
+// The agent whose fork-base record a forking chain reads and writes
+// (plans/0055 §8.4): the base the pipeline forks from must live on the
+// agent the forking subtask's chain runs on, so the persisted record is
+// per agent — under a registry that is the chain's agent (the decompose
+// dispatch's before the first subtask, the moved-to agent after a
+// cross-agent failover: a subtask that moved to another agent forks from
+// that agent's base, building it on first use), with the facts' runAgent
+// standing in while the chain holds no session. undefined = no registry,
+// where the plain-string record of the one-agent era applies as-is and
+// setForkBase keeps the old shape — the no-registry half is the
+// compatibility layer of plans/0061 §4.11, deleted in F2. A stateless
+// verdict (facts reads alone, no holder state); callers pass
+// `opts.routing` untested.
+export function forkAgent(facts: RouteFacts | undefined, chain: SessionChain): string | undefined {
+  return facts !== undefined ? (chain.agent ?? facts.runAgent) : undefined
+}
+
+// The role of the fork base's one-off rebuild chain (plans/0055 §8.4): a
+// base's value is a warm prefix (plans/0003), and a prefix cached under
+// one model is a miss under another, so the chain carries the `subtask`
+// role and the dispatch inside selects (and fails over) on the subtask
+// tier's list — the picked entry's variant and base step included.
+// Without a registry the field stays absent and the bypass routing of
+// the one-agent era applies unchanged (plans/0055 C2) — the compatibility
+// half of the fence (plans/0061 §4.11), deleted in F2. Callers spread
+// the verdict into the chain literal, `opts.routing` passed untested.
+export function forkBaseRole(facts: RouteFacts | undefined): { role?: ModelRole } {
+  return facts !== undefined ? { role: "subtask" } : {}
+}
+
+// The agent the fork-base record names as truly holding the built base
+// session (plans/0055 §8.2): under a registry it is the rebuild chain's
+// landed agent (the dispatch inside picked it — the subtask route's
+// first usable candidate's profile, which is where the forking subtask
+// dispatches too, so the prefix caches under the model that forks from
+// it), with the reading agent (forkAgent's answer) standing in when the
+// dispatch left no agent on the chain; with one agent a run this is
+// always the reading agent. undefined = no registry, where the record
+// keeps the old shape — the compatibility half of the fence
+// (plans/0061 §4.11), deleted in F2. A stateless verdict; callers pass
+// `opts.routing` untested.
+export function landedAgent(facts: RouteFacts | undefined, base: SessionChain, agent: string | undefined): string | undefined {
+  return facts !== undefined ? (base.agent ?? agent) : undefined
 }
 
 // The limits a reset instant reads as on the wait line (plans/0057 §7).

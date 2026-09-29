@@ -26,7 +26,7 @@ import { bookedSleep } from "./hibernate"
 import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
-import { jitterOf, probeAccountChain, probeChain, registryDriven, windowWake } from "./router"
+import { agentField, forkAgent, forkBaseRole, jitterOf, landedAgent, probeAccountChain, probeChain, registryDriven, windowWake } from "./router"
 import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
@@ -75,16 +75,18 @@ export async function ensureForkBase(
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
   const dir = opts.dir ?? plan.dir
-  // The reading agent (plans/0055 §8.4): the base the pipeline forks from must
-  // live on the agent the forking subtask's chain runs on, so the persisted
-  // record is read and written for that agent alone. Under a registry that is
+  // The reading agent (plans/0055 §8.4): the base the pipeline forks from
+  // must live on the agent the forking subtask's chain runs on, so the
+  // persisted record is read and written for that agent alone. The
+  // registry/no-registry verdict sits behind the router's routing fence
+  // (`forkAgent`, the facts passed untested): under a registry it answers
   // the chain's agent — the decompose dispatch's before the first subtask,
-  // the moved-to agent after a cross-agent failover (a subtask that moved to
-  // another agent forks from that agent's base, building it on first use);
-  // RoutingFacts.runAgent stands in while the chain holds no session.
-  // undefined = no registry, where the plain-string record of the one-agent
-  // era applies as-is and setForkBase keeps the old shape.
-  const agent = opts.routing ? (chain.agent ?? opts.routing.runAgent) : undefined
+  // the moved-to agent after a cross-agent failover (a subtask that moved
+  // to another agent forks from that agent's base, building it on first
+  // use) — with the facts' runAgent standing in while the chain holds no
+  // session; undefined = no registry, where the plain-string record of the
+  // one-agent era applies as-is and setForkBase keeps the old shape.
+  const agent = forkAgent(opts.routing, chain)
   // A persistent digest base is told from the understand-session id (the
   // session base) by the `digest:` prefix — an unprefixed value in digest mode
   // is only the fallback for a failed rebuild and takes no part in "alive
@@ -117,18 +119,22 @@ export async function ensureForkBase(
       // prefix cached under one model is a miss under another — the one-shot
       // chain carries the `subtask` role so the dispatch inside selects (and
       // fails over) on the subtask tier's list for the current phase type,
-      // the picked entry's variant and base step included. Without a registry
-      // the chain stays roleless and the bypass routing of the one-agent era
-      // applies unchanged (C2).
-      const base: SessionChain = { pct: 100, used: 0, at: 0, subject, ...(opts.routing ? { role: "subtask" as const } : {}) }
+      // the picked entry's variant and base step included. The conditional
+      // role sits behind the router's routing fence (`forkBaseRole`, the
+      // facts passed untested): without a registry the chain stays roleless
+      // and the bypass routing of the one-agent era applies unchanged (C2).
+      const base: SessionChain = { pct: 100, used: 0, at: 0, subject, ...forkBaseRole(opts.routing) }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
         // The record names the agent the base session truly lives on (the
         // dispatch inside picked it; §8.2) — the subtask route's first usable
         // candidate's profile, which is where the forking subtask dispatches
-        // too, so the prefix caches under the model that forks from it. With
-        // one agent a run this is always the reading agent.
-        const landed = opts.routing ? (base.agent ?? agent) : undefined
+        // too, so the prefix caches under the model that forks from it. The
+        // registry/no-registry verdict is the fence's `landedAgent` (the
+        // facts passed untested, the reading agent standing in when the
+        // dispatch left no agent on the chain — with one agent a run it is
+        // always the reading agent).
+        const landed = landedAgent(opts.routing, base, agent)
         await setForkBase(dir, task.id, `digest:${base.id}`, landed)
         // The ready line names the agent and the model under a registry (the
         // base is agent-local, §8.4, and was built for the subtask route's
@@ -567,9 +573,10 @@ export async function runSession(
   // have continued on success — the most valuable fork source and its
   // figure — in the progress record the re-run's recovery reads (written as
   // attempt writes it at a dispatch, with the figure for an agent that keeps
-  // no history), then throws to runAll (exit 3). A chain without a phase is
-  // a one-off session that writes no record, and a chain without a session
-  // has nothing to keep; the line says so.
+  // no history; the agent field is the fence's `agentField` verdict, the
+  // facts passed untested), then throws to runAll (exit 3). A chain without
+  // a phase is a one-off session that writes no record, and a chain without
+  // a session has nothing to keep; the line says so.
   const pauseForExit = async (): Promise<never> => {
     const best = forkSources(chain)[0]
     let kept: string
@@ -583,7 +590,7 @@ export async function runSession(
         active: true,
         phase: chain.phase,
         ...(strictResumeActive(opts, switches) ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: chainModel() } : {}),
-        ...(opts.routing && chain.agent !== undefined ? { agent: chain.agent } : {}),
+        ...agentField(opts.routing, chain.agent),
         used: best.used,
       })
       kept = `the re-run resumes the ${best.why} ${best.id} (${formatTokens(best.used)} tokens)`
