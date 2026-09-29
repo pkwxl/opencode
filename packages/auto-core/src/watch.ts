@@ -556,26 +556,11 @@ export async function watch(
       if (router.noteWindows(client, input.event)) fx.onLimit(input.event)
       return "consumed"
     },
-  }
-
-  // The not-yet-cut remainder of the body: the branches whose kinds have no
-  // map entry yet, in their old shape. It shrinks as the cut moves branches
-  // into the map and is deleted once the map is total. One call still
-  // handles one input from its first table cell (every roster entry
-  // delegates to the dispatching handle below), so the advice it returns
-  // decides the input: "consumed" is the old body's `continue`, a settle is
-  // one of the old early exits, and the natural idle finish names the
-  // spine's own terminal settle directly (the row running out would produce
-  // the same settle — with every cell delegating to the same handle, the
-  // explicit form saves re-entering the body for the remaining cells).
-  // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
-  const monolith = async (input: { kind: "event"; event: AgentEvent }, fx: TurnFx): Promise<Advice> => {
-    // —— External inputs: one event of the agent's stream. The session
-    // filter and the usage source's observe are the spine's (they preceded
-    // every branch of the old loop). ——
-    const event = input.event
-    if (event.type === "part") {
-      const part = event.part
+    // —— Event inputs: one event of the agent's stream. ——
+    // A part of the agent's output (row: guard → failure → liveness → stepUp
+    // → transcript → stuck).
+    part: async (input, fx) => {
+      const part = input.event.part
       guard.idleHandled = false
       // Model output after a retry: the agent's retry got through, so a late
       // classifier answer no longer settles this turn, an announced silence
@@ -583,12 +568,12 @@ export async function watch(
       // later failure of this watch must not carry its reset into a down mark.
       if (part.kind !== "step-start") {
         failure.retrying = false
-        liveness.quietUntil = undefined
         const stated = failure.info as ErrorInfo | undefined
         if (stated !== undefined && LIMIT_KEYS.some((key) => stated[key] !== undefined)) {
           const { resetAt: _reset, scope: _scope, retryAfterMs: _wait, limitReason: _reason, ...rest } = stated
           failure.info = rest
         }
+        liveness.quietUntil = undefined
       }
       // step-finish increment accumulation (T-003, the one basis that neither
       // duplicates nor misses): re-sends of the same part are not counted
@@ -665,9 +650,10 @@ export async function watch(
         }
       }
       return "consumed"
-    }
-    if (event.type === "message") {
-      const info = event.message
+    },
+    // A message of the session (row: guard → transcript → usage → stepUp).
+    message: async (input, fx) => {
+      const info = input.event.message
       guard.idleHandled = false
       transcript.lastMessage = info.id
       // Actually-used model report (each watch reports only the first
@@ -744,7 +730,25 @@ export async function watch(
         }
       }
       return "consumed"
-    }
+    },
+  }
+
+  // The not-yet-cut remainder of the body: the branches whose kinds have no
+  // map entry yet, in their old shape. It shrinks as the cut moves branches
+  // into the map and is deleted once the map is total. One call still
+  // handles one input from its first table cell (every roster entry
+  // delegates to the dispatching handle below), so the advice it returns
+  // decides the input: "consumed" is the old body's `continue`, a settle is
+  // one of the old early exits, and the natural idle finish names the
+  // spine's own terminal settle directly (the row running out would produce
+  // the same settle — with every cell delegating to the same handle, the
+  // explicit form saves re-entering the body for the remaining cells).
+  // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
+  const monolith = async (input: { kind: "event"; event: AgentEvent }, fx: TurnFx): Promise<Advice> => {
+    // —— External inputs: one event of the agent's stream. The session
+    // filter and the usage source's observe are the spine's (they preceded
+    // every branch of the old loop). ——
+    const event = input.event
     if (event.type === "question") {
       const text = event.questions.join("\n")
       // The dryrun preflight session auto-answers everything, never blocking
