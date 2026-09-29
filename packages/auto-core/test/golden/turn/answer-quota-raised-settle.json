@@ -1,0 +1,46 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "  classifier: asking free about a failure message (call 1/20)",
+    "  ↻ request retry (attempt 1)",
+    "⚖ the classifier reads the failure as quota, resets 2026-09-29T02:00:00+00:00; settling the turn as quota"
+  ],
+  "watch": {
+    "lastText": "",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "Ihr Kontingent für diesen Tarif ist erschöpft",
+    "errorInfo": {
+      "message": "Ihr Kontingent für diesen Tarif ist erschöpft",
+      "attempt": 1
+    },
+    "errorClass": "quota",
+    "failover": true,
+    "classified": true,
+    "resetAt": 1790647200000,
+    "resetSource": "classifier"
+  }
+}

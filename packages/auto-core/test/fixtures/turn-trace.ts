@@ -182,6 +182,22 @@ export async function until(cond: () => boolean, what: string): Promise<void> {
   throw new Error(`until: ${what} never happened`)
 }
 
+// Pump until the condition holds, yielding to the macrotask queue each
+// round: the classifier's own fake delivers its reply through the fake's
+// setTimeout(0) publish (its only transport — the harness owns the watched
+// stream, not the classifier's one-shot session), so anything awaiting the
+// classifier's answer must let real timers run; the microtask-only `until`
+// would starve the publish and never see the answer land. The timer is
+// 0 ms — no wall time is spent, and the answer's arrival point stays
+// governed by the scenario's gates, not by the wait.
+export async function untilPublished(cond: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 10_000; i++) {
+    if (cond()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error(`untilPublished: ${what} never happened`)
+}
+
 // ---------------------------------------------------------------------------
 // Gates: releasable one-shot promises every pinning construction uses
 // ---------------------------------------------------------------------------

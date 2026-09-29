@@ -24,12 +24,14 @@
 
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
+import { cachedAnswer } from "../src/classify"
 import type { SteerContext } from "../src/model-step"
+import { services } from "../src/services"
 import { createStuckTracker } from "../src/stuck"
 import type { Steer } from "../src/testrun"
 import { watch } from "../src/watch"
-import { ev } from "./fixtures/agent"
-import { compareTrace, runScenario, TURN_EPOCH, turnEntry, until, type TurnScenario } from "./fixtures/turn-trace"
+import { ev, type TurnScript } from "./fixtures/agent"
+import { compareTrace, flush, runScenario, TURN_EPOCH, turnEntry, until, untilPublished, type TurnScenario } from "./fixtures/turn-trace"
 
 // The steer literal the message-family scenarios share: the 2×64k budget
 // against the fake's 100.0k window gives an 80.0k effective wall
@@ -46,6 +48,26 @@ function usageSteer(): Steer {
     ],
   }
 }
+
+// —— The classifier-answer family's shared literals ——
+// Wording no error pattern knows (another language's quota notice): the
+// patterns class it unknown, so the classifier is asked beside the stream.
+const UNKNOWN_WORDING = "Ihr Kontingent für diesen Tarif ist erschöpft"
+// The classifier fake's scripted quota answer; its reset sits two hours past
+// the fixed turn epoch, inside the accepted horizon, and renders in the
+// registry's UTC zone in the ⚖ line.
+const QUOTA_ANSWER = `{"class": "quota", "resetAt": "${new Date(TURN_EPOCH + 2 * 3_600_000).toISOString()}"}`
+// The classifier fake's reply turn: one final text part carrying the JSON
+// answer, then idle. Its calls stay on its own fake's record — the trace's
+// `calls` section is the watched client's list only.
+const answerTurn =
+  (answer: string): TurnScript =>
+  (ctx) => [ev.text(ctx.session, `cls_${ctx.session}`, answer), ev.idle(ctx.session)]
+// The trace-observable checkpoint for "the classifier's answer landed": the
+// answer cache lives in the run's router, and the caching link of the
+// classify chain is attached before the watch's onAnswer link, so a cached
+// answer means onAnswer has already run.
+const answerCached = (message: string) => () => cachedAnswer(services().router, { message }) !== undefined
 
 const scenarios: TurnScenario[] = [
   // The smoke trace: the plainest happy path — one completed assistant
@@ -1041,6 +1063,236 @@ const scenarios: TurnScenario[] = [
         undefined,
         steerContext,
       )
+    },
+  },
+
+  // —— The `answer` row (plans/0061 §4.5): the failure-message classifier ——
+  // Every scenario wires the harness's classifier rig (a registry with a
+  // `classifier` list and the gated classifier client behind opts.server)
+  // and scripts the classifier fake's reply; UNKNOWN_WORDING classes unknown
+  // to the error patterns, so the classifier is asked beside the stream.
+  //
+  // Race standing (A-3): interleaving 1 (held-settle-vs-external) is this
+  // family's subject, and each scenario pins one of its observable outcomes
+  // by construction — the `how` of each pin names the gates: the settle
+  // preempting the held event wait; the settle landing mid-fx and winning
+  // the next boundary; a resolvable event consumed before the in-flight
+  // settle can land; the answer landing after consumption ended; the answer
+  // landing while the turn is not retrying. Interleaving 2
+  // (probe-during-fx) never materializes here: the queued probe timer is
+  // never fired in this family.
+
+  // `answer` row, recovery cell: the classifier's quota answer lands while
+  // the turn still retries the undecided failure — onAnswer raises the
+  // class, trip() preempts the held event wait, and the post-loop raised
+  // settle aborts the still-running old turn before handing the class to
+  // the escalation: the ⚖ line naming the answer and its reset, then the
+  // fixed snapshot field set (errorClass, failover, classified) with
+  // resetSource "classifier".
+  {
+    id: "answer-quota-raised-settle",
+    kinds: ["message", "retry", "answer"],
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the stream's next event sits behind a hold the scenario releases only after watch() returned, so inner.next() is pending when the answer trips the race — the settle is the only arm that can resolve",
+      },
+    ],
+    run: async (h) => {
+      const wiring = h.classifier({ agent: { turn: answerTurn(QUOTA_ANSWER) } })
+      h.opts.routing = wiring.routing
+      h.opts.server = wiring.server
+      const held = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: UNKNOWN_WORDING } },
+          { hold: held.promise },
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => wiring.agent.argsOf("create").length >= 1, "the classifier's one-shot session starting")
+      wiring.release()
+      const result = await done
+      held.release()
+      return result
+    },
+  },
+
+  // `answer` row, the §4.4 boundary discipline: the answer lands while the
+  // loop body awaits the human's reply to a question — trip() resolves, but
+  // the in-flight fx completes first (the → human answer echo and
+  // replyQuestion land in the trace before the abort), and the held settle
+  // wins at the next boundary: the stream's next event stays gated, so the
+  // race has one winner and the post-loop raised settle follows.
+  {
+    id: "answer-during-question-wait",
+    kinds: ["message", "retry", "question", "answer"],
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the answer lands while the loop body awaits the gated human reply and the stream's next event stays held, so at the next boundary tripped is settled and inner.next() is pending — the held settle wins",
+      },
+    ],
+    run: async (h) => {
+      const wiring = h.classifier({ agent: { turn: answerTurn(QUOTA_ANSWER) } })
+      h.opts.routing = wiring.routing
+      h.opts.server = wiring.server
+      const io = h.interactive()
+      h.opts.humanQuestions = true
+      h.opts.interactive = io.interactive
+      const held = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: UNKNOWN_WORDING } },
+          ev.question("s", "q1", "which db?"),
+          { hold: held.promise },
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => wiring.agent.argsOf("create").length >= 1, "the classifier's one-shot session starting")
+      wiring.release()
+      await untilPublished(answerCached(UNKNOWN_WORDING), "the classifier's answer landing while the body awaits the human")
+      io.reply("use postgres")
+      const result = await done
+      held.release()
+      return result
+    },
+  },
+
+  // `answer` row, the race's other outcome: an external event resolvable
+  // while the settle is still in flight is consumed first. The queued
+  // retry's hold and the classifier's gate are released in one synchronous
+  // stretch; the event resolves in microtasks while the answer structurally
+  // needs the classifier fake's real-timer publish (a macrotask), so the
+  // second retry is consumed (its ↻ vlog and accumulation land) before the
+  // answer raises the class and trips the following boundary.
+  {
+    id: "answer-queued-event-consumed-first",
+    kinds: ["message", "retry", "answer"],
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the queued retry's hold and the classifier's gate are released in one synchronous stretch: the event resolves in microtasks while the answer needs the classifier fake's macrotask publish, so the event wins this boundary and the settle wins the next",
+      },
+    ],
+    run: async (h) => {
+      const wiring = h.classifier({ agent: { turn: answerTurn(QUOTA_ANSWER) } })
+      h.opts.routing = wiring.routing
+      h.opts.server = wiring.server
+      const second = h.gate()
+      const tail = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: UNKNOWN_WORDING } },
+          { hold: second.promise },
+          { type: "retry", session: "s", id: "r2", attempt: 2, error: { message: UNKNOWN_WORDING } },
+          { hold: tail.promise },
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => wiring.agent.argsOf("create").length >= 1, "the classifier's one-shot session starting")
+      second.release()
+      wiring.release()
+      const result = await done
+      tail.release()
+      return result
+    },
+  },
+
+  // `answer` row, the late answer: the classify call is still gated when
+  // the turn ends (the session error folds the retry's wording in, the idle
+  // settles the turn); the final consult finds the call already in flight
+  // and rides it as pendingReset. Released only after watch() returned, the
+  // answer lands on a watch that no longer consumes (consuming false, so
+  // onAnswer ignores it); the recorder awaits pendingReset and inlines the
+  // answer's reset — and nothing else in the trace changes.
+  {
+    id: "answer-after-turn-ended-pending-reset",
+    kinds: ["message", "retry", "error", "idle", "answer"],
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the classifier's gate stays held until watch() returned, so the answer can land only when no event wait exists (consuming false) — onAnswer ignores it and pendingReset carries it",
+      },
+    ],
+    run: async (h) => {
+      const wiring = h.classifier({ agent: { turn: answerTurn(QUOTA_ANSWER) } })
+      h.opts.routing = wiring.routing
+      h.opts.server = wiring.server
+      const result = await watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: UNKNOWN_WORDING } },
+          ev.error("s", { name: "APIError", message: UNKNOWN_WORDING }),
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      wiring.release()
+      return result
+    },
+  },
+
+  // `answer` row, the cached raise: the answer lands while the turn is not
+  // retrying (the intervening model output cleared `retrying`, so onAnswer
+  // records the answer but cannot raise); the next retry of the same turn
+  // finds the cached answer in consult and raises the class synchronously —
+  // the retry row's early settle with classified: true riding it (abort
+  // first, then the ⚖ line and the fixed snapshot field set, the answer's
+  // reset with resetSource "classifier").
+  {
+    id: "answer-cached-later-retry-settle",
+    kinds: ["message", "retry", "part", "answer"],
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the classifier's gate is released only after the text part was consumed (microtask-flushed, retrying cleared) and the loop parked at the next hold, so the answer cannot trip; the later retry reads the cached answer synchronously inside the loop body",
+      },
+    ],
+    run: async (h) => {
+      const wiring = h.classifier({ agent: { turn: answerTurn(QUOTA_ANSWER) } })
+      h.opts.routing = wiring.routing
+      h.opts.server = wiring.server
+      const output = h.gate()
+      const second = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([
+          ev.message("s", "m1", 1000),
+          { type: "retry", session: "s", id: "r1", attempt: 1, error: { message: UNKNOWN_WORDING } },
+          { hold: output.promise },
+          ev.text("s", "t1", "the retry got through"),
+          { hold: second.promise },
+          { type: "retry", session: "s", id: "r2", attempt: 2, error: { message: UNKNOWN_WORDING } },
+          ev.idle("s"),
+        ]),
+        h.opts,
+      )
+      await until(() => wiring.agent.argsOf("create").length >= 1, "the classifier's one-shot session starting")
+      output.release()
+      // The text part's consumption is microtasks only (the loop parks at
+      // the next hold), so a microtask flush structurally covers it before
+      // the classifier's gate opens.
+      await flush()
+      wiring.release()
+      await untilPublished(answerCached(UNKNOWN_WORDING), "the classifier's answer landing while the turn is not retrying")
+      second.release()
+      return done
     },
   },
 ]
