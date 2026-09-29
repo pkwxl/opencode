@@ -13,17 +13,22 @@
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S7, pure move).
 //
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
-// TurnContext from its parameters, installs the slices and the one `remainder`
-// concern — every roster entry delegates to the single `handle` below, which
-// routes each input to its entry of the per-kind handler map (the loop body,
-// cut one branch per input kind) — and hands the stream to the spine
-// (src/engine/spine.ts), which owns the input queue, the arbitration
-// dispatch, the fx audit and the trip-wired stream wrapper. The probe timer
-// and the classifier answer arrive as synthetic inputs from
-// src/engine/sources.ts; all of the body's I/O goes through the production fx
-// (src/engine/fx.ts) under the spine's audit. What remains here besides the
-// body is the mapping of the spine's settle and the slices back into the
-// Watch result each old exit returned.
+// TurnContext from its parameters, installs the concern roster — the
+// extracted concerns in src/engine/concerns/ (guard, transcript, windows,
+// stuck; each owning its slice's construction) beside the one `remainder`
+// concern that still holds the not-yet-extracted turn code — and hands the
+// stream to the spine (src/engine/spine.ts), which owns the input queue, the
+// arbitration dispatch, the fx audit and the trip-wired stream wrapper. The
+// remainder serves the input kinds whose arbitration row still holds one of
+// its cells: the shared `handle` answers at the row's first such cell (its
+// cells are contiguous in every row), routing the input to its entry of the
+// per-kind handler map — the loop body, cut one branch per input kind, minus
+// what the extracted concerns own. The probe timer and the classifier answer
+// arrive as synthetic inputs from src/engine/sources.ts; all of the body's
+// I/O goes through the production fx (src/engine/fx.ts) under the spine's
+// audit. What remains here besides the remainder is the mapping of the
+// spine's settle and the slices back into the Watch result each old exit
+// returned.
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
@@ -32,18 +37,22 @@ import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnsw
 import { autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete } from "./handover"
-import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState } from "./engine/contract"
+import type { Advice, Concern, InputKind, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./engine/contract"
+import { guardConcern } from "./engine/concerns/guard"
+import { stuckConcern } from "./engine/concerns/stuck"
+import { transcriptConcern } from "./engine/concerns/transcript"
+import { windowsConcern } from "./engine/concerns/windows"
 import { makeTurnFx } from "./engine/fx"
 import { makeTurnSources } from "./engine/sources"
-import { runTurn, type ConcernRoster } from "./engine/spine"
+import { runTurn, TURN_ARBITRATION, type ConcernRoster } from "./engine/spine"
 import { formatDuration } from "./log"
 import type { Opts } from "./opts"
-import { renderStepUp, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
+import { renderStepUp, renderTestWrapup, renderTestResult } from "./prompt"
 import { compactText, sameIssue } from "./resolve"
-import { describePart, formatTokens, isApproval } from "./session-api"
+import { formatTokens, isApproval } from "./session-api"
 import { enabledSteps, stepId, stepUpPoint, type SteerContext } from "./model-step"
 import { services } from "./services"
-import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
+import type { StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { fillUsageNote, steerWall, type Steer, type TestRun } from "./testrun"
 import { steerDue, testHandoverDue, liveUsage, usageSource } from "./usage"
@@ -98,29 +107,24 @@ function withWording(e: AgentError, now: number): AgentError {
 
 const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
 
-// The per-input handler map (plans/0061 §4.5): one handler per input kind.
-// An `event` input keys on its event's own type (the spine's rowOf keying),
-// so an event handler receives its AgentEvent variant and a synthetic
-// handler its probe/answer/stream-end input. The record is total over
-// InputKind: "every input kind has exactly one handler" is a compile-time
-// fact.
+// The per-input handler map (plans/0061 §4.5): one handler per input kind the
+// remainder still serves. An `event` input keys on its event's own type (the
+// spine's rowOf keying), so an event handler receives its AgentEvent variant
+// and a synthetic handler its probe/answer input; the view is the spine's
+// read-only reach over every slice (the extracted concerns' slices are read
+// through it, the remainder's own through closure aliases).
 type EventInput<K extends AgentEvent["type"]> = { kind: "event"; event: Extract<AgentEvent, { type: K }> }
 type KindInput<K extends InputKind> = K extends AgentEvent["type"] ? EventInput<K> : Extract<TurnInput, { kind: K }>
-type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx) => Promise<Advice>
-type HandlerMap = { [K in InputKind]: KindHandler<K> }
+type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx, view: TurnView) => Promise<Advice>
 
-// The handler map's keys as a runtime list, exported for the arbitration
-// suite's one-handler-per-kind assertion (the map itself is a watch() local
-// — its handlers close over the turn's state — so a test cannot reach it).
-// The list cannot drift from the map: HandlerMap is a total record over
-// InputKind, so a missing map key is a type error and an extra one an
-// excess-property error; the assertion pins the list itself to the
-// arbitration table's row keys.
-export const HANDLER_KINDS: readonly InputKind[] = [
-  "probe",
-  "answer",
-  "stream-end",
-  "limit",
+// The input kinds the remainder still serves — those whose arbitration row
+// holds a not-yet-extracted cell (limit belongs to the windows concern alone,
+// stream-end to the spine's own terminal). The arbitration suite derives the
+// same set from the table and the install's delegation set and pins this list
+// to it. The map cannot drift from the list: HandlerMap is a total record
+// over ServedKind, so a missing handler is a type error and an extra one an
+// excess-property error.
+export const HANDLER_KINDS = [
   "part",
   "message",
   "question",
@@ -128,7 +132,50 @@ export const HANDLER_KINDS: readonly InputKind[] = [
   "error",
   "retry",
   "idle",
-]
+  "probe",
+  "answer",
+] as const satisfies readonly InputKind[]
+type ServedKind = (typeof HANDLER_KINDS)[number]
+type HandlerMap = { [K in ServedKind]: KindHandler<K> }
+
+// The slices the remainder concern still owns (plans/0061 §4.11): the
+// compatibility layer shrinks one slice per extraction unit and is gone with
+// its removal. Typed as the union's source of truth — the install below and
+// the cell routing both read it, so a stale entry is a type error, not a
+// silent mis-route.
+export const REMAINDER_KEYS = ["questions", "failure", "recovery", "liveness", "usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export type RemainderKey = (typeof REMAINDER_KEYS)[number]
+// The remainder's slices, pre-created by watch() (the extracted concerns own
+// their slices' construction in their own files): the fx's steer-model getter
+// and the settle→Watch mapping close over these live objects.
+export type RemainderState = { readonly [K in RemainderKey]: TurnState[K] }
+
+// The turn's concern install: the extracted concerns from their files, the
+// not-yet-extracted slices delegated to the one remainder handle. Exported
+// for the arbitration suite's shrink ratchet: slicesDelegatedTo over this
+// install reads exactly the not-yet-extracted set.
+export const turnConcerns = (state: RemainderState, handle: Concern<SliceKey>["handle"]): ConcernRoster => ({
+  guard: guardConcern,
+  transcript: transcriptConcern,
+  windows: windowsConcern,
+  stuck: stuckConcern,
+  questions: { name: "questions", initial: () => state.questions, handle },
+  failure: { name: "failure", initial: () => state.failure, handle },
+  recovery: { name: "recovery", initial: () => state.recovery, handle },
+  liveness: { name: "liveness", initial: () => state.liveness, handle },
+  usage: { name: "usage", initial: () => state.usage, handle },
+  stepUp: { name: "stepUp", initial: () => state.stepUp, handle },
+  test: { name: "test", initial: () => state.test, handle },
+})
+
+// The first not-yet-extracted cell of an input kind's arbitration row. The
+// remainder's cells are contiguous in every row, so the kind's handler —
+// which runs their statements in today's order — answers for the whole
+// segment there; the later cells are covered by that one run and pass.
+const firstRemainderCell = (kind: InputKind): RemainderKey | undefined => {
+  const cell = TURN_ARBITRATION[kind].find((row) => (REMAINDER_KEYS as readonly SliceKey[]).includes(row.concern))
+  return cell?.concern as RemainderKey | undefined
+}
 
 export async function watch(
   client: AgentClient,
@@ -215,23 +262,13 @@ export async function watch(
     startTime,
   }
 
-  // The turn's slices (plans/0061 §4.3): what used to be the body's turn-
-  // lifetime locals, grouped by the concern that will own them. The remainder
-  // install owns all eleven, so the body below reads and writes them through
-  // these aliases exactly where the locals stood. The slices are created here
-  // (not inside the roster's initials) so the fx's steer-model getter and the
-  // result mapping can hold the same live objects.
-  const state: TurnState = {
-    guard: { idleHandled: false },
-    transcript: {
-      lastText: "",
-      seen: new Set<string>(),
-      billed: new Set<string>(),
-      usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 },
-      modelReported: false,
-    },
-    windows: {},
-    stuck: {},
+  // The not-yet-extracted slices (plans/0061 §4.3/§4.11), pre-created here so
+  // the fx's steer-model getter and the settle→Watch mapping below hold the
+  // same live objects the roster's initials hand back; the body reads and
+  // writes them through these aliases exactly where the locals stood. The
+  // extracted concerns' slices (guard, transcript, windows, stuck) are built
+  // by their own initials inside the spine and read through the view.
+  const remainderState: RemainderState = {
     questions: { autoAnswered: [], resolves: [] },
     failure: { error: "", retrying: false },
     recovery: {},
@@ -240,11 +277,9 @@ export async function watch(
     stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { guard, transcript, questions, failure, recovery, liveness, usage, test: testState } = state
-  // The token accumulator (the old `usage` local) and the context-step slice
-  // (the old steerModel/stepNow/reached locals).
-  const tokens = transcript.usage
-  const steps = state.stepUp
+  const { questions, failure, recovery, liveness, usage, test: testState } = remainderState
+  // The context-step slice (the old steerModel/stepNow/reached locals).
+  const steps = remainderState.stepUp
 
   const sources = makeTurnSources(ctx)
   const fx = makeTurnFx({ ctx, steerModel: () => steps.model, onModel, onLimit })
@@ -305,19 +340,20 @@ export async function watch(
   // Turn snapshot (STATS_PLAN §2): every exit of watch carries durationMs +
   // usage + resolves uniformly, including the early-settling error/blocked
   // exits — consumption and proxy answers really happened, they are not lost.
-  // extra holds the fields that differ per exit. Rebuilt from the slices:
-  // same keys, same conditionals as the old closure over locals.
-  const snapshot = (extra?: Partial<Watch>): Watch => ({
-    lastText: transcript.lastText,
-    pct: usage.pct,
-    used: usage.used,
-    limit: usage.limit,
+  // extra holds the fields that differ per exit. Rebuilt from the final view
+  // over the slices: same keys, same conditionals as the old closure over
+  // locals.
+  const snapshot = (view: TurnView, extra?: Partial<Watch>): Watch => ({
+    lastText: view.transcript.lastText,
+    pct: view.usage.pct,
+    used: view.usage.used,
+    limit: view.usage.limit,
     durationMs: clock.now() - startTime,
-    usage: tokens,
-    resolves: questions.resolves,
-    ...(usage.hinted ? { hinted: true } : {}),
-    ...(usage.wall !== undefined ? { wall: usage.wall } : {}),
-    ...(steps.reached !== undefined ? { steppedUp: steps.reached } : {}),
+    usage: view.transcript.usage,
+    resolves: view.questions.resolves,
+    ...(view.usage.hinted ? { hinted: true } : {}),
+    ...(view.usage.wall !== undefined ? { wall: view.usage.wall } : {}),
+    ...(view.stepUp.reached !== undefined ? { steppedUp: view.stepUp.reached } : {}),
     ...extra,
   })
   // The snapshot extras a blocked settle carries: the handler records them
@@ -394,7 +430,7 @@ export async function watch(
   // handover flag). The kernel calls (the freeze pin, the pending-script
   // resolution, the test execution) all precede their path's single steer —
   // the audit's idle quiet point never trips on this protocol.
-  const handleIdleTest = async (fx: TurnFx): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
+  const handleIdleTest = async (fx: TurnFx, view: TurnView): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
     // The handover request is out: verify the handover document is finished
     // (F1, last line `Status: continue|done`). The criterion was tightened
     // from "non-empty" to the status line so interruption recovery can tell
@@ -421,7 +457,7 @@ export async function watch(
           type: "blocked",
           question:
             `the test-handover session failed twice to produce a valid ${test!.handoffFile} (missing, or lacking a \`Status: continue|done\` status line; hidden blockage). ` +
-            `Check the file and re-run. Last agent output:\n${transcript.lastText.trim().slice(-2000) || "(no output)"}`,
+            `Check the file and re-run. Last agent output:\n${view.transcript.lastText.trim().slice(-2000) || "(no output)"}`,
         }
       }
       testState.retried = true
@@ -482,7 +518,7 @@ export async function watch(
         // record reads.
         ...(opts.routing ? { agent: opts.routing.runAgent } : {}),
         pinSession: sessionID,
-        pinMessage: transcript.lastMessage,
+        pinMessage: view.transcript.lastMessage,
       })
       const ok = await fx.steer(renderTestWrapup({ handoffFile: test!.handoffFile }))
       if (!ok) return { type: "blocked", question: "steer dispatch failed (test-handover request); cannot continue the session, see the log." }
@@ -507,10 +543,15 @@ export async function watch(
     return { type: "continue" }
   }
 
-  // —— The per-input handlers (plans/0061 §4.5): the loop body, cut into one
-  // handler per input kind. Each handler reproduces its old branch's
-  // statements in its arbitration row's order and reads/writes the slices
-  // through the closure aliases exactly where the branch did. ——
+  // —— The remainder's per-input handlers (plans/0061 §4.5): the loop body,
+  // cut into one handler per input kind the remainder still serves. Each
+  // handler reproduces its old branch's statements — minus what the extracted
+  // concerns own (the guard's resets and twin-idle stop, the transcript's
+  // echo/billing/report, the windows' limit row, the stuck hint) — in its
+  // arbitration row's order, and reads/writes its own slices through the
+  // closure aliases exactly where the branch did; other concerns' slices are
+  // read through the view. The handler runs at the row's first remainder cell
+  // and answers for the whole contiguous segment. ——
   const handlers: HandlerMap = {
     // —— Synthetic inputs (their rows are the concurrent ones: they run
     // beside an in-flight fx call, so slice writes and log/vlog only — the
@@ -563,25 +604,13 @@ export async function watch(
       raisedSettle = { kind: "error", cls: merged, classified: true }
       return { settle: raisedSettle }
     },
-    // An empty row: no cell dispatches it, the spine's own terminal settles
-    // an exhausted stream interrupted. The entry stands so the finished map
-    // is total over every input kind.
-    "stream-end": async () => "pass",
-    // The account's usage windows (plans/0057 §5.2): logged and recorded (§8)
-    // when they change, nothing else — not a turn event, so the twin-idle
-    // guard is untouched.
-    limit: async (input, fx) => {
-      if (router.noteWindows(client, input.event)) fx.onLimit(input.event)
-      return "consumed"
-    },
     // —— Event inputs: one event of the agent's stream. The session filter
     // and the usage source's observe are the spine's (they preceded every
     // branch of the old loop). ——
     // A part of the agent's output (row: guard → failure → liveness → stepUp
-    // → transcript → stuck).
+    // → transcript → stuck; the remainder owns the middle three cells).
     part: async (input, fx) => {
       const part = input.event.part
-      guard.idleHandled = false
       // Model output after a retry: the agent's retry got through, so a late
       // classifier answer no longer settles this turn, an announced silence
       // is over, and what was stated about the limit no longer applies — a
@@ -595,14 +624,12 @@ export async function watch(
         }
         liveness.quietUntil = undefined
       }
-      // step-finish increment accumulation (T-003, the one basis that neither
-      // duplicates nor misses): re-sends of the same part are not counted
-      // twice.
+      // step-finish increment accumulation (the transcript concern's cell,
+      // after this segment) is unrelated to the truncation-continuation
+      // criterion and the cache-claim check here: a finish other than length
+      // (work back to normal after continuation) resets the consecutive-
+      // truncation count.
       if (part.kind === "step-finish") {
-        // Truncation-continuation criterion (unrelated to the billing
-        // dedup; re-sent events overwriting the same value is harmless): a
-        // finish other than length (work back to normal after continuation)
-        // resets the consecutive-truncation count.
         liveness.lastFinish = part.reason
         if (part.reason !== "length") liveness.lengthContinued = 0
         // Cache-claim check (§4.5): `wider` asserts the step ids share the
@@ -621,71 +648,17 @@ export async function watch(
             )
           }
         }
-        if (!transcript.billed.has(part.id)) {
-          transcript.billed.add(part.id)
-          tokens.input += part.tokens.input
-          tokens.output += part.tokens.output
-          tokens.reasoning += part.tokens.reasoning
-          tokens.cacheRead += part.tokens.cacheRead
-          tokens.cacheWrite += part.tokens.cacheWrite
-          tokens.cost += part.cost
-          tokens.steps += 1
-        }
       }
-      if (part.kind === "text") {
-        if (part.final) {
-          transcript.lastText = part.text
-          fx.vlog(part.text)
-        }
-        return "consumed"
-      }
-      const line = describePart(part)
-      if (line && !transcript.seen.has(part.id)) {
-        transcript.seen.add(part.id)
-        fx.vlog(line)
-        // Stuck-loop detection (src/stuck.ts): each tool call's terminal state
-        // is fed to the detector; recognizing "the same action repeated with
-        // unchanged results" injects a hint via steer, helping weaker models
-        // break out of the spin. Hint only, the session is not aborted; a
-        // failed dispatch was already logged by the fx's steer, observation
-        // continues as usual. Under a registry the hint also counts into the
-        // model's stuck-hint counter (the protocol-drift criterion of 0055
-        // §10 item 3); without one steerContext is undefined and
-        // statsModelEvent is a no-op (C2).
-        if (stuck && part.kind === "tool" && (part.status === "completed" || part.status === "error")) {
-          const hit = stuck.observe({
-            tool: part.tool,
-            input: part.input,
-            status: part.status,
-            result: (part.status === "error" ? part.error : part.output) ?? "",
-          })
-          if (hit) {
-            fx.log(
-              `⚠ repetitive action detected: ${hit.tool} has ${hit.count} consecutive ${hit.kind === "error" ? "identical errors" : "identical calls with identical results"}; ` +
-                `inserting a hint (level ${hit.level}/${STUCK_MAX_HINTS})`,
-            )
-            await fx.statsModelEvent("stuck")
-            await fx.steer(renderStuckHint(hit))
-          }
-        }
-      }
-      return "consumed"
+      // The transcript concern's cell follows (the billing dedup, the echo
+      // and the fresh flag), then the stuck concern's — this segment never
+      // stops the input, so the row carries on.
+      return "pass"
     },
-    // A message of the session (row: guard → transcript → usage → stepUp).
+    // A message of the session (row: guard → transcript → usage → stepUp;
+    // the remainder owns the last two cells). The transcript concern's cell
+    // before it stopped everything but a new completed assistant message.
     message: async (input, fx) => {
       const info = input.event.message
-      guard.idleHandled = false
-      transcript.lastMessage = info.id
-      // Actually-used model report (each watch reports only the first
-      // message carrying a model): a user message's model is the model the
-      // server resolved in effect for this turn; an assistant message's model
-      // is the same, as fallback.
-      if (info.model !== undefined && !transcript.modelReported) {
-        transcript.modelReported = true
-        fx.onModel(info.model)
-      }
-      if (info.role !== "assistant" || !info.completed || transcript.seen.has(info.id)) return "consumed"
-      transcript.seen.add(info.id)
       // Measurement point: the usage source already took this message in
       // (events/reported: its own figure; estimated: the running estimate).
       // An unknown figure (none, or none measured yet) changes nothing.
@@ -883,10 +856,10 @@ export async function watch(
       await fx.abort()
       return blockedAdvice(`permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`)
     },
-    // A session error (row: guard → failure → stepUp).
+    // A session error (row: guard → failure → stepUp; the remainder owns the
+    // last two cells).
     error: async (input, fx) => {
       const e = input.event.error
-      guard.idleHandled = false
       const errName = e.name ?? ""
       const detail = e.message ?? errName
       failure.error = failure.error ? `${failure.error}\n${detail}` : detail
@@ -925,23 +898,23 @@ export async function watch(
       return "consumed"
     },
     // A request retry (row: guard → failure → recovery → stepUp → liveness →
-    // transcript). B.4 the two signals unified / D.2 trigger surfaces 2 and
-    // 3, 0037 D4: the server itself is retrying a failed provider request.
-    // The id-carrying form comes from a retry part (self-contained
-    // structured ApiError), the id-less form from session.status retry
-    // (message/attempt/next, next being the wait until the next attempt —
-    // turning "still 40 minutes to wait" into an active decision; old
-    // servers may lack fields). Accumulate the failure slice's info first,
-    // then feed the classifier; a quota/auth/rate hit settles this turn
-    // early — the still-running old turn on the server must be aborted
-    // before returning (the same technique as the stream-interruption
-    // cleanup), otherwise it would modify files concurrently with the
-    // session forked next (D.2); overflow/transient/unknown only accumulate
-    // without settling, and observation continues (not treated as idle).
+    // transcript; the remainder owns the middle four cells). B.4 the two
+    // signals unified / D.2 trigger surfaces 2 and 3, 0037 D4: the server
+    // itself is retrying a failed provider request. The id-carrying form
+    // comes from a retry part (self-contained structured ApiError), the
+    // id-less form from session.status retry (message/attempt/next, next
+    // being the wait until the next attempt — turning "still 40 minutes to
+    // wait" into an active decision; old servers may lack fields). Accumulate
+    // the failure slice's info first, then feed the classifier; a quota/auth/
+    // rate hit settles this turn early — the still-running old turn on the
+    // server must be aborted before returning (the same technique as the
+    // stream-interruption cleanup), otherwise it would modify files
+    // concurrently with the session forked next (D.2); overflow/transient/
+    // unknown only accumulate without settling, and observation continues
+    // (not treated as idle).
     retry: async (input, fx) => {
       const event = input.event
       const e = event.error
-      guard.idleHandled = false
       failure.retrying = true
       // A retry means the agent works through a failure again (a later turn
       // of this watch, say): an earlier turn's end is not this signal's.
@@ -996,36 +969,26 @@ export async function watch(
         }
         liveness.quietUntil = until
       }
-      if (event.id !== undefined && !transcript.seen.has(event.id)) {
-        transcript.seen.add(event.id)
-        fx.vlog(`  ↻ request retry (attempt ${event.attempt})`)
-      }
-      return "consumed"
+      // The transcript concern's cell follows with the deduplicated retry
+      // vlog and ends the input.
+      return "pass"
     },
-    // The session gone idle (row: guard → test → liveness → settle natural).
-    idle: async (_input, fx) => {
-      // Twin-idle dedup: one turn end settles only once. At a turn's end the
-      // server emits two idle events in a row (session.status idle +
-      // session.idle); after a steer is dispatched via promptAsync (which
-      // returns immediately), the second idle arrives before the steer turn
-      // starts, and handling it would misjudge the session as finished and
-      // settle early. After one idle is handled, further idles are ignored
-      // until a new session event appears in this session (a new turn
-      // starting) re-arms acceptance.
-      if (guard.idleHandled) return "consumed"
-      guard.idleHandled = true
+    // The session gone idle (row: guard → test → liveness → the natural
+    // settle; the remainder owns the test and liveness cells). The guard
+    // concern's cell before it stopped the second idle of a twin.
+    idle: async (_input, fx, view) => {
       // Test execution protocol: idle first settles any pending test request
       // (execute + steer the result / handover request) before ending; the
       // session is only truly over when there is no pending test request and
       // no unfinished handover request.
       if (test) {
-        const handled = await handleIdleTest(fx)
+        const handled = await handleIdleTest(fx, view)
         if (handled.type === "continue") return "consumed"
         if (handled.type === "blocked") return blockedAdvice(handled.question, { testHandover: testState.handover })
         if (handled.type === "invalid") {
           const question =
             `test handover document ${test.handoffFile} missing or empty (strict resume: the boundary write-verify failed; no more backfill retries; ` +
-            `this unit will roll back to its baseline and redo). Last agent output:\n${transcript.lastText.trim().slice(-2000) || "(no output)"}`
+            `this unit will roll back to its baseline and redo). Last agent output:\n${view.transcript.lastText.trim().slice(-2000) || "(no output)"}`
           blockedExtra = { blocked: { type: "blocked", question }, testHandoverInvalid: true }
           return { settle: { kind: "blocked", question, invalid: true } }
         }
@@ -1034,8 +997,8 @@ export async function watch(
       // step finishing on length and no session error observed, the session's
       // work is unfinished — a short "continue from the cut-off point" steer
       // lets the same session carry on instead of closing out as a natural
-      // finish. Twin-idle dedup (the guard slice) and the steer-turn interplay
-      // are the same as the handover/test steer paths.
+      // finish. Twin-idle dedup (the guard concern's cell) and the steer-turn
+      // interplay are the same as the handover/test steer paths.
       // An agent that takes no further messages (MA.4: steer off) cannot be
       // told to continue; the truncated turn ends as if the cap were used up.
       if (liveness.lastFinish === "length" && !failure.error && liveness.lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
@@ -1053,48 +1016,34 @@ export async function watch(
         if (!ok) return blockedAdvice("steer dispatch failed (length-continuation hint); cannot continue the session, see the log.")
         return "consumed"
       }
-      // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from the first cell instead of passing the row through to the spine's own terminal — identical outcome (the row's later cells dispatch to this same handle), no per-input bookkeeping needed.
+      // AUTO-DECISION: the natural idle finish returns { settle: { kind: "natural" } } from this segment instead of passing the row through to the spine's own idle terminal — identical outcome, no per-input bookkeeping needed.
       return { settle: { kind: "natural" } }
     },
   }
 
-  // The remainder concern's dispatch (plans/0061 §4.11): every roster entry
-  // delegates to this one handle, which routes the input to its per-kind
-  // handler.
-  const handle: Concern<SliceKey>["handle"] = async (input, _own, _view, fx): Promise<Advice> => {
+  // The remainder concern's dispatch (plans/0061 §4.11): the not-yet-extracted
+  // roster entries share this one handle. The spine hands it each of its cells
+  // in the row's order; the remainder answers at the row's FIRST such cell —
+  // its cells are contiguous in every row, and the kind's handler runs their
+  // statements in today's order there — and passes at its later cells, which
+  // that one run already covered.
+  const handle: Concern<SliceKey>["handle"] = async (input, own, view, fx): Promise<Advice> => {
     const key: InputKind = input.kind === "event" ? input.event.type : input.kind
+    const first = firstRemainderCell(key)
+    if (first === undefined || own !== remainderState[first]) return "pass"
     // The map's construction pairs each key with its payload type, which the
     // union-typed lookup cannot show; the dispatch casts once, here.
-    const handler = handlers[key] as (input: TurnInput, fx: TurnFx) => Promise<Advice>
-    return handler(input, fx)
+    const handler = handlers[key as ServedKind] as (input: TurnInput, fx: TurnFx, view: TurnView) => Promise<Advice>
+    return handler(input, fx, view)
   }
 
-  // The remainder install (plans/0061 §4.11, the D1 compatibility layer):
-  // one concern holds the whole turn body and owns every slice — each
-  // roster entry hands its pre-created slice back and delegates to the
-  // shared handle, so `slicesDelegatedTo` reads the full eleven until the
-  // extraction units swap entries for real concerns.
-  const concerns: ConcernRoster = {
-    guard: { name: "guard", initial: () => state.guard, handle },
-    transcript: { name: "transcript", initial: () => state.transcript, handle },
-    windows: { name: "windows", initial: () => state.windows, handle },
-    stuck: { name: "stuck", initial: () => state.stuck, handle },
-    questions: { name: "questions", initial: () => state.questions, handle },
-    failure: { name: "failure", initial: () => state.failure, handle },
-    recovery: { name: "recovery", initial: () => state.recovery, handle },
-    liveness: { name: "liveness", initial: () => state.liveness, handle },
-    usage: { name: "usage", initial: () => state.usage, handle },
-    stepUp: { name: "stepUp", initial: () => state.stepUp, handle },
-    test: { name: "test", initial: () => state.test, handle },
-  }
-
-  const { settle } = await runTurn({ ctx, stream, concerns, fx, attach: sources.attach })
+  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle), fx, attach: sources.attach })
 
   // —— Mapping the settle back to the Watch result each old exit returned ——
   // The early blocked/error settles made their effects inside the handler
   // (their aborts precede the wrapper's close-out there, as they did inside
   // the old loop); what remains is shaping the snapshot.
-  if (settle.kind === "blocked") return snapshot(blockedExtra)
+  if (settle.kind === "blocked") return snapshot(view, blockedExtra)
   if (settle.kind === "error") {
     // The raised settle (a classifier answer raised the class of the
     // retrying turn, plans/0055 §7.1): the synthetic answer handler may not
@@ -1108,7 +1057,7 @@ export async function watch(
       raisedLine(settle.cls)
     }
     const msg = failure.info?.message ?? failure.error
-    return snapshot({
+    return snapshot(view, {
       error: msg,
       retryable: failure.info?.isRetryable === false ? false : undefined,
       errorInfo: failure.info,
@@ -1153,7 +1102,7 @@ export async function watch(
     finalClassified = consulted.classified
     if (finalClassified) raisedLine(finalClass)
   }
-  return snapshot({
+  return snapshot(view, {
     error: failure.error,
     testHandover: testState.handover,
     retryable: failure.retryable,

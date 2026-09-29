@@ -4,11 +4,9 @@
 // invariants firing as programming errors — a kernel fx after a steer in the
 // same idle quiet point, a second steer there, anything but log/vlog from a
 // synthetic input, a cross-slice write under frozen views — and the remainder
-// layer's owned-slice set (plans/0061 §4.11: all eleven slices while nothing
-// is extracted, shrinking per extraction unit, none at the layer's removal)
-// plus its per-input handler map: exactly one handler per input kind (the
-// turn-trace suite's roster case drives every kind through the real
-// dispatch, pinning that it is reached).
+// layer's owned-slice set over the real install (plans/0061 §4.11: exactly
+// the not-yet-extracted slices, shrinking per extraction unit, none at the
+// layer's removal) plus the input kinds it still serves.
 // The spine is driven with fake concerns over a fake TurnFx and a stub stream
 // — everything a turn needs arrives as runTurn's arguments.
 import { describe, expect, test } from "bun:test"
@@ -18,7 +16,7 @@ import { runTurn, slicesDelegatedTo, SLICE_KEYS, TURN_ARBITRATION, type ConcernR
 import { createServices } from "../src/services"
 import { parseSwitches } from "../src/switches"
 import { usageSource } from "../src/usage"
-import { HANDLER_KINDS } from "../src/watch"
+import { HANDLER_KINDS, turnConcerns, type RemainderState } from "../src/watch"
 import { ev, fakeAgent } from "./fixtures/agent"
 
 const SESSION = "ses_1"
@@ -285,23 +283,52 @@ describe("the queue discipline's terminal settles", () => {
   })
 })
 
-describe("the remainder layer's per-input handlers", () => {
-  test("every input kind has exactly one remainder handler", () => {
-    // watch's handler map is a total record over InputKind — a missing or
-    // extra key is a compile-time error — and HANDLER_KINDS is its keys'
-    // runtime mirror; pinned here to the eleven row keys (the table test
-    // above ties them to the table). That the dispatch reaches each handler
-    // is pinned by the turn-trace suite's roster case, which fires every
-    // arbitration cell through watch's real install.
-    expect([...HANDLER_KINDS].sort()).toEqual([...INPUT_KINDS].sort())
-    expect(new Set(HANDLER_KINDS).size).toBe(INPUT_KINDS.length)
-  })
-})
-
 describe("the remainder layer's owned slices", () => {
-  test("at the install every slice delegates to the one remainder handle (all eleven)", () => {
+  // The not-yet-extracted slices' initial values, as the real install reads
+  // them (turnConcerns hands the objects back through the roster's
+  // initials).
+  const remainderState = (): RemainderState => ({
+    questions: { autoAnswered: [], resolves: [] },
+    failure: { error: "", retrying: false },
+    recovery: {},
+    liveness: { probeFailures: 0, halfOpen: false, lengthContinued: 0 },
+    usage: { pct: 0, used: 0, hinted: false, notes: new Set<number>() },
+    stepUp: { step: 0 },
+    test: { handover: false, asked: false, retried: false },
+  })
+
+  test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
+    // The real install (watch's turnConcerns): guard, transcript, windows and
+    // stuck hold their own concerns; the seven not-yet-extracted slices share
+    // the one remainder handle. Each extraction unit shrinks this list, and
+    // the layer's removal empties it.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    expect(slicesDelegatedTo(delegatedRoster(handle), handle)).toEqual([...SLICE_KEYS])
+    expect(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle)).toEqual([
+      "questions",
+      "failure",
+      "recovery",
+      "liveness",
+      "usage",
+      "stepUp",
+      "test",
+    ])
+  })
+
+  test("the remainder serves exactly the input kinds whose row still holds a not-yet-extracted cell", () => {
+    // HANDLER_KINDS is the remainder handler map's keys' runtime mirror (the
+    // map itself is a watch() local — its handlers close over the turn's
+    // state); pinned here against the table and the install's delegation set,
+    // not a hand-written list — limit belongs to the windows concern alone,
+    // stream-end to the spine's own terminal. That the dispatch reaches each
+    // handler is pinned by the turn-trace suite's roster case, which fires
+    // every arbitration cell through watch's real install.
+    const handle: Concern<SliceKey>["handle"] = async () => "consumed"
+    const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle), handle))
+    // The cast is the assertion's own claim: the table-derived kinds are the
+    // kinds the remainder serves (the equality below checks it at runtime).
+    const served = INPUT_KINDS.filter((kind) => TURN_ARBITRATION[kind].some((cell) => remainder.has(cell.concern))) as (typeof HANDLER_KINDS)[number][]
+    expect([...HANDLER_KINDS].sort()).toEqual([...served].sort())
+    expect(new Set(HANDLER_KINDS).size).toBe(HANDLER_KINDS.length)
   })
 
   test("extraction shrinks the delegated set monotonically to none (the removal check's endpoint run backwards)", () => {

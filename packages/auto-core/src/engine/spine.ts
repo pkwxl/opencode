@@ -69,11 +69,11 @@ export const SLICE_KEYS = ["guard", "transcript", "windows", "stuck", "questions
 // The arbitration table (plans/0061 §4.5), declared with its final cell
 // skeleton: one ordered row per input kind (an `event` dispatches on its own
 // type), the cells naming the slice that owns the step, in today's statement
-// order. While the remainder layer lives, every cell resolves to the one
-// remainder concern through the roster — its handler answers consumed or a
-// settle for the whole uncut body at the first cell, so the later cells
-// stand ready for the extraction units, which swap roster entries for real
-// concerns without reshaping the table. The `concurrent` flag marks the
+// order. While the remainder layer lives, the not-yet-extracted cells resolve
+// to the one remainder concern through the roster — its handler answers at
+// the row's first such cell for its contiguous segment of the row — and the
+// extracted cells hold their own concerns, so the extraction units swap
+// roster entries without reshaping the table. The `concurrent` flag marks the
 // cells that may handle a synthetic input while an fx call is in flight.
 // The two terminal rows are the spine's own: a stream that exhausts without
 // an idle settles interrupted, an idle whose row runs out without a stop

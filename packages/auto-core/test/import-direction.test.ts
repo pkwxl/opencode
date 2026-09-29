@@ -173,6 +173,17 @@ const CLASSIFIED: Record<string, Domain> = {
     // synthetic inputs. Reaches the contract and spine types, the router's
     // answer type and session-api's probeSession; watch is its only caller.
     "engine/sources": "driver",
+    // The extracted turn concerns (plans/0061 §4.5/§4.6), one file per
+    // concern under engine/concerns/: guard (the twin-idle dedup), windows
+    // (the limit row), transcript (terminal echo and billing) and stuck (the
+    // loop hint). Each owns one slice of the turn state and reaches only the
+    // contract's types plus the unranked leaves below the session layer
+    // (session-api's describePart, the stuck-hint template render and the
+    // detector's constants); watch installs them beside the remainder.
+    "engine/concerns/guard": "driver",
+    "engine/concerns/windows": "driver",
+    "engine/concerns/transcript": "driver",
+    "engine/concerns/stuck": "driver",
     "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -343,16 +354,25 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // the session layer (log, session-api, testrun, git, handover, stats).
     "engine/fx": 5,
     // The turn's synthetic-input sources (plans/0061 §4.2/§4.4), taking the
-    // last slot under watch: they reach the contract and spine types, the
+    // slot beside the spine: they reach the contract and spine types, the
     // router's answer type and session-api's probeSession.
     "engine/sources": 6,
-    watch: 7,
-    attempt: 8,
-    session: 9,
-    artifact: 10,
-    "exec-session": 10,
-    execute: 11,
-    runner: 12,
+    // The extracted turn concerns (plans/0061 §4.5/§4.6), in their extraction
+    // order, filling the slots up to watch: each reaches the contract's types
+    // and the unranked leaves below the session layer; watch is their
+    // installer, beside the remainder that still holds the not-yet-extracted
+    // cells.
+    "engine/concerns/guard": 7,
+    "engine/concerns/transcript": 8,
+    "engine/concerns/windows": 9,
+    "engine/concerns/stuck": 10,
+    watch: 11,
+    attempt: 12,
+    session: 13,
+    artifact: 14,
+    "exec-session": 14,
+    execute: 15,
+    runner: 16,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

@@ -258,26 +258,10 @@ describe("session-boundary stats wiring (T-003): Watch.usage and statsSessionBeg
     }
   })
 
-  test("a re-sent part (SSE replaying the same step-finish update event) is not counted twice", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
-    try {
-      const { client } = fakeClient({
-        events: (sid) =>
-          (async function* () {
-            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 }, 0.02)
-            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 }, 0.02)
-            yield { type: "session.idle", properties: { sessionID: sid } }
-          })(),
-      })
-      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      await runSession(client, task, "prompt", { dir }, chain)
-      const round = await statsTotals(dir, "round")
-      expect(round?.usage).toEqual({ input: 1200, output: 300, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 1 })
-    } finally {
-      await flushStats(dir)
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
+  // The step-finish billing dedup itself (a re-sent part not counted twice)
+  // is the transcript concern's mechanism: re-homed into its concern suite
+  // (test/turn-transcript.test.ts) when the concern was extracted, so it is
+  // not asserted twice. What stays here is the wiring the books need.
 
   test("the blocked exit loses no usage (steps accumulated before the block are booked as usual)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
