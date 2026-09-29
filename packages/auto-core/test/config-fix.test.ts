@@ -141,7 +141,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
   })
 
   test("manual findings are reported only, and the artifact rules are skipped", async () => {
-    await seedInit(dir, { ...CONFIG_DEFAULTS, commit: false, handoverTest: true })
+    await seedInit(dir, { commit: false, handoverTest: true })
     await rm(join(dir, ".opencode/agent/auto.md"))
     const plan = await planFix(dir)
     expect(fixable(plan).map((finding) => finding.problem)).toEqual(["commit: false is retired (unified commit is a completion condition)"])
@@ -223,7 +223,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
   })
 
   test("planFix writes nothing", async () => {
-    await seedInit(dir, { ...CONFIG_DEFAULTS, commit: false })
+    await seedInit(dir, { commit: false })
     await rm(join(dir, ".opencode/agent/auto.md"))
     const before = await Bun.file(join(dir, CONFIG)).text()
     await planFix(dir)

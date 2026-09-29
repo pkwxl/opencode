@@ -52,9 +52,6 @@ export type RunAllOpts = {
   // minutes to pause between tasks waiting for the human (0 = no wait); Enter
   // continues immediately, the timeout continues automatically.
   waitBetween?: number
-  // --commit false: the unified commit after a session ends (on by default;
-  // the commit machinery is src/git.ts).
-  commit?: boolean
   subtask?: SubtaskMode
   // dryrun: run only the one permission-precheck session and print its
   // report; no task executes.

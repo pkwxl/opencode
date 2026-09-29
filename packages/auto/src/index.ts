@@ -59,11 +59,11 @@ const command = args[0]
 
 const flags = new Map<string, string>()
 const positional: string[] = []
-// --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
+// --agent/--server/--wait-answer/--wait-between/--context-limit/--subtask/
 // --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
 // --scan-exempt/--max-sessions/--reason (shared by close and plan --force-close)/--force-close
 // and --new-task (plan's alone) are value flags (they swallow the next token; the retired
-// --implement-file/--implement-prompt swallow one too, so their argument is
+// --implement-file/--implement-prompt/--commit swallow one too, so their argument is
 // never mistaken for the directory, auto-core plans/0053 D13; init's retired
 // -p/--prompt keeps swallowing one for the same reason, plans/0053 D31);
 // --verbose/--interactive/--dryrun/--test-by-driver/
@@ -74,11 +74,11 @@ const positional: string[] = []
 // accepts --flag=value; --prompt also has the short form -p, --interactive the
 // short form -i (boolean, swallows nothing), --mode the short form -m
 // (mirroring -p's swallow rule). Parsing matches whole names exactly:
-// --commit-changes differs from the config flag --commit and --force-close from
+// --commit-changes differs from the retired --commit and --force-close from
 // -f/--force, so none swallows the other's value by mistake; close's ref always
 // comes first (positional[0]), so --commit cannot swallow it even as a value
-// flag (auto-core plans/0053 D20/F8; the close side intercepts it with its
-// config-flag message anyway).
+// flag (auto-core plans/0053 D20/F8; the close side intercepts it with its own
+// retirement message anyway).
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -223,8 +223,9 @@ if (command !== "plan" && flags.has("new-task")) {
   console.error(`--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`)
   process.exit(1)
 }
-// Retired flags are usage errors with their own notice (mirroring the --commit
-// false retirement), let through the whitelist so the notice replaces "unknown
+// Retired flags are usage errors with their own notice (the --commit false
+// retirement set the pattern; the whole flag joined the table when its config
+// key went), let through the whitelist so the notice replaces "unknown
 // option": the completion-side mechanisms (plans/0044 D13), the migration
 // parameters — intent, not configuration (plans/0052 D1) — init's m-mode
 // planning shortcut, whose session is now plan's (plans/0053 D13), and init's
@@ -242,7 +243,12 @@ const INIT_PROMPT_RETIRED =
   "is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p"
 const AMEND_FLAG_RETIRED =
   "is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"
+const COMMIT_FLAG_RETIRED =
+  "is retired: committing cannot be turned off — the driver commits all changes after every session ends (unified commits are the " +
+  "completion condition). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value " +
+  "fails loading (opencode-auto fix <dir> drops the key)"
 const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }> = {
+  commit: COMMIT_FLAG_RETIRED,
   verify: COMPLETION_RETIRED,
   review: COMPLETION_RETIRED,
   early: COMPLETION_RETIRED,
@@ -259,7 +265,7 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
-const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt"]
+const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
 // agents and spends tokens); status stays flagless.
 const MODELS_FLAGS = new Set(["probe"])
@@ -285,17 +291,21 @@ for (const key of flags.keys()) {
   }
   if (command === "close") {
     if (CLOSE_FLAGS.has(key)) continue
+    // --commit keeps its close-specific refusal ahead of the generic
+    // retirement notice below: it takes a value, so it would swallow whatever
+    // follows it, and what a close caller means by it is the dirty-worktree
+    // pair (auto-core plans/0053 D20/F8).
+    if (key === "commit") {
+      console.error(
+        "--commit is retired (committing cannot be turned off — the driver commits after every session) and it takes a value, so it would swallow whatever follows it; " +
+          "the close options for a dirty worktree are --commit-changes and --stash-changes",
+      )
+      process.exit(1)
+    }
     // Globally retired flags keep their own notices below (they exit there);
     // a scoped entry (init's -p) does not fire for close, so it must not be
     // waved through here either — close's own refusals take it.
     if (typeof RETIRED_FLAGS[key] === "string") continue
-    if (key === "commit") {
-      console.error(
-        "--commit is a config flag frozen by init (run's commit semantics; to change: opencode-auto amend <dir> --commit <value>, or edit that file directly) " +
-          "and it takes a value, so it would swallow whatever follows it; the close options for a dirty worktree are --commit-changes and --stash-changes",
-      )
-      process.exit(1)
-    }
     if (CONFIG_FLAGS.includes(key)) {
       console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; close takes no config options`)
       process.exit(1)
@@ -855,15 +865,14 @@ async function logRunBanner(directory: string, config: ProjectConfig) {
 // and --max-sessions; plan adds its stop condition and planning input.
 function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags): RunAllOpts {
   return {
-    // The coding agent, commit semantics, context budget etc. come from the
-    // config file (written by init); OPENCODE_AUTO_AGENT still overrides the agent.
+    // The coding agent, context budget etc. come from the config file (written
+    // by init); OPENCODE_AUTO_AGENT still overrides the agent.
     agent: config.agent,
     server: flags.get("server"),
     // interactive implies the verbose log level (the watch/change-file
     // monitoring runs as usual and writes to the log).
     verbose: session.verbose || session.interactive,
     waitAnswer: session.waitAnswer,
-    commit: config.commit,
     subtask: config.subtask,
     contextLimit: config.contextLimit * 1000,
     permission: session.permission,
@@ -882,20 +891,6 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
     scanExempt: config.scanExempt,
     newSession: session.newSession,
   }
-}
-
-// --commit absent/bare/true = on (the unified commit after sessions). false
-// and the old alias none retired on 2026-09-15
-// (plans/0021-commit-boundary-design.md): the unified commit is the completion
-// condition — the unit baseline, the recovery-fidelity rollback and the rest
-// all assume commits are always on, so an off setting conflicts with them and
-// is a usage error on sight. The old subtask/task/once levels were removed
-// together with "revoke AI commit rights, the driver commits". Returns null
-// for an invalid value (the retired off levels included).
-function parseCommit(flags: Map<string, string>): boolean | null {
-  const raw = flags.get("commit")
-  if (raw === undefined || raw === "" || raw === "true") return true
-  return null
 }
 
 // --max-sessions defaults to 1; must be a positive integer — null marks an
@@ -1004,14 +999,6 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
       process.exit(1)
     }
   }
-  const commit = parseCommit(flags)
-  if (commit === null) {
-    console.error(
-      "--commit now only takes true (default): --commit false (and the old alias none) is retired — unified commits are the completion condition" +
-        " (plans/0021-commit-boundary-design.md); the driver commits all changes after every session ends; turning commits off is no longer supported",
-    )
-    process.exit(1)
-  }
   const subtask = parseSubtask(flags.get("subtask"))
   if (subtask === null) {
     console.error(`--subtask takes ${SUBTASK_MODES.join("|")}; defaults to auto`)
@@ -1061,12 +1048,11 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
     }
     phases = PRESET_FORM.test(raw) ? raw : parsed.map((entry) => entry.type).join(",")
   }
-  // Only explicitly given keys enter the merge: bare --commit/--subtask and
-  // their kin take their own defaults, and options never given leave the
-  // existing config alone.
+  // Only explicitly given keys enter the merge: bare --subtask and its kin
+  // take their own defaults, and options never given leave the existing config
+  // alone.
   const explicit: Partial<ProjectConfig> = {}
   if (agent === "claude") explicit.agent = agent
-  if (flags.has("commit")) explicit.commit = commit
   if (flags.has("subtask")) explicit.subtask = subtask
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
   if (flags.has("idle-time")) explicit.idleTime = idleTime
@@ -1598,17 +1584,17 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
 
-options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
@@ -1622,7 +1608,6 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        -p/--prompt is the planning input of plan (-p <text> | --file <path>); on every other command it is refused — init no longer writes the project brief: edit .opencode/auto/brief.md directly (init writes a stub there when the file is missing: ## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning; every planning session reads it). State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
        reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
        --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md). Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); once the current round is complete any value applies to the next round plan establishes
-       --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
        --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
@@ -1630,8 +1615,9 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --scan-exempt none|<globs> comma-separated path globs, relative to the target directory, of deliverable files the driver's content scans skip (default none): the process-document reference scan (unit close-out and round close) and the document terminator scan. For deliverables where such strings are content, e.g. a tool's own test fixtures or prompt templates; a glob naming a directory covers the files under it; only deliverable paths are exempted (process documents and the agent-contract surfaces are never scanned for references anyway); the list replaces the stored one, none removes it
-       --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
-       --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
+        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
+        --commit is retired: committing cannot be turned off — after any session ends the driver recursively commits all changes (git history is the audit trail of AI changes; --commit false and the old alias none were retired on 2026-09-15, and with the config key gone the flag went entirely). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value fails loading (opencode-auto fix <dir> drops the key)
+        --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error
         continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
         check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings

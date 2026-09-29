@@ -2,7 +2,7 @@
 
 A command-line tool that drives [opencode](https://opencode.ai) to implement work automatically, task by task,
 in task units (the phase's task index `tasks.md` + `docs/T-NNN/`). Constitutional project options (the agent
-contract, commit semantics, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
+contract, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
 (versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
 maintained exclusively by the driver: each task runs as one lead session that manages its own context (the
 default `subtask: auto`), or — under `subtask: true` — is first split into subtasks by a decompose session,
@@ -44,7 +44,7 @@ opencode-auto init [dir]     # initialize the project config layer: fix the proj
 opencode-auto amend [dir] --<key-option> <value> ...   # rewrite only the given config keys, keep the rest (at least one key; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
-opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent/commit semantics come from the project config)
+opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
@@ -84,16 +84,17 @@ config, or to clear retired keys, use `fix` (see [Config fix (fix)](#config-fix-
 remaining keys to defaults.
 
 **Breaking change**: `run` no longer accepts `-m/--mode`, `--agent`, `--context-limit`, `--subtask`,
-`--idle-time`, `--idle-max`, `--commit`, `--test-by-driver`, `--handover-test`, `--auto-number`,
+`--idle-time`, `--idle-max`, `--test-by-driver`, `--handover-test`, `--auto-number`,
 `--no-auto-number`, `--phases`, `--parallel`, `--scan-exempt` — any of them appearing is a usage error (exit code 1), and the
 message points at how to amend (`opencode-auto amend <dir> --<flag> <value>`, or edit the config file
-directly); these options are fixed as project attributes, see the next section. `--implement-file`/
+directly); these options are fixed as project attributes, see the next section. `--commit` is retired
+entirely (see the compatibility table below). `--implement-file`/
 `--implement-prompt` are retired; appearing on any command is a usage error — see
 [Planning tasks with AI](#planning-tasks-with-ai).
 
 ## Project configuration (.opencode/auto/config.json)
 
-Constitutional options — those deciding "how sessions are instructed and how commit semantics operate" —
+Constitutional options — those deciding "how sessions are instructed" —
 are fixed at `init` time into `.opencode/auto/config.json`: versioned, shared with the repository,
 human-editable. `run` reads the file at every start and prints a one-line config summary; `status` prints the
 same. The test for which side an option belongs on: **changing it requires also changing the wording of
@@ -109,7 +110,7 @@ describes how this run executes and how a person watches it → run.**
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `verify` | **Retired** | — | Task-level acceptance was retired (2026-09-21): an existing config with `verify: true` fails loading with exit 1 (delete the key — `fix` does it — and plan acceptance as tasks or use the v phase); `false` or absent is ignored |
-| `commit` | `true` (**`false` retired**) | `true` | Unified commit after sessions (the git history is the audit trail of AI changes); committing is the completion condition — an existing config with `false` fails loading with exit 1 (`fix` deletes the key) |
+| `commit` | **Retired** | — | Committing cannot be turned off. `false` was retired on 2026-09-15, and the key went entirely on 2026-09-29 with the flag: a stored `true` (what an older init wrote) loads and is ignored like an unknown key; any other stored value fails loading with exit 1 (`fix` deletes the key) |
 | `testByDriver` | `true` / `false` | `false` | Compile/test/build/lint commands are executed by the driver (sessions request them via a `test/` script + the `tmp/test.sh` marker), see [Test execution protocol](#test-execution-protocol---test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | On test failure with the context at its limit, write a handover document and continue in a new session; requires `testByDriver: true`, otherwise config validation fails (exit code 1) |
 | `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat in the target directory; the next available number is persisted in `.auto/next-task`, consumed by the phase planning session and recovered first when the record is missing — see the end of [Phased flow](#phased-flow---phases) |
@@ -117,7 +118,8 @@ describes how this run executes and how a person watches it → run.**
 | `scanExempt` | An array of path globs relative to the target directory (`*`, `**`, `{a,b}`; no absolute path, no `..`) | none (key not written) | Deliverable files the driver's two content scans skip (auto-core plans/0059 X2): the process-document reference scan (the lines a unit added, at subtask close-out, and the whole tree at round close) and the document terminator scan at subtask close-out. For a deliverable where such strings are content — a tool's own test fixtures, prompt templates, sample documents. A glob naming a directory covers the files under it (`test/fixtures` = `test/fixtures/**`). Only deliverable paths are exempted: the task and round records stay held to their rules whatever the list says. Set with `init`/`amend --scan-exempt a,b` (the list replaces the stored one; `none` removes the key); shared with the repository like every key |
 | `source` / `destDir` | **Retired** | — | The migration source and target are intent, not config (2026-09-23, auto-core plans/0052 D2/D3): they go into `.opencode/auto/brief.md`, read by the planning sessions. An existing config carrying either key (any value) fails loading with exit 1; the message names the original value and the fix (copy it into brief.md, then delete the key — `fix` migrates it into the `## Source` / `## Target` sections and deletes the key); a no-argument `init` full overwrite drops them and prints each original value. Both key names are tombstoned for good, never reused |
 
-**Unified commit** (`commit: true`, the default): after any session ends and the driver has finished its
+**Unified commit** (always on; the `commit` config key is retired): after any session ends and the driver has
+finished its
 state writes (e.g. ticking a subtask), the driver recursively commits all changes — nested `.git`
 repositories first, then the repository containing the target directory — with the short-label subject line
 `T-NNN <label> <task title/subtask>` (e.g. `T-001 decompose fix login`, `T-001 S2 write schema`, `T-001 wrapup
@@ -174,7 +176,8 @@ Compatibility and migration:
 | Scenario | Behavior |
 | --- | --- |
 | Old project (only `.auto/config.json` has a mode) | When the new file is missing, the old value is read as a fallback and run prints a hint to "run `fix` to write out the full config" (`fix` writes the new file from the old mode + defaults); once init / fix has written the new file the fallback ends (the old file is not deleted — it sits ignored by git until `reset` cleans it up) |
-| Old scripts like `run -m xxx` / `run --commit` | Exit code 1 + amend guidance (breaking) |
+| Old scripts like `run -m xxx` | Exit code 1 + amend guidance (breaking) |
+| Retired option `--commit` (any value, on any command) | Exit code 1 + retirement notice (committing cannot be turned off; a stored `commit: true` still loads and is ignored) |
 | Retired options `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | Appearing on any command: exit code 1 + retirement notice (acceptance becomes planned tasks; the report result line `Result: FAIL` stops the run) |
 | Retired options `--source-dir` / `--source-path` / `--dest-dir` | Appearing on any command: exit code 1 + retirement notice (the migration source and target are intent and go into `.opencode/auto/brief.md`) |
 | Existing config containing `source` / `destDir` | `run` / `amend` / `init` fail strictly (`status` prints a ⚠ line); the message names the original value and the fix (copy into brief.md, then delete the key) and points at `fix` — `fix` migrates the value into brief.md's `## Source` / `## Target` sections and deletes the key; a no-argument `init` drops them, prints the original values, and overwrites as usual |
@@ -188,9 +191,9 @@ Compatibility and migration:
 | An existing PLAN.md (with `verify:` / `verified:` / `final:` field lines, `T-F<k>` tasks) | Not read since M3.4; migrate the tasks into task units (see [Task unit format](#task-unit-format)) to continue |
 | Switching `subtask` mid-run | Tasks whose checklist was already injected resume from their ticked state (progress is recorded per task, never mixed across tasks); new tasks run under the new setting; switching mid-run is discouraged |
 | Changing `mode` mid-run | Only the prompt copy changes (modes do not enter the scheduling state machine) |
-| Turning `commit` off mid-run | No longer possible: `commit: false` was retired on 2026-09-15; reading it fails with exit 1 (`fix` deletes the key and keeps the rest; or delete it by hand / set `true`, or a no-argument `init` full overwrite — dropping and printing the key) |
+| Turning `commit` off | No longer possible: `commit: false` was retired on 2026-09-15, and on 2026-09-29 the flag and the config key went entirely — any `--commit` form is exit 1 + retirement notice; a stored `commit: true` loads and is ignored, any other stored value fails with exit 1 (`fix` deletes the key and keeps the rest; or delete it by hand, or a no-argument `init` full overwrite — dropping and printing the key) |
 
-Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commit / subtask do not take part.
+Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subtask does not take part.
 
 ### init options (fixing and amending)
 
@@ -202,7 +205,6 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commi
 | `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams, each run in a fork of the lead, when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
-| `--commit [true]` | Unified commit after sessions, written to the config (default/bare flag `true`). **`false` and the old alias `none` were retired on 2026-09-15** — the unified commit is the completion condition (the unit clean gate / SHA baseline / recovery rollback all assume committing is always on); appearing is a usage error with exit 1; an existing `commit: false` fails strictly as a bad file — delete the key or set `true` |
 | `--context-limit [n]` | The context budget baseline (unit: thousand tokens, default/bare flag 64), written to the config; a new session starts once the previous session's used tokens reach half of it (32k by default), effective alongside the 50% share threshold |
 | `--test-by-driver [true]` | Execution rights for compile/test/build/lint commands move to the driver (default/bare flag `false`), written to the config: execution sessions no longer run such commands in-session; instead they write the command as a script in `test/`, write the script path into `tmp/test.sh` to request execution by the driver, and the exit code and output file are fed back for the AI to read and judge directly. The switch also decides whether the test-execution principle block enters AGENTS.md and whether the test protocol section enters the agent contract and execution prompts. See [Test execution protocol](#test-execution-protocol---test-by-driver) |
 | `--handover-test [true]` | Must be combined with `--test-by-driver` (otherwise a usage error, exit code 1), written to the config: when a test fails and the session context reaches `contextLimit`, the AI is asked to write a handover document and continue in a new session, preventing repeated trial-and-error inside a bloated context |
@@ -224,7 +226,7 @@ sessions.
 `opencode-auto amend [dir] --<key-option> <value> ...` rewrites the given config keys and keeps the rest at
 their existing values (auto-core plans/0052 D25; the old spelling `init --amend` is retired, folded into this
 command). It accepts the same key options and values as init (`-m/--mode`, `--agent`, `--subtask`,
-`--idle-time`, `--idle-max`, `--commit`, `--context-limit`, `--phases`, `--test-by-driver`,
+`--idle-time`, `--idle-max`, `--context-limit`, `--phases`, `--test-by-driver`,
 `--handover-test`, `--auto-number`/`--no-auto-number`, `--wrapup`/`--no-wrapup`, `--parallel`,
 `--scan-exempt`); value-range
 validation, the `handoverTest` pairing check and the phase index prefix guardrail share their code with init.
@@ -264,7 +266,7 @@ which side to change is a person's decision).
 | Object | Finding | Action |
 | --- | --- | --- |
 | `config.json` missing, legacy `.auto/config.json` has a mode | Fixable | Write the new file from the old mode + defaults |
-| `commit: false` / `verify` (any value) / a contract-name `agent` (e.g. `auto`) | Fixable | Delete the key |
+| `commit` (any stored value but `true`) / `verify` (any value) / a contract-name `agent` (e.g. `auto`) | Fixable | Delete the key |
 | `verifyIdle` / `verifyMax` | Fixable | Rename to `idleTime` / `idleMax` (key order unchanged); if the new key already exists, delete the old one |
 | `source` / `destDir` | Fixable | Migrate the original value to the end of brief.md's `## Source` / `## Target` section (append the section at the end of the file if missing; start from the stub if brief.md is missing), then delete the key |
 | `config.json` is not valid JSON / not an object | Manual | — |

@@ -87,7 +87,6 @@ describe("loadProjectConfig", () => {
         ["subtask", "TRUE"],
         // verify is retired (plans/0044 D2): true fails strictly, the message names the key
         ["verify", true],
-        ["commit", 1],
         ["agent", ""],
         ["agent", 1],
         ["mode", 123],
@@ -130,15 +129,22 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("commit: false is retired → strict failure; true/absent load as usual (plans/0021-commit-boundary-design.md 2026-09-15)", async () => {
+  test("commit is retired: every stored value but true fails strictly; true loads and is ignored (plans/0021 D7, 2026-09-15; the key deleted 2026-09-29 with the git seam, plans/0061 R13)", async () => {
     const dir = tempDir()
     try {
-      expect(CONFIG_DEFAULTS.commit).toBe(true)
-      expect((await loadProjectConfig(dir)).commit).toBe(true)
+      expect(CONFIG_DEFAULTS).not.toHaveProperty("commit")
+      expect(await loadProjectConfig(dir)).not.toHaveProperty("commit")
+      // a stored true is the one tolerated value: it loads, ignored like an
+      // unknown key (init used to write it; an existing config keeps working)
       writeConfig(dir, JSON.stringify({ commit: true }))
-      expect((await loadProjectConfig(dir)).commit).toBe(true)
-      writeConfig(dir, JSON.stringify({ commit: false }))
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/commit: false is retired/)
+      expect(await loadProjectConfig(dir)).toEqual({ ...CONFIG_DEFAULTS })
+      // every other value — false (the retired off), "none" (its old alias)
+      // and 1 (a type error before the deletion) — is a strict failure with
+      // the retired message, so the strictness never dropped with the field
+      for (const value of [false, "none", 1, null]) {
+        writeConfig(dir, JSON.stringify({ commit: value }))
+        await expect(loadProjectConfig(dir)).rejects.toThrow("commit: false is retired")
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -375,10 +381,10 @@ describe("mergeProjectConfig and formatProjectConfig", () => {
 
   test("the summary line carries every key's effective value (phases appended last)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "mode migrate · agent opencode · subtask auto · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent opencode · subtask auto · watchdog idle 10m/max unset · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "mode migrate · agent claude · subtask auto · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent claude · subtask auto · watchdog idle 10m/max 30m · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
     // the tests-run-by-driver key enters the summary; the handover modifier follows handoverTest

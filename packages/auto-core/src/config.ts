@@ -36,12 +36,6 @@ export type ProjectConfig = {
   idleTime: number
   // Minutes, 0 = unset, 1..1440.
   idleMax: number
-  // Post-session unified commit (default true). **false has been retired since
-  // 2026-09-15** — unified commit is the completion condition, and any stored
-  // config reading commit: false fails loading strictly (see
-  // validateProjectConfig); the field itself and the code-side opts.commit
-  // gate stay for now, their cleanup is a separate task.
-  commit: boolean
   // --test-by-driver: the right to execute test/compile/build commands moves
   // to the driver. When on, execution sessions do not run such commands
   // directly; instead the command is written as a script into the test/
@@ -103,7 +97,6 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   subtask: "auto",
   idleTime: 10,
   idleMax: 0,
-  commit: true,
   testByDriver: false,
   handoverTest: false,
   autoNumber: true,
@@ -166,8 +159,13 @@ async function readConfigRecord(dir: string): Promise<unknown> {
 const RETIRED_KEYS: Record<string, { retired: (value: unknown) => boolean; why: string; message: (value: unknown) => string }> = {
   // 2026-09-15, plans/0021-commit-boundary-design.md D7: the unit-commit clean
   // gate, SHA baseline and recovery rollback anchor all assume commits are on.
+  // 2026-09-29 (plans/0061 R13): the key went with the code-side switch the
+  // git seam replaced — every stored value but true now fails (a stored true
+  // loads and is ignored like an unknown key; before the deletion "none"/1
+  // died in booleanOf's type check instead, likewise strictly — one strict
+  // failure traded for another, so no stored value changed meaning).
   commit: {
-    retired: (value) => value === false,
+    retired: (value) => value !== undefined && value !== true,
     why: "unified commit is a completion condition",
     message: () =>
       "commit: false is retired (unified commit is a completion condition, see plans/0021-commit-boundary-design.md): remove the key or set it to true",
@@ -253,7 +251,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
     `mode ${config.mode} · agent ${config.agent ?? "opencode"} · subtask ${config.subtask}` +
-    ` · watchdog ${watchdog} · commit ${config.commit ? "on" : "off"}` +
+    ` · watchdog ${watchdog}` +
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
     (config.wrapup ? "" : " · wrapup off") +
@@ -292,9 +290,9 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
   const clashes = phaseTypeRoleProblems(types.filter((entry) => entry.origin === "project").map((entry) => entry.type))
   if (clashes.length) throw new Error(clashes.join("\n"))
   if (resolvePhases(phases, types) === null) throw new Error(`${CONFIG_FILE} phases is invalid: ${phasesProblem(phases, types)}`)
-  // commit: false was refused above (RETIRED_KEYS); the opts.commit gate in the
-  // code stays for now, its cleanup is a separate task.
-  const commit = booleanOf("commit", pick("commit"))
+  // commit is refused above (RETIRED_KEYS) for every stored value but true,
+  // which loads and is ignored like an unknown key — the key itself went with
+  // the code-side switch the git service seam replaced (plans/0061 R13).
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
   if (handoverTest && !testByDriver) {
@@ -316,7 +314,6 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     // init naturally fixes the new keys.
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "minutes"),
     idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "minutes, 0 = unset"),
-    commit,
     phases,
     acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
     build: record.build === undefined ? undefined : stringOf("build", record.build),

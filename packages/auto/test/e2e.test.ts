@@ -644,7 +644,6 @@ describe("CLI parsing: run-side options and the config", () => {
         ["--subtask", "auto"],
         ["--idle-time", "10"],
         ["--idle-max", "0"],
-        ["--commit", "true"],
         ["--phases", "admtvk"],
         ["--test-by-driver"],
         ["--handover-test"],
@@ -671,6 +670,13 @@ describe("CLI parsing: run-side options and the config", () => {
       // -m/--mode's message has the same shape (the short form carries the
       // revision hint)
       expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
+      // --commit is no longer a frozen config flag: the flag went with the
+      // config key (committing cannot be turned off), so any form of it gets
+      // the retirement notice instead of the amend guidance
+      const retiredCommit = await runCli(["run", dir, "--commit", "true"])
+      expect(retiredCommit.code).toBe(1)
+      expect(retiredCommit.err).toContain("--commit is retired")
+      expect(retiredCommit.err).not.toContain("was frozen by init")
       // The --commit-subtask removal message is kept
       const removed = await runCli(["run", dir, "--commit-subtask"])
       expect(removed.code).toBe(1)
@@ -864,7 +870,6 @@ describe("CLI: init freezes the project config", () => {
         subtask: "auto",
         idleTime: 10,
         idleMax: 0,
-        commit: true,
         testByDriver: false,
         handoverTest: false,
         autoNumber: true,
@@ -882,7 +887,6 @@ describe("CLI: init freezes the project config", () => {
     subtask: "auto",
     idleTime: 10,
     idleMax: 0,
-    commit: true,
     testByDriver: false,
     handoverTest: false,
     autoNumber: true,
@@ -943,16 +947,27 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("--commit false / none is retired: init is a usage error with exit 1; --commit true works as usual", async () => {
+  test("--commit is retired: any value on any command is a usage error with exit 1; init writes no commit key, a stored true loads and is ignored", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const off = await runCli(["init", dir, "--commit", "false"])
-      expect(off.code).toBe(1)
-      expect(off.err).toContain("is retired")
-      expect((await runCli(["init", dir, "--commit", "none"])).code).toBe(1)
-      // Absent or explicit true freezes as usual (commits always on)
-      expect((await runCli(["init", dir, "--commit", "true"])).code).toBe(0)
-      expect((await readConfig(dir)).commit).toBe(true)
+      // false and none (the 2026-09-15 retirement), and true (which used to be
+      // the one accepted value) — the flag went with the config key
+      for (const value of ["false", "none", "true"]) {
+        const refused = await runCli(["init", dir, "--commit", value])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain("--commit is retired")
+        expect(refused.err).toContain("commit: true")
+      }
+      // A bare init writes no commit key at all
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("commit")
+      // A stored commit: true (what an older init wrote) keeps loading and is
+      // ignored like an unknown key
+      const file = join(dir, ".opencode/auto/config.json")
+      await Bun.write(file, JSON.stringify({ ...DEFAULT_CONFIG, commit: true }, null, 2) + "\n")
+      const status = await runCli(["status", dir])
+      expect(status.code).toBe(0)
+      expect(status.out).toContain("project config")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1036,7 +1051,7 @@ describe("CLI: init freezes the project config", () => {
       // keeps it, a bare init falls back to the default true
       expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
@@ -1066,7 +1081,7 @@ describe("CLI: init freezes the project config", () => {
       expect(off.out).toContain("wrapup off")
       // An amend naming neither key keeps the existing false; a bare init
       // without amend falls back to the default true
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--context-limit", "64"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
@@ -1100,7 +1115,7 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
       expect(claude.out).toContain("· agent claude ·")
       // amend keeps it; amend --agent opencode removes it
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
       expect((await runCli(["amend", dir, "--agent", "opencode"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("agent")
@@ -1132,7 +1147,7 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
       expect(high.out).toContain("· parallel high")
       // amend keeps it; amend --parallel none removes it; a plain init falls back to none
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
       expect((await runCli(["amend", dir, "--parallel", "none"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("parallel")
@@ -1171,7 +1186,7 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ scanExempt: ["test/fixtures/**", "templates/{prompts,intents}"] })
       expect(set.out).toContain("· scan-exempt test/fixtures/**,templates/{prompts,intents}")
       // amend keeps it, amend --scan-exempt replaces it, none removes it
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ scanExempt: ["test/fixtures/**", "templates/{prompts,intents}"] })
       expect((await runCli(["amend", dir, "--scan-exempt", "fixtures"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ scanExempt: ["fixtures"] })
@@ -1192,7 +1207,7 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
       // a hand-edited bad value is refused at load, naming the key
       await Bun.write(join(dir, ".opencode", "auto", "config.json"), JSON.stringify({ scanExempt: "test/**" }))
-      const load = await runCli(["amend", dir, "--commit", "true"])
+      const load = await runCli(["amend", dir, "--wrapup"])
       expect(load.code).toBe(1)
       expect(load.err).toContain("scanExempt must be an array of path globs")
     } finally {
@@ -1208,7 +1223,6 @@ describe("CLI: init freezes the project config", () => {
         ["--context-limit", "0"],
         ["--idle-time", "999"],
         ["--idle-max", "0.5"],
-        ["--commit", "maybe"],
       ]
       for (const extra of bad) {
         const init = await runCli(["init", dir, ...extra])
@@ -1307,7 +1321,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       // An amend without --phases keeps the existing value; an explicit init
       // value changes it
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
@@ -1407,7 +1421,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(bad.err).toContain('phases "security-review,implement" would drop the completed phase docs/R-01/P01-analysis/')
       // An invalid type file is a usage error naming the file
       await Bun.write(join(dir, ".opencode/auto/phases/broken.md"), "# Broken\n\nTasks: no\n\n## plan duties\n\nx\n")
-      const broken = await runCli(["amend", dir, "--commit", "true"])
+      const broken = await runCli(["amend", dir, "--wrapup"])
       expect(broken.code).toBe(1)
       expect(broken.err).toContain("broken.md")
     } finally {
@@ -1473,8 +1487,8 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(on.err).toContain("verify is retired")
       await Bun.write(file, JSON.stringify({ ...config, verify: false }, null, 2) + "\n")
       // The amend rewrites the existing keys (verify:false, a stored artifact
-      // of an old init, is silently dropped); --commit true is a no-change key
-      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      // of an old init, is silently dropped); --wrapup is a no-change key
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(config)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2063,7 +2077,7 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "128"])).code).toBe(0)
-      const { commit: _, ...kept } = await readConfig(dir)
+      const kept = await readConfig(dir)
       const stored = { ...kept, commit: false, verifyIdle: 20, source: { dir: "legacy", path: "pkg" }, destDir: "app" }
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify(stored, null, 2) + "\n")
       await rm(join(dir, ".opencode/agent/auto.md"))
@@ -2074,7 +2088,7 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.out).toContain("verifyIdle was renamed to idleTime, which is also set → drop the key")
       expect(fix.out).toContain("fixed: .opencode/agent/auto.md: write it from the template")
       expect(fix.out).toContain("✓ config layer repaired")
-      // every key no rule names survives; commit falls back to its default (on)
+      // every key no rule names survives; the retired commit key is gone
       expect(await readConfig(dir)).toEqual(kept)
       const brief = await Bun.file(join(dir, ".opencode/auto/brief.md")).text()
       expect(brief).toContain("`legacy`")
@@ -2615,9 +2629,9 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
         [["close", "T-001", dir, "--reason", "r", "--verify"], "--verify is retired"],
         // F8: --commit is a value flag, but the ref comes first and parsing
         // matches whole flag names, so it can never swallow the ref — the
-        // command refuses on the config flag instead of mis-reading the
+        // command refuses on the retirement instead of mis-reading the
         // arguments (the change flags were named to avoid exactly this).
-        [["close", "--commit", "T-001", "--reason", "r"], "--commit is a config flag frozen by init"],
+        [["close", "--commit", "T-001", "--reason", "r"], "--commit is retired"],
         [["close", "--commit", "T-001", "--reason", "r"], "the close options for a dirty worktree are --commit-changes and --stash-changes"],
       ]
       for (const [args, notice] of refusals) {
