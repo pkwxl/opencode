@@ -1,0 +1,45 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] The test script has finished running (run number 1).\n\n- Script: <repo>/test/build.sh\n- Exit code: 0; took <ms>ms; timeout: no\n- Full output (stdout and stderr merged): <repo>/tmp/test.1.out (judge by reading the file directly, in chunks if it is large; do not conclude by guessing)\n\nJudge the test result from this and carry on: if something needs fixing, keep fixing it; when you need to test again, write the same script path into tmp/test.sh once more to re-run it (the script is in the test/ directory, reusable, and may be modified before re-running)."
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "the test script is ready",
+    "  step finish (stop): input 100 / output 10 tokens",
+    "  ⚙ T-001 test script exit code 0, took <ms>ms, script: <repo>/test/build.sh, output: <repo>/tmp/test.1.out",
+    "⚠ steer dispatch failed: promptAsync failed"
+  ],
+  "watch": {
+    "lastText": "the test script is ready",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "blocked": {
+      "type": "blocked",
+      "question": "steer dispatch failed (test result feedback); cannot continue the session, see the log."
+    },
+    "testHandover": false
+  }
+}

@@ -23,15 +23,24 @@
 // the manifest — registering for the charter, not the first scenario).
 
 import { describe, expect, test } from "bun:test"
+import { existsSync } from "node:fs"
+import { mkdir, rm, writeFile } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
 import type { AgentEvent } from "../src/agent/types"
+import type { Watch } from "../src/chain"
 import { cachedAnswer } from "../src/classify"
+import { createGitOps } from "../src/git-ops"
 import type { SteerContext } from "../src/model-step"
-import { services } from "../src/services"
+import { testHandoffFile } from "../src/prompt"
+import { scriptTmpDir } from "../src/script"
+import { createServices, installServices, services, uninstallServices } from "../src/services"
 import { createStuckTracker } from "../src/stuck"
-import type { Steer } from "../src/testrun"
+import { parseSwitches } from "../src/switches"
+import type { Steer, TestRun } from "../src/testrun"
 import { watch } from "../src/watch"
 import { ev, type AgentCall, type TurnScript } from "./fixtures/agent"
-import { compareTrace, fireProbe, flush, runScenario, TURN_EPOCH, turnEntry, until, untilPublished, type TurnScenario } from "./fixtures/turn-trace"
+import { freshRepo, git, task } from "./fixtures/runner"
+import { compareTrace, fireProbe, flush, runScenario, scrubTrace, TURN_EPOCH, turnEntry, until, untilPublished, type ScenarioHand, type TurnScenario } from "./fixtures/turn-trace"
 
 // The steer literal the message-family scenarios share: the 2×64k budget
 // against the fake's 100.0k window gives an 80.0k effective wall
@@ -76,6 +85,77 @@ const answerCached = (message: string) => () => cachedAnswer(services().router, 
 // record is mutable and the scenario deletes the key mid-run (this one
 // scenario is its only user).
 const PROBE_DOWN: Partial<Record<AgentCall, unknown>> = { get: new Error("connection refused") }
+
+// —— The test-protocol family's shared helpers ——
+// The batch drives the test execution / handover protocol at idle over a
+// real temporary repository (freshRepo) and a hand-built TestRun whose
+// paths come from the product's own helpers (the driver working directory
+// scriptTmpDir, the scope-named handover document testHandoffFile).
+// repoScenario's scrub replaces the environment noise in the trace — the
+// repository's mkdtemp path (different on every run) and the script's
+// wall-clock run time (runScript measures real milliseconds) — with fixed
+// tokens, and normalizes the task's docs/ path so the recorded golden
+// stays free of process-shaped paths.
+function repoTestRun(dir: string, over: Partial<TestRun> = {}): TestRun {
+  return {
+    dir,
+    tmp: scriptTmpDir(dir),
+    handoffFile: join(dir, testHandoffFile(task)),
+    handover: false,
+    limit: 64_000,
+    seq: 0,
+    task,
+    unit: "execute",
+    subject: "T-001 exec sample task",
+    label: "T-001",
+    handovers: 0,
+    startUsed: 0,
+    ...over,
+  }
+}
+
+const repoNoise = (dir: string): [string | RegExp, string][] => [
+  [resolve(dir), "<repo>"],
+  [dir, "<repo>"],
+  ["docs/" + task.id, "docs/<task>"],
+  [/took \d+ms/g, "took <ms>ms"],
+]
+
+// One repo-batch scenario: run additionally receives the repository cell
+// it fills with the fresh path; the scrub (applied by the runner after the
+// run) reads it from the same closure.
+function repoScenario(def: Omit<TurnScenario, "run" | "scrub"> & { run: (h: ScenarioHand, repo: { dir: string }) => Promise<Watch> }): TurnScenario {
+  const repo = { dir: "" }
+  return { ...def, run: (h) => def.run(h, repo), scrub: (trace) => scrubTrace(trace, repoNoise(repo.dir)) }
+}
+
+// The test script and the request marker the batch shares: the protocol's
+// path form (the marker names a script under test/, a single line).
+async function scriptRequest(testRun: TestRun): Promise<void> {
+  await mkdir(join(testRun.dir, "test"), { recursive: true })
+  await mkdir(testRun.tmp, { recursive: true })
+  await writeFile(join(testRun.dir, "test", "build.sh"), "#!/bin/sh\necho fixture-ok\n")
+  await writeFile(join(testRun.tmp, "test.sh"), "test/build.sh\n")
+}
+
+// Write the handover document the session would have written (the
+// `Status: continue` line on the last line is the completeness criterion).
+async function writeHandoff(testRun: TestRun, text: string): Promise<void> {
+  await mkdir(dirname(testRun.handoffFile), { recursive: true })
+  await writeFile(testRun.handoffFile, text)
+}
+
+// Run fn with the production git seam installed over the scenario clock —
+// the runner's default is the no-commit double, and the freeze scenarios
+// commit for real on the temporary repository.
+async function withRealGit<T>(h: ScenarioHand, fn: () => Promise<T>): Promise<T> {
+  installServices(createServices({ clock: h.clock.clock, git: createGitOps() }))
+  try {
+    return await fn()
+  } finally {
+    uninstallServices()
+  }
+}
 
 const scenarios: TurnScenario[] = [
   // The smoke trace: the plainest happy path — one completed assistant
@@ -1522,6 +1602,320 @@ const scenarios: TurnScenario[] = [
       return done
     },
   },
+
+  // —— The test protocol at idle (plans/0061 §4.5, the `idle` row's test
+  // cells; the repo batch) ——
+  // Race standing (A-3): no settle source exists anywhere in this batch
+  // (no classifier wiring, and the queued probe timer is never fired), so
+  // neither interleaving materializes and no pins or exclusions are
+  // declared. The holds below gate post-steer event arrivals — the §4.4
+  // queue discipline (external inputs run to completion), not a race pin.
+
+  // Run and feedback: idle with a pending tmp/test.sh marker and no
+  // handover due — executeTest runs the script (the ⚙ line with the
+  // scrubbed run time), the rendered result is steered back, and the loop
+  // continues; the next idle finds no marker and the turn settles
+  // naturally.
+  repoScenario({
+    id: "test-run-and-feedback",
+    kinds: ["message", "part", "idle"],
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir)
+        await scriptRequest(testRun)
+        const afterRun = h.gate()
+        const done = watch(
+          h.agent.client,
+          "s",
+          h.script([
+            ev.message("s", "m1", 1000),
+            ev.text("s", "t1", "the test script is ready"),
+            ev.step("s", "stp1"),
+            ev.idle("s"),
+            { hold: afterRun.promise },
+            ev.text("s", "t2", "the tests pass"),
+            ev.step("s", "stp2"),
+            ev.idle("s"),
+          ]),
+          h.opts,
+          undefined,
+          testRun,
+        )
+        // The steer follows a real script run (a spawned process), so the
+        // checkpoint yields to the macrotask queue (untilPublished).
+        await untilPublished(() => h.agent.argsOf("promptAsync").length >= 1, "the test-result feedback steer")
+        // The request marker was consumed by the run.
+        expect(existsSync(join(testRun.tmp, "test.sh"))).toBe(false)
+        afterRun.release()
+        const result = await done
+        expect(await Bun.file(join(testRun.tmp, "test.1.out")).text()).toContain("fixture-ok")
+        return result
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // The due handover over the cap: the ⚠ … reached the … cap line, the
+  // freeze commit through the production git seam on the real repository
+  // (the ✓ git commit line with the `test handover #1 freeze` subject),
+  // the marker consumed and pinned by resolveTestScript, the in-flight
+  // handover record saved, the wrap-up steer, resumeWrapup seeded — then
+  // the session writes the complete document and the next idle breaks
+  // with testHandover: true.
+  repoScenario({
+    id: "test-handover-freeze-and-complete",
+    kinds: ["message", "part", "idle"],
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true })
+        await scriptRequest(testRun)
+        const wrapup = h.gate()
+        return await withRealGit(h, async () => {
+          const done = watch(
+            h.agent.client,
+            "s",
+            h.script([
+              ev.message("s", "m1", 70_000),
+              ev.text("s", "t1", "the test script is ready"),
+              ev.step("s", "stp1"),
+              ev.idle("s"),
+              { hold: wrapup.promise },
+              ev.text("s", "t2", "the wrap-up is written"),
+              ev.step("s", "stp2"),
+              ev.idle("s"),
+            ]),
+            h.opts,
+            undefined,
+            testRun,
+          )
+          // The steer follows the real freeze commit (spawned git), so the
+          // checkpoint yields to the macrotask queue (untilPublished).
+          await untilPublished(() => h.agent.argsOf("promptAsync").length >= 1, "the wrap-up steer")
+          // The freeze landed: committed, the marker consumed and pinned,
+          // the in-flight record saved, resumeWrapup seeded.
+          expect(testRun.resumeWrapup).toBe(true)
+          expect(testRun.pending).toEqual({ script: join(repo.dir, "test", "build.sh"), seq: 1 })
+          expect(existsSync(join(testRun.tmp, "test.sh"))).toBe(false)
+          expect(JSON.parse(await Bun.file(join(repo.dir, ".auto", "handover.json")).text())).toMatchObject({
+            task: task.id,
+            scope: testHandoffFile(task),
+            unit: "execute",
+            n: 1,
+            script: join(repo.dir, "test", "build.sh"),
+            seq: 1,
+            pinSession: "s",
+            pinMessage: "m1",
+          })
+          expect(await git(repo.dir, "log", "--format=%s", "-1")).toContain("test handover #1 freeze")
+          // The session writes the complete handover document and ends.
+          await writeHandoff(testRun, "# Handover\n\nThe progress so far.\n\nStatus: continue\n")
+          wrapup.release()
+          return done
+        })
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // The later idle over a complete handoff (a fresh watch instance
+  // carrying the seeded resumeWrapup — the retry-loop / interruption-
+  // recovery shape): the document is verified complete at the first idle
+  // and the turn breaks with testHandover: true — no steer, no commit.
+  repoScenario({
+    id: "test-handover-resume-wrapup-complete",
+    kinds: ["message", "part", "idle"],
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true, resumeWrapup: true })
+        await writeHandoff(testRun, "# Handover\n\nThe progress so far.\n\nStatus: continue\n")
+        return await watch(
+          h.agent.client,
+          "s",
+          h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "the wrap-up is written"), ev.step("s", "stp1"), ev.idle("s")]),
+          h.opts,
+          undefined,
+          testRun,
+        )
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // Strict resume at the handover boundary (strictResumeActive: the
+  // switch on, the recording git seam — opts.git unset defaults to the
+  // production seam — and no dryrun): one invalid document decides it,
+  // with no backfill steer — the testHandoverInvalid blocked exit, its
+  // fixed question (the handoff path scrubbed) and the last agent output.
+  repoScenario({
+    id: "test-handover-strict-invalid",
+    kinds: ["message", "part", "idle"],
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true, resumeWrapup: true })
+        await writeHandoff(testRun, "# Handover\n\nHalf-written, no status line.\n")
+        return await watch(
+          h.agent.client,
+          "s",
+          h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "half-written handover"), ev.step("s", "stp1"), ev.idle("s")]),
+          h.opts,
+          undefined,
+          testRun,
+          undefined,
+          parseSwitches({ OPENCODE_AUTO_STRICT_RESUME: "on" }),
+        )
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // Without strict resume the first invalid document earns one backfill
+  // steer (the hard-requirement text naming the handoff path); the second
+  // idle over the still invalid document blocks — the failed-twice
+  // question carrying the handoff path and the last agent output.
+  repoScenario({
+    id: "test-handover-backfill-twice-blocked",
+    kinds: ["message", "part", "idle"],
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true, resumeWrapup: true })
+        await writeHandoff(testRun, "# Handover\n\nHalf-written, no status line.\n")
+        const second = h.gate()
+        const done = watch(
+          h.agent.client,
+          "s",
+          h.script([
+            ev.message("s", "m1", 1000),
+            ev.text("s", "t1", "the first wrap-up attempt"),
+            ev.step("s", "stp1"),
+            ev.idle("s"),
+            { hold: second.promise },
+            ev.text("s", "t2", "the second wrap-up attempt"),
+            ev.step("s", "stp2"),
+            ev.idle("s"),
+          ]),
+          h.opts,
+          undefined,
+          testRun,
+          undefined,
+          parseSwitches({}),
+        )
+        // The steer follows a real document read (Bun.file), so the
+        // checkpoint yields to the macrotask queue (untilPublished).
+        await untilPublished(() => h.agent.argsOf("promptAsync").length >= 1, "the backfill steer")
+        second.release()
+        return done
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // The steer-dispatch-failure block of the backfill: the handover
+  // request is out (resumeWrapup), the document is missing, and the
+  // backfill steer's dispatch fails — the ⚠ steer dispatch failed line
+  // and the blocked exit with the fixed asking-to-backfill question.
+  repoScenario({
+    id: "test-handover-backfill-steer-failed",
+    kinds: ["message", "part", "idle"],
+    agent: { fail: { promptAsync: undefined } },
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true, resumeWrapup: true })
+        return await watch(
+          h.agent.client,
+          "s",
+          h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "no handover written"), ev.step("s", "stp1"), ev.idle("s")]),
+          h.opts,
+          undefined,
+          testRun,
+        )
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // The steer-dispatch-failure block of the handover request: the freeze
+  // already landed (the commit, the pinned script, the saved record) when
+  // the wrap-up steer's dispatch fails — the blocked exit with the fixed
+  // test-handover-request question, resumeWrapup left unseeded.
+  repoScenario({
+    id: "test-handover-request-steer-failed",
+    kinds: ["message", "part", "idle"],
+    agent: { fail: { promptAsync: undefined } },
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir, { handover: true })
+        await scriptRequest(testRun)
+        return await withRealGit(h, async () => {
+          const result = await watch(
+            h.agent.client,
+            "s",
+            h.script([
+              ev.message("s", "m1", 70_000),
+              ev.text("s", "t1", "the test script is ready"),
+              ev.step("s", "stp1"),
+              ev.idle("s"),
+            ]),
+            h.opts,
+            undefined,
+            testRun,
+          )
+          // The freeze landed before the failed dispatch: the commit, the
+          // pinned script, the saved record; resumeWrapup stays unseeded.
+          expect(testRun.resumeWrapup).toBe(undefined)
+          expect(testRun.pending).toEqual({ script: join(repo.dir, "test", "build.sh"), seq: 1 })
+          expect(await git(repo.dir, "log", "--format=%s", "-1")).toContain("test handover #1 freeze")
+          return result
+        })
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
+
+  // The steer-dispatch-failure block of the result feedback: the script
+  // ran (the ⚙ line with the scrubbed run time) and the result steer's
+  // dispatch failed — the blocked exit with the fixed
+  // test-result-feedback question.
+  repoScenario({
+    id: "test-result-feedback-steer-failed",
+    kinds: ["message", "part", "idle"],
+    agent: { fail: { promptAsync: undefined } },
+    run: async (h, repo) => {
+      repo.dir = await freshRepo()
+      try {
+        const testRun = repoTestRun(repo.dir)
+        await scriptRequest(testRun)
+        return await watch(
+          h.agent.client,
+          "s",
+          h.script([
+            ev.message("s", "m1", 1000),
+            ev.text("s", "t1", "the test script is ready"),
+            ev.step("s", "stp1"),
+            ev.idle("s"),
+          ]),
+          h.opts,
+          undefined,
+          testRun,
+        )
+      } finally {
+        await rm(repo.dir, { recursive: true, force: true })
+      }
+    },
+  }),
 ]
 
 describe("the turn-trace oracle", () => {

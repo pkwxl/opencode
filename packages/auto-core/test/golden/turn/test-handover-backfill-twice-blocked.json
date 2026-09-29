@@ -1,0 +1,45 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "You ended the session last time without writing a valid <repo>/docs/<task>/testhandoff.md (missing, or lacking the `Status: continue|done` status line). This is a hard requirement: write the progress, key decisions, failing-test context and next steps into that file, put the status line on the last line, and only then end the session."
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "the first wrap-up attempt",
+    "  step finish (stop): input 100 / output 10 tokens",
+    "the second wrap-up attempt",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "the second wrap-up attempt",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 200,
+      "output": 20,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.02,
+      "steps": 2
+    },
+    "resolves": [],
+    "blocked": {
+      "type": "blocked",
+      "question": "the test-handover session failed twice to produce a valid <repo>/docs/<task>/testhandoff.md (missing, or lacking a `Status: continue|done` status line; hidden blockage). Check the file and re-run. Last agent output:\nthe second wrap-up attempt"
+    },
+    "testHandover": false
+  }
+}

@@ -410,6 +410,22 @@ export type TurnScenario = {
   // Runs inside the installed window: services over the scenario clock and
   // the no-commit git double, verbose on, capture live.
   run: (h: ScenarioHand) => Promise<Watch>
+  // Normalization applied to the built trace before it is recorded or
+  // compared (both sides see the same bytes): scenarios over a real
+  // temporary repository replace environment noise — the repository's
+  // mkdtemp path, a script's wall-clock run time — with fixed tokens
+  // (scrubTrace). In-memory scenarios need none.
+  scrub?: (trace: TurnTrace) => TurnTrace
+}
+
+// Rewrite strings throughout a trace (calls, lines, watch) by replacement
+// pairs — the JSON round-trip keeps the shape and touches only string
+// content. A RegExp pair must be global: a first-match-only expression
+// would silently leave noise in the recorded golden.
+export function scrubTrace(trace: TurnTrace, replacements: [from: string | RegExp, to: string][]): TurnTrace {
+  let json = JSON.stringify(trace)
+  for (const [from, to] of replacements) json = typeof from === "string" ? json.split(from).join(to) : json.replace(from, to)
+  return JSON.parse(json) as TurnTrace
 }
 
 // Runs one scenario and builds its trace. Installs the scenario's services
@@ -465,7 +481,8 @@ export async function runScenario(scenario: TurnScenario): Promise<TurnTrace> {
     // bookkeeping) land while the capture is still live, then serialize —
     // pendingReset is awaited here, still inside the capture window.
     await flush()
-    return { calls: agent.calls, lines: out.lines, watch: await serializeWatch(result) }
+    const trace: TurnTrace = { calls: agent.calls, lines: out.lines, watch: await serializeWatch(result) }
+    return scenario.scrub ? scenario.scrub(trace) : trace
   } finally {
     setVerbose(false)
     out.restore()

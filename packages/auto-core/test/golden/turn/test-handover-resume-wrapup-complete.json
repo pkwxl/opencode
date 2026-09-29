@@ -1,0 +1,31 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "the wrap-up is written",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "the wrap-up is written",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "error": "",
+    "testHandover": true
+  }
+}

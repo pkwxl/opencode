@@ -1,0 +1,34 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "half-written handover",
+    "  step finish (stop): input 100 / output 10 tokens"
+  ],
+  "watch": {
+    "lastText": "half-written handover",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "blocked": {
+      "type": "blocked",
+      "question": "test handover document <repo>/docs/<task>/testhandoff.md missing or empty (strict resume: the boundary write-verify failed; no more backfill retries; this unit will roll back to its baseline and redo). Last agent output:\nhalf-written handover"
+    },
+    "testHandoverInvalid": true
+  }
+}

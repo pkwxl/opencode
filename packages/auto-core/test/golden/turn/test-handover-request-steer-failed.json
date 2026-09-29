@@ -1,0 +1,46 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "promptAsync",
+      "args": [
+        {
+          "session": "s",
+          "text": "[DRIVER] This round of work ends here: the test script you just submitted will be run by the DRIVER, and its result will be interpreted by the next session. A handover is needed now and the work switches to a new session, so complete the following in order:\n\n1. Finish and write out all remaining work in this execution scope that is **not dependent on this test run's result** (code, documents, artifacts) — do not omit any of it because a handover is due, since whatever is left undone here the new session has to redo from scratch;\n2. Write the following into <repo>/docs/<task>/testhandoff.md (overwriting it), and **only the parts closely tied to this test run or dependent on its result** — the work already written out needs no restating:\n   - the intent of this test run, the points to read it by and what is expected of it;\n   - the current progress around the test, the key decisions and the directions already ruled out;\n   - the next steps (the new session interprets the test result from these and goes on fixing and testing);\n   - **what is still unfinished in this execution scope**: if step 1 has items that genuinely cannot be completed (they can only be settled once this test result is known, or they need a fresh start in the new session), list each remaining item here with its own handover notes. This is not a loophole for omitting work — what step 1 says to finish must still be finished; remaining work that you do not list here is invisible to the new session and is permanently lost as presumed done;\n   - **write `Status: continue` alone on the last line** — the DRIVER uses that line to tell whether the handover document is finished, and without it the file is treated as half-written and sent back for a rewrite. The result of this test run is for the next session to interpret, so the value here is always `continue`, even if you have finished everything in this execution scope. That status line is a protocol string the driver parses: write it verbatim and untranslated.\n3. End the session as soon as the file is written; the DRIVER opens a brand-new session that continues from that file and the test result."
+        }
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 70.0k/100.0k tokens (70%)",
+    "the test script is ready",
+    "  step finish (stop): input 100 / output 10 tokens",
+    "⚠ T-001 context used 70.0k tokens reached the 64.0k cap; after the frozen commit, hand over first and then run the tests; asking for a handover document before switching to a new session",
+    "  ✓ git commit (.): T-001 exec sample task test handover #1 freeze",
+    "⚠ steer dispatch failed: promptAsync failed"
+  ],
+  "watch": {
+    "lastText": "the test script is ready",
+    "pct": 70,
+    "used": 70000,
+    "limit": 100000,
+    "usage": {
+      "input": 100,
+      "output": 10,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0.01,
+      "steps": 1
+    },
+    "resolves": [],
+    "blocked": {
+      "type": "blocked",
+      "question": "steer dispatch failed (test-handover request); cannot continue the session, see the log."
+    },
+    "testHandover": false
+  }
+}
