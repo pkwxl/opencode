@@ -745,15 +745,14 @@ describe("proxy-answer ledger wiring (AUTO-RESOLVE, T-005)", () => {
 // ---- Truncated-output resume (2026-09-18, kernel-spi-nor T-030 S13 field
 // case): a final step-finish ending with reason length = the reply was cut
 // off by the output limit, not a natural finish — a "continue from the
-// cut-off point" steer lets the original session carry on; consecutive
-// truncations are capped at LENGTH_CONTINUE_MAX (3), a non-length ending
-// resets the count; once a session.error is observed there is no resume
-// (the error path wins). The continuation decision itself — the criterion,
-// the cap, the reset, the error gate, the steer text — is the liveness
-// concern's mechanism, pinned in its suite (test/turn-liveness.test.ts)
-// since the concern was extracted; these cases stay as the end-to-end
-// wiring: the steer reaching the client in the original session, and the
-// exits' session discipline. ----
+// cut-off point" steer lets the original session carry on. The continuation
+// decision itself — the criterion, the cap, the reset, the error gate, the
+// steer text — is the liveness concern's mechanism, pinned in its suite
+// (test/turn-liveness.test.ts) since the concern was extracted (0061 F3's
+// audit deleted this block's cap, reset and error-gate cases as duplicates
+// of those pins); what stays is the one wiring fact only an entry run over
+// the opencode adapter observes: the continuation rides the steer surface
+// into the original session — no new session, no re-sent prompt. ----
 
 describe("truncated-output resume (a step ending with length is not a natural finish)", () => {
   const stepFinish = (sid: string, id: string, reason: string) => ({
@@ -795,64 +794,5 @@ describe("truncated-output resume (a step ending with length is not a natural fi
     expect(calls.steers.length).toBe(1)
     expect(calls.creates).toBe(1)
     expect(calls.prompts.length).toBe(1)
-  })
-
-  test("more than 3 consecutive truncations: no further resume; settles as a natural finish (left to the shape-check loop)", async () => {
-    const { client, calls } = fakeClient({
-      events: (sid) =>
-        (async function* () {
-          for (let i = 0; i < 4; i++) {
-            yield stepFinish(sid, `pt_${i}`, "length")
-            yield idle(sid)
-          }
-        })(),
-    })
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "prompt", {}, chain)
-    expect(result.type).toBe("idle")
-    expect(calls.steers.length).toBe(3)
-  })
-
-  test("a non-length step ending (work back to normal after a resume) resets the consecutive-truncation count", async () => {
-    const { client, calls } = fakeClient({
-      events: (sid) =>
-        (async function* () {
-          yield stepFinish(sid, "pt_1", "length")
-          yield idle(sid)
-          // After the resume, work is back to normal (tool step) ...
-          yield stepFinish(sid, "pt_2", "tool-calls")
-          // ... then another truncation: the count was reset, so it resumes
-          // again.
-          yield stepFinish(sid, "pt_3", "length")
-          yield idle(sid)
-          yield stepFinish(sid, "pt_4", "stop")
-          yield idle(sid)
-        })(),
-    })
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "prompt", {}, chain)
-    expect(result.type).toBe("idle")
-    expect(calls.steers.length).toBe(2)
-  })
-
-  test("session.error already observed: no truncation resume; the error path (retry ladder) wins", async () => {
-    const { client, calls } = fakeClient({
-      events: (sid) =>
-        (async function* () {
-          yield stepFinish(sid, "pt_1", "length")
-          yield {
-            type: "session.error",
-            properties: { sessionID: sid, error: { name: "APIError", data: { message: "Internal Server Error", isRetryable: true, statusCode: 500 } } },
-          }
-          yield idle(sid)
-        })(),
-    })
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    // Drive attempt directly for the single result (runSession would take
-    // the failure into its retry loop).
-    const result = await attempt(client, task, "prompt", {}, chain, undefined, undefined, parseSwitches({}))
-    expect(result.type).toBe("blocked")
-    expect((result as { question: string }).question).toContain("session error: ")
-    expect(calls.steers).toEqual([])
   })
 })

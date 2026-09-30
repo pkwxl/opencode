@@ -195,12 +195,11 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     expect(chain.forkBase).toBe("ses_base")
   })
 
-  test("failed session is a pure error stub (0 usage) with no fork base: keeps the blank new session, does not carry the error stub into the copy", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
-    expect(calls.forks).toEqual([])
-  })
+  // The stub's contrast case (a 0-usage failed session never enters the fork
+  // candidates, so the retry opens a blank new session) is the ladder
+  // section's "chain.id empty from the start" case below — identical fixture
+  // and inputs, asserting the same no-fork fact plus the blank session's
+  // creates; it is not repeated here (one case per fact).
 
   test("chain.failed clears after a successful retry, leaving no residue into the next round", async () => {
     const { client } = retryClient(["error-retryable", "ok"], [9000], "stream disconnected")
@@ -886,30 +885,12 @@ describe("failback scope and the /failback override: failback timing / cross-tas
     expect(shown[2]).toContain("prov/b")
   })
 
-  test("no route set: announces the model the server actually resolved (observed from the event stream), the prompt still carries no model key, a new session announces again", async () => {
-    const lines: string[] = []
-    const orig = console.log
-    console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
-    let calls: { prompts: { model?: unknown }[] }
-    try {
-      // No route set: the announcement no longer guesses the server default; it announces the actual model carried by a user message in the event stream.
-      const fake = fakeClient({ events: (id) => modelThenIdle(id, "prov/default") })
-      calls = fake.calls
-      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      await runSession(fake.client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({}))
-      await runSession(fake.client, task, "prompt text 2", {}, chain, undefined, undefined, parseSwitches({}))
-    } finally {
-      console.log = orig
-    }
-    const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // The two runSessions each open a new session (reuse off); the same model still announces per session.
-    expect(shown.length).toBe(2)
-    expect(shown[0]).toContain("prov/default")
-    expect(shown[0]).toContain("server resolved")
-    expect(shown[1]).toContain("prov/default")
-    // Invariant F: the announcement is one thing, the dispatch still carries no model key.
-    expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)
-  })
+  // The no-route ◈ form (the model the server actually resolved, observed
+  // from the event stream, announced per new session and not repeated on a
+  // takeover) is the takeover describe's first case — the same fake, the same
+  // no-route switches; and a no-route dispatch carrying no model key is
+  // pinned by the model-injection describe's "no policy set" case and the
+  // no-candidate failover case. Neither fact is repeated here.
 })
 
 // ---- The post-ladder-exhaustion fallback joins the quota failover ring (T1): transient/unknown exhausts the ladder → switch candidate and continue ----
