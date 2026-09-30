@@ -10,14 +10,14 @@
 //   3. chain layering   — the session-driving chain stays strictly layered (0024 §D.2)
 //   4. one-way rules    — documented one-way invariants (0024 §D.2)
 //   5. runner fan-in    — runner stays the top of the task pipeline
-//   6. domain entries   — once a provider domain physically exists under
-//                         src/<domain>/, nobody crosses its boundary except via
-//                         its entry (interface) module, and it never imports driver
-//   7. frozen baselines — provider-tagged flat files keep their exact import set
-//                         until they physically move (transition-era guard)
-//   8. hygiene          — shells are never imported; relative imports either stay
+//   6. domain entries   — a provider-domain module, placed in src/<domain>/
+//                         or still flat, never imports driver, and crosses
+//                         into other domains only via their entry (interface)
+//                         modules (the flat files joined the rule when E3
+//                         retired the FROZEN_IMPORTS transition guard)
+//   7. hygiene          — shells are never imported; relative imports either stay
 //                         inside src/ or embed assets via `with { type: "file" }`
-//   9. sub-domains      — driver modules carry a sub-domain (R10); the value
+//   8. sub-domains      — driver modules carry a sub-domain (R10); the value
 //                         edges between sub-domains stay inside SUBDOMAIN_EDGES,
 //                         a seed that may only shrink, with contract a leaf over
 //                         types and no engine → pipeline edge
@@ -63,9 +63,13 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // per-role policies, protect list, handoff protocol checks); state = the
   // todo.md/done.md subtask state protocol (M2.3 move from subtask-state.ts);
   // process-refs = the P1 prohibition scan (M2.3); unit = the unified unit
-  // model (M3.1 — refs, state scan, index parser, dependency checks), first
-  // consumed by the phase directory layout (M3.3).
-  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs", "document/unit"],
+  // model (M3.1 — refs, state scan, index parser and its tick, dependency
+  // checks), first consumed by the phase directory layout (M3.3). E3 added
+  // the domain's flat published files once the flat provider files joined the
+  // entry rule: docpaths = the single path-construction point (plans/0010),
+  // round-brief = the round brief stub and section readers (M4.2) — both
+  // always were document surface other domains build on.
+  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs", "document/unit", "docpaths", "round-brief"],
   // agent: types = the frozen interface (MA.1); opencode/server = the opencode
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that
@@ -343,34 +347,6 @@ const CLASSIFIED: Record<string, Domain> = {
   usage: "driver",
   watch: "driver",
   wrapup: "driver",
-}
-
-// Transition-era guard (rule 7): provider-tagged flat files freeze their exact
-// src-import set. Today prompt.ts imports tasks.ts etc. because concerns are
-// still physically mixed; before this refactor lands them in domain dirs, any
-// import change in these files must be a conscious edit here, so the (a)/(b)
-// untangling (M1-M4, MA) cannot silently re-couple the domains.
-const FROZEN_IMPORTS: Record<string, string[]> = {
-  mode: [],
-  template: [],
-  // E2: prompt.ts is off the driver — every driver-side fact (the task and
-  // plan views, the question-rule data, the stuck-hint data, the
-  // switch-derived options and the prompt globals) reaches it as data
-  // through PromptFacts (src/prompt-facts.ts) and the view types; the entry
-  // is deleted outright in E3.
-  prompt: ["intent/load", "intent/types", "mode", "template"],
-  // M3.4: routing loads the current phase's tasks (tasks) and no longer
-  // renders the retired PLAN.md scaffold (template).
-  // M3.6: phase types load per project (phases/custom).
-  // M4.2: completePhase checks the phase gates (document/roles: result line,
-  // acceptance mark); establishRound writes the round brief stub (round-brief).
-  // P3c (0053 D35): the blocked pointer names `plan` with the profile's bin
-  // (shell) — the phases-domain text needs the shell-agnostic program name,
-  // the same seam the driver-plane modules already use.
-  phases: ["docpaths", "document/roles", "document/unit", "phases/custom", "phases/registry", "round-brief", "shell", "tasks"],
-  docpaths: [],
-  doccheck: [],
-  protect: ["document/roles"],
 }
 
 // The driver domain's logical sub-domains (R10, plans/0061 §2.2/§4.10): the
@@ -924,10 +900,6 @@ function checkClassification(): string[] {
     if (!known.has(key)) problems.push(`CLASSIFIED lists src/${key}.ts which does not exist — remove the stale entry`)
     else if (inDomainDir(key)) problems.push(`src/${key}.ts lives in a domain directory but is also in CLASSIFIED — remove the table entry (dir classification takes over)`)
   }
-  for (const key of Object.keys(FROZEN_IMPORTS)) {
-    if (CLASSIFIED[key] === undefined) problems.push(`FROZEN_IMPORTS lists src/${key}.ts which is not classified as a provider domain`)
-    else if (CLASSIFIED[key] === "driver") problems.push(`FROZEN_IMPORTS lists src/${key}.ts which is classified as driver — only provider-domain files freeze imports`)
-  }
   return problems
 }
 
@@ -1038,31 +1010,15 @@ function checkDomainEntries(): string[] {
     for (const e of list) {
       const dTo = domainOf(e.to)
       if (dTo === "unclassified") continue
-      if (inDomainDir(from) && dFrom !== "driver") {
-        // physically-placed provider domain: never imports driver; crosses
-        // domains only via the other domain's entry module
+      if (dFrom !== "driver") {
+        // provider-domain module — placed in a domain directory or still flat
+        // (the flat files joined with E3, when FROZEN_IMPORTS was retired):
+        // never imports driver; crosses domains only via the other domain's
+        // entry module
         if (dTo === "driver") problems.push(`domain violation: src/${from}.ts (${dFrom}) imports driver module src/${e.to}.ts — provider domains must not depend on the driver domain (D8)`)
         else if (dTo !== dFrom && !entriesOf(dTo).includes(e.to)) problems.push(`domain violation: src/${from}.ts (${dFrom}) imports src/${e.to}.ts (${dTo}) outside its entry list [${entriesOf(dTo).join(", ")}] — depend on a domain only via its interface module (D8)`)
       }
       if (dFrom === "driver" && inDomainDir(e.to) && !entriesOf(dTo).includes(e.to)) problems.push(`domain violation: src/${from}.ts (driver) imports src/${e.to}.ts (${dTo}) outside its entry list [${entriesOf(dTo).join(", ")}] — depend on a domain only via its interface module (D8)`)
-    }
-  }
-  return problems
-}
-
-function checkFrozenBaselines(): string[] {
-  const problems: string[] = []
-  for (const [key, frozen] of Object.entries(FROZEN_IMPORTS)) {
-    const actual = [...new Set((edges.get(key) ?? []).map((e) => e.to))].sort()
-    const expected = [...frozen].sort()
-    const added = actual.filter((x) => !expected.includes(x))
-    const removed = expected.filter((x) => !actual.includes(x))
-    if (added.length || removed.length) {
-      const parts = [
-        added.length ? `new imports: ${added.join(", ")}` : "",
-        removed.length ? `removed imports: ${removed.join(", ")}` : "",
-      ].filter(Boolean)
-      problems.push(`frozen baseline drift in src/${key}.ts (${CLASSIFIED[key]} domain) — ${parts.join("; ")}; this file is a provider-domain landing spot, so any import change must be a conscious edit to FROZEN_IMPORTS (M0.7 transition guard)`)
     }
   }
   return problems
@@ -1154,10 +1110,6 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("domain boundaries are crossed only via entry modules (D8)", () => {
     expect(checkDomainEntries().join("\n")).toBe("")
-  })
-
-  test("provider-tagged flat files keep their frozen import sets", () => {
-    expect(checkFrozenBaselines().join("\n")).toBe("")
   })
 
   test("no shell imports (core does not know shells)", () => {

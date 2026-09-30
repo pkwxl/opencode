@@ -258,7 +258,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
 async function phaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   for (;;) {
-    const route = await routePhase(directory)
+    const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
     if (route.type === "blocked") {
       log(`⏸ phase flow blocked: ${route.reason}`)
       return 1

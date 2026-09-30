@@ -32,7 +32,7 @@ import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-cl
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
 import { addTask } from "./task-add"
-import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths } from "./tasks"
+import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan } from "./tasks"
 
 type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
@@ -107,7 +107,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     return establish(dir, round, opts.phases, lines)
   }
-  const route = await routePhase(dir)
+  const route = await routePhase(dir, { loadPlan, bin })
   // Row 2: m mode never gets here (its single phase stays open).
   if (route.type === "complete") {
     const next = roundDirName(round + 1)
@@ -389,7 +389,7 @@ async function establish(dir: string, round: number, phases: string, before: str
 // phase the loop reaches after handing it over, passing task-less
 // (knowledge) phases the way the loop does. listed = its task index already
 // lists tasks, so the loop would stop on its execute route instead.
-async function planTarget(dir: string, route: Extract<PhaseRoute, { type: "plan" | "handover" }>): Promise<{ phase: PhaseUnit; listed: boolean } | undefined> {
+async function planTarget(dir: string, route: Extract<PhaseRoute<Plan>, { type: "plan" | "handover" }>): Promise<{ phase: PhaseUnit; listed: boolean } | undefined> {
   if (route.type === "plan" && route.phase.entry.hasTasks) return { phase: route.phase, listed: false }
   const state = (await readPhases(dir))!
   const done = new Set([...state.done, route.phase.id])
@@ -408,7 +408,7 @@ export const phaseRefText = (phase: PhaseUnit): string => `${qualifiedPhase(phas
 // (plans/0053 D7, D15). The pointers name the lifecycle commands a person
 // can go on with: run the phase, add more tasks (an append on a planned
 // index), or close units that will not run.
-export function executeNotice(dir: string, route: Extract<PhaseRoute, { type: "execute" | "handover" }>, manual: boolean): string[] {
+export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { type: "execute" | "handover" }>, manual: boolean): string[] {
   const { bin } = shellProfile()
   const total = route.plan.tasks.length
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
@@ -425,7 +425,7 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute, { type: "e
 
 // Input on a planned phase without --append (row 7): nothing would plan it —
 // appending is what the input is for.
-function inputUnusedLine(dir: string, route: Extract<PhaseRoute, { type: "execute" | "handover" }>): string {
+function inputUnusedLine(dir: string, route: Extract<PhaseRoute<Plan>, { type: "execute" | "handover" }>): string {
   const { bin } = shellProfile()
   return (
     `${phaseRefText(route.phase)} already lists tasks, so the planning input would not be used; ` +

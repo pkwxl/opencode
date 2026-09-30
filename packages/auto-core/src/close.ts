@@ -32,7 +32,7 @@ import { readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { roundDirName, taskDoc } from "./docpaths"
 import { validHandover } from "./document/roles"
-import { parseIndex, renameUnitDone, unitStatePaths, type UnitRef } from "./document/unit"
+import { parseIndex, renameUnitDone, tickIndexLine, unitStatePaths, type UnitRef } from "./document/unit"
 import { changedFiles, commitTree, driverStateFile, headSha, repoRoots, stashTree, unitBaseline, unitViolations } from "./git"
 import { forgetHandover, peekHandover } from "./handover"
 import {
@@ -49,7 +49,7 @@ import {
 import type { PhaseGate } from "./phases/registry"
 import { forgetProgress, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
-import { forgetUnits, loadPlan, qualifiedPhase, tickIndexLine, type Plan, type Task } from "./tasks"
+import { forgetUnits, loadPlan, qualifiedPhase, type Plan, type Task } from "./tasks"
 import { removeHandoffChain } from "./testrun"
 
 // How a dirty worktree is handled (plans/0053 D20): "commit" folds the

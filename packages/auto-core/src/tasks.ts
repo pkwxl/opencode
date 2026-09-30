@@ -41,6 +41,7 @@ import {
   renameUnitDone,
   resolveDepends,
   scanUnitStates,
+  tickIndexLine,
   unitProblems,
   unitStatePaths,
   UNIT_COMPLETE,
@@ -569,15 +570,8 @@ export async function forgetUnits(dir: string, ids: readonly string[]): Promise<
   })
 }
 
-// Tick the index line of a unit id (phases.md / tasks.md). Idempotent; a
-// missing file or line is left alone (the state file is the fact).
-export async function tickIndexLine(file: string, id: string): Promise<void> {
-  const text = await Bun.file(file).text().catch(() => undefined)
-  if (text === undefined) return
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
-  if (line.test(text)) await Bun.write(file, text.replace(line, "$1x$2"))
-}
+// tickIndexLine (markDone's index tick) moved to document/unit (0061 E3),
+// the shared index machinery beside parseIndex.
 
 // Ids of every task directory under docs/ (T-NNN with a state file or not).
 export async function taskDirs(dir: string): Promise<string[]> {

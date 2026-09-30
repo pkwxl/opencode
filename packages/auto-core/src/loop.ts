@@ -18,6 +18,7 @@ import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
 import { flushStats, statsClassifyUsage } from "./stats"
 import { freezeSwitches } from "./switches"
+import { loadPlan } from "./tasks"
 
 // RunAllOpts is runAll's signature; the preflight segment owns it.
 import { preflight, type RunAllOpts } from "./loop-preflight"
@@ -91,7 +92,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // manual single phase R-01/P01-implement and routes the same way.
     const phases = opts.phases ?? "m"
     if (!opts.dryrun) {
-      const pre = await routePhase(directory)
+      const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
         return 1

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { roundDir } from "../src/docpaths"
 import { validHandover } from "../src/document/roles"
-import { renderTaskIndex, renderTaskTodo } from "../src/tasks"
+import { loadPlan, renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import {
   completePhase,
   currentPhase,
@@ -253,8 +253,11 @@ describe("routePhase (phase routing, D.2)", () => {
     rmSync(join(dir, "docs/T-001", done ? "todo.md" : "done.md"), { force: true })
     writeFileSync(join(dir, "docs/T-001", done ? "done.md" : "todo.md"), renderTaskTodo({ id: "T-001", title: "task" }))
   }
+  // The driver-side inputs routePhase takes since 0061 E3: the task-index read
+  // (tasks.ts's loadPlan) and the bin name (the shell profile's).
+  const deps = { loadPlan, bin: "opencode-auto" }
   const route = async (dir: string) => {
-    const r = await routePhase(dir)
+    const r = await routePhase(dir, deps)
     return r.type === "plan" || r.type === "execute" || r.type === "handover" ? { type: r.type, phase: r.phase, tasks: r.plan.tasks.length } : r
   }
 
@@ -280,21 +283,21 @@ describe("routePhase (phase routing, D.2)", () => {
       await seedTask(dir, units[2]!, false)
       expect(await route(dir)).toEqual({ type: "execute", phase: units[2]!, tasks: 1 })
       await completePhase(dir, units[2]!)
-      expect(await routePhase(dir)).toEqual({ type: "complete" })
+      expect(await routePhase(dir, deps)).toEqual({ type: "complete" })
     }),
   )
 
   test(
     "missing or invalid phase or task index → blocked (environment error with guidance)",
     withDir(async (dir) => {
-      const missing = await routePhase(dir)
+      const missing = await routePhase(dir, deps)
       expect(missing).toEqual({ type: "blocked", reason: expect.stringContaining("phase index docs/R-01/phases.md is missing") })
       const [first] = await syncPhaseIndex(dir, 1, "am")
       writeFileSync(join(dir, first!.dir, "tasks.md"), "- [ ] T-001 lost\n")
-      const lost = await routePhase(dir)
+      const lost = await routePhase(dir, deps)
       expect(lost).toEqual({ type: "blocked", reason: expect.stringContaining("docs/T-001/ has neither todo.md nor done.md") })
       writeFileSync(join(dir, "docs/R-01/phases.md"), "- [ ] P01 nonsense\n")
-      const broken = await routePhase(dir)
+      const broken = await routePhase(dir, deps)
       expect(broken.type).toBe("blocked")
       if (broken.type === "blocked") expect(broken.reason).toContain("docs/R-01/phases.md")
     }),

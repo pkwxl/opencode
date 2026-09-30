@@ -32,8 +32,10 @@ import {
   parseIndex,
   parsePhaseDir,
   parseUnitDoc,
+  qualifiedId,
   renameUnitDone,
   scanUnitStates,
+  tickIndexLine,
   unitProblems,
   unitStatePaths,
   UNIT_PENDING,
@@ -42,8 +44,6 @@ import {
   type UnitRef,
 } from "./document/unit"
 import { renderRoundBrief } from "./round-brief"
-import { loadPlan, qualifiedPhase, tickIndexLine, type Plan } from "./tasks"
-import { shellProfile } from "./shell"
 import { loadPhaseTypes } from "./phases/custom"
 import {
   PHASE_LETTERS,
@@ -85,6 +85,12 @@ export type PhaseUnit = {
 export function phaseRef(unit: PhaseUnit): UnitRef {
   return { level: "phase", id: unit.id, round: unit.round, type: unit.type }
 }
+
+// The qualified phase id R-NN.P<nn> (the runtime key) over the document
+// domain's qualifiedId: the phases domain formats its own key through the
+// shared unit model, not through the task store's helper (0061 E3 — this
+// module no longer imports the driver's task store or shell).
+const qualifiedPhase = (unit: PhaseUnit): string => qualifiedId(phaseRef(unit))
 
 // Display label and directory name: P02-design.
 export function phaseLabel(unit: PhaseUnit): string {
@@ -348,15 +354,22 @@ export async function completePhase(dir: string, unit: PhaseUnit, gates: readonl
 
 // Phase routing (D.2): blocked = an environment error such as an invalid or
 // missing phase or task index (the CLI turns it into exit 1 with fix-it
-// guidance). The routes carry the current phase's plan, loaded once here.
-export type PhaseRoute =
+// guidance). The routes carry the current phase's plan, loaded once here
+// through the caller's read: the phases domain takes the task-index read and
+// the bin name as call inputs (0061 E3), so a driver caller passes tasks.ts's
+// loadPlan and the shell profile's bin — the reads it already does — and P is
+// the loaded plan's type, of which only the task statuses are read here.
+export type PhaseRoute<P> =
   | { type: "complete" } // every phase done
-  | { type: "plan"; phase: PhaseUnit; plan: Plan } // no tasks listed yet → planning session
-  | { type: "execute"; phase: PhaseUnit; plan: Plan } // tasks left to run
-  | { type: "handover"; phase: PhaseUnit; plan: Plan } // all of this phase's tasks done → handover
+  | { type: "plan"; phase: PhaseUnit; plan: P } // no tasks listed yet → planning session
+  | { type: "execute"; phase: PhaseUnit; plan: P } // tasks left to run
+  | { type: "handover"; phase: PhaseUnit; plan: P } // all of this phase's tasks done → handover
   | { type: "blocked"; reason: string }
 
-export async function routePhase(dir: string): Promise<PhaseRoute> {
+export async function routePhase<P extends { tasks: readonly { status: string }[] }>(
+  dir: string,
+  deps: { loadPlan: (dir: string, phase: PhaseUnit) => Promise<P>; bin: string },
+): Promise<PhaseRoute<P>> {
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
   let state: PhaseState | undefined
   try {
@@ -368,15 +381,15 @@ export async function routePhase(dir: string): Promise<PhaseRoute> {
     return {
       type: "blocked",
       // plan owns the rounds (plans/0053 D31): the pointer names it, with the
-      // bin from the shell profile.
-      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with ${shellProfile().bin} plan first`,
+      // bin the caller passes (the shell profile's — E3).
+      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with ${deps.bin} plan first`,
     }
   }
   const phase = currentPhase(state)
   if (!phase) return { type: "complete" }
-  let plan: Plan
+  let plan: P
   try {
-    plan = await loadPlan(dir, phase)
+    plan = await deps.loadPlan(dir, phase)
   } catch (error) {
     return { type: "blocked", reason: reason(error) }
   }

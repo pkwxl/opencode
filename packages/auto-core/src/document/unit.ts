@@ -153,6 +153,19 @@ export function parseIndex(text: string, level: UnitLevel): { entries: IndexEntr
   return { entries, problems }
 }
 
+// Tick the index line of a unit id (phases.md / tasks.md), the write-side
+// counterpart of parseIndex. Idempotent; a missing file or line is left alone
+// (the state file is the fact). Moved here from the task store (0061 E3): the
+// phase index is ticked by the phases domain, which no longer imports the
+// driver's task store.
+export async function tickIndexLine(file: string, id: string): Promise<void> {
+  const text = await Bun.file(file).text().catch(() => undefined)
+  if (text === undefined) return
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
+  if (line.test(text)) await Bun.write(file, text.replace(line, "$1x$2"))
+}
+
 // —— Unit documents: title line + field block ——
 
 // A unit's dependency declaration. `depends`: undefined = field absent (G3
