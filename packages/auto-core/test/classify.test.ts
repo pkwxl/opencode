@@ -26,7 +26,7 @@ import {
   type Classifier,
 } from "../src/classify"
 import { isoInZone, parseWindow } from "../src/model-window"
-import type { ModelEntry, TierList } from "../src/models"
+import type { ModelEntry, TierList } from "../src/models-schema"
 import type { RoutingFacts } from "../src/routing"
 import { createServices, installServices, services, type Clock } from "../src/services"
 import { clockAt } from "./fixtures/clock"

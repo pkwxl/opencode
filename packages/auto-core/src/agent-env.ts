@@ -18,7 +18,7 @@
 // covers the loopback names.
 import { readFile } from "node:fs/promises"
 import type { AgentEnv } from "./agent/types"
-import type { ProfileEnvValue, RegistryAgentProfile } from "./models"
+import type { ProfileEnvValue, RegistryAgentProfile } from "./models-schema"
 
 export type ResolvedProfileEnv = { env: AgentEnv } | { problems: string[] }
 

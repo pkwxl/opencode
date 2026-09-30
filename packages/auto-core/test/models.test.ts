@@ -3,17 +3,14 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
-  BUILTIN_ADAPTERS,
   checkModelReferences,
   loadModels,
   MODELS_FILE,
   ModelRegistryError,
   operatorLayerPath,
   projectLayerPath,
-  type LoadModelsOptions,
-  type ModelRegistry,
-  type ProfileEnvValue,
 } from "../src/models"
+import { BUILTIN_ADAPTERS, type LoadModelsOptions, type ModelRegistry, type ProfileEnvValue } from "../src/models-schema"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
 import { setShellProfile, shellProfile } from "../src/shell"
 

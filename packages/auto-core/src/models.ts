@@ -1,11 +1,14 @@
-// Model registry (plans/0055 §4.1–§4.3): the operator's fleet of models, the
-// agent profiles that run them, the reasoning tiers and routes that pick them,
-// and the key rings that pay for them. This module finds the two registry
-// layers, merges them one level deep, validates the merged result strictly,
-// and checks the key and env references. It never reads a referenced value
-// into anything it builds: a key or an env value is carried as its reference
-// (`{env:NAME}`, `{file:path}`) and named by it (`ZHIPU_KEY_B`,
-// `~/.secrets/zhipu-c`).
+// Model registry (plans/0055 §4.1–§4.3): the load, merge and validate half of
+// the operator's fleet of models — the agent profiles that run them, the
+// reasoning tiers and routes that pick them, and the key rings that pay for
+// them. The registry's types and schema tables live in src/models-schema.ts
+// (0061 E4, ruling R14: the two halves are separable, and a type-only
+// importer binds no loader code); this module finds the two registry layers,
+// merges them one level deep, validates the merged result strictly against
+// the schema, and checks the key and env references. It never reads a
+// referenced value into anything it builds: a key or an env value is carried
+// as its reference (`{env:NAME}`, `{file:path}`) and named by it
+// (`ZHIPU_KEY_B`, `~/.secrets/zhipu-c`).
 //
 // Layers (§4.1):
 //   - operator layer: $OPENCODE_AUTO_MODELS if set, otherwise
@@ -37,134 +40,48 @@
 // Keys and references (§4.3, C4): a key is `{env:NAME}` or `{file:path}` only,
 // and a literal key is refused. No error message quotes a `keys` or `env`
 // value, since either may be a secret written in the wrong place.
-// AUTO-DECISION: name-keyed sections are Maps, not records (a JSON key such as `__proto__` or `constructor` can then neither set a prototype nor pass an existence check through Object.prototype)
 
 import { accessSync, constants, statSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
-import type { AgentRetryPolicy } from "./agent/types"
 import { checkTimeZone, DEFAULT_WINDOW_TZ, parseWindow, type ModelWindow } from "./model-window"
-import { PHASE_LETTERS, TIERS, type Tier } from "./phases/registry"
+import {
+  BUILTIN_ADAPTERS,
+  ENV_NAME,
+  ENV_REF,
+  FILE_REF,
+  IMPLIED_AGENT,
+  MODEL_FIELDS,
+  NAME,
+  PROFILE_FIELDS,
+  REF_START,
+  REFERENCE_HINT,
+  RETRY_FIELDS,
+  SECTIONS,
+  TOP_FIELDS,
+  type EntryOrigin,
+  type LoadModelsOptions,
+  type ModelEntry,
+  type ModelReference,
+  type ModelRegistry,
+  type ModelRoute,
+  type ProfileEnvValue,
+  type ReferenceProblem,
+  type RegistryAgentProfile,
+  type RegistryLayer,
+  type RegistryLayerName,
+  type RetryOverride,
+  type Section,
+  type Tier,
+  type TierList,
+} from "./models-schema"
+import { PHASE_LETTERS, TIERS } from "./phases/registry"
 import { registeredAdapterNames, shellProfile } from "./shell"
-import { MODEL_ROLES, SWITCH_ENV, type AgentChoice } from "./switches"
+import { MODEL_ROLES, SWITCH_ENV } from "./switches"
 
 // The project layer, relative to the target directory.
 export const MODELS_FILE = join(".opencode", "auto", "models.json")
-
-// The adapters the core ships. A shell that registers another adapter passes
-// the extended list to loadModels; the default accepts every registered name
-// beside these (registerAgentAdapter, src/shell.ts, plans/0055 §8.8).
-export const BUILTIN_ADAPTERS: readonly AgentChoice[] = ["opencode", "claude"]
-
-// The implied agent profile of a registry without one.
-export const IMPLIED_AGENT = "opencode"
-
-// The tier words are declared with the phase types (a tier is a property of
-// the work, not of the fleet); the registry keys its tier lists by them.
-export { TIERS, type Tier }
-
-export type RegistryLayerName = "operator" | "project"
-
-// A loaded layer: which one, and its file (absolute).
-export type RegistryLayer = { name: RegistryLayerName; path: string }
-
-// Where an entry comes from. "implied" is the opencode profile of a registry
-// that declares no agent profile.
-export type EntryOrigin = RegistryLayerName | "implied"
-
-// A reference to a value held elsewhere. `ref` is the reference text an agent
-// substitutes itself (opencode reads `{env:…}` / `{file:…}` in its config);
-// a file reference is normalized to its absolute path there. `label` is what
-// logs and messages show: the variable name, or the path as written.
-export type ModelReference =
-  | { kind: "env"; name: string; ref: string; label: string }
-  | { kind: "file"; path: string; ref: string; label: string }
-
-// A profile env value: a literal (`~` expanded), a reference the driver
-// resolves at spawn, or null, which removes an inherited variable.
-export type ProfileEnvValue = string | ModelReference | null
-
-// An agent profile (`agents.<name>`, §4.2).
-export type RegistryAgentProfile = {
-  name: string
-  layer: EntryOrigin
-  // "opencode", "claude", or an adapter a shell registered.
-  adapter: string
-  // The executable, `~` expanded; absent = the adapter's own.
-  bin?: string
-  env?: Map<string, ProfileEnvValue>
-  // An external opencode server URL (opencode profiles only).
-  server?: string
-}
-
-// A model entry (`models.<internal name>`, §4.2). Structurally a WindowSpec
-// of src/model-window.ts (`avoid` / `only`).
-export type ModelEntry = {
-  name: string
-  layer: RegistryLayerName
-  // The agent profile that runs it.
-  agent: string
-  // The adapter's model id; absent = the agent's own default model.
-  model?: string
-  // opencode entries: the provider of `model` (the part before the first `/`),
-  // which owns the key ring (§4.3).
-  provider?: string
-  // Context steps: model ids that continue a session once it outgrows the
-  // current id's window (opencode only, §4.5).
-  wider?: string[]
-  variant?: string
-  // The context window of `model` in k tokens.
-  context?: number
-  avoid?: ModelWindow[]
-  only?: ModelWindow[]
-  // The key ring as references (opencode only, §4.3).
-  keys?: ModelReference[]
-  // Fields of the agent's retry policy this entry overrides (plans/0057 §11
-  // item 3): what its profile's environment or its provider changes about
-  // the adapter's record, laid over it field by field (chain.ts retryPolicyOf).
-  retry?: RetryOverride
-}
-
-// A model entry's `retry` (plans/0057 §4, §11 item 3): any fields of the
-// agent's retry policy.
-export type RetryOverride = Partial<AgentRetryPolicy>
-
-export type TierList = { tier: Tier; names: string[]; layer: RegistryLayerName }
-
-// A route (`routes.<key>`): a role word, a phase type id or a preset letter,
-// mapped to a tier or to an ordered list of internal names.
-export type ModelRoute = { key: string; layer: RegistryLayerName } & ({ tier: Tier } | { names: string[] })
-
-export type ModelRegistry = {
-  // The layers that exist, operator first.
-  layers: RegistryLayer[]
-  // Canonical IANA spelling; DEFAULT_WINDOW_TZ when no layer sets it.
-  tz: string
-  tzLayer?: RegistryLayerName
-  agents: Map<string, RegistryAgentProfile>
-  models: Map<string, ModelEntry>
-  tiers: Partial<Record<Tier, TierList>>
-  routes: Map<string, ModelRoute>
-  classifier?: { names: string[]; layer: RegistryLayerName }
-  // Notes, not errors: models that no tier, route list or classifier names.
-  unused: string[]
-}
-
-export type LoadModelsOptions = {
-  // Phase type ids a route key may name: the builtin types and the project's
-  // custom types.
-  phaseTypes: readonly string[]
-  // The adapters a profile may name; default BUILTIN_ADAPTERS plus every
-  // adapter a shell registered (§8.8).
-  adapters?: readonly string[]
-  // Where OPENCODE_AUTO_MODELS and XDG_CONFIG_HOME are read; default process.env.
-  env?: Record<string, string | undefined>
-  // The home directory `~` expands to; default os.homedir().
-  home?: string
-  // The directory under XDG_CONFIG_HOME; default the shell profile's configDir.
-  configDir?: string
-}
 
 export class ModelRegistryError extends Error {
   constructor(readonly problems: string[]) {
@@ -172,24 +89,6 @@ export class ModelRegistryError extends Error {
     this.name = "ModelRegistryError"
   }
 }
-
-// Internal names of models and agent profiles. No `/`, so a name never reads
-// as a raw provider/model string.
-// AUTO-RESOLVE: do agent profile names follow the internal-name pattern too? -> yes (they appear beside model names in logs such as `claude:opus` and will be persisted with session ids; one rule for every name the registry defines)
-const NAME = /^[a-z][a-z0-9.-]*$/
-// AUTO-RESOLVE: which env variable names are accepted (profile env keys, {env:NAME})? -> the portable shell names [A-Za-z_][A-Za-z0-9_]* (anything else cannot be exported from a shell and is almost certainly a typo)
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const ENV_REF = /^\{env:([^}]*)\}$/
-const FILE_REF = /^\{file:([^}]*)\}$/
-const REF_START = /\{(?:env|file):/
-
-const TOP_FIELDS = ["tz", "agents", "models", "tiers", "routes", "classifier"]
-const SECTIONS = ["agents", "models", "tiers", "routes"] as const
-type Section = (typeof SECTIONS)[number]
-const PROFILE_FIELDS = ["adapter", "bin", "env", "server"]
-const MODEL_FIELDS = ["agent", "model", "wider", "variant", "context", "avoid", "only", "keys", "retry"]
-const RETRY_FIELDS = ["maxAttempts", "backoffCapMs", "honorsRetryAfter", "waitsOutLimit", "silenceBudgetMs"]
-const REFERENCE_HINT = "{env:NAME} or {file:path}"
 
 // ---------------------------------------------------------------------------
 // Location
@@ -881,10 +780,6 @@ function serverUrl(value: unknown): boolean {
 // ---------------------------------------------------------------------------
 // Reference check
 // ---------------------------------------------------------------------------
-
-// One broken reference. `message` names the field, the layer and the reference
-// (`ZHIPU_KEY_B`, `~/.secrets/zhipu-c`), never a value.
-export type ReferenceProblem = { field: string; layer: EntryOrigin; label: string; message: string }
 
 // Checks every reference of the registry (keys, profile env): a variable is
 // set and non-empty, a file exists and is readable. Neither value is read into

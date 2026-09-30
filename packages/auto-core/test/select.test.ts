@@ -6,7 +6,7 @@
 // instants and injected marks, rings and windows: select is pure.
 import { describe, expect, test } from "bun:test"
 import { parseWindow, type ModelWindow } from "../src/model-window"
-import type { ModelEntry, ModelReference, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
+import type { ModelEntry, ModelReference, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models-schema"
 import { phaseType, type Tier } from "../src/phases/registry"
 import type { ModelPolicy } from "../src/switches"
 import { candidatesOf, recoveryAt, select, type Candidate, type SelectCall, type SelectContext } from "../src/select"

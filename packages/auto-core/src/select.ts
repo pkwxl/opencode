@@ -27,7 +27,7 @@
 import { resolveModel } from "./chain"
 import { candidateList } from "./model-route"
 import { nextOpening, usableAt } from "./model-window"
-import type { ModelEntry, ModelRegistry, ModelRoute } from "./models"
+import type { ModelEntry, ModelRegistry, ModelRoute } from "./models-schema"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import type { ModelPolicy, ModelRole } from "./switches"
 

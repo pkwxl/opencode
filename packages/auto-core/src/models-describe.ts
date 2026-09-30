@@ -34,16 +34,18 @@ import {
   ModelRegistryError,
   operatorLayerPath,
   projectLayerPath,
-  type EntryOrigin,
-  type LoadModelsOptions,
-  type ModelEntry,
-  type ModelRegistry,
-  type ReferenceProblem,
-  type RegistryAgentProfile,
-  type RegistryLayer,
-  type RegistryLayerName,
-  type RetryOverride,
 } from "./models"
+import type {
+  EntryOrigin,
+  LoadModelsOptions,
+  ModelEntry,
+  ModelRegistry,
+  ReferenceProblem,
+  RegistryAgentProfile,
+  RegistryLayer,
+  RegistryLayerName,
+  RetryOverride,
+} from "./models-schema"
 import { loadPhaseTypes } from "./phases/custom"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { shellProfile } from "./shell"

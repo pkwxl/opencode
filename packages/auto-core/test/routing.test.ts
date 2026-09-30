@@ -4,7 +4,7 @@
 // by test/agent-fake.test.ts; the selection core itself by test/select.test.ts.
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { parseWindow } from "../src/model-window"
-import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
+import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models-schema"
 import { phaseType } from "../src/phases/registry"
 import { dispatchCoverageProblems, logRunRouting, routingFacts, type DispatchNeed, type RoutingFacts } from "../src/routing"
 import { services } from "../src/services"

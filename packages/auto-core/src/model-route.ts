@@ -13,7 +13,7 @@
 //
 // The OPENCODE_AUTO_MODEL and `/failback` overrides replace the list where a
 // dispatch resolves its model (§6.1 line 4); they are not part of this helper.
-import type { ModelRegistry, ModelRoute } from "./models"
+import type { ModelRegistry, ModelRoute } from "./models-schema"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { MODEL_ROLES, type ModelRole } from "./switches"
 import { defaultTier } from "./tier"

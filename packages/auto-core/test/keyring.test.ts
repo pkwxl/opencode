@@ -6,7 +6,7 @@
 // instance the preload installed.
 import { describe, expect, test } from "bun:test"
 import { buildRings, ringKeyLabel, type RingRotation } from "../src/keyring"
-import type { ModelEntry, ModelReference, ModelRegistry } from "../src/models"
+import type { ModelEntry, ModelReference, ModelRegistry } from "../src/models-schema"
 import { createServices, installServices, services } from "../src/services"
 
 const envKey = (name: string): ModelReference => ({ kind: "env", name, ref: `{env:${name}}`, label: name })

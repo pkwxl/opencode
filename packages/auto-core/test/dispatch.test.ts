@@ -8,7 +8,7 @@
 // every write.
 import { describe, expect, test } from "bun:test"
 import { parseWindow, type ModelWindow } from "../src/model-window"
-import type { ModelEntry, ModelRegistry, RegistryAgentProfile, TierList } from "../src/models"
+import type { ModelEntry, ModelRegistry, RegistryAgentProfile, TierList } from "../src/models-schema"
 import type { SessionChain } from "../src/chain"
 import { selectContext, type RoutingFacts } from "../src/routing"
 import { services } from "../src/services"

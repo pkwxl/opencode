@@ -38,7 +38,7 @@ import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } fr
 import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
 import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
-import type { ModelEntry, ModelRegistry } from "./models"
+import type { ModelEntry, ModelRegistry } from "./models-schema"
 import { renderClassifyError } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import type { ClassifierAnswer, ClassifyUsageSink, Router } from "./router"

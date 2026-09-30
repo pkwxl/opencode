@@ -263,6 +263,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // The model registry (plans/0055 §4.1–§4.3): layers, merge, strict
   // validation and the reference check; a loader below every session module.
   models: "driver",
+  // The registry's schema half (0061 E4, R14): the types of a loaded
+  // registry and the tables that declare what a file may say; the loader
+  // (models) validates against it, and the type-only importers read it
+  // without binding the loader.
+  "models-schema": "driver",
   // The models command's data (plans/0055 §9): checkModels, describeModels
   // and formatModels; starts no agent and writes nothing.
   "models-describe": "driver",
@@ -363,8 +368,8 @@ const CLASSIFIED: Record<string, Domain> = {
 // - `check` (runtime until A4) is gone — A4 retired it.
 // - `protect` (runtime in §4.10) is a document-domain flat file since M2.3,
 //   not a driver module, so it carries no sub-domain.
-// - `models-schema` (policies) does not exist yet; E4 adds the entry with
-//   the module.
+// - `models-schema` (policies) landed with E4 beside the loader: the
+//   registry's types and schema tables, split out of `models` by R14.
 // - AUTO-DECISION: §4.10 lists `lock` in both kernel and runtime; it sits in
 //   runtime (its only src imports are log and shell — both runtime — and the
 //   run lock is a process-level facility, not task-store or commit state).
@@ -457,6 +462,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   tier: "policies",
   keyring: "policies",
   models: "policies",
+  "models-schema": "policies",
   "models-describe": "policies",
   // pipeline — the task pipeline: the loops and plans that decide what runs,
   // runner at the top, down to the bypass and wrap-up halves.

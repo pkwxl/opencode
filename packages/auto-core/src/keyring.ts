@@ -25,7 +25,7 @@
 // exclusion — and the run-start routing block says so. Without a registry
 // nothing here runs (C2). Sits below the session layer and above the agent
 // domain (§12): no loop, no session-driving, no agent host imports.
-import type { ModelReference, ModelRegistry } from "./models"
+import type { ModelReference, ModelRegistry } from "./models-schema"
 
 // The registry's rings, by provider, in registry order. The loader
 // guarantees that every opencode entry on one provider declares the same

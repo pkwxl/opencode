@@ -87,13 +87,13 @@ describe("resumeModelNow (strict-resume model check)", () => {
   // returns the selection's pick for the same routing — the marks and windows
   // apply, the env-switch chain does not.
   test("under a registry: the pick's internal name, down marks and windows applying", () => {
-    const entry = (name: string, fields: Partial<import("../src/models").ModelEntry> = {}): import("../src/models").ModelEntry => ({
+    const entry = (name: string, fields: Partial<import("../src/models-schema").ModelEntry> = {}): import("../src/models-schema").ModelEntry => ({
       name,
       layer: "operator",
       agent: "opencode",
       ...fields,
     })
-    const registry: import("../src/models").ModelRegistry = {
+    const registry: import("../src/models-schema").ModelRegistry = {
       layers: [{ name: "operator", path: "/unused/models.json" }],
       tz: "UTC",
       agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
@@ -124,7 +124,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
   // window change that only moves the fresh pick does not roll a unit back,
   // while a model that is down or outside its windows is a dead session.
   describe("resumeModelEligible / deadSessionWhy (plans/0055 §8.3, §10 item 11)", () => {
-    const entry = (name: string, fields: Partial<import("../src/models").ModelEntry> = {}): import("../src/models").ModelEntry => ({
+    const entry = (name: string, fields: Partial<import("../src/models-schema").ModelEntry> = {}): import("../src/models-schema").ModelEntry => ({
       name,
       layer: "operator",
       agent: "opencode",
@@ -132,7 +132,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
     })
     // Friday 2026-09-25 12:00 UTC.
     const NOW = Date.parse("2026-09-25T12:00:00Z")
-    const registryOf = (models: import("../src/models").ModelEntry[]): import("../src/models").ModelRegistry => ({
+    const registryOf = (models: import("../src/models-schema").ModelEntry[]): import("../src/models-schema").ModelRegistry => ({
       layers: [{ name: "operator", path: "/unused/models.json" }],
       tz: "UTC",
       agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
@@ -142,7 +142,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       unused: [],
     })
     const factsOf = (
-      models: import("../src/models").ModelEntry[],
+      models: import("../src/models-schema").ModelEntry[],
       clock: import("../src/services").Clock = clockAt(NOW),
     ): import("../src/routing").RoutingFacts => ({
       registry: registryOf(models),

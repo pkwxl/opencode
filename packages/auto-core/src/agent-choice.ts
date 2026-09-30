@@ -11,7 +11,7 @@
 // run's host starts with. Without a registry the pool starts exactly the one
 // agent chosen here.
 import { claudeHost } from "./agent/claude/host"
-import type { ModelRegistry, RegistryAgentProfile } from "./models"
+import type { ModelRegistry, RegistryAgentProfile } from "./models-schema"
 import { shellProfile, type AgentProfile } from "./shell"
 import { autoSwitches, type AgentChoice } from "./switches"
 

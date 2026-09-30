@@ -17,7 +17,7 @@ import {
   stepValidationLines,
   STEP_UP_RESERVE_MIN,
 } from "../src/model-step"
-import type { ModelEntry, ModelRegistry } from "../src/models"
+import type { ModelEntry, ModelRegistry } from "../src/models-schema"
 
 const entry = (fields: Partial<ModelEntry> = {}): ModelEntry => ({ name: "k3", layer: "operator", agent: "opencode", model: "prov/k3-256k", wider: ["prov/k3"], ...fields })
 

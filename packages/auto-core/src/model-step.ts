@@ -17,7 +17,7 @@
 // registry never calls in: `wider` exists only on registry entries, so the
 // no-registry run stays byte-identical (plans/0055 C2).
 // AUTO-DECISION: the module is model-step.ts, in the model-window / model-route family, not steps.ts (src/step.ts is the graceful-exit boundary module of plans/0014; a steps/steps pair would read as one mechanism split in two)
-import type { ModelEntry, ModelRegistry } from "./models"
+import type { ModelEntry, ModelRegistry } from "./models-schema"
 import { formatTokens } from "./session-api"
 
 // The reserve a step keeps between its step-up point and its window (§4.5):
