@@ -157,6 +157,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // attempt is its executor; the module reaches only the selection core and
   // the types below the session layer.
   "engine/dispatch": "driver",
+  // The run-events journal (plans/0061 R4/F1): the append-only writer of
+  // `.auto/run-events.jsonl` — the input log at the engine's I/O seam (turn
+  // inputs, fx results, clock readings) and the decision events (the
+  // executed effects). The spine and the production fx append; the loop
+  // rotates the file at the run start. Types-only reach into the contract.
+  "engine/events": "driver",
    // The production TurnFx (plans/0061 §4.2/§4.3): the one I/O path of a
    // turn — the AgentClient calls, the testrun kernel, the git service's
    // freeze commit, the handover record, the stats counter and the human
@@ -425,6 +431,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "session-api": "engine",
   "chain-transitions": "engine",
   "engine/dispatch": "engine",
+  "engine/events": "engine",
   "engine/fx": "engine",
   "engine/ladder": "engine",
   "engine/result": "engine",
@@ -554,43 +561,48 @@ const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
     // fx and sources the turn consolidation adds take the slots between it
     // and watch as they land.
     "engine/contract": 3,
+    // The run-events journal (plans/0061 R4/F1), below the two modules that
+    // append to it (the spine's inputs and settles, the fx's calls and
+    // answers): it reaches the contract module's types only.
+    "engine/events": 4,
     // The turn spine (plans/0061 §4.4), directly under its executor: it
-    // reaches the contract module's types only.
-    "engine/spine": 4,
+    // reaches the contract module's types and the journal.
+    "engine/spine": 5,
     // The production TurnFx (plans/0061 §4.2/§4.3): beside the spine, under
-    // watch — it reaches the contract's types and the unranked leaves below
-    // the session layer (log, session-api, testrun, git, handover, stats).
-    "engine/fx": 5,
+    // watch — it reaches the contract's types, the journal and the unranked
+    // leaves below the session layer (log, session-api, testrun, git,
+    // handover, stats).
+    "engine/fx": 6,
     // The turn's synthetic-input sources (plans/0061 §4.2/§4.4), taking the
     // slot beside the spine: they reach the contract and spine types, the
     // router's answer type and session-api's probeSession.
-    "engine/sources": 6,
+    "engine/sources": 7,
     // The extracted turn concerns (plans/0061 §4.5/§4.6), in their extraction
     // order, filling the slots up to watch: each reaches the contract's types
     // and the unranked leaves below the session layer; watch installs them —
     // the remainder layer that held the not-yet-extracted cells during the
     // extraction units is deleted, every slice owned by its own concern.
-    "engine/concerns/guard": 7,
-    "engine/concerns/transcript": 8,
-    "engine/concerns/windows": 9,
-    "engine/concerns/stuck": 10,
-    "engine/concerns/questions": 11,
-    "engine/concerns/failure": 12,
-    "engine/concerns/recovery": 13,
-    "engine/concerns/liveness": 14,
-    "engine/concerns/usage": 15,
-    "engine/concerns/step-up": 16,
-    "engine/concerns/test": 17,
+    "engine/concerns/guard": 8,
+    "engine/concerns/transcript": 9,
+    "engine/concerns/windows": 10,
+    "engine/concerns/stuck": 11,
+    "engine/concerns/questions": 12,
+    "engine/concerns/failure": 13,
+    "engine/concerns/recovery": 14,
+    "engine/concerns/liveness": 15,
+    "engine/concerns/usage": 16,
+    "engine/concerns/step-up": 17,
+    "engine/concerns/test": 18,
     // The turn's result mapping (plans/0061 §4.6), directly under the
     // concern it reads (recovery's reset fields) and its caller watch.
-    "engine/result": 18,
-    watch: 19,
-    attempt: 20,
-    session: 21,
-    artifact: 22,
-    "exec-session": 22,
-    execute: 23,
-    runner: 24,
+    "engine/result": 19,
+    watch: 20,
+    attempt: 21,
+    session: 22,
+    artifact: 23,
+    "exec-session": 23,
+    execute: 24,
+    runner: 25,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

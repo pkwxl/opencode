@@ -55,6 +55,7 @@
 // The spine is drivable with injected concerns, table and fx and no real
 // stream: everything a turn needs arrives as arguments.
 import type { AgentEvent } from "../agent/types"
+import { recordRunEvent } from "./events"
 import type { Advice, Arbitration, ArbitrationRow, Concern, Settle, SliceKey, TurnContext, TurnFx, TurnInput, TurnState, TurnView } from "./contract"
 
 // One concern per slice: a missing owner is a type error. The remainder
@@ -159,6 +160,13 @@ export async function runTurn(args: {
 }): Promise<TurnOutcome> {
   const { ctx, stream, concerns, fx } = args
   const table = args.table ?? TURN_ARBITRATION
+  // The run-events journal (plans/0061 R4/F1): the turn's inputs and settle
+  // are recorded here at the dispatch points — the executed effects (every
+  // fx call with its arguments and answer) are the production fx's own
+  // entries — so the journal's line order is the spine's own total order of
+  // dispatches and effects. Recording is a no-op until a run started the
+  // journal.
+  recordRunEvent({ type: "turn-start", session: ctx.sessionID, start: ctx.startTime })
   const state: TurnState = {
     guard: concerns.guard.initial(ctx),
     transcript: concerns.transcript.initial(ctx),
@@ -299,6 +307,10 @@ export async function runTurn(args: {
   // slice by construction — the dispatch reads that pairing back through the
   // key union, which the compiler cannot see, hence the one cast.
   const runRow = async (input: TurnInput, origin: "external" | "synthetic"): Promise<Settle | "consumed" | undefined> => {
+    // The input log's turn-input half: one entry per dispatched input, in
+    // dispatch order — the events the session filter dropped and the queued
+    // input a held settle discarded never dispatched, so they never appear.
+    recordRunEvent({ type: "input", origin, input })
     const quiet = origin === "external" && input.kind === "event" && input.event.type === "idle"
     // One audited wrapper for the input's whole row: the quiet-point flags
     // span every cell the input visits, so a concern that steers at idle and
@@ -411,6 +423,9 @@ export async function runTurn(args: {
     // interrupted is the spine's own settle).
     settle = (await runExternal({ kind: "stream-end" })) ?? { kind: "interrupted" }
   }
+  // The decision event of the turn's outcome, recorded ahead of the finalize
+  // procedure so the journal's remaining fx entries read as its effects.
+  recordRunEvent({ type: "settle", settle })
 
   // The finalize procedure (plans/0061 §4.4 rule 5): each distinct finalize
   // function once, in table order — the order of its concern's first cell

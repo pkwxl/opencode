@@ -1,4 +1,5 @@
 import { ExitRequested } from "./exit"
+import { startRunEvents } from "./engine/events"
 import { hibernatePause } from "./hibernate"
 import { startInteractive, type Interactive } from "./interactive"
 import { acquireRunLock, lockLines } from "./lock"
@@ -56,6 +57,15 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   // session-driving engine and the stats module read the run's clock through
   // this holder from now on.
   installServices(run)
+  // The run-events journal (plans/0061 R4/F1): rotated here, once per run
+  // start — the turn engine's inputs and executed effects append to it for
+  // the rest of the run, and the file holds exactly this run's entries.
+  // AUTO-DECISION: the rotation call sits in loop.ts although F1's touch set
+  // names only the engine files (the journal's own "rotated per run start"
+  // needs the run-start hook, and this is the run's start beside the
+  // services install; the shell starts nothing per run in the core, and a
+  // shell-side hook would be a shell-visible surface).
+  startRunEvents(directory)
   // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
   // inside the window, sleep until window end + random delay before continuing,
   // so the first execution unit isn't wasted; dryrun permission preflight is

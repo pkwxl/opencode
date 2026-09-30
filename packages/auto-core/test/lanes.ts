@@ -102,6 +102,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/prompt-template.test.ts",
   "test/protect.test.ts",
   "test/quota-windows.test.ts",
+  "test/replay.test.ts",
   "test/resume-gate.test.ts",
   "test/resume.test.ts",
   "test/routing.test.ts",
