@@ -56,6 +56,63 @@ export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" 
   return join(subtaskDir(id, k), `${role}.md`)
 }
 
+// —— Handover-document paths (moved from src/prompt.ts with E2, which took
+// prompt.ts's imports down to the intent domain; the paths themselves are
+// this module's layout, and their non-render consumers — the ondemand loop's
+// reads and clears — keep the same exported names) ——
+
+// Handover document (relative to the target directory): written by an ondemand
+// whole-task session when it hands its context over (self-decided at a natural
+// boundary, or after the hard-wall steer; plans/0056) — the session writes its
+// progress into this file, and the trailing line `Status: continue|done` is
+// parsed by the driver.
+export function handoffFile(task: { id: string }): string {
+  return taskDoc(task.id, "handoff")
+}
+
+// --handover-test's test handover document (relative to the target
+// directory): when the context limit is reached (the decision point is
+// fixed at "the moment the AI initiates the test"; test failure no longer
+// stacks onto it), the session writes its progress and next steps into
+// this file and ends; the driver archives it as testhandoff-<n>.md and
+// opens a new session that continues on the continuation prompt. The file is
+// named per execution scope: a subtask session writes
+// docs/<id>/S<two-digit ordinal>/testhandoff.md, a whole-task session is
+// task-level (docs/<id>/testhandoff.md) — the handover document applies
+// only to its own execution scope, preventing the next subtask from
+// misreading the previous subtask's leftover handover.
+export function testHandoffFile(task: { id: string }, subtask?: number): string {
+  return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
+}
+
+// Subtask output file (relative to the target directory): the standalone
+// write-out file for document/analysis/design-type subtasks, mechanically
+// named by the driver (two-digit increment, avoiding slug-cleaning
+// ambiguity) with the title on the file's first line; code-type outputs
+// land directly in the source tree and are not duplicated as documents
+// (fork-decompose design §4.7).
+export function subtaskOutputFile(task: { id: string }, index: number): string {
+  return subtaskDoc(task.id, index, "index")
+}
+
+// The prompt layer's document-path view of one task (E2, plans/0061 §6.3):
+// every layout path the task-family prompt templates reference, precomputed
+// here — the prompt renderers construct no paths themselves. The shape is
+// prompt.ts's TaskDocs, kept structurally identical (the type is not
+// imported: this module's src-import set is frozen empty).
+export function taskDocPaths(id: string) {
+  return {
+    handoff: handoffFile({ id }),
+    subtasks: taskDoc(id, "subtasks"),
+    testHandoff: taskDoc(id, "testhandoff"),
+    subtask: (k: number) => ({
+      testHandoff: subtaskDoc(id, k, "testhandoff"),
+      todo: subtaskDoc(id, k, "todo"),
+      output: subtaskDoc(id, k, "index"),
+    }),
+  }
+}
+
 // —— Permanent knowledge-document paths (the round-specific directory
 // docs/R-NN, created at round start, permanent once on disk) ——
 

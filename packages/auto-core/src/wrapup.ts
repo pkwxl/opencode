@@ -15,13 +15,14 @@ import { dirname, join } from "node:path"
 import type { SessionChain } from "./chain"
 import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
-import { taskDoc } from "./docpaths"
+import { taskDoc, taskDocPaths } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
 import { createGitOps } from "./git-ops"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
-import type { Plan, Task } from "./tasks"
+import { promptViews, type Plan, type Task } from "./tasks"
 import { renderWrapup } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
 import { statsModelEvent } from "./stats"
@@ -59,6 +60,7 @@ export async function runWrapup(
   const subject = `${task.id} wrapup ${task.title}`
   nameSubject(chain, subject)
   const resolves = await wrapupResolves(dir, task.id)
+  const views = promptViews(plan, task)
   let feedback = ""
   // When the shape re-prompt goes out through a fork of the session that just
   // ended (2026-09-18 revision), the next turn carries only the feedback — the
@@ -71,7 +73,7 @@ export async function runWrapup(
     const result = await runSession(
       client,
       task,
-      brief ? feedback.trimStart() : renderWrapup(plan, task, { mode: opts.mode, solo: input.solo, resolves }) + feedback,
+      brief ? feedback.trimStart() : renderWrapup(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, solo: input.solo, resolves }) + feedback,
       opts,
       chain,
     )

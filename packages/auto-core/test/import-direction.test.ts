@@ -276,6 +276,12 @@ const CLASSIFIED: Record<string, Domain> = {
   "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
   "prompt-plan": "driver",
+  // The render facts' composition helper (plans/0061 E2): the one PromptFacts
+  // value builder the render callers share — the prompt globals, the library
+  // handle, the switch-derived ask tier and the implement-entry fallback.
+  // runtime: it composes the run's process-level inputs (switches, the pack
+  // loader, the template registry) for every sub-domain that renders.
+  "prompt-facts": "driver",
   // Learned quota windows persisted across runs (plans/0057 §8): read by the
   // recovery wait's sleep only; below attempt and session.
   "quota-windows": "driver",
@@ -347,9 +353,12 @@ const CLASSIFIED: Record<string, Domain> = {
 const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
-  // M3.6: the phase view is a PhaseKey / type entry (phases/registry), no
-  // longer the phases.ts letter helpers.
-  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases/registry", "resolve", "stuck", "switches", "tasks", "template"],
+  // E2: prompt.ts is off the driver — every driver-side fact (the task and
+  // plan views, the question-rule data, the stuck-hint data, the
+  // switch-derived options and the prompt globals) reaches it as data
+  // through PromptFacts (src/prompt-facts.ts) and the view types; the entry
+  // is deleted outright in E3.
+  prompt: ["intent/load", "intent/types", "mode", "template"],
   // M3.4: routing loads the current phase's tasks (tasks) and no longer
   // renders the retired PLAN.md scaffold (template).
   // M3.6: phase types load per project (phases/custom).
@@ -512,6 +521,11 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   clean: "runtime",
   confirm: "runtime",
   reset: "runtime",
+  // AUTO-DECISION: prompt-facts (the PromptFacts builder) sits in runtime —
+  // it reads only the switches and the provider loaders (pack, template) and
+  // is consumed by every sub-domain that renders (pipeline, engine, kernel,
+  // policies alike), so no other placement fits its edge set.
+  "prompt-facts": "runtime",
   "templates.d": "runtime",
   lock: "runtime",
 }

@@ -39,7 +39,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Intent packs | Frozen schema of the (b)-class content (quality bars, phase duties, acceptance semantics, decision governance, artifact conventions); built-in packs + the project overlay | `src/intent/types.ts`, `src/intent/load.ts`, `templates/intents/default.md` (0031–0034, 0043) |
 | Modes | `-m/--mode` scenario guidance, sectioned-file templates | `src/mode.ts`, `templates/modes/` |
 | Template engine | Load/render prompt templates, partials, project overrides in `.opencode/auto/prompts/`, protocol-marker tiers | `src/template.ts`, `templates/prompts/_partials.md` (0033) |
-| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md` | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers: `renderPhasePlan`, `renderImplementPlan`, `renderPhaseAppend`, 0053), `templates/prompts/` |
+| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md`; renders from a caller-built `PromptFacts` value and view types (off the driver since 0061 E2) | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers: `renderPhasePlan`, `renderImplementPlan`, `renderPhaseAppend`, 0053), `src/prompt-facts.ts` (the facts' composition helper), `templates/prompts/` |
 
 ### phases — what a phase is
 
@@ -193,6 +193,7 @@ The engine of one session turn (0061): `watch()` is its facade and entry — it 
 | Stuck-loop detection | policies | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
 | Proxy-answer ledger | kernel | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting | `src/resolve.ts` (0020) |
 | Logging | runtime | Verbose/audit output, timestamps, log file | `src/log.ts` |
+| Render facts | runtime | The one `PromptFacts` builder every render caller shares: the prompt globals (the intent pack, the human-questions flag), the template library handle, the switch-derived ask tier and the implement-entry fallback (0061 E2) | `src/prompt-facts.ts` |
 
 ## Templates
 

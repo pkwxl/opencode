@@ -12,7 +12,9 @@ import { renderPhaseHandover } from "../src/prompt"
 import { renderPhasePlan } from "../src/prompt-plan"
 import { closeSection, renderRoundBrief, roundBriefText } from "../src/round-brief"
 import { roundCloseLines, roundCloseProblems } from "../src/round-close"
-import { phaseType } from "../src/phases/registry"
+import { phaseType, planDutiesPartial } from "../src/phases/registry"
+import { promptFacts } from "../src/prompt-facts"
+import { renderText } from "../src/template"
 
 function withDir(fn: (dir: string) => Promise<void>) {
   return async () => {
@@ -248,24 +250,26 @@ describe("config keys acceptanceGate / build (plans/0049 G9)", () => {
 
 describe("prompt slots (plans/0049 G3/G7)", () => {
   const design = phaseType("design")!
+  const facts = promptFacts()
+  const duties = renderText(`{{> ${planDutiesPartial(design)}}}>`, {}).trimEnd()
 
   test("phase-plan injects the round brief with its intent rules only when there is one", () => {
-    const base = { phase: design, phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-design/tasks.md" }
-    const withBrief = renderPhasePlan({ ...base, round: "## Goal\n\nPort the driver to arm64." })
+    const base = { phase: design, planDuties: duties, phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-design/tasks.md" }
+    const withBrief = renderPhasePlan(facts, { ...base, round: "## Goal\n\nPort the driver to arm64." })
     expect(withBrief).toContain("## Input: round brief (this round's round.md)")
     expect(withBrief).toContain("Port the driver to arm64.")
     expect(withBrief).toContain("never edit round.md")
-    expect(renderPhasePlan(base)).not.toContain("round brief")
+    expect(renderPhasePlan(facts, base)).not.toContain("round brief")
   })
 
   test("phase-handover asks for the acceptance draft and forbids the sign-off only when the gate is on", () => {
     const base = { phase: design, handover: "docs/R-01/P02-design/handover.md" }
-    const gated = renderPhaseHandover({ ...base, acceptance: "docs/R-01/P02-design/acceptance.md" })
+    const gated = renderPhaseHandover(facts, { ...base, acceptance: "docs/R-01/P02-design/acceptance.md" })
     expect(gated).toContain("## Artifact: acceptance draft")
     expect(gated).toContain("Never write a line starting with `Accepted:`")
     expect(gated).toContain("may write are docs/R-01/P02-design/handover.md and docs/R-01/P02-design/acceptance.md")
     expect(gated).toContain("decisions the reviewer should confirm or")
-    const plain = renderPhaseHandover(base)
+    const plain = renderPhaseHandover(facts, base)
     expect(plain).not.toContain("acceptance draft")
     expect(plain).toContain("The only file this session may write is docs/R-01/P02-design/handover.md;")
   })

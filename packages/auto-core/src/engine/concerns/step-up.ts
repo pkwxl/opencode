@@ -22,6 +22,7 @@
 // the turn is byte-identical to before (C2).
 import { enabledSteps, stepId, stepUpPoint } from "../../model-step"
 import { renderStepUp } from "../../prompt"
+import { promptFacts } from "../../prompt-facts"
 import { formatTokens } from "../../session-api"
 import { liveUsage } from "../../usage"
 import type { Advice, Concern, TurnContext, TurnFx, TurnState } from "../contract"
@@ -48,7 +49,7 @@ async function stepUp(fx: TurnFx, own: TurnState["stepUp"], ctx: TurnContext, us
   own.reached = { step: own.step, model: nextId }
   fx.log(`⇡ ${steerContext.label} context ${formatTokens(usedNow)} reached the step-up point of ${steerContext.name} (${fromId}); continuing the same session on ${nextId}`)
   if (ctx.client.capabilities.steer) {
-    const ok = await fx.steer(renderStepUp({ from: fromId, next: nextId }))
+    const ok = await fx.steer(renderStepUp(promptFacts(ctx.opts), { from: fromId, next: nextId }))
     if (ok) ctx.services.router.awaitCacheClaim(steerContext.name, usedNow)
   } else {
     fx.log(`⇡ ${steerContext.label} the agent takes no mid-turn steers; the next prompt into this session names ${nextId}`)

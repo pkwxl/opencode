@@ -4,16 +4,24 @@
 import { describe, expect, test } from "bun:test"
 import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
 import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "../src/prompt-plan"
-import { usePromptLibrary } from "../src/template"
+import { promptFacts } from "../src/prompt-facts"
+import { usePromptLibrary, renderText } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
 import { parsePhaseTypeFile } from "../src/phases/custom"
-import { phaseTypeOfLetter as L } from "../src/phases/registry"
+import { phaseTypeOfLetter as L, planDutiesPartial, type PhaseTypeEntry } from "../src/phases/registry"
+
+// E2 render inputs: every render takes the facts (default globals), and the
+// planning renders take their phase's duty paragraph pre-rendered (the
+// registry's own data through the active library — loop-plan's helper,
+// replicated for the fixture).
+const facts = promptFacts()
+const duties = (entry: PhaseTypeEntry) => renderText(entry.planDuties ?? `{{> ${planDutiesPartial(entry)}}}`, {}).trimEnd()
 
 // The unit coordinates every planning render needs (M3.4); tests vary the rest.
-const phasePlan = (input: Omit<Parameters<typeof renderPhasePlan>[0], "phaseId" | "taskIndex">) =>
-  renderPhasePlan({ phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", ...input })
-const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[0], "phaseId" | "taskIndex">) =>
-  renderImplementPlan({ phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", ...input })
+const phasePlan = (input: Omit<Parameters<typeof renderPhasePlan>[1], "phaseId" | "taskIndex" | "planDuties"> & { phase: PhaseTypeEntry }) =>
+  renderPhasePlan(facts, { phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", planDuties: duties(input.phase), ...input })
+const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[1], "phaseId" | "taskIndex">) =>
+  renderImplementPlan(facts, { phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", ...input })
 
 describe("renderPhasePlan (phase planning session, section E)", () => {
   test("injects brief / the mode preamble and the task-unit format protocol; writes only the task index and task documents", () => {
@@ -150,7 +158,7 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     expect(text).toContain("Plan one review task per trust boundary.")
     expect(text).not.toContain("code migration and rework")
     expect(text).not.toMatch(/\{\{|\}\}/)
-    expect(renderPhaseHandover({ phase: custom, handover: "docs/R-01/P02-security-review/handover.md" })).toContain("Security review")
+    expect(renderPhaseHandover(facts, { phase: custom, handover: "docs/R-01/P02-security-review/handover.md" })).toContain("Security review")
   })
 })
 
@@ -203,8 +211,9 @@ describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
 })
 
 describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D23/D27)", () => {
-  const phaseAppend = (input: Omit<Parameters<typeof renderPhaseAppend>[0], "phaseId" | "taskIndex" | "input" | "inputPath" | "existingTasks">) =>
-    renderPhaseAppend({
+  const phaseAppend = (input: Omit<Parameters<typeof renderPhaseAppend>[1], "phaseId" | "taskIndex" | "input" | "inputPath" | "existingTasks" | "planDuties"> & { phase?: PhaseTypeEntry }) =>
+    renderPhaseAppend(facts, {
+      planDuties: input.phase ? duties(input.phase) : undefined,
       phaseId: "R-01.P02",
       taskIndex: "docs/R-01/P02-implement/tasks.md",
       input: "Fill in the lexical fallback first.",
@@ -265,7 +274,7 @@ describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D2
   })
 
   test("m mode: no phase signature / duties / round handover, implement-plan tone; the mandatory slots remain", () => {
-    const text = renderPhaseAppend({
+    const text = renderPhaseAppend(facts, {
       phaseId: "R-01.P01",
       taskIndex: "docs/R-01/P01-implement/tasks.md",
       input: "Migrate one more module.",
@@ -291,7 +300,7 @@ describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D2
     for (const text of [
       phaseAppend({ phase: L("a"), numberStart: 12 }),
       phaseAppend({ phase: L("m"), brief: "intent", handovers: "### a Analysis (x)\n\n- decision", mode: migrate, parallel: "high" }),
-      renderPhaseAppend({
+      renderPhaseAppend(facts, {
         phaseId: "R-01.P01",
         taskIndex: "docs/R-01/P01-implement/tasks.md",
         input: "x",
@@ -309,7 +318,7 @@ describe("renderNumberRecovery (number recovery session)", () => {
   test("injects the floor and the evidence checklist; the hard output protocol points at .auto/next-task", () => {
     // The template library may have been overridden by another case in the same process; reset to built-ins only
     usePromptLibrary(undefined)
-    const text = renderNumberRecovery({ floor: 5 })
+    const text = renderNumberRecovery(facts, { floor: 5 })
     // Protocol-sensitive markers: what the DRIVER parses out of the session's output
     expect(text).toContain(".auto/next-task")
     // The floor is injected (raw and zero-padded forms)
@@ -330,7 +339,7 @@ describe("renderNumberRecovery (number recovery session)", () => {
 
 describe("renderPhaseHandover (phase handover distillation session, F.1)", () => {
   test("injects the phase / the handover permanent path / the four-section protocol and the only-writable-file constraint", () => {
-    const text = renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" })
+    const text = renderPhaseHandover(facts, { phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" })
     expect(text).toContain("\"Analysis\" phase (a)")
     expect(text).toContain("handover distiller")
     expect(text).toContain("docs/R-01/P01-analysis/handover.md")
@@ -347,7 +356,7 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
   })
 
   test("k phase with no next phase: for-later-reference wording; still demands the four sections", () => {
-    const text = renderPhaseHandover({ phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" })
+    const text = renderPhaseHandover(facts, { phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" })
     expect(text).toContain("no next phase")
     expect(text).toContain("later rounds and")
     for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
@@ -359,20 +368,20 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
     expect(text).toContain("this phase directory's kb.md")
     expect(text).toContain("skip")
     // With a next phase there is no close-out wording
-    const withNext = renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" })
+    const withNext = renderPhaseHandover(facts, { phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" })
     expect(withNext).not.toContain("no next phase")
     expect(withNext).not.toContain("kb.md")
   })
 
   test("no verified field wording (verify retired)", () => {
-    expect(renderPhaseHandover({ phase: L("m"), handover: "docs/R-01/P02-implement/handover.md" })).not.toContain("verified")
+    expect(renderPhaseHandover(facts, { phase: L("m"), handover: "docs/R-01/P02-implement/handover.md" })).not.toContain("verified")
   })
 
   test("representative parameter combinations render with no leftover template tags", () => {
     for (const text of [
-      renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" }),
-      renderPhaseHandover({ phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" }),
-      renderPhaseHandover({
+      renderPhaseHandover(facts, { phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" }),
+      renderPhaseHandover(facts, { phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" }),
+      renderPhaseHandover(facts, {
         phase: L("m"),
         handover: "phase/handover.md",
         closedTasks: [{ id: "T-006", title: "Port the parser", reason: "superseded" }],
@@ -384,7 +393,7 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
 
   test("closed tasks (plans/0053 D16): listed with reasons, recorded as not delivered", () => {
     const base = { phase: L("m"), handover: "phase/handover.md", next: "P03-test Testing" }
-    const text = renderPhaseHandover({
+    const text = renderPhaseHandover(facts, {
       ...base,
       closedTasks: [
         { id: "T-006", title: "Port the parser", reason: "superseded by T-007" },
@@ -409,12 +418,12 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
     }
 
     // No closures (key absent or empty list): nothing renders, byte-identical to the render without the key.
-    const plain = renderPhaseHandover(base)
+    const plain = renderPhaseHandover(facts, base)
     expect(plain).not.toContain("## Closed tasks")
     expect(plain).not.toContain("closed without completing")
     expect(plain).toContain("phases.md).\n\n## Artifact\n")
-    expect(renderPhaseHandover({ ...base, closedTasks: [] })).toBe(plain)
-    expect(renderPhaseHandover({ ...base, closedTasks: undefined })).toBe(plain)
+    expect(renderPhaseHandover(facts, { ...base, closedTasks: [] })).toBe(plain)
+    expect(renderPhaseHandover(facts, { ...base, closedTasks: undefined })).toBe(plain)
   })
 })
 
@@ -422,7 +431,7 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
   const FILE = "docs/R-01/P03-knowledge/kb.md"
 
   test("injects the output path, source list and section skeleton; read-only analysis, the only writable file is the output path", () => {
-    const text = renderKnowledge({ file: FILE })
+    const text = renderKnowledge(facts, { file: FILE })
     expect(text).toContain(FILE)
     // Source pointers (the phase index inside this round's directory and each phase directory's handover document; the phase directories also hold the PLAN snapshot)
     expect(text).toContain("docs/R-NN/phases.md")
@@ -447,14 +456,14 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
   })
 
   test("injects the mode.exec scenario background; without a mode the whole block disappears", () => {
-    const text = renderKnowledge({ file: FILE, mode: migrate })
+    const text = renderKnowledge(facts, { file: FILE, mode: migrate })
     expect(text).toContain("Scenario mode notes (migrate)")
     expect(text).toContain("Migration/upgrade mode notes")
-    expect(renderKnowledge({ file: FILE })).not.toContain("Scenario mode notes")
+    expect(renderKnowledge(facts, { file: FILE })).not.toContain("Scenario mode notes")
   })
 
   test("renders with no leftover template tags", () => {
-    for (const text of [renderKnowledge({ file: FILE }), renderKnowledge({ file: FILE, mode: migrate })]) {
+    for (const text of [renderKnowledge(facts, { file: FILE }), renderKnowledge(facts, { file: FILE, mode: migrate })]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
   })
@@ -463,7 +472,7 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
 describe("renderPriorKnowledge (prior knowledge extraction session)", () => {
   test("referencing two states: a non-empty distilled list injects the list and the no-restating demand; empty/default, the whole block disappears (same behavior as full distillation)", () => {
     usePromptLibrary(undefined)
-    const withList = renderPriorKnowledge({
+    const withList = renderPriorKnowledge(facts, {
       file: "docs/prior-kb/R2-prior-x.md",
       brief: "intent",
       distilled: ["docs/R-01/P02-implement/handover.md", "docs/R-01/P03-knowledge/kb.md"],
@@ -474,15 +483,15 @@ describe("renderPriorKnowledge (prior knowledge extraction session)", () => {
     expect(withList).toContain("- docs/R-01/P03-knowledge/kb.md")
     // Referencing's same constraint: already-covered knowledge points are replaced by a one-line reference instead of an excerpt
     expect(withList).toContain("a one-line reference (`see <path>: <one sentence>`)")
-    const bare = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })
+    const bare = renderPriorKnowledge(facts, { file: "docs/prior-kb/R1-prior-x.md" })
     expect(bare).not.toContain("## Input: existing distilled artifacts")
     expect(bare).not.toContain("must not be restated")
-    expect(renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## Input: existing distilled artifacts")
+    expect(renderPriorKnowledge(facts, { file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## Input: existing distilled artifacts")
   })
 
   test("closing-marker protocol: the intermediate-artifact path note + a final \"DONE\" alone on its own line + never written before everything is complete", () => {
     usePromptLibrary(undefined)
-    const text = renderPriorKnowledge({ file: "docs/R-01/temp-kb.md" })
+    const text = renderPriorKnowledge(facts, { file: "docs/R-01/temp-kb.md" })
     expect(text).toContain("intermediate artifact path")
     expect(text).toContain("put the line `DONE` on a line of its own at the very end of the document")
     expect(text).toContain("DRIVER-parsed protocol string: write it verbatim, do not translate it")

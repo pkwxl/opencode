@@ -10,14 +10,15 @@
 
 import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { archivedTestHandoff, latestHandoffSeq, taskDoc } from "./docpaths"
+import { archivedTestHandoff, handoffFile, latestHandoffSeq, taskDoc, taskDocPaths } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { peekHandover } from "./handover"
 import { formatTokens, log } from "./log"
 import type { Opts } from "./opts"
 import type { Task } from "./tasks"
-import { handoffFile, renderHandoffSteer, renderUsageNoteInfo, renderUsageNoteWinddown, type TestRunInfo } from "./prompt"
+import { renderHandoffSteer, renderUsageNoteInfo, renderUsageNoteWinddown, type TestRunInfo } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { runScript } from "./script"
 
 // Ondemand context management (OPENCODE_AUTO_STEER, plans/0056): the driver
@@ -47,10 +48,13 @@ export function handoffSteer(on: boolean, cap: number, task: Task): Steer | unde
   return on
     ? {
         limit: cap * 2,
-        text: renderHandoffSteer(task),
+        // The steer texts and usage notices render no intent sections and no
+        // question rule, so their facts carry the built-in pack (the render
+        // exit takes facts uniformly; the values never reach these bytes).
+        text: renderHandoffSteer(promptFacts(), taskDocPaths(task.id)),
         notes: [
-          { at: 0.5, text: renderUsageNoteInfo(task) },
-          { at: 0.85, text: renderUsageNoteWinddown(task) },
+          { at: 0.5, text: renderUsageNoteInfo(promptFacts(), taskDocPaths(task.id)) },
+          { at: 0.85, text: renderUsageNoteWinddown(promptFacts(), taskDocPaths(task.id)) },
         ],
       }
     : undefined

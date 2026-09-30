@@ -187,7 +187,7 @@ export type Opts = {
   // for the human's answer with no timeout and never proxy-answers (no
   // AUTO-RESOLVE); it blocks only when the input channel is unreachable (stdin
   // closed). The planning templates' question-rule branch follows the same
-  // policy (prompt.ts useHumanQuestions).
+  // policy (the render facts' humanQuestions flag, src/prompt-facts.ts).
   humanQuestions?: boolean
   // The run's registry routing facts (plans/0055 §6): the loaded model
   // registry with the agent filter and the default agent, built once at run

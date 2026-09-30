@@ -36,7 +36,7 @@ import {
 } from "./config"
 import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
 import { CONTRACT_AGENT } from "./opts"
-import { useIntentPacks } from "./prompt"
+import { loadIntents } from "./intent/load"
 import { shellProfile } from "./shell"
 import { renderText } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -189,7 +189,7 @@ export async function planFix(dir: string): Promise<FixPlan> {
   // The block embeds intent-pack text, so it renders against the project's packs.
   let packs: string | undefined
   try {
-    useIntentPacks(dir)
+    loadIntents(dir)
   } catch (error) {
     packs = error instanceof Error ? error.message : String(error)
   }

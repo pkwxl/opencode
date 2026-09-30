@@ -39,10 +39,13 @@ import {
   type ScriptRun,
 } from "../src/prompt"
 import { renderImplementPlan, renderPhaseAppend, renderPhasePlan, existingTaskList } from "../src/prompt-plan"
+import { promptFacts } from "../src/prompt-facts"
+import { promptViews } from "../src/tasks"
+import { taskDocPaths } from "../src/docpaths"
 import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"
-import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
+import { phaseTypeOfLetter, planDutiesPartial, type PhaseLetter } from "../src/phases/registry"
 
 const UPDATE = process.env.UPDATE_GOLDEN === "1"
 const GOLDEN_DIR = join(import.meta.dir, "golden")
@@ -83,6 +86,16 @@ const task = plan.tasks[1]!
 
 const migrate = loadModes().migrate!
 
+// E2 render inputs: the facts (default globals — built-in pack, ask off, no
+// attending human), the plan/task views and the task's document paths.
+const facts = promptFacts()
+const views = promptViews(plan, task)
+const docs = taskDocPaths(task.id)
+// The planning renders' duty paragraph (the registry's own data, rendered
+// through the active library — loop-plan's helper, replicated for the
+// fixture): a builtin type's shared partial.
+const duties = (letter: PhaseLetter) => renderText(`{{> ${planDutiesPartial(phaseTypeOfLetter(letter))}}}`, {}).trimEnd()
+
 const run: ScriptRun = { script: "test/check.sh", code: 1, ms: 1234, timedOut: false, out: "/repo/tmp/test.1.out" }
 const resolves: ResolveItem[] = [{ at: 0, task: task.id, phase: "m", round: 1, source: "driver", question: "strategy A or B?" }]
 const stuck = (level: number): StuckHit => ({ kind: "repeat", tool: "bash", count: 3, level, input: "git status", detail: "(empty)" })
@@ -93,12 +106,12 @@ const execOpts = { testByDriver: true, handoverTest: true, mode: migrate }
 
 describe("golden render snapshots", () => {
   test("fork-base session", () => {
-    golden("context-base", renderContextBase(task, "Prior distillation summary (fixed input)."))
+    golden("context-base", renderContextBase(facts, task, "Prior distillation summary (fixed input)."))
   })
 
   test("decompose family (six phases + generic fallback)", () => {
     for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
-      golden(`decompose-${phase}`, renderDecompose(plan, task, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter(phase) } }))
+      golden(`decompose-${phase}`, renderDecompose(facts, views.plan, views.task, docs, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter(phase) } }))
     }
     // The generic decompose is the fallback when the builtin library has no
     // decompose-<phase>; renderDecompose never reaches it, so it is rendered
@@ -128,7 +141,7 @@ describe("golden render snapshots", () => {
       "decompose-generic",
       renderTemplate(
         "decompose",
-        promptCtx({
+        promptCtx(facts, {
           ...genericCtx,
           decomposeRule: rule && renderText(rule, genericCtx),
           contextDigest: digest && renderText(digest, genericCtx),
@@ -138,17 +151,17 @@ describe("golden render snapshots", () => {
   })
 
   test("execution family (subtask/whole-task/wrap-up)", () => {
-    golden("subtask", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2 }))
+    golden("subtask", renderSubtask(facts, views.plan, views.task, docs, "write the execution logic", { ...execOpts, index: 2 }))
     // A stream of auto's split without a fork of the lead (or continuing from
     // its handover): the full prompt with the context-budget protocol
     // (plans/0059 D5).
-    golden("subtask-budget", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2, budget: true }))
+    golden("subtask-budget", renderSubtask(facts, views.plan, views.task, docs, "write the execution logic", { ...execOpts, index: 2, budget: true }))
     // The delta a fork of the lead gets (plans/0059 D5): a dependent stream
     // with the files changed since the split, the protocol and the test
     // handover; then the last stream, independent, with neither.
     golden(
       "fanout",
-      renderFanout(plan, task, "write the execution logic: src/exec.ts, verify with its test Depends: S01 Artifacts: src/exec.ts", 2, {
+      renderFanout(facts, views.plan, views.task, docs, "write the execution logic: src/exec.ts, verify with its test Depends: S01 Artifacts: src/exec.ts", 2, {
         ...execOpts,
         siblings: ["S01 write the schema part (done)", "S03 write the docs"],
         changed: ["src/schema.ts", "test/schema.test.ts"],
@@ -157,23 +170,24 @@ describe("golden render snapshots", () => {
     )
     golden(
       "fanout-last",
-      renderFanout(plan, task, "write the docs: README.md, verify by reading it back Depends: none Artifacts: README.md", 3, {
+      renderFanout(facts, views.plan, views.task, docs, "write the docs: README.md, verify by reading it back Depends: none Artifacts: README.md", 3, {
         siblings: ["S01 write the schema part (done)", "S02 write the execution logic (done)"],
         last: true,
       }),
     )
-    golden("whole", renderWhole(plan, task, { ...execOpts, ondemand: true }))
-    golden("whole-budget", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true }))
-    golden("whole-adaptive", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true, adaptive: true }))
-    golden("wrapup", renderWrapup(plan, task, { mode: migrate, resolves }))
+    golden("whole", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true }))
+    golden("whole-budget", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true }))
+    golden("whole-adaptive", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true }))
+    golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
   })
 
   test("phase-loop family (planning/handover/knowledge)", () => {
     for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
       golden(
         `phase-plan-${phase}`,
-        renderPhasePlan({
+        renderPhasePlan(facts, {
           phase: phaseTypeOfLetter(phase),
+          planDuties: duties(phase),
           brief: "Project intent (fixed input).",
           handovers: "Prior phase handover (fixed input).",
           mode: migrate,
@@ -187,8 +201,9 @@ describe("golden render snapshots", () => {
     // above renders at none and stays byte-identical.
     golden(
       "phase-plan-m-parallel-high",
-      renderPhasePlan({
+      renderPhasePlan(facts, {
         phase: phaseTypeOfLetter("m"),
+        planDuties: duties("m"),
         brief: "Project intent (fixed input).",
         mode: migrate,
         phaseId: "R-01.P02",
@@ -198,7 +213,7 @@ describe("golden render snapshots", () => {
     )
     golden(
       "phase-handover",
-      renderPhaseHandover({ phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test Testing" }),
+      renderPhaseHandover(facts, { phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test Testing" }),
     )
     // Append planning (plans/0053 D27): the shared phase-append template, both
     // modes byte-stable. The existing-task lines come from existingTaskList
@@ -211,8 +226,9 @@ describe("golden render snapshots", () => {
     ])
     golden(
       "phase-append",
-      renderPhaseAppend({
+      renderPhaseAppend(facts, {
         phase: phaseTypeOfLetter("m"),
+        planDuties: duties("m"),
         brief: "Project intent (fixed input).",
         handovers: "Prior phase handover (fixed input).",
         mode: migrate,
@@ -226,7 +242,7 @@ describe("golden render snapshots", () => {
     )
     golden(
       "phase-append-m",
-      renderPhaseAppend({
+      renderPhaseAppend(facts, {
         phaseId: "R-01.P01",
         taskIndex: "docs/R-01/P01-implement/tasks.md",
         numberStart: 4,
@@ -235,10 +251,10 @@ describe("golden render snapshots", () => {
         existingTasks,
       }),
     )
-    golden("knowledge", renderKnowledge({ file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
+    golden("knowledge", renderKnowledge(facts, { file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
     golden(
       "prior-knowledge",
-      renderPriorKnowledge({ file: "docs/R-01/temp-kb.md", brief: "Second-pass migration intent.", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),
+      renderPriorKnowledge(facts, { file: "docs/R-01/temp-kb.md", brief: "Second-pass migration intent.", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),
     )
     // The capped digest's index form (plans/0061 R3/A7): what fills the
     // phase-plan prevRound slot when the joined digest exceeds the cap.
@@ -256,27 +272,27 @@ describe("golden render snapshots", () => {
   })
 
   test("bypass family (plan generation/number recovery/handover steer/stuck loop/dryrun)", () => {
-    golden("implement-plan", renderImplementPlan({ content: "Full implementation prompt (fixed input).", brief: "Project intent.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md" }))
+    golden("implement-plan", renderImplementPlan(facts, { content: "Full implementation prompt (fixed input).", brief: "Project intent.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md" }))
     golden(
       "implement-plan-parallel-medium",
-      renderImplementPlan({ content: "Full implementation prompt (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel: "medium" }),
+      renderImplementPlan(facts, { content: "Full implementation prompt (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel: "medium" }),
     )
-    golden("implement-plan-file", renderImplementPlan({ file: "spec.md", content: "Full plan file (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
-    golden("number-recovery", renderNumberRecovery({ floor: 7 }))
-    golden("handoff-steer", renderHandoffSteer(task))
-    golden("usage-note-info", renderUsageNoteInfo(task))
-    golden("usage-note-winddown", renderUsageNoteWinddown(task))
-    golden("split-rejected", renderSplitRejected(task, "1 item, where a split takes 2 to 5 streams", true))
-    golden("stuck-hint-1", renderStuckHint(stuck(1)))
-    golden("stuck-hint-2", renderStuckHint(stuck(2)))
-    golden("stuck-hint-3", renderStuckHint(stuck(3)))
-    golden("dryrun", renderDryrun())
+    golden("implement-plan-file", renderImplementPlan(facts, { file: "spec.md", content: "Full plan file (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
+    golden("number-recovery", renderNumberRecovery(facts, { floor: 7 }))
+    golden("handoff-steer", renderHandoffSteer(facts, docs))
+    golden("usage-note-info", renderUsageNoteInfo(facts, docs))
+    golden("usage-note-winddown", renderUsageNoteWinddown(facts, docs))
+    golden("split-rejected", renderSplitRejected(facts, docs, "1 item, where a split takes 2 to 5 streams", true))
+    golden("stuck-hint-1", renderStuckHint(facts, stuck(1)))
+    golden("stuck-hint-2", renderStuckHint(facts, stuck(2)))
+    golden("stuck-hint-3", renderStuckHint(facts, stuck(3)))
+    golden("dryrun", renderDryrun(facts))
   })
 
   test("test-handover family", () => {
-    golden("test-result", renderTestResult({ ...run, seq: 1 }))
-    golden("test-wrapup", renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" }))
-    golden("test-continue", renderTestContinue({ handoffFile: "docs/T-002/testhandoff-1.md", run: { ...run, seq: 1 } }))
+    golden("test-result", renderTestResult(facts, { ...run, seq: 1 }))
+    golden("test-wrapup", renderTestWrapup(facts, { handoffFile: "docs/T-002/testhandoff.md" }))
+    golden("test-continue", renderTestContinue(facts, { handoffFile: "docs/T-002/testhandoff-1.md", run: { ...run, seq: 1 } }))
   })
 
   test("agent contract (testByDriver two states)", async () => {

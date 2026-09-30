@@ -4,67 +4,147 @@
 // only assembles plan/task/run info into template variables. The render*
 // signatures stay stable, so runner/loop call sites are unaware of the
 // template mechanism.
-import { dirname, join } from "node:path"
+// Off the driver (E2, plans/0061 §6.3): this module imports the intent
+// domain alone (the mode/template halves and the intent pack's loader).
+// Everything it used to read from driver modules reaches it as data — one
+// PromptFacts value per render call (the prompt globals, the switch-derived
+// options, the implement-entry fallback; src/prompt-facts.ts is the
+// composition helper), the view types below (which the driver's own types
+// satisfy structurally, built by tasks.ts's promptViews), and the task's
+// document-path view (docpaths' taskDocPaths). No module state remains here.
 import type { ModeSpec } from "./mode"
-import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
+import { dutiesForPhase, packSubsection } from "./intent/load"
 import type { IntentPack, IntentSection } from "./intent/types"
-import { subtaskDoc, taskDoc } from "./docpaths"
-import { checklistTitle, prerequisites, type Plan, type Status, type Task } from "./tasks"
-import type { ResolveItem } from "./resolve"
-import type { StuckHit } from "./stuck"
-import { phaseType, REQUIRED_TYPE, type PhaseKey, type PhaseTypeEntry } from "./phases/registry"
-import { autoSwitches, type TaskContextMode } from "./switches"
-import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
+import { renderTemplate, renderText, type Ctx } from "./template"
 
-// The active intent pack (M1.2/M1.3, plans/0032+0033): the (b)-class content
-// of the decompose family (split granularity criteria + per-phase duties) and
-// the subtask family's closing self-check sentences lives in the pack, not in
-// the core templates; the assembly point injects it as pre-rendered data
-// (decomposeRule/phaseDuties/selfCheck vars). Default state = the built-in
-// preset; loop-preflight calls useIntentPacks(dir) next to usePromptLibrary so
-// the project overlay (.opencode/auto/intents/) applies; invalid pack files
-// throw there as usage errors. Degenerate composition only (F8): one active
-// pack, a same-named project file overrides the built-in wholesale.
-let activeIntentPack: IntentPack = resolveIntent(loadIntents())
+// —— The render layer's views of driver data (E2) ——
 
-export function useIntentPacks(dir: string | undefined): void {
-  activeIntentPack = resolveIntent(loadIntents(dir))
+// The prompt facts: what the render layer reads beyond each template's own
+// inputs — the prompt globals (module state before E2: the active intent
+// pack, the humanQuestions flag), the template library handle, the
+// switch-derived ask tier, and the phase registry's implement entry (the
+// fallback of phase-less renders). One value per render call, built by the
+// caller (src/prompt-facts.ts); an ask given explicitly in a render ctx
+// still wins (the override the tests use).
+export type PromptFacts = {
+  // The active intent pack (the project overlay resolved): the (b)-class
+  // content of the decompose family and the closing self-check sentences
+  // lives in it, not in the core templates; preflight validated the load.
+  pack: IntentPack
+  // plan's attended-human mode (stopBefore === "execute"): the
+  // question-rule partial renders its human-answer branch — the session
+  // asks, the driver waits for the human's answer with no timeout, and no
+  // AUTO-RESOLVE proxy answer or labeling applies.
+  humanQuestions: boolean
+  // The template library handle: the template names currently in effect
+  // (built-ins + shell registrations + the project overlay), read once per
+  // facts build; the decompose template choice consults it.
+  templateNames: string[]
+  // The ask tier (OPENCODE_AUTO_ASK, see src/switches.ts): question-rule's
+  // attended branch.
+  ask: boolean
+  // The phase registry's implement entry: the phase view phase-less renders
+  // fall back to (the single-phase flow's default).
+  implementPhase: PhaseEntry
 }
 
-// plan's sessions (RunAllOpts.stopBefore === "execute"): a human is attending,
-// so the question-rule partial renders its human-answer branch — the session
-// asks, the driver waits for the human's answer with no timeout, and no
-// AUTO-RESOLVE proxy answer or labeling applies. Set once in preflight next to
-// usePromptLibrary/useIntentPacks (same per-process load point), read by
-// promptCtx below; run sets it false and renders exactly as before.
-let humanQuestions = false
+// A phase type as the render layer sees it (the phases registry's
+// PhaseTypeEntry satisfies it structurally): the preset letter or type id
+// (the {{phase}} var), the display name, and the decompose-side fields.
+export type PhaseEntry = {
+  type: string
+  name: string
+  letter?: string
+  dutiesRef: string
+  decomposeTemplate: string
+  decomposeDuties?: string
+}
 
-export function useHumanQuestions(on: boolean): void {
-  humanQuestions = on
+// One checklist item as the render layer sees it: the full line text (the
+// session's own item is matched by it), the display title (tasks.ts
+// checklistTitle) and the effective done flag.
+export type ChecklistView = { text: string; title: string; done: boolean }
+
+// The task view (tasks.ts promptViews builds it): the task fields the
+// templates read plus the plan-derived fields the render layer no longer
+// computes — the effective prerequisites (the closed-prerequisite notes read
+// them) and the checklist's display titles.
+export type TaskView = {
+  id: string
+  title: string
+  status: "pending" | "in_progress" | "blocked" | "done"
+  closed?: string
+  body: string
+  prerequisites: string[]
+  checklist?: readonly ChecklistView[]
+}
+
+// The plan view: what the done list, the closed map and the tick snapshot
+// read. The whole plan enters as this view (its every task a TaskView).
+export type PlanView = {
+  tasks: readonly TaskView[]
+  closed: ReadonlyMap<string, string>
+}
+
+// The task's document-path view (docpaths' taskDocPaths builds it — the
+// render layer constructs no paths): the task-level paths the templates
+// reference, and the S<nn>-scoped paths of checklist item k (its test
+// handover document, state file and output file).
+export type TaskDocs = {
+  handoff: string
+  subtasks: string
+  testHandoff: string
+  subtask(k: number): { testHandoff: string; todo: string; output: string }
+}
+
+// The wrap-up's proxy-answer entries (the resolve ledger's items satisfy it
+// structurally): only the source flag, the driver-source pairing flag and
+// the question text reach the render; the agent-source extras ride along
+// with ledger items and are ignored.
+export type ResolveEntry = {
+  source: string
+  question: string
+  matched?: boolean
+  option?: string
+  reason?: string
+  file?: string
+  malformed?: boolean
+}
+
+// The stuck detector's hit as the render layer sees it (src/stuck.ts's
+// StuckHit satisfies it structurally).
+export type StuckHitView = {
+  kind: "error" | "repeat"
+  tool: string
+  count: number
+  level: number
+  input: string
+  detail: string
 }
 
 // Pack-section injection helper: address a `### <key>` subsection of the
-// active pack and pre-render it with the session context (pack text may use
-// the template syntax, same license as mode files); absent section/key
-// yields undefined and the template guard drops the block cleanly.
-// Exported for src/prompt-plan.ts, like renderPrompt, phaseTag and modeText.
-export function intentText(section: IntentSection, key: string, ctx: Ctx): string | undefined {
-  const text = packSubsection(activeIntentPack, section, key)
+// facts' intent pack and pre-render it with the session context (pack text
+// may use the template syntax, same license as mode files); absent
+// section/key yields undefined and the template guard drops the block
+// cleanly. Exported for src/prompt-plan.ts, like renderPrompt, phaseTag and
+// modeText.
+export function intentText(facts: PromptFacts, section: IntentSection, key: string, ctx: Ctx): string | undefined {
+  const text = packSubsection(facts.pack, section, key)
   return text && renderText(text, ctx)
 }
 
 // testByDriver/handoverTest: the --test-by-driver test execution protocol (a
-// run-level switch); when true the execution templates (subtask/whole) inject
-// the protocol section.
-// phase/contextLimit/fine: the phased flow's current phase (PhaseKey: the
-// qualified id plus the type entry), the context budget baseline (tokens) and
-// the fine-grained decompose switch (OPENCODE_AUTO_DECOMPOSE_FINE, wiring in
-// plans/0003-fork-decompose-design.md §4.6) — the entry's decompose template is
-// chosen and rendered from these (phaseName = the display name; contextBudget =
-// the half-budget granularity ceiling, an item's own work counted above the
-// context its session starts with — plans/0059 T3: a fresh subtask session's
-// harness and prompt alone can reach the whole half budget; fine injects the
-// fine-grained criteria).
+// run-level switch); when true the execution templates (subtask/whole)
+// inject the protocol section.
+// phase/contextLimit/fine: the phased flow's current phase ({ id, entry }:
+// the qualified id plus the type entry), the context budget baseline
+// (tokens) and the fine-grained decompose switch (OPENCODE_AUTO_DECOMPOSE_FINE,
+// wiring in plans/0003-fork-decompose-design.md §4.6) — the entry's decompose
+// template is chosen and rendered from these (phaseName = the display name;
+// contextBudget = the half-budget granularity ceiling, an item's own work
+// counted above the context its session starts with — plans/0059 T3: a fresh
+// subtask session's harness and prompt alone can reach the whole half
+// budget; fine injects the fine-grained criteria).
 // taskContext: the understanding digest's line-count tier
 // (OPENCODE_AUTO_TASK_CONTEXT, see src/switches.ts); the understand template
 // renders contextLines from it (suggested wording, not a hard cut).
@@ -72,10 +152,10 @@ type Opts = {
   mode?: ModeSpec
   testByDriver?: boolean
   handoverTest?: boolean
-  phase?: PhaseKey
+  phase?: { id: string; entry: PhaseEntry }
   contextLimit?: number
   fine?: boolean
-  taskContext?: TaskContextMode
+  taskContext?: "off" | "small" | "medium" | "large"
 }
 
 // The single render exit, also for src/prompt-plan.ts's planning renderers.
@@ -103,14 +183,14 @@ export const DECISION_FORMAT = "`AUTO-DECISION: <decision> (<reason>)`"
 
 // The exit's context completion, exported so tests that render the shared
 // partials directly (renderText/renderTemplate) see what every session sees.
-export function promptCtx(ctx: Ctx): Ctx {
-  const full: Ctx = { ask: autoSwitches().ask, humanQuestions, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
+export function promptCtx(facts: PromptFacts, ctx: Ctx): Ctx {
+  const full: Ctx = { ask: facts.ask, humanQuestions: facts.humanQuestions, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
   const key = full.ask ? "decisionsAsk" : "decisionsUnattended"
-  return { ...full, [key]: intentText("governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
+  return { ...full, [key]: intentText(facts, "governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
 }
 
-export function renderPrompt(name: string, ctx: Ctx): string {
-  return renderTemplate(name, promptCtx(ctx))
+export function renderPrompt(facts: PromptFacts, name: string, ctx: Ctx): string {
+  return renderTemplate(name, promptCtx(facts, ctx))
 }
 
 // Run info of a driver-executed script, relayed to the session: out is the
@@ -132,28 +212,10 @@ export type ScriptRun = {
 // output file directly to judge.
 export type TestRunInfo = ScriptRun & { seq: number }
 
-// --handover-test's test handover document (relative to the target
-// directory): when the context limit is reached (the decision point is
-// fixed at "the moment the AI initiates the test"; test failure no longer
-// stacks onto it), the session writes its progress and next steps into
-// this file and ends; the driver archives it as testhandoff-<n>.md and
-// opens a new session that continues on the continuation prompt. The file
-// is named per execution scope: a subtask session writes
-// docs/<id>/S<two-digit ordinal>/testhandoff.md, a whole-task session is
-// task-level (docs/<id>/testhandoff.md) — the handover document applies
-// only to its own execution scope, preventing the next subtask from
-// misreading the previous subtask's leftover handover. Path construction
-// goes through docpaths (the single construction point of the
-// directory-based layout); the exported name and signature stay stable,
-// zero change to runner's call surface.
-export function testHandoffFile(task: Task, subtask?: number): string {
-  return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
-}
-
 // Test execution result feedback (steered into the executing session): exit code
 // and output file path; the AI reads the file directly to judge.
-export function renderTestResult(run: TestRunInfo): string {
-  return renderPrompt("test-result", {
+export function renderTestResult(facts: PromptFacts, run: TestRunInfo): string {
+  return renderPrompt(facts, "test-result", {
     seq: String(run.seq),
     script: run.script,
     code: String(run.code),
@@ -199,12 +261,12 @@ export function renderTestResult(run: TestRunInfo): string {
 // the two sentences that forbid leaving work undone come from the active
 // pack's `## governance` / `### test-handover-finish` and
 // `### test-handover-leftover`, and drop out cleanly when a pack omits them.
-export function renderTestWrapup(info: { handoffFile: string }): string {
+export function renderTestWrapup(facts: PromptFacts, info: { handoffFile: string }): string {
   const ctx: Ctx = { handoffFile: info.handoffFile }
-  return renderPrompt("test-wrapup", {
+  return renderPrompt(facts, "test-wrapup", {
     ...ctx,
-    finishRule: intentText("governance", "test-handover-finish", ctx),
-    leftoverRule: intentText("governance", "test-handover-leftover", ctx),
+    finishRule: intentText(facts, "governance", "test-handover-finish", ctx),
+    leftoverRule: intentText(facts, "governance", "test-handover-leftover", ctx),
   })
 }
 
@@ -216,8 +278,8 @@ export function renderTestWrapup(info: { handoffFile: string }): string {
 // threshold (10) — assess whether the session is stuck in a temporarily
 // unsolvable problem; it may continue after marking the leftover with
 // AUTO-FIXME.
-export function renderTestContinue(input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
-  return renderPrompt("test-continue", {
+export function renderTestContinue(facts: PromptFacts, input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
+  return renderPrompt(facts, "test-continue", {
     handoffFile: input.handoffFile,
     runScript: input.run?.script,
     runCode: input.run ? String(input.run.code) : undefined,
@@ -229,8 +291,8 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
 // digest base session (①′, driver-led, fork-decompose design §7): the
 // full digest text + one confirmation sentence; when the session ends it
 // becomes the prefix fork base for every fork (subtask) of the task.
-export function renderContextBase(task: Task, digest: string): string {
-  return renderPrompt("context-base", { taskId: task.id, digest })
+export function renderContextBase(facts: PromptFacts, task: { id: string }, digest: string): string {
+  return renderPrompt(facts, "context-base", { taskId: task.id, digest })
 }
 
 // Merged understand+decomposition session (M1.0, plans/0030): read-only
@@ -249,38 +311,40 @@ export function renderContextBase(task: Task, digest: string): string {
 // license as mode sections) and injected as data; when the pack lacks the
 // subsection the block disappears entirely (zero-intent baseline) and the
 // core template keeps only role boundaries, format protocols, and eof.
-export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
-  const ctx = baseCtx(plan, task, opts)
-  const entry = phaseEntry(opts.phase)
+export function renderDecompose(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts = {}): string {
+  const ctx = baseCtx(facts, plan, task, docs, opts)
+  const entry = phaseEntry(facts, opts.phase)
   // A custom type's own `## decompose duties` wins; otherwise the active
   // pack's `### <dutiesRef>` subsection.
-  const duties = entry.decomposeDuties ?? dutiesForPhase(activeIntentPack, entry.dutiesRef)
-  return renderPrompt(decomposeTemplateName(entry, promptTemplateNames()), {
+  const duties = entry.decomposeDuties ?? dutiesForPhase(facts.pack, entry.dutiesRef)
+  return renderPrompt(facts, decomposeTemplateName(entry, facts.templateNames), {
     ...ctx,
-    decomposeRule: intentText("quality", "decompose", ctx),
+    decomposeRule: intentText(facts, "quality", "decompose", ctx),
     phaseDuties: duties && renderText(duties, ctx),
     // context.md section layout (M2.1): `## artifact spec` / `### context-digest`.
-    contextDigest: intentText("artifactSpec", "context-digest", ctx),
+    contextDigest: intentText(facts, "artifactSpec", "context-digest", ctx),
   })
 }
 
 // decompose template-name resolution (a pure function, easy to unit-test):
-// phase type entry → decomposeTemplate (default implement); names is the
-// currently active template-name list (promptTemplateNames()); an absent
-// name falls back to the generic decompose.
-export function decomposeTemplateName(entry: PhaseTypeEntry | undefined, names: string[]): string {
-  const candidate = (entry ?? phaseEntry(undefined)).decomposeTemplate
+// phase type entry → decomposeTemplate; names is the currently active
+// template-name list (the facts' templateNames); an absent name falls back
+// to the generic decompose. The caller resolves the phase-less fallback
+// (the facts' implement entry) before calling.
+export function decomposeTemplateName(entry: PhaseEntry, names: string[]): string {
+  const candidate = entry.decomposeTemplate
   return names.includes(candidate) ? candidate : "decompose"
 }
 
-// The current phase's type entry; outside the phase loop, implement.
-function phaseEntry(phase: PhaseKey | undefined): PhaseTypeEntry {
-  return phase?.entry ?? phaseType(REQUIRED_TYPE)!
+// The current phase's type entry; outside the phase loop, the implement
+// entry the facts carry.
+function phaseEntry(facts: PromptFacts, phase: { id: string; entry: PhaseEntry } | undefined): PhaseEntry {
+  return phase?.entry ?? facts.implementPhase
 }
 
 // The `{{phase}}` prompt var: the preset letter of a builtin type, the type id
 // of a custom one.
-export const phaseTag = (entry: PhaseTypeEntry): string => entry.letter ?? entry.type
+export const phaseTag = (entry: PhaseEntry): string => entry.letter ?? entry.type
 
 // The L1 authoritative grounded-state block (session-boundary-hardening design
 // §4.1): a subtask session is injected with the authoritative state the driver
@@ -292,11 +356,11 @@ export const phaseTag = (entry: PhaseTypeEntry): string => entry.letter ?? entry
 // the fully qualified id only ever reaches the prompt (L3).
 // Task status wording (while the driver runs a subtask session the task is always
 // in progress; the other states are rendered faithfully for completeness).
-const STATUS_TEXT: Record<Status, string> = { pending: "not started", in_progress: "in progress", blocked: "blocked", done: "done" }
+const STATUS_TEXT: Record<TaskView["status"], string> = { pending: "not started", in_progress: "in progress", blocked: "blocked", done: "done" }
 
 // Tick snapshot: S01☑ S02☐ …, done k/n (effective done flags — the state files
 // win — which is exactly the authoritative information the session cannot read).
-function subtaskSnapshot(items: { done: boolean }[]): string | undefined {
+function subtaskSnapshot(items: readonly { done: boolean }[]): string | undefined {
   if (!items.length) return undefined
   const ticks = items.map((item, i) => `S${String(i + 1).padStart(2, "0")}${item.done ? "☑" : "☐"}`).join(" ")
   return `${ticks}, done ${items.filter((item) => item.done).length}/${items.length}`
@@ -305,7 +369,7 @@ function subtaskSnapshot(items: { done: boolean }[]): string | undefined {
 // Inline list of previously completed task ids (same source as head's doneList;
 // the grounded-state declaration line inlines ids only and does not restate the
 // title list, avoiding duplication with head's completed list).
-function doneIds(plan: Plan): string | undefined {
+function doneIds(plan: PlanView): string | undefined {
   const ids = plan.tasks.filter((item) => item.status === "done").map((item) => item.id)
   return ids.length ? ids.join(", ") : undefined
 }
@@ -325,9 +389,9 @@ function doneIds(plan: Plan): string | undefined {
 // file for document-type outputs (mechanically named by the driver), and
 // warm = the session inherited the task background context from the fork
 // base (a cold start instead prompts reading the context.md digest first).
-// The list names every item by title (tasks.ts checklistTitle) and the
-// session's own item follows in full (plans/0059 T1: the other items' full
-// text was half of every subtask prompt, repeated in each). digest = the base
+// The list names every item by title (the view items' display titles) and
+// the session's own item follows in full (plans/0059 T1: the other items'
+// full text was half of every subtask prompt, repeated in each). digest = the base
 // is the digest base, which holds the context.md digest but none of the files
 // the decompose session read, so the warm sentence must not claim them (T2).
 // last = every other item is done: the item runs the task's full acceptance
@@ -342,8 +406,10 @@ function doneIds(plan: Plan): string | undefined {
 // D5); the planned pipeline's subtasks never pass it (0056 D1).
 // AUTO-DECISION: the protocol is a conditional block of subtask.md rather than a separate template (the stream without a fork needs the whole subtask prompt anyway, and without the flag the prompt stays byte-identical)
 export function renderSubtask(
-  plan: Plan,
-  task: Task,
+  facts: PromptFacts,
+  plan: PlanView,
+  task: TaskView,
+  docs: TaskDocs,
   subtask: string,
   opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean } = {},
 ): string {
@@ -351,9 +417,9 @@ export function renderSubtask(
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
   const last = opts.last ?? (at >= 0 && at < items.length && items.every((item, i) => item.done || i === at))
-  const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
-  const outputFile = opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined)
-  return renderPrompt("subtask", {
+  const ctx = baseCtx(facts, plan, task, docs, { ...opts, index: index !== undefined ? Number(index) : undefined })
+  const outputFile = opts.outputFile ?? (index !== undefined ? docs.subtask(at + 1).output : undefined)
+  return renderPrompt(facts, "subtask", {
     // The derived index value is fed back into baseCtx: the test handover
     // document naming (the test protocol section) and the "item N" injected
     // here share one source, so under default derivation (old callers not
@@ -362,21 +428,21 @@ export function renderSubtask(
     ...ctx,
     subtask,
     continuation: Boolean(opts.continuation),
-    handoffFile: handoffFile(task),
+    handoffFile: docs.handoff,
     // Closing self-check sentence (M1.3): (b)-class quality intent from the
     // active pack's `## quality` / `### self-check-subtask`; the guard drops
     // the wrap-up item cleanly when the pack omits it (zero-intent baseline).
-    selfCheck: intentText("quality", "self-check-subtask", ctx),
+    selfCheck: intentText(facts, "quality", "self-check-subtask", ctx),
     // Output-placement convention (M1.4, plans/0034 D7/D8): (b)-class artifact
     // convention from the active pack's `## artifact spec` / `### subtask-output`,
     // pre-rendered with the output-file slot (the convention text references
     // {{outputFile}}). Injected only when the slot exists (index given or
     // derived); a pack omitting the subsection drops the block cleanly.
-    artifactConvention: outputFile ? intentText("artifactSpec", "subtask-output", { ...ctx, outputFile }) : undefined,
+    artifactConvention: outputFile ? intentText(facts, "artifactSpec", "subtask-output", { ...ctx, outputFile }) : undefined,
     // P1 discipline (M2.3, plans/0045): the deliverable must not reference
     // process documents — `## governance` / `### process-references`; the
     // DRIVER's prohibition scan at close-out is the mechanical side.
-    processRefs: intentText("governance", "process-references", ctx),
+    processRefs: intentText(facts, "governance", "process-references", ctx),
     // L1 ground-state block vars (the ground-state partial): the ledger's
     // authoritative state is injected with every subtask session;
     // qualifiedId is given only when the number is known (old-shape tasks
@@ -387,12 +453,12 @@ export function renderSubtask(
     subtaskSnapshot: subtaskSnapshot(items),
     doneIds: doneIds(plan),
     index,
-    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${checklistTitle(item.text)}`).join("\n") : undefined),
+    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.title}`).join("\n") : undefined),
     outputFile,
     // Subtask-directory state protocol (M1.0): the scope declaration file
     // fixed at decompose time; old-shape tasks lack the file, and the
     // template conditions on it with "if it exists" wording.
-    todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,
+    todoFile: index !== undefined ? docs.subtask(Number(index)).todo : undefined,
     warm: Boolean(opts.warm),
     digest: Boolean(opts.digest),
     last,
@@ -417,14 +483,16 @@ export function renderSubtask(
 //   - budget: the context-budget protocol, scoped to the stream.
 // AUTO-DECISION: the delta also carries the terminator rule and names the stream's own test-handover document (the lead's prompt had neither — its test handover is the task-level one — and the stream's close-out checks the terminator and reads the stream-level document)
 export function renderFanout(
-  plan: Plan,
-  task: Task,
+  facts: PromptFacts,
+  plan: PlanView,
+  task: TaskView,
+  docs: TaskDocs,
   subtask: string,
   index: number,
   opts: Opts & { siblings: string[]; changed?: string[]; last?: boolean; budget?: boolean },
 ): string {
-  const ctx = baseCtx(plan, task, { ...opts, index })
-  return renderPrompt("fanout", {
+  const ctx = baseCtx(facts, plan, task, docs, { ...opts, index })
+  return renderPrompt(facts, "fanout", {
     ...ctx,
     subtask,
     qualifiedId: `${task.id}.S${String(index).padStart(2, "0")}`,
@@ -432,23 +500,12 @@ export function renderFanout(
     changed: opts.changed?.length ? opts.changed.map((path) => `- ${path}`).join("\n") : undefined,
     last: Boolean(opts.last),
     budget: Boolean(opts.budget),
-    handoffFile: handoffFile(task),
-    subtasksFile: taskDoc(task.id, "subtasks"),
-    outputFile: subtaskOutputFile(task, index),
+    handoffFile: docs.handoff,
+    subtasksFile: docs.subtasks,
+    outputFile: docs.subtask(index).output,
     // The stream's closing self-check (M1.3), the subtask one.
-    selfCheck: intentText("quality", "self-check-subtask", ctx),
+    selfCheck: intentText(facts, "quality", "self-check-subtask", ctx),
   })
-}
-
-// Subtask output file (relative to the target directory): the standalone
-// write-out file for document/analysis/design-type subtasks, mechanically
-// named by the driver (two-digit increment, avoiding slug-cleaning
-// ambiguity) with the title on the file's first line; code-type outputs
-// land directly in the source tree and are not duplicated as documents
-// (fork-decompose design §4.7). Constructed through docpaths' directory
-// layout.
-export function subtaskOutputFile(task: Task, index: number): string {
-  return subtaskDoc(task.id, index, "index")
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
@@ -467,19 +524,19 @@ export function subtaskOutputFile(task: Task, index: number): string {
 // items (which session-identified proxy calls also belong in the section) from
 // `## governance` / `### wrapup-audit`. The driver-listed items and their
 // "every one must appear" demand stay core: they are the persistent audit trail.
-export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean; resolves?: ResolveItem[] } = {}): string {
-  const ctx = baseCtx(plan, task, opts)
-  return renderPrompt("wrapup", {
+export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { solo?: boolean; resolves?: ResolveEntry[] } = {}): string {
+  const ctx = baseCtx(facts, plan, task, docs, opts)
+  return renderPrompt(facts, "wrapup", {
     ...ctx,
     solo: Boolean(opts.solo),
     resolveList: resolveList(opts.resolves),
-    reportForm: intentText("artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
-    auditScope: intentText("governance", "wrapup-audit", ctx),
+    reportForm: intentText(facts, "artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
+    auditScope: intentText(facts, "governance", "wrapup-audit", ctx),
     // Result-line discipline (plans/0044 §3.1): when to write the line and what
     // counts as FAIL is intent (`## acceptance` / `### result-line`); the literal
     // and its placement stay core. A pack without the subsection drops the
     // whole instruction — no result line, the run never stops on a verdict.
-    resultRule: intentText("acceptance", "result-line", ctx),
+    resultRule: intentText(facts, "acceptance", "result-line", ctx),
   })
 }
 
@@ -495,7 +552,7 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
 // demand; only the newlines of the original question are squeezed into a
 // single line, otherwise multi-line questions would break the list
 // structure.
-function resolveList(items: ResolveItem[] | undefined): string | undefined {
+function resolveList(items: ResolveEntry[] | undefined): string | undefined {
   const driver = (items ?? []).filter((item) => item.source === "driver")
   const lines = [...driver.filter((item) => !item.matched), ...driver.filter((item) => item.matched)]
     .map((item) => item.question.replace(/\s+/g, " ").trim())
@@ -510,8 +567,8 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
 // is the lower bound of used numbers from the driver's deterministic scan,
 // one value shared by the template input and the driver-side collect
 // check.
-export function renderNumberRecovery(input: { floor: number }): string {
-  return renderPrompt("number-recovery", {
+export function renderNumberRecovery(facts: PromptFacts, input: { floor: number }): string {
+  return renderPrompt(facts, "number-recovery", {
     floor: String(input.floor),
     floorPadded: String(input.floor).padStart(3, "0"),
   })
@@ -532,21 +589,21 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // closedTasks = the phase's tasks closed without completing (plans/0053 D16):
 // an optional block tells the distillation to record them as not delivered;
 // absent or empty renders nothing, so the output without closures is unchanged.
-export function renderPhaseHandover(input: {
-  phase: PhaseTypeEntry
+export function renderPhaseHandover(facts: PromptFacts, input: {
+  phase: PhaseEntry
   handover: string
   next?: string
   acceptance?: string
   closedTasks?: { id: string; title: string; reason: string }[]
 }): string {
   const closed = input.closedTasks ?? []
-  return renderPrompt("phase-handover", {
+  return renderPrompt(facts, "phase-handover", {
     phase: phaseTag(input.phase),
     phaseName: input.phase.name,
     handover: input.handover,
     next: input.next,
     acceptance: input.acceptance,
-    acceptanceRules: input.acceptance ? intentText("acceptance", "phase-acceptance-draft", { acceptance: input.acceptance }) : undefined,
+    acceptanceRules: input.acceptance ? intentText(facts, "acceptance", "phase-acceptance-draft", { acceptance: input.acceptance }) : undefined,
     closedTasks: closed.length
       ? closed.map((task) => `- ${task.id}: ${task.title} (closed without completing: ${task.reason})`).join("\n")
       : undefined,
@@ -563,9 +620,9 @@ export function renderPhaseHandover(input: {
 // to the target directory); mode.exec is injected as scenario background
 // (reusing ModeSpec's existing fields, adding no registration surface).
 // The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
-export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
+export function renderKnowledge(facts: PromptFacts, input: { file: string; mode?: ModeSpec }): string {
   const ctx = { file: input.file, ...modeCtx(input.mode) }
-  return renderPrompt("knowledge", { ...ctx, qualityRules: intentText("quality", "knowledge", ctx) })
+  return renderPrompt(facts, "knowledge", { ...ctx, qualityRules: intentText(facts, "quality", "knowledge", ctx) })
 }
 
 // Prior-knowledge extraction session (the shell's second-migration
@@ -585,7 +642,7 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 // are referenced, not restated, and the distillation effort focuses on the
 // differential increment of new objects).
 // The quality hard constraints (M2.1) come from `## quality` / `### prior-knowledge`.
-export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
+export function renderPriorKnowledge(facts: PromptFacts, input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
   const ctx = {
     file: input.file,
@@ -593,17 +650,7 @@ export function renderPriorKnowledge(input: { file: string; brief?: string; mode
     distilled: distilled.length ? distilled.map((path) => `- ${path}`).join("\n") : undefined,
     ...modeCtx(input.mode),
   }
-  return renderPrompt("prior-knowledge", { ...ctx, qualityRules: intentText("quality", "prior-knowledge", ctx) })
-}
-
-// Handover document (relative to the target directory): written by an ondemand
-// whole-task session when it hands its context over (self-decided at a natural
-// boundary, or after the hard-wall steer; plans/0056) — the session writes its
-// progress into this file, and the trailing line `Status: continue|done` is
-// parsed by the driver. Constructed through docpaths (the task-directory
-// layout).
-export function handoffFile(task: Task): string {
-  return taskDoc(task.id, "handoff")
+  return renderPrompt(facts, "prior-knowledge", { ...ctx, qualityRules: intentText(facts, "quality", "prior-knowledge", ctx) })
 }
 
 // The hard-wall steer the driver inserts while a session is running (usage
@@ -611,9 +658,11 @@ export function handoffFile(task: Task): string {
 // of a large model window and clamped to 80% of it; ondemand
 // whole-task sessions, auto's lead and the streams of its split, plans/0059
 // D5 — the last resort after the usage notices went unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
-// session at the next provider-turn boundary.
-export function renderHandoffSteer(task: Task): string {
-  return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
+// session at the next provider-turn boundary. The handover document path it
+// names is the task's (docs/<id>/handoff.md), read from the document-path
+// view.
+export function renderHandoffSteer(facts: PromptFacts, docs: TaskDocs): string {
+  return renderPrompt(facts, "handoff-steer", { handoffFile: docs.handoff })
 }
 
 // Usage notices steered into a running ondemand whole-task session (or auto's
@@ -622,16 +671,16 @@ export function renderHandoffSteer(task: Task): string {
 // render time — the {{used}}/{{pct}}/{{wall}} slots round-trip as literal
 // placeholders that the driver fills at send time (fillUsageNote in
 // src/testrun.ts).
-export function renderUsageNoteInfo(task: Task): string {
-  return renderPrompt("usage-note-info", usageNoteCtx(task))
+export function renderUsageNoteInfo(facts: PromptFacts, docs: TaskDocs): string {
+  return renderPrompt(facts, "usage-note-info", usageNoteCtx(docs))
 }
 
-export function renderUsageNoteWinddown(task: Task): string {
-  return renderPrompt("usage-note-winddown", usageNoteCtx(task))
+export function renderUsageNoteWinddown(facts: PromptFacts, docs: TaskDocs): string {
+  return renderPrompt(facts, "usage-note-winddown", usageNoteCtx(docs))
 }
 
-function usageNoteCtx(task: Task): Ctx {
-  return { handoffFile: handoffFile(task), used: "{{used}}", pct: "{{pct}}", wall: "{{wall}}" }
+function usageNoteCtx(docs: TaskDocs): Ctx {
+  return { handoffFile: docs.handoff, used: "{{used}}", pct: "{{pct}}", wall: "{{wall}}" }
 }
 
 // Context step-up note (steered into the same session when its context
@@ -640,8 +689,8 @@ function usageNoteCtx(task: Task): Ctx {
 // cache — and the steer itself names that id, so the next provider turn
 // runs on it. One line: the session needs to know only that nothing else
 // changed.
-export function renderStepUp(input: { from: string; next: string }): string {
-  return renderPrompt("step-up", { fromModel: input.from, toModel: input.next })
+export function renderStepUp(facts: PromptFacts, input: { from: string; next: string }): string {
+  return renderPrompt(facts, "step-up", { fromModel: input.from, toModel: input.next })
 }
 
 // The failure-message classifier's prompt (plans/0055 §7.1, src/classify.ts):
@@ -649,8 +698,8 @@ export function renderStepUp(input: { from: string; next: string }): string {
 // zone's offset), the zone itself, and the redacted error text — nothing
 // else leaves the driver in this session. The reply shape (one JSON line of
 // class and resetAt) is parsed by src/classify.ts parseClassifierReply.
-export function renderClassifyError(input: { now: string; tz: string; error: string }): string {
-  return renderPrompt("classify-error", { now: input.now, tz: input.tz, error: input.error })
+export function renderClassifyError(facts: PromptFacts, input: { now: string; tz: string; error: string }): string {
+  return renderPrompt(facts, "classify-error", { now: input.now, tz: input.tz, error: input.error })
 }
 
 // Stuck-loop hint (steered into a running session when the driver detects
@@ -660,7 +709,7 @@ export function renderClassifyError(input: { now: string; tz: string; error: str
 // two do not interfere.
 // The level-2 reflection discipline (M2.1) comes from `## quality` /
 // `### stuck-reflection`; the reminder framing stays core.
-export function renderStuckHint(hit: StuckHit): string {
+export function renderStuckHint(facts: PromptFacts, hit: StuckHitView): string {
   const ctx: Ctx = {
     tool: hit.tool,
     count: String(hit.count),
@@ -672,14 +721,7 @@ export function renderStuckHint(hit: StuckHit): string {
     level2: hit.level === 2,
     level3: hit.level >= 3,
   }
-  return renderPrompt("stuck-hint", { ...ctx, reflection: hit.level === 2 ? intentText("quality", "stuck-reflection", ctx) : undefined })
-}
-
-// Raw (unrendered) subsection of the active intent pack, for consumers outside
-// the prompt templates — preflight's check that the configured `## parallelism`
-// level exists.
-export function activeIntentText(section: IntentSection, key: string): string | undefined {
-  return packSubsection(activeIntentPack, section, key)
+  return renderPrompt(facts, "stuck-hint", { ...ctx, reflection: hit.level === 2 ? intentText(facts, "quality", "stuck-reflection", ctx) : undefined })
 }
 
 // --subtask off/auto/ondemand: a single session completes the whole task (no
@@ -694,24 +736,26 @@ export function activeIntentText(section: IntentSection, key: string): string | 
 // passes it only with the protocol (the clause's criterion (c) is the first
 // usage notice), and drops it after a rejected split.
 export function renderWhole(
-  plan: Plan,
-  task: Task,
+  facts: PromptFacts,
+  plan: PlanView,
+  task: TaskView,
+  docs: TaskDocs,
   opts: Opts & { ondemand?: boolean; continuation?: boolean; budget?: boolean; adaptive?: boolean } = {},
 ): string {
-  const ctx = baseCtx(plan, task, opts)
-  return renderPrompt("whole", {
+  const ctx = baseCtx(facts, plan, task, docs, opts)
+  return renderPrompt(facts, "whole", {
     ...ctx,
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
     adaptive: Boolean(opts.adaptive),
-    handoffFile: handoffFile(task),
-    subtasksFile: taskDoc(task.id, "subtasks"),
+    handoffFile: docs.handoff,
+    subtasksFile: docs.subtasks,
     // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
     // the whole-task scope): `## quality` / `### self-check-whole`.
-    selfCheck: intentText("quality", "self-check-whole", ctx),
+    selfCheck: intentText(facts, "quality", "self-check-whole", ctx),
     // P1 discipline (M2.3), same subsection as renderSubtask.
-    processRefs: intentText("governance", "process-references", ctx),
+    processRefs: intentText(facts, "governance", "process-references", ctx),
   })
 }
 
@@ -721,14 +765,14 @@ export function renderWhole(
 // fallback where no fork could be made — the note then follows the full
 // whole-task prompt of a new session, and says the earlier work is committed.
 // AUTO-DECISION: the note is a template (split-rejected.md), not an inline string like the shape-check feedback (it is session-facing copy a project may override through its prompt library, as the usage notes are)
-export function renderSplitRejected(task: Task, reason: string, fresh = false): string {
-  return renderPrompt("split-rejected", { reason, subtasksFile: taskDoc(task.id, "subtasks"), fresh })
+export function renderSplitRejected(facts: PromptFacts, docs: TaskDocs, reason: string, fresh = false): string {
+  return renderPrompt(facts, "split-rejected", { reason, subtasksFile: docs.subtasks, fresh })
 }
 
 // --dryrun: the permission-preflight session; its report goes to
 // .auto/dryrun.md.
-export function renderDryrun(): string {
-  return renderPrompt("dryrun", {})
+export function renderDryrun(facts: PromptFacts): string {
+  return renderPrompt(facts, "dryrun", {})
 }
 
 // Mode-note context (the mode part of baseCtx, exported separately): the
@@ -749,7 +793,7 @@ export function modeCtx(mode?: ModeSpec): Ctx {
 // A closed task (plans/0053 D16) is done for scheduling but not delivered: it
 // stays in the "already done" list, labelled `[closed]` with its reason. The
 // label is session-facing prose, not a protocol string.
-function doneList(plan: Plan): string {
+function doneList(plan: PlanView): string {
   return plan.tasks
     .filter((t) => t.status === "done")
     .map((t) =>
@@ -783,14 +827,15 @@ function formatTokens(n: number): string {
 // wording in the prompt changes — ensureDecomposed only checks that
 // context.md is non-empty, never truncates by or rejects on line count;
 // raising the tier changes no validation behavior.
-const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
+const TASK_CONTEXT_LINES: Record<"off" | "small" | "medium" | "large", number> = { off: 200, small: 300, medium: 400, large: 500 }
 
 // Driver notes appended to the task block (plans/0053 D16): one line per
 // effective prerequisite (explicit or implicit) that was closed, so the
 // session does not build on deliverables that never landed. Empty without
-// closures, keeping the task block byte-identical.
-function closedPrerequisiteNotes(plan: Plan, task: Task): string {
-  return prerequisites(plan, task.id)
+// closures, keeping the task block byte-identical. The prerequisite ids are
+// the task view's (tasks.ts resolves them when it builds the view).
+function closedPrerequisiteNotes(plan: PlanView, task: TaskView): string {
+  return task.prerequisites
     .filter((id) => plan.closed.has(id))
     .map(
       (id) =>
@@ -799,8 +844,8 @@ function closedPrerequisiteNotes(plan: Plan, task: Task): string {
     .join("\n")
 }
 
-function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
-  const entry = phaseEntry(opts.phase)
+function baseCtx(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { index?: number } = {}): Ctx {
+  const entry = phaseEntry(facts, opts.phase)
   const notes = closedPrerequisiteNotes(plan, task)
   return {
     ...modeCtx(opts.mode),
@@ -813,7 +858,7 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
     // (passed only by renderSubtask, the subtask ordinal) exists it lands
     // in the subtask-level directory (docs/<id>/S<kk>/testhandoff.md); the
     // whole task gets task-level naming.
-    testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
+    testHandoffFile: opts.testByDriver ? (opts.index !== undefined ? docs.subtask(opts.index).testHandoff : docs.testHandoff) : undefined,
     phase: phaseTag(entry),
     phaseName: entry.name,
     contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),

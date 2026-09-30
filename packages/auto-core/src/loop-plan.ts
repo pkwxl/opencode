@@ -19,6 +19,8 @@ import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, rea
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
+import { promptFacts } from "./prompt-facts"
+import { planDutiesPartial } from "./phases/registry"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
 import { statsDigest } from "./stats"
@@ -38,7 +40,7 @@ import {
   taskStatePaths,
   type PlanPhase,
 } from "./tasks"
-import { templateRenders } from "./template"
+import { renderText, templateRenders } from "./template"
 import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
 
 // the phase index (routing already validated it; re-read here only for the
@@ -49,6 +51,18 @@ export async function phaseState(directory: string): Promise<PhaseState> {
 
 // the phase display name (logs/commit titles): P02-design Design
 export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
+
+// The planning renders' facts (E2): the bypass sessions' human-questions mode
+// is plan's stop condition — the same rule sessionOpts applies to every
+// bypass site, so a planning prompt renders the question-rule's human-answer
+// branch exactly when its session would wait for the human.
+const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute" })
+
+// A phase type's duty paragraph for the planning/append prompts (E2): the
+// type's own `## plan duties` (custom types), else the type's shared partial
+// (`plan-duties-<dutiesRef>`), rendered through the active library so
+// overlays apply — moved out of the render layer with the registry imports.
+const planDuties = (entry: PhaseUnit["entry"]): string => renderText(entry.planDuties ?? `{{> ${planDutiesPartial(entry)}}}`, {}).trimEnd()
 
 // the phase planning session (§E): a one-off bypass reusing the
 // requireArtifact skeleton, artifacts = this phase's task index
@@ -132,7 +146,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // numbers).
   const taken = await takenTaskIds(directory, phase)
   const prompt = ctx.manual
-    ? renderImplementPlan({
+    ? renderImplementPlan(planFacts(ctx), {
         file: planInputPath(phase),
         content: input!,
         brief,
@@ -262,8 +276,9 @@ async function phasePlanPrompt(
   // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
   // plans against the round's goal and criteria; an untouched stub injects nothing.
   const round = await roundBriefText(directory, state.round)
-  return renderPhasePlan({
+  return renderPhasePlan(planFacts(ctx), {
     phase: phase.entry,
+    planDuties: planDuties(phase.entry),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
     brief: parts.brief,
@@ -567,7 +582,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   const brief = await projectBriefText(directory)
   const phaseId = qualifiedPhase(phase)
   const prompt = ctx.manual
-    ? renderPhaseAppend({
+    ? renderPhaseAppend(planFacts(ctx), {
         phaseId,
         taskIndex,
         numberStart: promptStart,
@@ -674,8 +689,9 @@ async function phaseAppendPrompt(
 ): Promise<string> {
   const { directory, opts } = ctx
   const state = await phaseState(directory)
-  return renderPhaseAppend({
+  return renderPhaseAppend(planFacts(ctx), {
     phase: phase.entry,
+    planDuties: planDuties(phase.entry),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
     numberStart: parts.numberStart,

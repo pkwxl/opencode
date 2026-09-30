@@ -40,6 +40,7 @@ import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry } from "./models"
 import { renderClassifyError } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import type { ClassifierAnswer, ClassifyUsageSink, Router } from "./router"
 import type { RoutingFacts } from "./routing"
 import { formatClientError } from "./session-api"
@@ -353,7 +354,10 @@ async function runClassifier(
   now: number,
 ): Promise<ClassifierAnswer | undefined> {
   const { registry, router } = classifier
-  const text = renderClassifyError({ now: isoInZone(now, registry.tz), tz: registry.tz, error: input })
+  // The classifier's bare prompt renders no intent sections and no question
+  // rule, so its facts carry the built-in pack (the values never reach these
+  // bytes); the classifier holds no target directory.
+  const text = renderClassifyError(promptFacts(), { now: isoInZone(now, registry.tz), tz: registry.tz, error: input })
   vlog(`  classifier: asking ${pick.name} about a failure message (call ${router.classifierCalls()}/${CLASSIFY_CALL_LIMIT})`)
   // The entry's own host (§8.1): the pool starts it here if the entry is the
   // first dispatch on its agent; the watch's client is the fallback.

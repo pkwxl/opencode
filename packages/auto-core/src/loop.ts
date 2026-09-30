@@ -8,6 +8,7 @@ import { log } from "./log"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { logRunRouting, routingFacts } from "./routing"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
@@ -158,7 +159,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {
-      const result = await runOnce(server, "permission preflight", renderDryrun(), {
+      const result = await runOnce(server, "permission preflight", renderDryrun(promptFacts({ dir: directory })), {
         agent: agentName,
         dir: directory,
         verbose: opts.verbose,

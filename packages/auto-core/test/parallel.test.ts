@@ -4,8 +4,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { phaseTypeOfLetter } from "../src/phases/registry"
-import { useIntentPacks } from "../src/prompt"
+import { phaseTypeOfLetter, planDutiesPartial } from "../src/phases/registry"
+import { promptFacts } from "../src/prompt-facts"
+import { renderText } from "../src/template"
 import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
 
 const dirs: string[] = []
@@ -15,15 +16,19 @@ function tempDir() {
   return dir
 }
 
+// The render facts build per render call (E2), so the overlay a test plants
+// is read through the facts' dir at the next render — no global to reset.
+let factsDir: string | undefined
 afterEach(() => {
-  useIntentPacks(undefined)
+  factsDir = undefined
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+const planDuties = renderText(`{{> ${planDutiesPartial(phaseTypeOfLetter("m"))}}>`, {}).trimEnd()
 const phasePlan = (parallel?: "low" | "medium" | "high") =>
-  renderPhasePlan({ phase: phaseTypeOfLetter("m"), phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
+  renderPhasePlan(promptFacts({ dir: factsDir }), { phase: phaseTypeOfLetter("m"), planDuties, phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
 const implementPlan = (parallel?: "low" | "medium" | "high") =>
-  renderImplementPlan({ content: "prompt.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
+  renderImplementPlan(promptFacts({ dir: factsDir }), { content: "prompt.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
 
 describe("planning guidance block (D10/D11)", () => {
   test("each level injects its own subsection into both planning templates; none injects nothing", () => {
@@ -41,7 +46,7 @@ describe("planning guidance block (D10/D11)", () => {
     const overlay = join(dir, ".opencode", "auto", "intents")
     mkdirSync(overlay, { recursive: true })
     writeFileSync(join(overlay, "default.md"), "# default\n\n## parallelism\n\n### low\n\nProject low guidance.\n")
-    useIntentPacks(dir)
+    factsDir = dir
     expect(phasePlan("low")).toContain("Project low guidance.")
     expect(phasePlan("high")).toBe(phasePlan())
   })

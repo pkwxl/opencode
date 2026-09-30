@@ -6,12 +6,12 @@
 // not grow that file; the copy stays in templates/prompts/phase-plan.md,
 // implement-plan.md and phase-append.md, and rendering goes through
 // prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
+// Off the driver with E2 (plans/0061 §6.3): the phase entry and the duty
+// paragraph arrive as data (the caller renders the registry's duty text),
+// and every render takes the PromptFacts value the caller built.
 import type { ModeSpec } from "./mode"
 import type { ParallelLevel } from "./intent/types"
-import { planDutiesPartial, type PhaseTypeEntry } from "./phases/registry"
-import { intentText, modeText, phaseTag, renderPrompt } from "./prompt"
-import type { Task } from "./tasks"
-import { renderText } from "./template"
+import { intentText, modeText, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
 
 // Phase planning session (design doc plans/0006-phases-design.md §E): a
 // one-shot bypass session whose artifacts = this phase's task index
@@ -29,6 +29,10 @@ import { renderText } from "./template"
 // directory is established).
 // The migration source and target are intent and reach planning through the
 // brief (plans/0052 D2); there are no separate parameters.
+// planDuties is the phase type's duty paragraph, pre-rendered by the caller
+// (E2): a custom type's own `## plan duties`, else the type's shared
+// partial (`plan-duties-<dutiesRef>`), rendered through the active library
+// so overlays apply.
 // trimmedPhases takes effect only for the m phase (passed by the loop when
 // the effective phases were trimmed via --phases and include no standalone
 // a/d phases; the template injects the "flow trimming" note — the survey
@@ -38,8 +42,9 @@ import { renderText } from "./template"
 // (config.autoNumber): the .auto/next-task recorded value, which the loop
 // ensures is in place via ensureNumbering before the planning session;
 // defaults when disabled — numbering starts from T-001.
-export function renderPhasePlan(input: {
-  phase: PhaseTypeEntry
+export function renderPhasePlan(facts: PromptFacts, input: {
+  phase: PhaseEntry
+  planDuties: string
   phaseId: string
   taskIndex: string
   brief?: string
@@ -58,7 +63,7 @@ export function renderPhasePlan(input: {
   parallel?: ParallelLevel
 }): string {
   const type = input.phase
-  return renderPrompt("phase-plan", {
+  return renderPrompt(facts, "phase-plan", {
     phase: phaseTag(type),
     phaseName: type.name,
     phaseId: input.phaseId,
@@ -66,7 +71,7 @@ export function renderPhasePlan(input: {
     brief: input.brief?.trim() || undefined,
     round: input.round?.trim() || undefined,
     // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
-    roundRules: input.round?.trim() ? intentText("acceptance", "round-brief", {}) : undefined,
+    roundRules: input.round?.trim() ? intentText(facts, "acceptance", "round-brief", {}) : undefined,
     input: input.input?.trim() || undefined,
     inputPath: input.inputPath,
     handovers: input.handovers?.trim() || undefined,
@@ -75,19 +80,16 @@ export function renderPhasePlan(input: {
     modeInit: input.mode && modeText(input.mode.init),
     trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
-    // The duty paragraph: a custom type's own `## plan duties` (M3.6), else the
-    // type's shared partial (registry dutiesRef, M3.2), rendered through the
-    // active library so overlays apply.
-    planDuties: renderText(type.planDuties ?? `{{> ${planDutiesPartial(type)}}}`, {}).trimEnd(),
-    ...parallelism(input.parallel),
+    planDuties: input.planDuties,
+    ...parallelism(facts, input.parallel),
   })
 }
 
 // Planning parallelism guidance (MP.1, plans/0046 D10/D11): the level's
 // `## parallelism` intent subsection. At none, or when the pack lacks the
 // subsection, both keys are undefined and the template's block renders nothing.
-function parallelism(level: ParallelLevel | undefined): { parallel?: string; parallelRules?: string } {
-  const rules = level ? intentText("parallelism", level, {}) : undefined
+function parallelism(facts: PromptFacts, level: ParallelLevel | undefined): { parallel?: string; parallelRules?: string } {
+  const rules = level ? intentText(facts, "parallelism", level, {}) : undefined
   return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
@@ -105,7 +107,7 @@ function parallelism(level: ParallelLevel | undefined): { parallel?: string; par
 // prompt branch is unused by the core. brief is the .opencode/auto/brief.md
 // text verbatim (may be empty; it lets the planning session sense the
 // project intent).
-export function renderImplementPlan(input: {
+export function renderImplementPlan(facts: PromptFacts, input: {
   file?: string
   content: string
   brief?: string
@@ -114,7 +116,7 @@ export function renderImplementPlan(input: {
   numberStart?: number
   parallel?: ParallelLevel
 }): string {
-  return renderPrompt("implement-plan", {
+  return renderPrompt(facts, "implement-plan", {
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
     numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
@@ -122,9 +124,13 @@ export function renderImplementPlan(input: {
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
-    ...parallelism(input.parallel),
+    ...parallelism(facts, input.parallel),
   })
 }
+
+// The task fields the append prompt's existing-task lines read (the task
+// store's Task satisfies the shape structurally).
+export type ExistingTask = { id: string; title: string; status: string; closed?: string }
 
 // The existing-task lines of the append prompt's existingTasks slot
 // (plans/0053 D27): one line per task of the current index, in index order,
@@ -133,7 +139,7 @@ export function renderImplementPlan(input: {
 // protocol string. An in_progress task (transient runtime state, impossible
 // at an append step — a task mid-pipeline blocks the append, D26) would show
 // its own label unchanged.
-export function existingTaskList(tasks: readonly Pick<Task, "id" | "title" | "status" | "closed">[]): string {
+export function existingTaskList(tasks: readonly ExistingTask[]): string {
   return tasks
     .map((task) =>
       task.closed !== undefined
@@ -146,9 +152,9 @@ export function existingTaskList(tasks: readonly Pick<Task, "id" | "title" | "st
 // Append planning (plans/0053 D23/D27): the planner that adds tasks to a
 // phase whose index already lists some, rendered from the shared
 // phase-append template by both modes. Phased sessions pass the phase entry
-// (the phase naming, the duty paragraph, the round brief and the prior-phase
-// handovers); an m-mode session passes none of those — as implement-plan, it
-// has no duties, round or handovers — so the template drops those blocks.
+// (the phase naming) and the pre-rendered duty paragraph (as renderPhasePlan's
+// planDuties; an m-mode session passes neither — as implement-plan, it has no
+// duties, round or handovers — so the template drops those blocks).
 // input/inputPath are required (append always plans against a planning
 // input: --append without input is a usage error, D23), and existingTasks is
 // the pre-joined line list of the index as it stands (existingTaskList).
@@ -164,8 +170,9 @@ export function existingTaskList(tasks: readonly Pick<Task, "id" | "title" | "st
 // The rejected alternative was two separate templates per mode, which D27
 // rules out; per-block negative fallbacks were dropped because m mode must
 // render the shared blocks' absence silently, as implement-plan does.
-export function renderPhaseAppend(input: {
-  phase?: PhaseTypeEntry
+export function renderPhaseAppend(facts: PromptFacts, input: {
+  phase?: PhaseEntry
+  planDuties?: string
   phaseId: string
   taskIndex: string
   numberStart?: number
@@ -180,7 +187,7 @@ export function renderPhaseAppend(input: {
   parallel?: ParallelLevel
 }): string {
   const type = input.phase
-  return renderPrompt("phase-append", {
+  return renderPrompt(facts, "phase-append", {
     phase: type ? phaseTag(type) : undefined,
     phaseName: type?.name,
     phaseId: input.phaseId,
@@ -194,7 +201,7 @@ export function renderPhaseAppend(input: {
     handovers: input.handovers?.trim() || undefined,
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
-    ...(type ? { planDuties: renderText(type.planDuties ?? `{{> ${planDutiesPartial(type)}}}`, {}).trimEnd() } : {}),
-    ...parallelism(input.parallel),
+    planDuties: input.planDuties,
+    ...parallelism(facts, input.parallel),
   })
 }

@@ -14,7 +14,7 @@ import { join } from "node:path"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { anchorBaseline, coldStart, consumeNote, nameSubject, resetRoute } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
-import { subtaskDoc, taskDoc } from "./docpaths"
+import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
@@ -24,8 +24,9 @@ import { headText, removeIfUntracked, unitAddedLines, unitChangedFiles, unitQuie
 import { createGitOps } from "./git-ops"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
-import { checklistTitle, forkBaseFor, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
-import { handoffFile, renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
+import { checklistTitle, forkBaseFor, promptViews, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
+import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
 import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
@@ -218,13 +219,14 @@ export async function executeWhole(
   for (;;) {
     const brief = forked
     forked = false
+    const views = promptViews(plan, task)
     const result = await runExecSession(
       client,
       plan,
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(plan, task, { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open" }) + feedback,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open" }) + feedback,
       opts,
       chain,
       steer,
@@ -287,7 +289,7 @@ export async function executeWhole(
       consumed = await readHandoff()
       // AUTO-DECISION: without a fork (the lead's session is gone, or the fork call failed) the rejected lead continues in a new session with the full whole-task prompt, no clause, plus the note (the shape-check re-prompts' fallback; an agent that cannot fork never gets the clause, plans/0059 D7)
       forked = await forkEndedSession(client, chain, subject)
-      feedback = `${forked ? "" : "\n\n"}${renderSplitRejected(task, verdict.reason, !forked)}`
+      feedback = `${forked ? "" : "\n\n"}${renderSplitRejected(promptFacts(opts), taskDocPaths(task.id), verdict.reason, !forked)}`
       retried = false
       log(`↻ ${task.id} the lead's split was not taken (${verdict.reason}); ${forked ? "a fork of the lead" : "a new session"} finishes the task`)
       continue
@@ -403,12 +405,13 @@ export async function ensureDecomposed(
     // wording of context.md.
     const brief = shapeForked
     shapeForked = false
+    const views = promptViews(plan, task)
     const result = await runSession(
       client,
       task,
       brief
         ? feedback.trimStart()
-        : renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine, taskContext: autoSwitches().taskContext }) + feedback,
+        : renderDecompose(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { ...opts, fine: autoSwitches().fine, taskContext: autoSwitches().taskContext }) + feedback,
       opts,
       chain,
     )
@@ -644,10 +647,13 @@ export async function runSubtask(
       }
     }
     const delta = forked ? await fanout() : undefined
-    const prompt = (): string =>
-      forked && delta
-        ? renderFanout(plan, task, text, index, { ...opts, ...delta, budget: steer !== undefined })
-        : renderSubtask(plan, task, text, { ...opts, continuation, index, warm: split ? false : warm, digest: Boolean(base?.digest), budget: steer !== undefined })
+    const prompt = (): string => {
+      const views = promptViews(plan, task)
+      const docs = taskDocPaths(task.id)
+      return forked && delta
+        ? renderFanout(promptFacts(opts), views.plan, views.task, docs, text, index, { ...opts, ...delta, budget: steer !== undefined })
+        : renderSubtask(promptFacts(opts), views.plan, views.task, docs, text, { ...opts, continuation, index, warm: split ? false : warm, digest: Boolean(base?.digest), budget: steer !== undefined })
+    }
     let feedback = ""
     // Re-prompt count for the artifact shape check (D2): one re-prompt with
     // feedback per subtask, then blocked for a human.

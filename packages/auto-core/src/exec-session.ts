@@ -10,7 +10,7 @@
 import { dirname, join } from "node:path"
 import type { SessionChain, SessionResult } from "./chain"
 import { consumeNote, seedFork } from "./chain-transitions"
-import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
+import { archivedTestHandoff, latestHandoffSeq, testHandoffFile } from "./docpaths"
 import { fileCommitted, suffixedTitle } from "./git"
 import { createGitOps } from "./git-ops"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
@@ -18,7 +18,8 @@ import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import type { RoutingFacts } from "./routing"
 import type { Plan, Task } from "./tasks"
-import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo } from "./prompt"
+import { renderTestContinue, renderTestWrapup, type TestRunInfo } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { COMMIT_CLARIFY } from "./resume-gate"
 import { runSession } from "./session"
 import { clientOf, forkSession, sessionAlive, sessionUsed } from "./session-api"
@@ -143,7 +144,7 @@ export async function runExecSession(
     if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, opts.routing)) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
-      firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
+      firstPrompt = renderTestWrapup(promptFacts(opts), { handoffFile: test.handoffFile })
       log(`↻ ${test.label} resume after interruption: test handover #${record.n} committed the frozen tree but wrapup is unfinished; forking from the frozen point to redo the wrapup`)
     } else {
       // The frozen session is no longer available: the wrap-up has nothing to
@@ -231,7 +232,7 @@ export async function runExecSession(
       // continue").
       firstPrompt =
         ran && !record?.ran
-          ? renderTestContinue({ handoffFile: archived, run: ran, stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined })
+          ? renderTestContinue(promptFacts(opts), { handoffFile: archived, run: ran, stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined })
           : `[DRIVER] The last run was interrupted here; resumed from a fork of the continuation session. Continue from the interruption point. ${COMMIT_CLARIFY}`
     }
     continuation = true
@@ -249,7 +250,7 @@ export async function runExecSession(
   }
   for (;;) {
     const extra = continuation
-      ? `\n\n${renderTestContinue({
+      ? `\n\n${renderTestContinue(promptFacts(opts), {
           handoffFile: archived,
           run: test.last,
           stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined,

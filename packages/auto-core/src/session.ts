@@ -30,6 +30,7 @@ import { agentField, forkAgent, forkBaseRole, jitterOf, landedAgent, probeAccoun
 import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { accountAnswered, accountOf, learnedReset, learnFailure } from "./quota-windows"
 import { saveProgress } from "./resume"
 import { firstLine } from "./resume-gate"
@@ -124,7 +125,7 @@ export async function ensureForkBase(
       // facts passed untested): without a registry the chain stays roleless
       // and the bypass routing of the one-agent era applies unchanged (C2).
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject, ...forkBaseRole(opts.routing) }
-      const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
+      const result = await runSession(client, task, renderContextBase(promptFacts(opts), task, digest), opts, base)
       if (result.type === "idle" && base.id) {
         // The record names the agent the base session truly lives on (the
         // dispatch inside picked it; §8.2) — the subtask route's first usable

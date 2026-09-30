@@ -28,8 +28,10 @@ import { phaseType, REQUIRED_TYPE, resolvePhases, type PhaseTypeEntry } from "./
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import type { PlanInput } from "./plan-input"
-import { activeIntentText, useHumanQuestions, useIntentPacks } from "./prompt"
+import { promptFacts } from "./prompt-facts"
+import type { PromptFacts } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
+import { packSubsection } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
@@ -197,14 +199,18 @@ export async function preflight(
   // switches accept: OPENCODE_AUTO_MODEL values may be internal names and
   // OPENCODE_AUTO_MODEL_FALLBACK is a usage error (plans/0055 §9 R7).
   let registry: ModelRegistry | undefined
+  // The prompt globals load and validate inside the block below (E2): the
+  // render facts are built per render call by the callers
+  // (src/prompt-facts.ts); preflight builds one itself so an invalid intent
+  // pack still exits here as a usage error, and the parallelism check below
+  // reads the same pack. Its humanQuestions flag is plan's stop condition —
+  // a person attends plan, so its sessions' questions wait for the human
+  // with no timeout and never get an AUTO-RESOLVE proxy answer (the driver
+  // side of the same rule is Opts.humanQuestions, watch.ts).
+  let renderFacts: PromptFacts | undefined
   try {
     usePromptLibrary(directory)
-    useIntentPacks(directory)
-    // plan's sessions (stopBefore === "execute") render question-rule's
-    // human-answer branch: a person attends plan, so questions wait for the
-    // human with no timeout and never get an AUTO-RESOLVE proxy answer (the
-    // driver side of the same rule is Opts.humanQuestions, watch.ts).
-    useHumanQuestions(opts.stopBefore === "execute")
+    renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore === "execute" })
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
     const types = loaded.map((entry) => entry.type)
@@ -244,7 +250,7 @@ export async function preflight(
   }
   // A project intent pack without the level's subsection injects nothing; say so
   // once rather than let the setting silently do nothing.
-  if (opts.parallel && !activeIntentText("parallelism", opts.parallel)) {
+  if (opts.parallel && (!renderFacts || !packSubsection(renderFacts.pack, "parallelism", opts.parallel))) {
     log(`⚠ parallel ${opts.parallel}: the active intent pack has no \`## parallelism\` / \`### ${opts.parallel}\` subsection; planning sessions get no parallelism guidance`)
   }
 

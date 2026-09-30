@@ -25,12 +25,38 @@ import {
   renderTestWrapup,
   renderWhole,
   renderWrapup,
-  useHumanQuestions,
 } from "../src/prompt"
+import { promptFacts } from "../src/prompt-facts"
+import { promptViews, type Plan, type Task } from "../src/tasks"
+import { taskDocPaths } from "../src/docpaths"
 import { autoSwitches } from "../src/switches"
 import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import { listPlan, listTask, migrate, plan, resolveItem, task } from "./fixtures/prompt"
+
+// E2 render inputs: the facts (the attended-human cases build their own) and
+// the task-family shims that wrap the fixtures into views + doc paths.
+const facts = () => promptFacts()
+const decOf = (p: Plan, t: Task, opts?: Parameters<typeof renderDecompose>[4]) => {
+  const v = promptViews(p, t)
+  return renderDecompose(facts(), v.plan, v.task, taskDocPaths(t.id), opts)
+}
+const subOf = (p: Plan, t: Task, text: string, opts?: Parameters<typeof renderSubtask>[5]) => {
+  const v = promptViews(p, t)
+  return renderSubtask(facts(), v.plan, v.task, taskDocPaths(t.id), text, opts)
+}
+const fanOf = (p: Plan, t: Task, text: string, index: number, opts: Parameters<typeof renderFanout>[6]) => {
+  const v = promptViews(p, t)
+  return renderFanout(facts(), v.plan, v.task, taskDocPaths(t.id), text, index, opts)
+}
+const wholeOf = (p: Plan, t: Task, opts?: Parameters<typeof renderWhole>[4]) => {
+  const v = promptViews(p, t)
+  return renderWhole(facts(), v.plan, v.task, taskDocPaths(t.id), opts)
+}
+const wrapOf = (p: Plan, t: Task, opts?: Parameters<typeof renderWrapup>[4]) => {
+  const v = promptViews(p, t)
+  return renderWrapup(facts(), v.plan, v.task, taskDocPaths(t.id), opts)
+}
 
 describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, plans/0020-auto-resolve-design.md §E)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
@@ -51,7 +77,7 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
 
   // Rendered through the exit's context completion (M2.1): the ownership catalog
   // and recording discipline come from the built-in pack's `## governance`.
-  const fragment = (ask: boolean) => renderText("{{> question-rule}}", promptCtx({ ask }))
+  const fragment = (ask: boolean, f = facts()) => renderText("{{> question-rule}}", promptCtx(f, { ask }))
 
   // History-marker reader templates: they ask the session to compile the decisions marked
   // AUTO-DECISION in existing documents, unrelated to "whether to leave a record this time"
@@ -111,31 +137,29 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     }
   })
 
-  // plan's sessions (preflight sets useHumanQuestions when RunAllOpts.stopBefore === "execute"):
-  // questions wait for the human answer, no proxy-answer basis, no annotation demand; the same
-  // single numbered-2 invariant holds. The module state must be reset, otherwise it pollutes
-  // the other cases in this process.
+  // plan's sessions (the composition root sets humanQuestions when
+  // RunAllOpts.stopBefore === "execute", carried by the facts since E2 — no
+  // module state left to reset): questions wait for the human answer, no
+  // proxy-answer basis, no annotation demand; the same single numbered-2
+  // invariant holds.
   test("humanQuestions setting (plan's sessions): waits for the human, no proxy answers; the structural invariant holds equally", () => {
-    useHumanQuestions(true)
-    try {
-      for (const ask of [false, true]) {
-        const text = fragment(ask)
-        expect(text).toContain("waits for the answer with no timeout")
-        expect(text).toContain("never decide in the user's place")
-        expect(text).toContain("question tool")
-        expect(text).not.toContain("do not call the question tool")
-        expect(text).not.toContain("answered automatically")
-        expect(text.startsWith("2. ")).toBe(true)
-        expect(text.endsWith("\n")).toBe(false)
-        expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
-        expect(text).not.toContain("\n\n")
-      }
-      // After the reset both settings' wording is byte-identical to the unset state (run's rendering is unaffected by plan).
-      useHumanQuestions(false)
-      expect(fragment(false)).toBe(renderText("{{> question-rule}}", promptCtx({ ask: false })))
-    } finally {
-      useHumanQuestions(false)
+    const attended = promptFacts({ humanQuestions: true })
+    for (const ask of [false, true]) {
+      const text = fragment(ask, attended)
+      expect(text).toContain("waits for the answer with no timeout")
+      expect(text).toContain("never decide in the user's place")
+      expect(text).toContain("question tool")
+      expect(text).not.toContain("do not call the question tool")
+      expect(text).not.toContain("answered automatically")
+      expect(text.startsWith("2. ")).toBe(true)
+      expect(text.endsWith("\n")).toBe(false)
+      expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
+      expect(text).not.toContain("\n\n")
     }
+    // The run's facts carry the flag false (plan's setting reaches only the
+    // facts built with it), and their wording is the unattended one.
+    expect(facts().humanQuestions).toBe(false)
+    expect(fragment(false)).toBe(renderText("{{> question-rule}}", promptCtx(facts(), { ask: false })))
   })
 
   test("all 23 consumer templates render under both settings (a partial change reaches every referencing side)", () => {
@@ -170,7 +194,7 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
       // The test process sets no OPENCODE_AUTO_ASK, autoSwitches().ask === false — the exit injects
       // the switch value rather than undefined, so the off branch is taken instead of both branches disappearing.
       expect(autoSwitches().ask).toBe(false)
-      const text = renderWhole(plan, task)
+      const text = wholeOf(plan, task)
       expect(text).toContain("ASK-OFF-BRANCH")
       expect(text).not.toContain("ASK-ON-BRANCH")
       // An ask given explicitly at the call site wins over the switch (the basis for unit tests driving both settings directly)
@@ -260,10 +284,10 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
 
   test("consumer templates render with the eof-marker discipline paragraph (the subtask/decompose/wrapup automatic session kinds and the lead's stream, M1.0 merge)", () => {
     for (const rendered of [
-      renderSubtask(plan, task, "write the schema part of the migration script"),
-      renderDecompose(plan, task),
-      renderWrapup(plan, task),
-      renderFanout(plan, task, "write the schema part of the migration script", 1, { siblings: ["S02 write the execution logic"] }),
+      subOf(plan, task, "write the schema part of the migration script"),
+      decOf(plan, task),
+      wrapOf(plan, task),
+      fanOf(plan, task, "write the schema part of the migration script", 1, { siblings: ["S02 write the execution logic"] }),
     ]) {
       expect(rendered).toContain("Document terminator discipline")
       expect(rendered).toContain("<!-- auto: eof -->")
@@ -275,19 +299,19 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
 describe("Mode injection (-m/--mode)", () => {
   test("execution-family templates inject the exec paragraph; without a mode nothing is injected", () => {
     for (const text of [
-      renderDecompose(plan, task, { mode: migrate }),
-      renderSubtask(plan, task, "write the schema part of the migration script", { mode: migrate }),
-      renderWrapup(plan, task, { mode: migrate }),
-      renderWhole(plan, task, { mode: migrate }),
+      decOf(plan, task, { mode: migrate }),
+      subOf(plan, task, "write the schema part of the migration script", { mode: migrate }),
+      wrapOf(plan, task, { mode: migrate }),
+      wholeOf(plan, task, { mode: migrate }),
     ]) {
       expect(text).toContain("(migrate):")
       expect(text).toContain("behaviourally equivalent")
       expect(text).toContain("AUTO-DECISION")
     }
-    expect(renderDecompose(plan, task)).not.toContain("Scenario mode notes")
-    expect(renderSubtask(plan, task, "write the schema part of the migration script")).not.toContain("Scenario mode notes")
-    expect(renderWrapup(plan, task)).not.toContain("Scenario mode notes")
-    expect(renderWhole(plan, task)).not.toContain("Scenario mode notes")
+    expect(decOf(plan, task)).not.toContain("Scenario mode notes")
+    expect(subOf(plan, task, "write the schema part of the migration script")).not.toContain("Scenario mode notes")
+    expect(wrapOf(plan, task)).not.toContain("Scenario mode notes")
+    expect(wholeOf(plan, task)).not.toContain("Scenario mode notes")
   })
 
   test("modeCtx: shared mode-variable assembly (the extension point for shells writing their own render*) and the default shape", () => {
@@ -349,28 +373,28 @@ describe("Template render completeness", () => {
   test("all render* leave no template tags behind under representative parameter combinations", () => {
     const solo = plan.tasks[0]!
     const texts = [
-      renderDecompose(plan, task),
-      renderDecompose(plan, task, { mode: migrate }),
-      renderSubtask(plan, task, "subtask A"),
-      renderSubtask(plan, task, "subtask A", { mode: migrate }),
-      renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, warm: true, mode: migrate }),
-      renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, continuation: true }),
-      renderWrapup(plan, task),
-      renderWrapup(plan, task, { solo: true, mode: migrate }),
-      renderWrapup(plan, task, { resolves: [resolveItem("Should the third implementation be closed out as well?")] }),
-      renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
-      renderHandoffSteer(task),
-      renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
-      renderTestWrapup({ handoffFile: "/h" }),
-      renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
-      renderKnowledge({ file: "docs/R-01/P03-knowledge/kb.md", mode: migrate }),
-      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "intent", mode: migrate }),
-      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
-      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", distilled: ["docs/R-01/P02-implement/handover.md"] }),
-      renderDryrun(),
-      renderDecompose(plan, solo),
-      renderHandoffSteer(solo),
-      renderStepUp({ from: "prov/model-256k", next: "prov/model" }),
+      decOf(plan, task),
+      decOf(plan, task, { mode: migrate }),
+      subOf(plan, task, "subtask A"),
+      subOf(plan, task, "subtask A", { mode: migrate }),
+      subOf(listPlan, listTask, "write the execution logic", { index: 2, warm: true, mode: migrate }),
+      subOf(listPlan, listTask, "write the execution logic", { index: 2, continuation: true }),
+      wrapOf(plan, task),
+      wrapOf(plan, task, { solo: true, mode: migrate }),
+      wrapOf(plan, task, { resolves: [resolveItem("Should the third implementation be closed out as well?")] }),
+      wholeOf(plan, task, { ondemand: true, continuation: true, mode: migrate }),
+      renderHandoffSteer(facts(), taskDocPaths(task.id)),
+      renderTestResult(facts(), { script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
+      renderTestWrapup(facts(), { handoffFile: "/h" }),
+      renderTestContinue(facts(), { handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
+      renderKnowledge(facts(), { file: "docs/R-01/P03-knowledge/kb.md", mode: migrate }),
+      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md", brief: "intent", mode: migrate }),
+      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md" }),
+      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md", distilled: ["docs/R-01/P02-implement/handover.md"] }),
+      renderDryrun(facts()),
+      decOf(plan, solo),
+      renderHandoffSteer(facts(), taskDocPaths(solo.id)),
+      renderStepUp(facts(), { from: "prov/model-256k", next: "prov/model" }),
     ]
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
@@ -386,7 +410,7 @@ describe("Template render completeness", () => {
 
 describe("step-up template (plans/0055 §4.5)", () => {
   test("one-line note names both step ids, renders with no leftover tags, and the file ends with the terminator", async () => {
-    const text = renderStepUp({ from: "moonshotai/kimi-k3-256k", next: "moonshotai/kimi-k3" })
+    const text = renderStepUp(facts(), { from: "moonshotai/kimi-k3-256k", next: "moonshotai/kimi-k3" })
     expect(text).toContain("moonshotai/kimi-k3-256k")
     expect(text).toContain("moonshotai/kimi-k3")
     expect(text).not.toMatch(/\{\{|\}\}/)
@@ -401,7 +425,7 @@ describe("step-up template (plans/0055 §4.5)", () => {
 
 describe("classify-error template (plans/0055 §7.1)", () => {
   test("states the time and zone, fences the error text as data, asks for the one JSON line; the file ends with the terminator", async () => {
-    const text = renderClassifyError({ now: "2026-09-26T15:00:00+08:00", tz: "Asia/Shanghai", error: "Kontingent erschöpft {{not a tag}}" })
+    const text = renderClassifyError(facts(), { now: "2026-09-26T15:00:00+08:00", tz: "Asia/Shanghai", error: "Kontingent erschöpft {{not a tag}}" })
     expect(text).toContain("The current time is 2026-09-26T15:00:00+08:00 (time zone Asia/Shanghai)")
     expect(text).toContain("<<<\nKontingent erschöpft {{not a tag}}\n>>>")
     expect(text).toContain('{"class": "quota" | "rate" | "auth" | "transient" | "unknown", "resetAt": "<ISO 8601 with offset>" | null}')
@@ -420,7 +444,7 @@ describe("classify-error template (plans/0055 §7.1)", () => {
       expect(() => usePromptLibrary(dir)).toThrow(/classify-error\.md is missing required protocol content: "resetAt", \{\{now\}\}/)
       writeFileSync(join(overlay, "classify-error.md"), 'At {{now}} classify: {{error}}\nReply {"class": "…", "resetAt": null}\n\n<!-- auto: eof -->\n')
       usePromptLibrary(dir)
-      expect(renderClassifyError({ now: "N", tz: "UTC", error: "E" })).toBe('At N classify: E\nReply {"class": "…", "resetAt": null}')
+      expect(renderClassifyError(facts(), { now: "N", tz: "UTC", error: "E" })).toBe('At N classify: E\nReply {"class": "…", "resetAt": null}')
     } finally {
       usePromptLibrary(undefined)
       rmSync(dir, { recursive: true, force: true })

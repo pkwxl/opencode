@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { parseIndex } from "./document/unit"
 import { renderNumberRecovery } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 
@@ -107,7 +108,7 @@ export async function ensureNumbering(
   const recovered = await requireArtifact(
     client,
     { id: "PLAN", title: "task numbering record recovery", status: "in_progress", attempts: 0, body: "" },
-    renderNumberRecovery({ floor }),
+    renderNumberRecovery(promptFacts(opts), { floor }),
     opts,
     {
       kind: "numbering recovery",

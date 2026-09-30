@@ -7,6 +7,7 @@ import { createGitOps } from "./git-ops"
 import { formatTokens, log } from "./log"
 import { currentRound, phaseHandoverDoc, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { renderTemplate } from "./template"
 import { statsKnowledgePhase } from "./stats"
 import { estimateTokens } from "./usage"
@@ -92,7 +93,7 @@ export async function extractKnowledge(
   const produced = await requireArtifact(
     client,
     task,
-    renderKnowledge({ file, mode: opts.mode }),
+    renderKnowledge(promptFacts(opts), { file, mode: opts.mode }),
     opts,
     {
       kind: "knowledge extraction",
@@ -244,7 +245,7 @@ export async function extractPriorKnowledge(
   }
   const distilled = await existingDistilledDocs(dir, round)
   log(`▶ opening prior-knowledge extraction session (writes ${temp}, renamed to ${file} once the closing mark is confirmed${distilled.length ? "; existing distilled artifacts referenced, not restated" : ""})`)
-  const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
+  const produced = await requireArtifact(client, task, renderPriorKnowledge(promptFacts(opts), { file: temp, brief, mode: opts.mode, distilled }), opts, {
     kind: "prior-knowledge extraction",
     role: "prior-knowledge",
     // Independent hidden task unit (plans/0021-commit-boundary-design.md). The unified

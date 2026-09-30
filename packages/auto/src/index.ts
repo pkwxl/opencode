@@ -48,7 +48,7 @@ import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/au
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
-import { useIntentPacks } from "@opencode-ai/auto-core/prompt"
+import { loadIntents } from "@opencode-ai/auto-core/intent/load"
 import { shellProfile } from "@opencode-ai/auto-core/shell"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -1280,10 +1280,12 @@ if (command === "init" || command === "amend") {
   // The prompt library and intent packs: load the target directory's
   // .opencode/auto/prompts/ and .opencode/auto/intents/ overrides (a failed
   // protocol check exits right there); init renders no prompts, but loading
-  // early surfaces override problems at init time already.
+  // early surfaces override problems at init time already. The pack load
+  // validates through the loader itself (the render facts build per render
+  // call holds no module state).
   try {
     usePromptLibrary(directory)
-    useIntentPacks(directory)
+    loadIntents(directory)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)

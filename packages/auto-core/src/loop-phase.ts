@@ -18,6 +18,7 @@ import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseK
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
 import { autoSwitches } from "./switches"
@@ -98,7 +99,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     const distilled = await requireArtifact(
       serverHandle,
       distillTask,
-      renderPhaseHandover({ phase: phase.entry, handover, next, acceptance, closedTasks }),
+      renderPhaseHandover(promptFacts(sessionOpts(ctx, { site: "handover" })), { phase: phase.entry, handover, next, acceptance, closedTasks }),
       sessionOpts(ctx, { site: "handover" }),
       {
         kind: "handover distillation",

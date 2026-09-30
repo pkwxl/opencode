@@ -32,6 +32,7 @@ import { taskDoc } from "./docpaths"
 import type { UnitBaseline } from "./git"
 import { checkArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
+import type { PlanView, TaskView } from "./prompt"
 import {
   isUnitId,
   nextReady,
@@ -447,8 +448,32 @@ const declOf = (task: Task): UnitDecl => ({ id: task.id, ...(task.depends !== un
 // AUTO-DECISION: exported here rather than calling resolveDepends from
 // prompt.ts, so prompt.ts keeps its frozen src-import set (FROZEN_IMPORTS in
 // test/import-direction.test.ts); a direct document/unit import would drift it.
+// Since E2 the prompt layer no longer calls it at all — promptViews below is
+// the one build point that feeds the renderers their plan-derived data.
 export function prerequisites(plan: Plan, id: string): string[] {
   return resolveDepends(plan.tasks.map(declOf)).get(id) ?? []
+}
+
+// The prompt layer's views of one plan and one of its tasks (E2, plans/0061
+// §6.3): the renderers take no task-store types — the view adds the two
+// plan-derived fields they used to compute over driver imports (the
+// effective prerequisites and the checklist items' display titles), and
+// every task of the plan enters as a view because the done list and the
+// tick snapshot read the whole plan. The task view is built from the task
+// the caller holds (it may be a reload newer than the plan's own entry —
+// the checklist after a decompose session is exactly that). Pure over the
+// plan; callers build it once per render.
+export function promptViews(plan: Plan, task: Task): { plan: PlanView; task: TaskView } {
+  const view = (item: Task): TaskView => ({
+    id: item.id,
+    title: item.title,
+    status: item.status,
+    ...(item.closed !== undefined ? { closed: item.closed } : {}),
+    body: item.body,
+    prerequisites: prerequisites(plan, item.id),
+    ...(item.checklist ? { checklist: item.checklist.map((entry) => ({ text: entry.text, title: checklistTitle(entry.text), done: entry.done })) } : {}),
+  })
+  return { plan: { tasks: plan.tasks.map(view), closed: plan.closed }, task: view(task) }
 }
 
 // The next task to run: the first one in index order that is not done and

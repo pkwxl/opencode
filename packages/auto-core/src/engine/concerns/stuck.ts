@@ -9,6 +9,7 @@
 // statsModelEvent is a no-op. The slice is empty on purpose: the tracker
 // lives in TurnContext (dispatch lifetime, one instance per session).
 import { renderStuckHint } from "../../prompt"
+import { promptFacts } from "../../prompt-facts"
 import { STUCK_MAX_HINTS } from "../../stuck"
 import type { Advice, Concern, TurnState } from "../contract"
 
@@ -37,7 +38,9 @@ export const stuckConcern: Concern<"stuck"> = {
     await fx.statsModelEvent("stuck")
     // A failed dispatch is ignored: the steer already logged it, and the
     // session keeps running — the hint is an attempt to help, not a gate.
-    await fx.steer(renderStuckHint(hit))
+    // The hint's level-2 reflection section comes from the project's intent
+    // pack, so the facts read the run's directory.
+    await fx.steer(renderStuckHint(promptFacts(ctx.opts), hit))
     return "consumed"
   },
 }

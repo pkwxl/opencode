@@ -20,6 +20,7 @@ import { suffixedTitle } from "../../git"
 import { handoffComplete } from "../../handover"
 import { commitBlocked, strictResumeActive } from "../../unit-commit"
 import { renderTestResult, renderTestWrapup } from "../../prompt"
+import { promptFacts } from "../../prompt-facts"
 import { formatTokens } from "../../session-api"
 import { testHandoverDue } from "../../usage"
 import type { Advice, Concern, TurnContext, TurnFx, TurnState, TurnView } from "../contract"
@@ -179,7 +180,7 @@ const idleProtocol = async (test: NonNullable<TurnContext["test"]>, own: TurnSta
       pinSession: ctx.sessionID,
       pinMessage: view.transcript.lastMessage,
     })
-    const ok = await fx.steer(renderTestWrapup({ handoffFile: test.handoffFile }))
+    const ok = await fx.steer(renderTestWrapup(promptFacts(ctx.opts), { handoffFile: test.handoffFile }))
     if (!ok) return { type: "blocked", question: "steer dispatch failed (test-handover request); cannot continue the session, see the log." }
     // The wrap-up request is in effect; seed resumeWrapup:
     // the test slice's asked flag is state of this turn, and when
@@ -197,7 +198,7 @@ const idleProtocol = async (test: NonNullable<TurnContext["test"]>, own: TurnSta
   // Archive (a protocol marker whose presence is the request, removed after
   // execution so it can be requested again) → execute → feed back.
   const run = await fx.runTest()
-  const ok = await fx.steer(renderTestResult(run))
+  const ok = await fx.steer(renderTestResult(promptFacts(ctx.opts), run))
   if (!ok) return { type: "blocked", question: "steer dispatch failed (test result feedback); cannot continue the session, see the log." }
   return { type: "continue" }
 }
