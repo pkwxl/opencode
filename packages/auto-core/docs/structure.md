@@ -12,6 +12,7 @@ src/
   phases/      phases domain    — phase-type registry + custom types
   document/    document domain  — roles, unit model, state protocol, artifact specs
   agent/       agent domain     — AgentClient interface + opencode / claude adapters
+  engine/      turn engine      — the spine, concerns, fx and sources of one session turn
   *.ts         driver (orchestration plane) + the flat intent/phases/document modules
 templates/     prompts, intent packs, modes, and init copy templates (embedded via `with { type: "file" }`)
 test/          one suite per module + fixtures/ + golden/ + import-direction.test.ts
@@ -75,7 +76,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 
 ## Driver
 
-Grouped by layer, top down. The session-driving chain is strictly layered (0024 §D.2): `runner` → `execute` → `exec-session` → `session` → `attempt` → `watch`; lower layers never import upward, and `testrun` never imports the session-driving layer.
+Grouped by layer, top down. The session-driving chain is strictly layered (0024 §D.2): `runner` → `execute` → `exec-session` → `session` → `attempt` → `watch` → the turn engine (`src/engine/`); lower layers never import upward, and `testrun` never imports the session-driving layer.
 
 ### Run entry and loops
 
@@ -123,13 +124,25 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
 | Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; a spent quota window with a stated reset skips the retry ladder; the scheduled wait (`planSleep`: the recovery sleep to a known instant — a candidate usable again, a stated or learned reset — plus jitter, `/exit` a boundary inside it); registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4, 0057 §4.1, §6) |
 | Single dispatch | Resumed-takeover-or-create (every prompt opens a fresh session except a recovery takeover of the recorded one), model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |
-| Event stream | Echo, usage tracking, handoff steer, stuck hints, marker collection, test requests, liveness probe (held off through an announced silence), truncation resume; context step-up steers and classifier calls beside the retry branch; the limit fields merged (stated, then wording, then classifier), quota-window lines | `src/watch.ts` (0026, 0055 §4.5, §7.1, 0057) |
+| Event stream | The turn facade: `watch()` — one session turn on the engine (builds the turn context, installs the concerns, runs the spine, maps the outcome into `Watch`); the mechanisms are the concerns' files, see the turn engine group | `src/watch.ts` (0026, 0055 §4.5, §7.1, 0057, 0061) |
 | Session chain and routing | `SessionChain` (with its `agent` and model entry), phase → role → model routing, error classification, the retry policy in force and `agentGaveUp`, resets stated in a known provider wording (`statedInWording`) | `src/chain.ts` (0017, 0055 §8.2, 0057 §4, S4a) |
 | Session helpers | Fork, usage, liveness, rename over `AgentClient`; `clientOf`/`contextLimitsOf` resolve a client or the agent pool; terminal formatting; human answers | `src/session-api.ts` |
 | Bypass-session skeleton | `requireArtifact`: dispatch → collect → one retry → implicit block; hidden-unit commit boundary | `src/artifact.ts` |
 | Wrap-up | Wrap-up session, `Result: PASS\|FAIL` parsing | `src/wrapup.ts` (0044) |
 | Knowledge | Knowledge phase and prior-knowledge extraction | `src/knowledge.ts` |
 | Options and outcomes | Shared opts, `Outcome`/`UnitStop` types, context-budget constants, and `sessionOpts` — the one builder of the loop family's session options (a structural context slice, seven site ids, no per-site field exceptions; the module stays import-free) | `src/opts.ts` (0061 C7) |
+
+### Turn engine (under watch)
+
+The engine of one session turn (0061): `watch()` is its facade and entry — it builds the turn's context, installs the concern roster, runs the spine and maps the outcome back; every mechanism below lives in its own file.
+
+| Module | Responsibility | Key files |
+|---|---|---|
+| Turn contract | The engine's types: `TurnInput` (external and synthetic), the per-concern `TurnState` slices with the read-only view over them, the immutable `TurnContext`, the audited `TurnFx` surface, `Concern`/`Advice`/`Settle` and the arbitration types | `src/engine/contract.ts` (0061 §4.3) |
+| Turn spine | The single input queue of one turn: the declared arbitration table (§4.5) dispatched over the slices, the fx audit (the queue discipline's runtime invariants), the trip-wired stream wrapper and the finalize procedure | `src/engine/spine.ts` (0061 §4.4) |
+| Turn fx and sources | The production `TurnFx` — every I/O call a turn makes (steers, questions and permissions, the human answer, the kernel test effects, the freeze commit, the handover record); the synthetic-input sources (the liveness probe timer, the classifier-answer feed) | `src/engine/fx.ts`, `src/engine/sources.ts` (0061) |
+| Turn result | The settle→Watch mapping: the snapshot every exit carries (duration, usage, resolves) plus the per-exit fields — the blocked question, the error class and retryable marks, the reset fields | `src/engine/result.ts` (0061) |
+| Turn concerns | One file per concern, each owning one state slice and its cells in the arbitration table: guard (the twin-idle guard), transcript (terminal echo and billing), windows (the limit row), stuck (the loop hint), questions (the question and permission rows), failure (the error accumulator with its limit-statement helpers), recovery (the classifier's turn: the consult, the raised settle, the final classification, the reset fields), liveness (probe verdicts, announced silence, truncation continuation, the interrupted close-out), usage (the measurement point: wall, notice bands, hard wall), stepUp (the context steps' live half: step-up, late step-up, cache claims), test (the idle test protocol with the kernel effects) | `src/engine/concerns/*.ts` (0061 §4.5–§4.6) |
 
 ### Task store, state, and recovery
 
@@ -197,6 +210,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | `test/<module>.test.ts` | One suite per module (names follow the module; domain suites prefixed `agent-`, `document-`, `phases-`, `prompt-`) |
 | `test/fixtures/` | Shared doubles: `agent.ts` (native `AgentClient` fake, 0042), `runner.ts`, `prompt.ts`, `units.ts` |
 | `test/golden/` + `test/golden.test.ts` | Rendered-prompt and contract golden files |
+| `test/turn-*.test.ts` + `test/golden/turn/` | The turn engine's suites: the arbitration table and fx audit, one suite per concern over a fake `TurnFx`, the idle test protocol, and the frozen turn-trace oracle (the equivalence proof of the consolidation's stage D) |
 | `test/import-direction.test.ts` | Domain classification and dependency-direction rules (above) |
 | `test/agent-fake.test.ts` | Agent-neutral driver behavior; fails if any `AgentClient` call goes unexercised |
 | `test/incident-regression.test.ts` | Regressions from field incidents |

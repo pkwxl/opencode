@@ -3,10 +3,10 @@
 // some row, the synthetic-input rows are the concurrent ones), the audit
 // invariants firing as programming errors — a kernel fx after a steer in the
 // same idle quiet point, a second steer there, anything but log/vlog from a
-// synthetic input, a cross-slice write under frozen views — and the remainder
-// layer's owned-slice set over the real install (plans/0061 §4.11: exactly
-// the not-yet-extracted slices, shrinking per extraction unit, none at the
-// layer's removal) plus the input kinds it still serves.
+// synthetic input, a cross-slice write under frozen views — and the
+// compatibility layer's removal check over the real install (plans/0061
+// §4.11: the deleted `remainder` owns no slice — every entry of the install
+// holds its own concern's handle, none shared).
 // The spine is driven with fake concerns over a fake TurnFx and a stub stream
 // — everything a turn needs arrives as runTurn's arguments.
 import { describe, expect, test } from "bun:test"
@@ -20,7 +20,7 @@ import { runTurn, slicesDelegatedTo, SLICE_KEYS, TURN_ARBITRATION, type ConcernR
 import { createServices } from "../src/services"
 import { parseSwitches } from "../src/switches"
 import { usageSource } from "../src/usage"
-import { HANDLER_KINDS, turnConcerns, type RemainderState } from "../src/watch"
+import { turnConcerns } from "../src/watch"
 import { ev, fakeAgent } from "./fixtures/agent"
 
 const SESSION = "ses_1"
@@ -94,8 +94,9 @@ const roster = (over: Partial<{ [K in SliceKey]: Concern<K>["handle"] }> = {}): 
   test: { name: "test", initial: () => ({ handover: false, asked: false, retried: false }), handle: over.test ?? PASS },
 })
 
-// The remainder install's roster shape (plans/0061 §4.11): every entry
-// delegates to the one shared handle, except the slices already extracted.
+// A synthetic shared-handle roster (the compatibility layer's shape,
+// plans/0061 §4.11): every entry delegates to the one handle, except the
+// slices named as extracted — the shape the removal check exists to catch.
 const delegatedRoster = (handle: Concern<SliceKey>["handle"], extracted: SliceKey[] = []): ConcernRoster => {
   const base = roster()
   const entries = SLICE_KEYS.map((key) => [key, extracted.includes(key) ? base[key] : { ...base[key], handle }])
@@ -287,53 +288,33 @@ describe("the queue discipline's terminal settles", () => {
   })
 })
 
-describe("the remainder layer's owned slices", () => {
-  // The layer's (empty) state, as the real install reads it: every slice is
-  // extracted now, so turnConcerns holds real concerns only. The recovery,
-  // liveness, stepUp and test concerns are the real factories over inert
-  // deps — the ratchet reads handle identity, which each factory's own
-  // handle provides.
-  const remainderState = (): RemainderState => ({})
-  const recoveryConcern = (): Concern<"recovery"> => makeRecoveryConcern({ answerWith: () => {}, extended: {} })
-  const livenessConcern = (): Concern<"liveness"> => makeLivenessConcern({ extended: {} })
-  const stepUpConcern = (): Concern<"stepUp"> => makeStepUpConcern({ live: {} })
-  const testConcern = (): Concern<"test"> => makeTestConcern({ blockedExtra: {} })
-  const install = (handle: Concern<SliceKey>["handle"]): ConcernRoster =>
-    turnConcerns(remainderState(), handle, recoveryConcern(), livenessConcern(), stepUpConcern(), testConcern())
+describe("the compatibility layer's removal check", () => {
+  // The remainder layer is deleted (plans/0061 §4.6/§4.11): the real install
+  // — watch's turnConcerns over the real factories, the four per-turn
+  // channels as inert deps here — holds the eleven concerns from their
+  // files, and the check asks the §4.11 question of it: `remainder` owns no
+  // slice, which once the layer is gone reads as "no entry shares one
+  // handle with another" — the shape a resurrected compatibility layer
+  // (every roster entry delegating to one body) would have again.
+  const install = (): ConcernRoster =>
+    turnConcerns(
+      makeRecoveryConcern({ answerWith: () => {}, extended: {} }),
+      makeLivenessConcern({ extended: {} }),
+      makeStepUpConcern({ live: {} }),
+      makeTestConcern({ blockedExtra: {} }),
+    )
 
-  test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
-    // The real install (watch's turnConcerns): every slice's entry holds its
-    // own concern's handle, so the delegated set is empty — the layer's
-    // removal endpoint, reached by the extractions one slice at a time.
-    const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    expect(slicesDelegatedTo(install(handle), handle)).toEqual([])
+  test("remainder owns no slice: every concern's handle owns exactly its own slice in the real install", () => {
+    const roster = install()
+    for (const key of SLICE_KEYS) {
+      // slicesDelegatedTo names every slice whose entry handles through the
+      // given function: with each concern its own, that is exactly the one
+      // slice — a shared handle (the layer's shape) would list two or more.
+      expect(slicesDelegatedTo(roster, (roster[key] as Concern<SliceKey>).handle)).toEqual([key])
+    }
   })
 
-  test("the remainder serves exactly the input kinds whose row still holds a not-yet-extracted cell", () => {
-    // HANDLER_KINDS is the remainder handler map's keys' runtime mirror,
-    // pinned here against the table and the install's delegation set, not a
-    // hand-written list. Every row's cells are extracted concerns' now, so
-    // the remainder serves no kind. That the dispatch reaches each
-    // concern's cell is pinned by the turn-trace suite's roster case, which
-    // fires every arbitration cell through watch's real install.
-    const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    const remainder = new Set(slicesDelegatedTo(install(handle), handle))
-    // The cast is the assertion's own claim: the table-derived kinds are the
-    // kinds the remainder serves (the equality below checks it at runtime).
-    const served = INPUT_KINDS.filter((kind) => TURN_ARBITRATION[kind].some((cell) => remainder.has(cell.concern))) as (typeof HANDLER_KINDS)[number][]
-    expect([...HANDLER_KINDS].sort()).toEqual([...served].sort())
-    expect(new Set(HANDLER_KINDS).size).toBe(HANDLER_KINDS.length)
-  })
-
-  test("extraction shrinks the delegated set monotonically to none (the removal check's endpoint run backwards)", () => {
-    const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    const one = delegatedRoster(handle, ["test"])
-    expect(slicesDelegatedTo(one, handle)).toEqual(SLICE_KEYS.filter((key) => key !== "test"))
-    const all = delegatedRoster(handle, [...SLICE_KEYS])
-    expect(slicesDelegatedTo(all, handle)).toEqual([])
-  })
-
-  test("a finalize function shared across the delegated entries runs once (the remainder close-out's single execution)", async () => {
+  test("a finalize function shared across roster entries runs once (the finalize procedure's per-function dedup)", async () => {
     let runs = 0
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
     const finalize = (async () => {

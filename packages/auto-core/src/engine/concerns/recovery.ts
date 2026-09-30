@@ -33,11 +33,10 @@ import type { Advice, Concern, Settle, TurnContext, TurnFx, TurnState } from "..
 // sources' answer feed: the ask's in-flight call is handed to the spine's
 // queue, its resolution arriving as the synthetic answer input. `extended`
 // is the settle procedure's channel for the interrupted close-out's failure
-// record: the liveness step — the remainder's finalize until the liveness
-// concern lands — extends the failure slice's record with the transport
-// message of the interruption, and this concern's final classification and
-// the snapshot mapping read the extension through this cell; `error` is set
-// exactly when the turn settled interrupted.
+// record: the liveness concern's finalize extends the failure slice's record
+// with the transport message of the interruption, and this concern's final
+// classification and the result mapping read the extension through this
+// cell; `error` is set exactly when the turn settled interrupted.
 export type RecoveryDeps = {
   answerWith(call: Promise<ClassifierAnswer | undefined>): void
   extended: { error?: string; info?: ErrorInfo }

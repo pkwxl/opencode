@@ -162,6 +162,14 @@ const CLASSIFIED: Record<string, Domain> = {
    // only the chain types and the first-line helper below the session
    // layer.
    "engine/ladder": "driver",
+    // The turn's result mapping (plans/0061 §4.3/§4.6): shaping the spine's
+    // settle and the final view over the slices into the Watch result each
+    // exit of the pre-engine watch body returned — the facade's second
+    // half, extracted so watch stays the entry that builds the context and
+    // runs the spine. Reaches the contract's types, the chain's result
+    // types and the recovery concern's reset fields; watch is its only
+    // caller.
+    "engine/result": "driver",
     // The turn spine (plans/0061 §4.4): the single input queue of one watch
     // turn, the arbitration dispatch over the concerns' slices, the fx audit
     // (the queue discipline's runtime invariants) and the finalize
@@ -195,7 +203,7 @@ const CLASSIFIED: Record<string, Domain> = {
     // agentGaveUp, classify's ask and merge policies, the router's answer
     // type and cache-claim service, log's formatDuration, testrun's steer
     // helpers, usage's tier rules, model-step's pure step walk); watch
-    // installs them beside the remainder.
+    // installs them — every slice owned by its own concern.
     "engine/concerns/guard": "driver",
     "engine/concerns/windows": "driver",
     "engine/concerns/transcript": "driver",
@@ -382,9 +390,9 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/sources": 6,
     // The extracted turn concerns (plans/0061 §4.5/§4.6), in their extraction
     // order, filling the slots up to watch: each reaches the contract's types
-    // and the unranked leaves below the session layer; watch is their
-    // installer, beside the remainder that still holds the not-yet-extracted
-    // cells.
+    // and the unranked leaves below the session layer; watch installs them —
+    // the remainder layer that held the not-yet-extracted cells during the
+    // extraction units is deleted, every slice owned by its own concern.
     "engine/concerns/guard": 7,
     "engine/concerns/transcript": 8,
     "engine/concerns/windows": 9,
@@ -396,13 +404,16 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/concerns/usage": 15,
     "engine/concerns/step-up": 16,
     "engine/concerns/test": 17,
-    watch: 18,
-    attempt: 19,
-    session: 20,
-    artifact: 21,
-    "exec-session": 21,
-    execute: 22,
-    runner: 23,
+    // The turn's result mapping (plans/0061 §4.6), directly under the
+    // concern it reads (recovery's reset fields) and its caller watch.
+    "engine/result": 18,
+    watch: 19,
+    attempt: 20,
+    session: 21,
+    artifact: 22,
+    "exec-session": 22,
+    execute: 23,
+    runner: 24,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

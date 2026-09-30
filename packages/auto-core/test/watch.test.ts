@@ -1,20 +1,22 @@
-// Wiring tests for src/watch.ts (error signals / stats / the two-line report
-// driven through attempt or runSession): SSE subscription lifecycle, the
-// liveness probe's wiring (timer cleanup, the H7 POST abort), the three
-// trigger surfaces of error signals, session-boundary stats, the ◉ two-line
-// report, proxy-answer collection. Session-failure exits (session
-// error / dispatch failure) are driven directly through attempt — since
-// 2026-09-16 runSession no longer returns blocked for failures (it enters
-// the wait-and-probe loop, see test/session.test.ts), and attempt's return
-// value is the direct exit surface of watch's classification marks (P3).
+// Entry-behaviour and wiring tests for the turn facade (src/watch.ts): the
+// surfaces only an end-to-end run observes, each driven through attempt or
+// runSession — SSE subscription lifecycle, the liveness probe's wiring
+// (timer cleanup, the H7 POST abort), the three trigger surfaces of error
+// signals, session-boundary stats, the ◉ two-line report, proxy-answer
+// collection, truncated-output resume. The turn's mechanisms are the
+// concerns' suites (test/turn-*.test.ts) and the spine's own checks
+// (test/turn-arbitration.test.ts); the whole turn is byte-pinned through
+// watch's real install by the trace oracle (test/turn-trace.test.ts), so
+// what stays here is the wiring the books, the exits and the client-level
+// call surface need — no mechanism assertion exists twice. Session-failure
+// exits (session error / dispatch failure) are driven directly through
+// attempt — since 2026-09-16 runSession no longer returns blocked for
+// failures (it enters the wait-and-probe loop, see test/session.test.ts),
+// and attempt's return value is the direct exit surface of the turn's
+// classification marks (P3).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18,
-// pure move).
-// The test-handover describe that used to close this file (the freeze steer
-// seeding resumeWrapup, the forked instance verifying the document) was
-// re-homed into the test concern's suite (test/turn-test-protocol.test.ts)
-// when the concern was extracted; the protocol's end-to-end exits stay
-// byte-pinned by the trace oracle's test-protocol repo family
-// (test/turn-trace.test.ts).
+// pure move); the concern extraction units (0061 stage D) re-homed every
+// mechanism case into its concern's suite.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
@@ -54,10 +56,11 @@ describe("SSE subscription lifecycle (disconnected at session end)", () => {
     expect(result.type).toBe("blocked")
     expect((result as { question: string }).question).toContain("task dispatch failed")
     expect(state.signal?.aborted).toBe(true)
-    // The liveness probe's trip race wrapper (S4, watch.ts) leaves the event
-    // stream generator's teardown to settle a few microtasks later (this
-    // path's attempt returns without awaiting watching) — yield one
-    // macrotask before asserting the stream has wound down.
+    // The spine's trip race wrapper (the stream wrapper of
+    // src/engine/spine.ts) leaves the event stream generator's teardown to
+    // settle a few microtasks later (this path's attempt returns without
+    // awaiting watching) — yield one macrotask before asserting the stream
+    // has wound down.
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(state.closed).toBe(true)
   })
@@ -785,10 +788,11 @@ describe("truncated-output resume (a step ending with length is not a natural fi
     const result = await runSession(client, task, "prompt", {}, chain)
     expect(result.type).toBe("idle")
     // The resume goes into the original session via steer (promptAsync): no
-    // new session, no re-sent prompt.
+    // new session, no re-sent prompt. The steer's exact text is the liveness
+    // concern's mechanism (test/turn-liveness.test.ts) and is byte-pinned
+    // through the real install by the oracle's length-continuation traces,
+    // so it is not asserted a third time here.
     expect(calls.steers.length).toBe(1)
-    expect(calls.steers[0]).toContain("cut off by the output length limit")
-    expect(calls.steers[0]).toContain("continue the unfinished work")
     expect(calls.creates).toBe(1)
     expect(calls.prompts.length).toBe(1)
   })

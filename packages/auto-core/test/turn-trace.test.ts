@@ -37,6 +37,8 @@ import { createServices, installServices, services, uninstallServices } from "..
 import { createStuckTracker } from "../src/stuck"
 import { parseSwitches } from "../src/switches"
 import type { Steer, TestRun } from "../src/testrun"
+import type { ArbitrationRow } from "../src/engine/contract"
+import { TURN_ARBITRATION } from "../src/engine/spine"
 import { watch } from "../src/watch"
 import { ev, type AgentCall, type TurnScript } from "./fixtures/agent"
 import { freshRepo, git, task } from "./fixtures/runner"
@@ -1927,16 +1929,17 @@ describe("the turn-trace oracle", () => {
 })
 
 // —— The roster: the arbitration table's cell → scenario map (0061 §4.5) ——
-// The §4.5 rows and their concern cells, transcribed statically, each cell
-// naming the scenarios whose family comment declares it covered. At D0 the
-// case below asserts what is statically known: every input kind fired in at
-// least one recorded trace — the kind's row names at least one scenario,
-// every named scenario is registered, declares the kind in its `kinds`, and
-// has its golden on disk — and the map cannot drift away from the recorded
-// set (every registered scenario is named at least once). The full
-// every-cell assertion completes at D9 (0061 §6.3), when the engine's table
-// exists as code and each cell's coverage is checked against it; until then
-// the cell keys are the plan's transcription, not checked artifacts.
+// The rows and their concern cells, each cell naming the scenarios whose
+// family comment declares it covered. The case below asserts the roster
+// against the engine's table as code (src/engine/spine.ts
+// TURN_ARBITRATION): every cell of every row names at least one scenario,
+// each named scenario is registered, declares the kind in its `kinds`, and
+// has its golden on disk; the roster's concern keys are exactly the
+// table's cells (nothing hand-invented, nothing missed); the two terminal
+// rows keep their spine cells beside them (§4.5's "spine — settle natural"
+// and "spine — settle interrupted", which the engine's table leaves to the
+// spine's own settles); and the map cannot drift away from the recorded
+// set (every registered scenario is named at least once).
 const ROSTER: Record<InputKind, Record<string, readonly string[]>> = {
   limit: {
     windows: ["limit-windows-change"],
@@ -2029,13 +2032,15 @@ const ROSTER: Record<InputKind, Record<string, readonly string[]>> = {
   },
 }
 
-test("roster: every input kind fired in at least one recorded trace", () => {
+test("roster: every arbitration-table cell fired in at least one recorded trace", () => {
   const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]))
   const named = new Set<string>()
-  for (const [kind, cells] of Object.entries(ROSTER) as [InputKind, Record<string, readonly string[]>][]) {
-    const ids = Object.values(cells).flat()
-    expect(ids.length, `the ${kind} row names at least one scenario`).toBeGreaterThan(0)
-    for (const id of ids) {
+  // One cell's coverage: at least one scenario, each registered, declaring
+  // the row's kind in its `kinds` (the fired input), with its golden on disk.
+  const covered = (kind: InputKind, cell: string, ids: readonly string[] | undefined): void => {
+    expect(ids, `the ${kind} row's ${cell} cell names at least one scenario`).toBeDefined()
+    expect(ids!.length, `the ${kind} row's ${cell} cell names at least one scenario`).toBeGreaterThan(0)
+    for (const id of ids ?? []) {
       const scenario = byId.get(id)
       expect(scenario, `roster names a registered scenario: ${id}`).toBeDefined()
       expect(scenario!.kinds, `${id} declares the ${kind} input`).toContain(kind)
@@ -2043,6 +2048,21 @@ test("roster: every input kind fired in at least one recorded trace", () => {
       named.add(id)
     }
   }
+  // The engine's table as code: each row's cells must all be covered, and
+  // the roster holds no concern key the row does not (the cast is the two
+  // InputKind unions' agreement — fixture and contract spell the same
+  // eleven kinds — checked at runtime by the key equality below).
+  for (const [kind, row] of Object.entries(TURN_ARBITRATION) as [InputKind, readonly ArbitrationRow[]][]) {
+    for (const cell of row) covered(kind, cell.concern, ROSTER[kind][cell.concern])
+    expect(
+      Object.keys(ROSTER[kind]).filter((key) => key !== "spine").sort(),
+      `the ${kind} row's roster keys are exactly its table cells`,
+    ).toEqual(row.map((cell) => cell.concern).sort())
+  }
+  // The spine's own terminal cells (§4.5's spine rows), beside the table's:
+  // the natural idle settle and the stream-end interruption.
+  covered("idle", "spine", ROSTER.idle.spine)
+  covered("stream-end", "spine", ROSTER["stream-end"].spine)
   expect([...named].sort(), "every recorded scenario is named in the roster at least once").toEqual(
     scenarios.map((scenario) => scenario.id).sort(),
   )
