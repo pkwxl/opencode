@@ -1,10 +1,12 @@
 // Context steps (plans/0055 §4.5): the step-up point, the step walk over
 // the live windows, the resume rule (the step a context size puts a session
-// on), the startup validation that disables unknown or non-growing steps,
-// and the cache-claim check's verdicts (the run state the router service
-// holds; each test reads the fresh instance the preload installed). Pure
-// over a hand-built entry and a limits map — the live half (the steer) is
-// in test/agent-fake.test.ts.
+// on) and the startup validation that disables unknown or non-growing
+// steps. Pure over a hand-built entry and a limits map — the live half (the
+// steer, the late step-up and the cache-claim observation) is the stepUp
+// concern's (src/engine/concerns/step-up.ts, its suite
+// test/turn-step-up.test.ts), and the cache-claim verdict tables are
+// re-homed there with it: the router holds the run state, and the concern
+// is its only consumer.
 import { describe, expect, test } from "bun:test"
 import {
   enabledSteps,
@@ -16,7 +18,6 @@ import {
   STEP_UP_RESERVE_MIN,
 } from "../src/model-step"
 import type { ModelEntry, ModelRegistry } from "../src/models"
-import { services } from "../src/services"
 
 const entry = (fields: Partial<ModelEntry> = {}): ModelEntry => ({ name: "k3", layer: "operator", agent: "opencode", model: "prov/k3-256k", wider: ["prov/k3"], ...fields })
 
@@ -143,29 +144,5 @@ describe("the startup validation (§4.5, §10 item 13)", () => {
   test("only opencode-adapter entries are checked (another agent's windows are its own)", () => {
     const claude = entry({ name: "opus", agent: "claude", model: "opus", wider: ["opus-1m"] })
     expect(stepValidationLines(registry([claude]), new Map())).toEqual([])
-  })
-})
-
-describe("the cache-claim check (§4.5)", () => {
-  test("a large cacheRead confirms, a whole-prefix cacheWrite contradicts, inconclusive tokens say nothing", () => {
-    const router = services().router
-    router.awaitCacheClaim("k3", 60_000)
-    expect(router.observeCacheClaim("k3", { cacheRead: 50_000, cacheWrite: 1_000 })).toBe("confirmed")
-    // The claim is consumed by its first step-finish; re-arming re-checks.
-    expect(router.observeCacheClaim("k3", { cacheRead: 0, cacheWrite: 0 })).toBeUndefined()
-    router.awaitCacheClaim("k3", 60_000)
-    expect(router.observeCacheClaim("k3", { cacheRead: 0, cacheWrite: 55_000 })).toBe("contradiction")
-    router.awaitCacheClaim("k3", 60_000)
-    expect(router.observeCacheClaim("k3", { cacheRead: 100, cacheWrite: 2_000 })).toBeUndefined()
-    // A zero figure at the step-up (nothing measured) is never judged.
-    router.awaitCacheClaim("k3", 0)
-    expect(router.observeCacheClaim("k3", { cacheRead: 0, cacheWrite: 0 })).toBeUndefined()
-  })
-
-  test("the contradiction line is noted once per entry", () => {
-    const router = services().router
-    expect(router.noteClaimContradiction("k3")).toBe(true)
-    expect(router.noteClaimContradiction("k3")).toBe(false)
-    expect(router.noteClaimContradiction("other")).toBe(true)
   })
 })

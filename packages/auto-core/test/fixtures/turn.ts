@@ -15,18 +15,22 @@ import type { Opts } from "../../src/opts"
 import { createServices, type RunServices } from "../../src/services"
 import { parseSwitches, type Switches } from "../../src/switches"
 import type { StuckTracker } from "../../src/stuck"
-import { usageSource } from "../../src/usage"
+import type { Steer } from "../../src/testrun"
+import { usageSource, type UsageSource } from "../../src/usage"
 import { fakeAgent } from "./agent"
 
 // A TurnFx double: every member records and resolves trivially. `steerOk`
-// steers the steer answer and `human` the askHuman answer (undefined = the
-// timeout / closed-channel resolution), so a suite can pin the
-// failure-ignored paths and the human-vs-fallback decisions.
-export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): TurnFx & {
+// steers the steer answer, `human` the askHuman answer (undefined = the
+// timeout / closed-channel resolution) and `limits` the contextLimits map
+// (the measurement points read the model windows off it), so a suite can
+// pin the failure-ignored paths, the human-vs-fallback decisions and the
+// window-dependent figures.
+export const fakeTurnFx = (over: { steerOk?: boolean; human?: string; limits?: ReadonlyMap<string, number> } = {}): TurnFx & {
   calls: string[]
   lines: string[]
   vlogs: string[]
   steers: string[]
+  steerModels: (string | undefined)[]
   models: string[]
   limits: LimitEvent[]
   humanAsks: { timeoutMin: number | undefined; hint: string }[]
@@ -38,6 +42,7 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
   const lines: string[] = []
   const vlogs: string[] = []
   const steers: string[] = []
+  const steerModels: (string | undefined)[] = []
   const models: string[] = []
   const limits: LimitEvent[] = []
   const humanAsks: { timeoutMin: number | undefined; hint: string }[] = []
@@ -52,15 +57,17 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
     lines,
     vlogs,
     steers,
+    steerModels,
     models,
     limits,
     humanAsks,
     questionReplies,
     questionRejects,
     permissionReplies,
-    steer: async (text) => {
+    steer: async (text, model) => {
       rec("steer")
       steers.push(text)
+      steerModels.push(model)
       return over.steerOk ?? true
     },
     replyQuestion: async (request, answers) => {
@@ -81,7 +88,7 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
       humanAsks.push({ timeoutMin, hint })
       return over.human
     },
-    contextLimits: async () => (rec("contextLimits"), new Map<string, number>()),
+    contextLimits: async () => (rec("contextLimits"), over.limits ?? new Map<string, number>()),
     readText: async () => (rec("readText"), ""),
     exists: async () => (rec("exists"), false),
     commitFreeze: async () => (rec("commitFreeze"), { type: "ok" as const }),
@@ -113,8 +120,9 @@ export const fakeTurnFx = (over: { steerOk?: boolean; human?: string } = {}): Tu
 // agent, with the pieces a concern may read (the run options, the retry
 // policy, the stuck tracker, the switches, the services — the windows concern
 // reads the run's router; the pattern classifier, the failure-message
-// classifier's handle and the steer context — the recovery concern's reads)
-// injectable.
+// classifier's handle and the steer context — the recovery concern's reads;
+// the ondemand handover steer and the usage source — the usage concern's
+// reads) injectable.
 export const turnContext = (
   over: {
     client?: AgentClient
@@ -126,6 +134,8 @@ export const turnContext = (
     classify?: (info: ErrorInfo) => ErrorClass
     classifier?: Classifier
     steerContext?: SteerContext
+    steer?: Steer
+    source?: UsageSource
   } = {},
 ): TurnContext => ({
   client: over.client ?? fakeAgent().client,
@@ -134,12 +144,13 @@ export const turnContext = (
   switches: over.switches ?? parseSwitches({}),
   policy: over.policy ?? { backoffCapMs: 60_000, silenceBudgetMs: 60_000, honorsRetryAfter: false, waitsOutLimit: false },
   classify: over.classify ?? (() => "unknown"),
-  source: usageSource("events"),
+  source: over.source ?? usageSource("events"),
   services: over.services ?? createServices(),
   startTime: 0,
   ...(over.stuck !== undefined ? { stuck: over.stuck } : {}),
   ...(over.classifier !== undefined ? { classifier: over.classifier } : {}),
   ...(over.steerContext !== undefined ? { steerContext: over.steerContext } : {}),
+  ...(over.steer !== undefined ? { steer: over.steer } : {}),
 })
 
 // A view carrying only the slices a driven concern reads (a suite drives one

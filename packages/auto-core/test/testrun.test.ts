@@ -14,11 +14,9 @@ import { saveHandover } from "../src/handover"
 import { planOf } from "./fixtures/units"
 import {
   cleanTestHandoffs,
-  fillUsageNote,
   handoffSteer,
   resolveTestScript,
   restoreTestHandoffs,
-  steerWall,
 } from "../src/testrun"
 import { sessionHandoverDue, testHandoverDue } from "../src/usage"
 import { task } from "./fixtures/runner"
@@ -45,39 +43,12 @@ describe("handoffSteer / sessionHandoverDue (OPENCODE_AUTO_STEER wiring)", () =>
     expect(steer.notes[1]!.text).toContain("Status: continue")
   })
 
-  test("fillUsageNote: the figure slots become the formatted figures", () => {
-    const text = fillUsageNote("[DRIVER] context: {{used}} — {{pct}}% of the budget (wall {{wall}})", 60_000, 80_000)
-    expect(text).toBe("[DRIVER] context: 60.0k — 75% of the budget (wall 80.0k)")
-  })
-
-  test("steerWall: the budget clamped to 80% of the window when that is smaller; an unknown window keeps the budget", () => {
-    expect(steerWall(128_000, undefined)).toBe(128_000)
-    expect(steerWall(128_000, 200_000)).toBe(128_000)
-    expect(steerWall(128_000, 100_000)).toBe(80_000)
-  })
-
-  // min(max(2×cap, window/4), 80% of the window) (plans/0059 D6).
-  test("steerWall: a large window raises the wall to a quarter of it; up to 512k at the default cap nothing changes", () => {
-    // The default cap (64k → a 128k budget) over the windows in use.
-    const table: [number, number][] = [
-      [100_000, 80_000],
-      [128_000, 102_400],
-      [200_000, 128_000],
-      [512_000, 128_000],
-      [1_000_000, 250_000],
-      [2_000_000, 500_000],
-    ]
-    for (const [window, wall] of table) expect(steerWall(128_000, window)).toBe(wall)
-    // The floor lifts a small budget on any window it undercuts; the ceiling
-    // still wins over both.
-    expect(steerWall(64_000, 400_000)).toBe(100_000)
-    expect(steerWall(500, 100_000)).toBe(25_000)
-    expect(steerWall(2_000_000, 1_000_000)).toBe(800_000)
-    // A budget above the floor is kept as it is.
-    expect(steerWall(300_000, 1_000_000)).toBe(300_000)
-    // An unknown window: the budget, whatever its size.
-    expect(steerWall(500, undefined)).toBe(500)
-  })
+  // The steerWall and fillUsageNote tables are re-homed into the usage
+  // concern's suite (test/turn-usage.test.ts) since the concern was
+  // extracted: watch's measurement cell was their only consumer, and the
+  // policies are pinned beside the cells that apply them. handoffSteer
+  // (the steer's construction from the task) is execute's, and its cases
+  // stay here.
 
   test("steer=off: no handover steer built (no handover hint injected into the session)", () => {
     expect(handoffSteer(false, cap, task)).toBeUndefined()

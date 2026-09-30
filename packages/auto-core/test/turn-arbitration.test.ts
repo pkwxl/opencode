@@ -14,6 +14,7 @@ import type { AgentEvent } from "../src/agent/types"
 import type { Advice, Concern, SliceKey, TurnContext, TurnFx, TurnState } from "../src/engine/contract"
 import { makeLivenessConcern } from "../src/engine/concerns/liveness"
 import { makeRecoveryConcern } from "../src/engine/concerns/recovery"
+import { makeStepUpConcern } from "../src/engine/concerns/step-up"
 import { runTurn, slicesDelegatedTo, SLICE_KEYS, TURN_ARBITRATION, type ConcernRoster, type TurnSources } from "../src/engine/spine"
 import { createServices } from "../src/services"
 import { parseSwitches } from "../src/switches"
@@ -286,31 +287,25 @@ describe("the queue discipline's terminal settles", () => {
 })
 
 describe("the remainder layer's owned slices", () => {
-  // The not-yet-extracted slices' initial values, as the real install reads
-  // them (turnConcerns hands the objects back through the roster's
-  // initials). The recovery and liveness concerns are the real factories
-  // over inert deps — the ratchet reads handle identity, which each
-  // factory's own handle provides.
+  // The not-yet-extracted slice's initial value, as the real install reads
+  // it (turnConcerns hands the object back through the roster's initial).
+  // The recovery, liveness and stepUp concerns are the real factories over
+  // inert deps — the ratchet reads handle identity, which each factory's
+  // own handle provides.
   const remainderState = (): RemainderState => ({
-    usage: { pct: 0, used: 0, hinted: false, notes: new Set<number>() },
-    stepUp: { step: 0 },
     test: { handover: false, asked: false, retried: false },
   })
   const recoveryConcern = (): Concern<"recovery"> => makeRecoveryConcern({ answerWith: () => {}, extended: {} })
   const livenessConcern = (): Concern<"liveness"> => makeLivenessConcern({ extended: {} })
+  const stepUpConcern = (): Concern<"stepUp"> => makeStepUpConcern({ live: {} })
 
   test("the install delegates exactly the not-yet-extracted slices to the one remainder handle (the shrink ratchet)", () => {
-    // The real install (watch's turnConcerns): guard, transcript, windows,
-    // stuck, questions, failure, recovery and liveness hold their own
-    // concerns; the three not-yet-extracted slices share the one remainder
-    // handle. Each extraction unit shrinks this list, and the layer's
-    // removal empties it.
+    // The real install (watch's turnConcerns): every concern but the test
+    // slice's holds its own; the one not-yet-extracted slice shares the
+    // remainder handle. Each extraction unit shrinks this list, and the
+    // layer's removal empties it.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    expect(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessConcern()), handle)).toEqual([
-      "usage",
-      "stepUp",
-      "test",
-    ])
+    expect(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessConcern(), stepUpConcern()), handle)).toEqual(["test"])
   })
 
   test("the remainder serves exactly the input kinds whose row still holds a not-yet-extracted cell", () => {
@@ -318,13 +313,16 @@ describe("the remainder layer's owned slices", () => {
     // map itself is a watch() local — its handlers close over the turn's
     // state); pinned here against the table and the install's delegation set,
     // not a hand-written list — limit belongs to the windows concern alone,
-    // question and permission to the questions concern, answer to the
-    // recovery concern, probe to the liveness concern, stream-end to the
+    // part to the stepUp, transcript and stuck concerns, message to the
+    // usage and stepUp concerns, question and permission to the questions
+    // concern, error to the failure and stepUp concerns, retry to the
+    // failure, recovery, stepUp, liveness and transcript concerns, answer to
+    // the recovery concern, probe to the liveness concern, stream-end to the
     // spine's own terminal. That the dispatch reaches each handler is pinned
     // by the turn-trace suite's roster case, which fires every arbitration
     // cell through watch's real install.
     const handle: Concern<SliceKey>["handle"] = async () => "consumed"
-    const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessConcern()), handle))
+    const remainder = new Set(slicesDelegatedTo(turnConcerns(remainderState(), handle, recoveryConcern(), livenessConcern(), stepUpConcern()), handle))
     // The cast is the assertion's own claim: the table-derived kinds are the
     // kinds the remainder serves (the equality below checks it at runtime).
     const served = INPUT_KINDS.filter((kind) => TURN_ARBITRATION[kind].some((cell) => remainder.has(cell.concern))) as (typeof HANDLER_KINDS)[number][]

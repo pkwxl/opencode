@@ -15,9 +15,9 @@
 // The turn runs on the engine (plans/0061 §4.2–§4.4): watch() builds the
 // TurnContext from its parameters, installs the concern roster — the
 // extracted concerns in src/engine/concerns/ (guard, transcript, windows,
-// stuck, questions, failure, recovery, liveness; each owning its slice's
-// construction) beside the one `remainder` concern that still holds the
-// not-yet-extracted turn code — and hands the stream to the spine
+// stuck, questions, failure, recovery, liveness, usage, stepUp; each owning
+// its slice's construction) beside the one `remainder` concern that still
+// holds the not-yet-extracted turn code — and hands the stream to the spine
 // (src/engine/spine.ts), which owns the input queue, the arbitration
 // dispatch, the fx audit and the trip-wired stream wrapper. The remainder
 // serves the input kinds whose arbitration row still holds one of its cells:
@@ -29,7 +29,9 @@
 // the questions' question and permission rows, the failure's error
 // accumulation, the recovery's classifier consult and verdicts, the
 // liveness's probe verdicts, announced silence, truncation continuation and
-// interrupted close-out). The settle procedure's steps are the concerns'
+// interrupted close-out, the usage concern's measurement, wall and notice
+// steers, the stepUp concern's step-ups, late step-ups and cache-claim
+// observation). The settle procedure's steps are the concerns'
 // own finalize functions: the liveness concern's holds the interrupted
 // close-out (aborting the orphan turn and extending the failure record),
 // the recovery concern's the raised settle's abort and the final
@@ -52,21 +54,23 @@ import { guardConcern } from "./engine/concerns/guard"
 import { makeLivenessConcern } from "./engine/concerns/liveness"
 import { questionsConcern } from "./engine/concerns/questions"
 import { makeRecoveryConcern, resetFields } from "./engine/concerns/recovery"
+import { makeStepUpConcern } from "./engine/concerns/step-up"
 import { stuckConcern } from "./engine/concerns/stuck"
 import { transcriptConcern } from "./engine/concerns/transcript"
+import { usageConcern } from "./engine/concerns/usage"
 import { windowsConcern } from "./engine/concerns/windows"
 import { makeTurnFx } from "./engine/fx"
 import { makeTurnSources } from "./engine/sources"
 import { runTurn, TURN_ARBITRATION, type ConcernRoster } from "./engine/spine"
 import type { Opts } from "./opts"
-import { renderStepUp, renderTestWrapup, renderTestResult } from "./prompt"
+import { renderTestWrapup, renderTestResult } from "./prompt"
 import { formatTokens } from "./session-api"
-import { enabledSteps, stepId, stepUpPoint, type SteerContext } from "./model-step"
+import type { SteerContext } from "./model-step"
 import { services } from "./services"
 import type { StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
-import { fillUsageNote, steerWall, type Steer, type TestRun } from "./testrun"
-import { steerDue, testHandoverDue, liveUsage, usageSource } from "./usage"
+import type { Steer, TestRun } from "./testrun"
+import { testHandoverDue, usageSource } from "./usage"
 
 // The per-input handler map (plans/0061 §4.5): one handler per input kind the
 // remainder still serves. An `event` input keys on its event's own type (the
@@ -80,19 +84,16 @@ type KindHandler<K extends InputKind> = (input: KindInput<K>, fx: TurnFx, view: 
 
 // The input kinds the remainder still serves — those whose arbitration row
 // holds a not-yet-extracted cell (limit belongs to the windows concern alone,
-// question and permission to the questions concern, answer to the recovery
-// concern, probe to the liveness concern, stream-end to the spine's own
-// terminal). The arbitration suite derives the same set from the table and
-// the install's delegation set and pins this list to it. The map cannot
-// drift from the list: HandlerMap is a total record over ServedKind, so a
-// missing handler is a type error and an extra one an excess-property error.
-export const HANDLER_KINDS = [
-  "part",
-  "message",
-  "error",
-  "retry",
-  "idle",
-] as const satisfies readonly InputKind[]
+// part to the stepUp, transcript and stuck concerns, message to the usage and
+// stepUp concerns, question and permission to the questions concern, error to
+// the failure and stepUp concerns, retry to the failure, recovery, stepUp,
+// liveness and transcript concerns, answer to the recovery concern, probe to
+// the liveness concern, stream-end to the spine's own terminal). The
+// arbitration suite derives the same set from the table and the install's
+// delegation set and pins this list to it. The map cannot drift from the
+// list: HandlerMap is a total record over ServedKind, so a missing handler is
+// a type error and an extra one an excess-property error.
+export const HANDLER_KINDS = ["idle"] as const satisfies readonly InputKind[]
 type ServedKind = (typeof HANDLER_KINDS)[number]
 type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 
@@ -101,11 +102,14 @@ type HandlerMap = { [K in ServedKind]: KindHandler<K> }
 // its removal. Typed as the union's source of truth — the install below and
 // the cell routing both read it, so a stale entry is a type error, not a
 // silent mis-route.
-export const REMAINDER_KEYS = ["usage", "stepUp", "test"] as const satisfies readonly SliceKey[]
+export const REMAINDER_KEYS = ["test"] as const satisfies readonly SliceKey[]
 export type RemainderKey = (typeof REMAINDER_KEYS)[number]
-// The remainder's slices, pre-created by watch() (the extracted concerns own
-// their slices' construction in their own files): the fx's steer-model getter
-// and the settle→Watch mapping close over these live objects.
+// The remainder's slice, pre-created by watch() (the extracted concerns own
+// their slices' construction in their own files): the idle handler closes
+// over the same live object the roster's initial hands back. The fx's
+// steer-model getter reaches the stepUp slice through the concern's live
+// cell (the fx is built before the spine creates the slices); the
+// settle→Watch mapping reads every slice through the view.
 export type RemainderState = { readonly [K in RemainderKey]: TurnState[K] }
 
 // The turn's concern install: the extracted concerns from their files, the
@@ -123,6 +127,7 @@ export const turnConcerns = (
   handle: Concern<SliceKey>["handle"],
   recovery: Concern<"recovery">,
   liveness: Concern<"liveness">,
+  stepUp: Concern<"stepUp">,
 ): ConcernRoster => ({
   guard: guardConcern,
   transcript: transcriptConcern,
@@ -132,8 +137,8 @@ export const turnConcerns = (
   failure: failureConcern,
   recovery,
   liveness,
-  usage: { name: "usage", initial: () => state.usage, handle },
-  stepUp: { name: "stepUp", initial: () => state.stepUp, handle },
+  usage: usageConcern,
+  stepUp,
   test: { name: "test", initial: () => state.test, handle },
 })
 
@@ -175,19 +180,19 @@ export async function watch(
   // The run's services (the installed holder): every time read and every
   // timer of this turn goes through its clock — a run on a steered clock
   // observes a steered timeline, and the engine never reads the wall clock
-  // behind the services' back. The router holds the run-wide decision state
-  // (the logged usage windows and the model-step cache-claim checks); the git
-  // service sits behind the fx's commitFreeze.
+  // behind the services' back. The router (the logged usage windows, the
+  // classifier's cache, the model-step cache-claim checks) and the git
+  // service behind the fx's commitFreeze ride the context to the concerns
+  // and the fx.
   const svcs = services()
   const clock = svcs.clock
-  const router = svcs.router
   // Session start timestamp, for computing duration.
   const startTime = clock.now()
   // The figure comes from the usage source of the adapter's tier (plans/0038):
   // the spine feeds it every event of this session (the old loop's
-  // source.observe), the body reads its used() at the measurement points.
-  const tier = client.capabilities.usage
-  const source = usageSource(tier)
+  // source.observe), the usage concern reads its used() at the measurement
+  // points and the test protocol's handover decision at idle.
+  const source = usageSource(client.capabilities.usage)
   // The agent's retry policy (plans/0057 §4): the adapter's record with the
   // registry entry's override. Every pattern verdict below reads the rate
   // threshold from it — a rate signal is the rate class once the agent gave
@@ -221,24 +226,25 @@ export async function watch(
     startTime,
   }
 
-  // The not-yet-extracted slices (plans/0061 §4.3/§4.11), pre-created here so
-  // the fx's steer-model getter and the settle→Watch mapping below hold the
-  // same live objects the roster's initials hand back; the body reads and
-  // writes them through these aliases exactly where the locals stood. The
-  // extracted concerns' slices (guard, transcript, windows, stuck, questions,
-  // failure, recovery, liveness) are built by their own initials inside the
-  // spine and read through the view.
+  // The not-yet-extracted slice (plans/0061 §4.3/§4.11), pre-created here so
+  // the idle handler below holds the same live object the roster's initial
+  // hands back; the body reads and writes it through the alias exactly where
+  // the local stood. The extracted concerns' slices (guard, transcript,
+  // windows, stuck, questions, failure, recovery, liveness, usage, stepUp)
+  // are built by their own initials inside the spine and read through the
+  // view.
   const remainderState: RemainderState = {
-    usage: { pct: 100, used: 0, hinted: false, notes: new Set<number>() },
-    stepUp: { model: steerContext?.model, step: steerContext?.step ?? 0 },
     test: { handover: false, asked: test?.resumeWrapup === true, retried: false },
   }
-  const { usage, test: testState } = remainderState
-  // The context-step slice (the old steerModel/stepNow/reached locals).
-  const steps = remainderState.stepUp
+  const testState = remainderState.test
 
+  // The stepUp concern's live-slice cell: the fx's steer default (the
+  // reached context step's id, the stepUp slice's model field) is wired over
+  // it below — the fx is built before the spine creates the slices, and the
+  // concern's initial parks the slice it builds in the cell.
+  const stepUpLive: { slice?: TurnState["stepUp"] } = {}
   const sources = makeTurnSources(ctx)
-  const fx = makeTurnFx({ ctx, steerModel: () => steps.model, onModel, onLimit })
+  const fx = makeTurnFx({ ctx, steerModel: () => stepUpLive.slice?.model, onModel, onLimit })
 
   // The settle procedure's channel for the interrupted close-out's failure
   // record (both concerns' deps name the discipline): the liveness concern's
@@ -247,6 +253,7 @@ export async function watch(
   const extended: { error?: string; info?: ErrorInfo } = {}
   const recovery = makeRecoveryConcern({ answerWith: sources.answerWith, extended })
   const liveness = makeLivenessConcern({ extended })
+  const stepUp = makeStepUpConcern({ live: stepUpLive })
   // Turn snapshot (STATS_PLAN §2): every exit of watch carries durationMs +
   // usage + resolves uniformly, including the early-settling error/blocked
   // exits — consumption and proxy answers really happened, they are not lost.
@@ -277,54 +284,6 @@ export async function watch(
     return { settle: { kind: "blocked", question } }
   }
 
-  // —— Context steps (plans/0055 §4.5) ——
-  // The step-up itself, at the measurement point that crossed the current
-  // step's step-up point: steer the same session with the next step's id and
-  // the one-line note, record the reached step, and arm the cache-claim
-  // check on the wider id. Without the steer capability the note cannot be
-  // delivered mid-session; the step still takes effect — the chain's record
-  // makes the next prompt into this session name the next id (§4.5). The
-  // slice's step moves one-way, up only; reached records the change and the
-  // snapshot carries it to attempt for writing back to the chain.
-  const stepUp = async (fx: TurnFx, usedNow: number): Promise<void> => {
-    const entry = steerContext?.entry
-    if (entry === undefined || steerContext === undefined) return
-    const nextId = stepId(entry, steps.step + 1)
-    const fromId = stepId(entry, steps.step)
-    if (nextId === undefined || fromId === undefined) return
-    // The step is recorded before the steer goes out: the steer itself names
-    // the next id (that is how the session moves), and a failed dispatch
-    // still leaves the record — the next prompt into this session names the
-    // id, exactly as without the steer capability.
-    steps.step += 1
-    steps.model = nextId
-    steps.reached = { step: steps.step, model: nextId }
-    fx.log(`⇡ ${steerContext.label} context ${formatTokens(usedNow)} reached the step-up point of ${steerContext.name} (${fromId}); continuing the same session on ${nextId}`)
-    if (client.capabilities.steer) {
-      const ok = await fx.steer(renderStepUp({ from: fromId, next: nextId }))
-      if (ok) router.awaitCacheClaim(steerContext.name, usedNow)
-    } else {
-      fx.log(`⇡ ${steerContext.label} the agent takes no mid-turn steers; the next prompt into this session names ${nextId}`)
-    }
-  }
-  // Late step-up (§4.5, §7's overflow exception): the agent compacted before
-  // the step-up steer could land — an overflow error below the top step. No
-  // steer (the compaction already shrank the context); the reached step is
-  // recorded so the next prompt into this session names the next id. Every
-  // other overflow stays with the handover mechanism.
-  const stepLate = async (fx: TurnFx): Promise<void> => {
-    const entry = steerContext?.entry
-    if (entry === undefined || steerContext === undefined) return
-    const limits = await fx.contextLimits()
-    if (steps.step + 1 >= enabledSteps(entry, limits)) return
-    const nextId = stepId(entry, steps.step + 1)
-    const fromId = stepId(entry, steps.step)
-    if (nextId === undefined || fromId === undefined) return
-    fx.log(`⇡ ${steerContext.label} step-up late: the agent compacted the session (overflow on ${fromId}) before the step-up steer could land; the next prompt into this session names ${nextId}`)
-    steps.step += 1
-    steps.model = nextId
-    steps.reached = { step: steps.step, model: nextId }
-  }
   // --test-by-driver test execution protocol: when the session goes idle,
   // check tmp/test.sh (the request marker, holding a script path under test/
   // or an inline script) → run that script → steer the result back into this
@@ -455,7 +414,9 @@ export async function watch(
   // questions' question and permission rows, the failure's error
   // accumulation, the recovery's classifier consult and verdicts, the
   // liveness's probe verdicts, announced silence and truncation
-  // continuation) — in its arbitration row's order, and reads/writes its own
+  // continuation, the usage concern's measurement, wall and notice steers,
+  // the stepUp concern's step-ups, late step-ups and cache-claim
+  // observation) — in its arbitration row's order, and reads/writes its own
   // slices through the closure aliases exactly where the branch did; other
   // concerns' slices are read through the view. The handler runs at the row's
   // first remainder cell and answers for the whole contiguous segment. ——
@@ -469,150 +430,14 @@ export async function watch(
     // undecided failure, raises the class as a held settle that preempts the
     // event wait). They run beside an in-flight fx call, so slice writes and
     // log/vlog only — the audit's (c); a settle returned there is held to
-    // the next boundary.
+    // the next boundary. The part, message, error and retry rows are the
+    // extracted concerns' alone in the same way (the stepUp cell of each
+    // row was the remainder's last held segment); a question or permission
+    // is the questions concern's row alone, and stream-end the spine's own
+    // terminal.
     // —— Event inputs: one event of the agent's stream. The session filter
     // and the usage source's observe are the spine's (they preceded every
     // branch of the old loop). ——
-    // A part of the agent's output (row: guard → failure → liveness → stepUp
-    // → transcript → stuck; the failure and liveness cells are the concerns',
-    // the remainder owns the stepUp cell — the cache-claim check).
-    part: async (input, fx) => {
-      const part = input.event.part
-      // The liveness concern's cell before this segment cleared any
-      // announced silence (the agent produced output again) and recorded a
-      // step-finish's reason. Cache-claim check (§4.5): `wider` asserts the
-      // step ids share the base id's prompt cache; the first step-finish
-      // after a step-up shows whether it holds (a large cacheRead confirms
-      // it, a cacheWrite of the whole prefix contradicts it). The
-      // contradiction line fires once per entry.
-      if (part.kind === "step-finish" && steerContext?.entry !== undefined) {
-        const verdict = router.observeCacheClaim(steerContext.name, part.tokens)
-        if (verdict === "confirmed") {
-          fx.vlog(`✓ ${steerContext.name}: the wider step read ${formatTokens(part.tokens.cacheRead)} tokens from the shared prompt cache`)
-        } else if (verdict === "contradiction" && router.noteClaimContradiction(steerContext.name)) {
-          fx.log(
-            `⚠ ${steerContext.name}: the first step on the wider id wrote ${formatTokens(part.tokens.cacheWrite)} tokens of cache and read ${formatTokens(part.tokens.cacheRead)} — ` +
-              `the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids`,
-          )
-        }
-      }
-      // The transcript concern's cell follows (the billing dedup, the echo
-      // and the fresh flag), then the stuck concern's — this segment never
-      // stops the input, so the row carries on.
-      return "pass"
-    },
-    // A message of the session (row: guard → transcript → usage → stepUp;
-    // the remainder owns the last two cells). The transcript concern's cell
-    // before it stopped everything but a new completed assistant message.
-    message: async (input, fx) => {
-      const info = input.event.message
-      // Measurement point: the usage source already took this message in
-      // (events/reported: its own figure; estimated: the running estimate).
-      // An unknown figure (none, or none measured yet) changes nothing.
-      const now = source.used()
-      if (now === undefined) return "consumed"
-      const limits = await fx.contextLimits()
-      usage.used = now
-      // A message that names no model (claude's synthetic API-error message,
-      // plans/0057 F21) ran under the window already in effect.
-      usage.limit = info.model !== undefined ? limits.get(info.model) : usage.limit
-      usage.pct = usage.limit ? Math.round((usage.used / usage.limit) * 100) : 100
-      fx.vlog(`  context: ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)}` : ""} tokens${usage.limit ? ` (${usage.pct}%)` : ""}`)
-      if (steer) {
-        // Effective wall (plans/0056, plans/0059 D6): the 2×cap budget, raised
-        // to a quarter of a large model window and clamped to 80% of any
-        // window — the hard-wall hint must leave room to write the handover
-        // document. Recomputed per measurement, so a mid-session model step-up
-        // widens it naturally.
-        const wall = steerWall(steer.limit, usage.limit)
-        usage.wall = wall
-        if (!usage.hinted && steerDue(tier, now, wall)) {
-          // The hard wall supersedes the notice bands (a jump may cross both):
-          // one steer, and the bands count as spent.
-          usage.hinted = true
-          for (const note of steer.notes) usage.notes.add(note.at)
-          fx.log(`⚠ context used ${formatTokens(usage.used)} tokens reached the wall ${formatTokens(wall)}; inserting the handover hint`)
-          const ok = await fx.steer(steer.text)
-          if (!ok) return blockedAdvice("steer dispatch failed (handover hint); cannot continue the session, see the log.")
-          // The handover hint owns this measurement point: the session is being
-          // wound down by the project's cap, so a step-up steer in the same
-          // breath would only confuse it. A session that keeps working past the
-          // hint steps up at a later measurement (hinted stays true).
-          // AUTO-RESOLVE: when one measurement crosses both the wall and a step-up point, which steer goes out? -> the handover hint (the wall is the operator's policy for ending the session, and the design keeps the two mechanisms independent without ordering them; a session that survives the hint still steps up at its next measurement)
-          return "consumed"
-        }
-        // Milestone usage notices (plans/0056): informational steers, the
-        // session decides when to hand over. One steer per measurement point —
-        // the highest band newly crossed; lower bands crossed by the same jump
-        // are spent with it. Notices do not suppress the step-up check below.
-        let fire: Steer["notes"][number] | undefined
-        for (const note of steer.notes) {
-          if (now < note.at * wall) break
-          if (!usage.notes.has(note.at)) fire = note
-        }
-        if (fire) {
-          for (const note of steer.notes) if (note.at <= fire.at) usage.notes.add(note.at)
-          fx.log(`• context used ${formatTokens(usage.used)} tokens (${Math.round((usage.used / wall) * 100)}% of the wall ${formatTokens(wall)}); steering a usage notice`)
-          const ok = await fx.steer(fillUsageNote(fire.text, now, wall))
-          if (!ok) return blockedAdvice("steer dispatch failed (usage notice); cannot continue the session, see the log.")
-        }
-      }
-      // Context steps (§4.5): a live figure that crossed the current step's
-      // step-up point steps the same session up in place — steer the next
-      // step's id, keep it for the rest of the session. The condition itself
-      // is the re-arm: after a step-up the next step's point sits above the
-      // current figure, so the next steer happens at its own boundary.
-      if (steerContext?.entry !== undefined && liveUsage(tier)) {
-        const entry = steerContext.entry
-        if (steps.step + 1 < enabledSteps(entry, limits)) {
-          const window = limits.get(stepId(entry, steps.step)!)
-          if (window !== undefined && now >= stepUpPoint(window)) await stepUp(fx, now)
-        }
-      }
-      return "consumed"
-    },
-    // A question or permission of the session is the questions concern's row
-    // alone (src/engine/concerns/questions.ts): every question path (the
-    // plan-session human policy, --wait-answer with its fallback auto-answer,
-    // the default permission-question block, the dryrun preflight) and every
-    // permission mode (the dryrun deny, auto-allow, the ask-* triad).
-    // A session error (row: guard → failure → stepUp; the failure cell is
-    // the concern's, the remainder owns the last cell).
-    error: async (input, fx, view) => {
-      // The failure concern's cell before this segment accumulated the error
-      // text, the retryable pessimism and the ErrorInfo (the limit statement
-      // laid over); this cell only reads the folded info.
-      // Late step-up (§4.5, §7): an overflow below the top step means the
-      // agent compacted before the step-up steer could land — record the
-      // next step and go on observing (the compacted session continues).
-      if (classify(view.failure.info ?? {}) === "overflow") await stepLate(fx)
-      return "consumed"
-    },
-    // A request retry (row: guard → failure → recovery → stepUp → liveness →
-    // transcript; the failure, recovery and liveness cells are the concerns'
-    // — the failure concern accumulated the signal into the info, the
-    // recovery concern consulted the classifier and settled the turn for the
-    // classes that cure only by moving, the liveness concern opens the
-    // announced-silence window — the remainder owns the stepUp cell). B.4
-    // the two signals unified / D.2 trigger surfaces 2 and 3, 0037 D4: the
-    // server itself is retrying a failed provider request. The id-carrying
-    // form comes from a retry part (self-contained structured ApiError), the
-    // id-less form from session.status retry (message/attempt/next, next
-    // being the wait until the next attempt — turning "still 40 minutes to
-    // wait" into an active decision; old servers may lack fields). The
-    // classes that observe on reach this segment: overflow/transient/unknown
-    // accumulate without settling, and observation continues (not treated as
-    // idle).
-    retry: async (_input, fx, view) => {
-      // The same overflow read from the retry surface (the agent retried the
-      // request that overflowed before compacting): the late step-up applies
-      // here exactly as at the session-error handler above.
-      // AUTO-DECISION: the read is the patterns' own classification, not a verdict channelled from the recovery cell (the consult's verdict is overflow exactly when the patterns' read is — an answer never raises to overflow, the reply's class union has none — so re-deriving the pattern read needs no channel and no second consult).
-      if (classify(view.failure.info ?? {}) === "overflow") await stepLate(fx)
-      // The liveness concern's cell follows with the announced silence, then
-      // the transcript concern's with the deduplicated retry vlog.
-      return "pass"
-    },
     // The session gone idle (row: guard → test → liveness → the spine's own
     // natural terminal; the remainder owns the test cell). The guard
     // concern's cell before it stopped the second idle of a twin.
@@ -658,7 +483,7 @@ export async function watch(
     return handler(input, fx, view)
   }
 
-  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle, recovery, liveness), fx, attach: sources.attach })
+  const { settle, view } = await runTurn({ ctx, stream, concerns: turnConcerns(remainderState, handle, recovery, liveness, stepUp), fx, attach: sources.attach })
 
   // —— Mapping the settle back to the Watch result each old exit returned ——
   // The settle procedure's steps already ran inside the spine (its finalize

@@ -179,16 +179,21 @@ const CLASSIFIED: Record<string, Domain> = {
     // loop hint), questions (the question and permission rows), failure (the
     // error accumulator with its limit-statement helpers), recovery (the
     // failure-message classifier's turn: the consult, the pattern verdicts,
-    // the raised settle, the final classification and the reset fields) and
+    // the raised settle, the final classification and the reset fields),
     // liveness (the probe verdicts, the announced silence, the truncation
-    // continuation and the interrupted close-out). Each owns one slice of
-    // the turn state and reaches only the contract's types plus the
-    // unranked leaves below the session layer (session-api's describePart
-    // and isApproval, the stuck-hint template render and the detector's
-    // constants, unit-commit's autoAnswer, resolve's sameIssue/compactText,
-    // chain's statedInWording and agentGaveUp, classify's ask and merge
-    // policies, the router's answer type, log's formatDuration); watch
-    // installs them beside the remainder.
+    // continuation and the interrupted close-out), usage (the measurement
+    // point: the wall, the notice bands, the hard wall) and stepUp (the
+    // context steps' live half: the step-up, the late step-up, the
+    // cache-claim observation). Each owns one slice of the turn state and
+    // reaches only the contract's types plus the unranked leaves below the
+    // session layer (session-api's describePart, isApproval and
+    // formatTokens, the stuck-hint and step-up template renders and the
+    // detector's constants, unit-commit's autoAnswer, resolve's
+    // sameIssue/compactText, chain's statedInWording and agentGaveUp,
+    // classify's ask and merge policies, the router's answer type and
+    // cache-claim service, log's formatDuration, testrun's steer helpers,
+    // usage's tier rules, model-step's pure step walk); watch installs them
+    // beside the remainder.
     "engine/concerns/guard": "driver",
     "engine/concerns/windows": "driver",
     "engine/concerns/transcript": "driver",
@@ -197,6 +202,8 @@ const CLASSIFIED: Record<string, Domain> = {
     "engine/concerns/failure": "driver",
     "engine/concerns/recovery": "driver",
     "engine/concerns/liveness": "driver",
+    "engine/concerns/usage": "driver",
+    "engine/concerns/step-up": "driver",
     "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -383,13 +390,15 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     "engine/concerns/failure": 12,
     "engine/concerns/recovery": 13,
     "engine/concerns/liveness": 14,
-    watch: 15,
-    attempt: 16,
-    session: 17,
-    artifact: 18,
-    "exec-session": 18,
-    execute: 19,
-    runner: 20,
+    "engine/concerns/usage": 15,
+    "engine/concerns/step-up": 16,
+    watch: 17,
+    attempt: 18,
+    session: 19,
+    artifact: 20,
+    "exec-session": 20,
+    execute: 21,
+    runner: 22,
   }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
