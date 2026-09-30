@@ -93,6 +93,10 @@ Unit and outcome states:
 |---|---|---|
 | 会话 | session | An AI session; never "conversation" or "chat" |
 | 会话驱动 | session driving | `runner` → `execute` → `exec-session` → `session` → `attempt` → `watch` |
+| 回合 | turn | One `watch()` drive of a live session — the turn engine's unit of work (`src/engine/`, 0061) |
+| 回合主干 | turn spine | `src/engine/spine.ts` (0061): one turn's single input queue — external and synthetic inputs run one at a time through the arbitration table over the concern slices, with the fx audit and the finalize procedure |
+| 关注点 | concern | One file per concern, `src/engine/concerns/` (0061): owns exactly one `TurnState` slice and its cells in the arbitration table (guard, transcript, windows, stuck, questions, failure, recovery, liveness, usage, stepUp, test) |
+| 仲裁表 | arbitration table | The spine's declared input → concern rows, one per input kind, run top to bottom (`test/turn-arbitration.test.ts` checks its shape, 0061 §4.5) |
 | 理解 | understand | Merged into the decompose session |
 | 分解 | decompose (noun: decomposition) | `decompose*.md` |
 | 整体执行 | whole-task session | `whole.md`: a task run without subtasks |
@@ -280,6 +284,7 @@ Unit and outcome states:
 | 退出码 | exit code | 0 / 1 / 2 / 130 |
 | 人工介入 | human attention | |
 | 预检 | preflight | `src/loop-preflight.ts` |
+| 运行服务 | run services | `RunServices` (`src/services.ts`, 0061): the run's one service holder — the clock, the router, the control and the git service — built by preflight and installed by `runAll`; the ambient `services()` accessor's callers are held in `SERVICE_ENTRIES` (may only shrink) |
 | 空跑 | dryrun | |
 | 步进模式 | step mode | `OPENCODE_AUTO_STEP` |
 | 安全边界、步进边界 | safe boundary | Phase / task / subtask boundary; for `/exit` also the wait-and-probe loop's sleep (`plans/0057` §6) |
