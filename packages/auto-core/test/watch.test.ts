@@ -9,11 +9,17 @@
 // value is the direct exit surface of watch's classification marks (P3).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18,
 // pure move).
+// The test-handover describe that used to close this file (the freeze steer
+// seeding resumeWrapup, the forked instance verifying the document) was
+// re-homed into the test concern's suite (test/turn-test-protocol.test.ts)
+// when the concern was extracted; the protocol's end-to-end exits stay
+// byte-pinned by the trace oracle's test-protocol repo family
+// (test/turn-trace.test.ts).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
 import { attempt } from "../src/attempt"
@@ -23,7 +29,6 @@ import { resolvesOf } from "../src/resolve"
 import { runSession } from "../src/session"
 import { flushStats, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
-import type { TestRun } from "../src/testrun"
 import { autoAnswer } from "../src/unit-commit"
 import { noCommitGit } from "../src/git-ops"
 import { task, fakeClient, freshRepo, sseClient } from "./fixtures/runner"
@@ -845,106 +850,5 @@ describe("truncated-output resume (a step ending with length is not a natural fi
     expect(result.type).toBe("blocked")
     expect((result as { question: string }).question).toContain("session error: ")
     expect(calls.steers).toEqual([])
-  })
-})
-
-// testHandoverAsked is per-watch-instance state; when a mid-wrap-up session
-// error is forked and resumed by runSession's retry loop, the new attempt
-// builds a new watch instance — without the resumeWrapup seeding, the new
-// instance mistakes the completed wrap-up for a natural finish and the
-// handover loop is lost (the freeze script never runs, the handover document
-// is never archived).
-
-describe("test handover: the freeze steer's successful delivery seeds resumeWrapup", () => {
-  let dir = ""
-
-  beforeEach(async () => {
-    dir = await freshRepo()
-  })
-
-  afterEach(async () => {
-    await flushStats(dir)
-    await rm(dir, { recursive: true, force: true })
-  })
-
-  const msg = (sid: string, id: string) => ({
-    type: "message.updated",
-    properties: {
-      info: {
-        id,
-        sessionID: sid,
-        role: "assistant",
-        time: { completed: Date.now() },
-        tokens: { input: 1000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        providerID: "zai",
-        modelID: "glm",
-      },
-    },
-  })
-
-  test("after the freeze the flag is set; a new watch instance verifies the handover document at idle on the strength of the flag instead of calling it a natural finish", async () => {
-    const tmp = join(dir, "tmp")
-    await mkdir(join(dir, "test"), { recursive: true })
-    await mkdir(tmp, { recursive: true })
-    await writeFile(join(dir, "test", "build.sh"), "#!/bin/sh\nexit 0\n")
-    const handoffPath = join(dir, "docs", "T-001", "testhandoff.md")
-    const testRun: TestRun = {
-      dir,
-      tmp,
-      handoffFile: handoffPath,
-      handover: true,
-      limit: 1,
-      seq: 0,
-      task,
-      unit: "execute",
-      subject: "T-001 exec sample task",
-      label: "T-001",
-      handovers: 0,
-      startUsed: 0,
-    }
-    const { client } = fakeClient({
-      events: (sid) =>
-        (async function* () {
-          yield msg(sid, `${sid}_m1`)
-          // The session starts a test within the turn (attempt clears
-          // leftover markers at the start, so it must be written here).
-          await writeFile(join(tmp, "test.sh"), "test/build.sh")
-          yield { type: "session.idle", properties: { sessionID: sid } }
-          // The freeze + wrap-up steer has happened; the session writes the
-          // handover document at close and goes idle again.
-          await mkdir(dirname(handoffPath), { recursive: true })
-          await writeFile(handoffPath, "# Handover\n\nStatus: continue\n")
-          yield msg(sid, `${sid}_m2`)
-          yield { type: "session.idle", properties: { sessionID: sid } }
-        })(),
-    })
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await attempt(client, task, "prompt", { dir }, chain, undefined, testRun, parseSwitches({}))
-    expect(result.type).toBe("idle")
-    expect((result as { testHandover?: boolean }).testHandover).toBe(true)
-    // The freeze steer's successful delivery is the seeding (this fix's
-    // assertion): the new instance forked by the retry loop carries on from
-    // it.
-    expect(testRun.resumeWrapup).toBe(true)
-    // The in-flight record is already flushed after the freeze; the pending
-    // script has the path form the freeze consumed.
-    const record = JSON.parse(await Bun.file(join(dir, ".auto", "handover.json")).text())
-    expect(record.n).toBe(1)
-    expect(record.script).toBe(join(dir, "test", "build.sh"))
-    // Retry scenario: the same TestRun on a fresh session (the marker
-    // already consumed, the document ready) — the new watch instance must
-    // verify the handover document at idle and rule testHandover, not drop
-    // the handover as a natural finish.
-    const { client: client2 } = fakeClient({
-      events: (sid) =>
-        (async function* () {
-          yield msg(sid, `${sid}_m1`)
-          yield { type: "session.idle", properties: { sessionID: sid } }
-        })(),
-    })
-    const chain2: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result2 = await attempt(client2, task, "prompt", { dir }, chain2, undefined, testRun, parseSwitches({}))
-    expect(result2.type).toBe("idle")
-    expect((result2 as { testHandover?: boolean }).testHandover).toBe(true)
   })
 })
