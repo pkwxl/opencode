@@ -4,6 +4,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
   checkModelReferences,
+  implicitRegistry,
+  IMPLIED_MODEL,
   loadModels,
   MODELS_FILE,
   ModelRegistryError,
@@ -13,6 +15,7 @@ import {
 import { BUILTIN_ADAPTERS, type LoadModelsOptions, type ModelRegistry, type ProfileEnvValue } from "../src/models-schema"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
 import { setShellProfile, shellProfile } from "../src/shell"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // Every test builds its own home, operator file and target directory under a
 // temporary root, and passes the environment explicitly: the operator's real
@@ -903,5 +906,69 @@ describe("checkModelReferences", () => {
     await rm(join(dirname(operator), "keys"), { recursive: true })
     await put(join(dirname(operator), "keys"), SECRET)
     expect(checkModelReferences(registry, {})).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The implicit registry (0061 F2): what a run without layers synthesizes
+// from the env switches.
+// ---------------------------------------------------------------------------
+
+describe("implicitRegistry (the env switches as a registry)", () => {
+  const policy = parseSwitches({
+    [SWITCH_ENV.model]: "wrapup=zai/glm-4.6,m=moonshotai/kimi-k2",
+    [SWITCH_ENV.modelFallback]: "zai/glm-4.6-flash,moonshotai/kimi-k2",
+  }).model
+
+  test("one entry per model string on the run's agent, beside the default entry; no windows, keys or classifier", () => {
+    const reg = implicitRegistry("opencode", policy)
+    expect(reg.layers).toEqual([])
+    expect(reg.implicit).toBe(true)
+    // No wildcard in this policy, so the default entry (the agent's own
+    // model) exists beside the keyed and ring entries.
+    expect([...reg.models.keys()].sort()).toEqual([IMPLIED_MODEL, "moonshotai/kimi-k2", "zai/glm-4.6", "zai/glm-4.6-flash"])
+    for (const [name, entry] of reg.models) {
+      expect(entry.layer).toBe("implied")
+      expect(entry.agent).toBe("opencode")
+      // The default entry alone carries no model; every other entry's model
+      // is its own name, its provider the string's prefix.
+      expect(entry.model).toBe(name === IMPLIED_MODEL ? undefined : name)
+      expect(entry.provider).toBe(entry.model === undefined ? undefined : entry.model.slice(0, entry.model.indexOf("/")))
+      expect(entry.avoid).toBeUndefined()
+      expect(entry.keys).toBeUndefined()
+    }
+    expect([...reg.agents.values()]).toEqual([{ name: "opencode", layer: "implied", adapter: "opencode" }])
+    expect(reg.classifier).toBeUndefined()
+    expect(reg.unused).toEqual([])
+  })
+
+  test("no wildcard: the default entry (no model) leads both tiers, the _FALLBACK ring behind it", () => {
+    const reg = implicitRegistry("opencode", parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov/c" }).model)
+    expect(reg.models.get(IMPLIED_MODEL)).toEqual({ name: IMPLIED_MODEL, layer: "implied", agent: "opencode" })
+    expect(reg.tiers.deep?.names).toEqual([IMPLIED_MODEL, "prov/b", "prov/c"])
+    expect(reg.tiers.simple?.names).toEqual([IMPLIED_MODEL, "prov/b", "prov/c"])
+    expect(reg.routes.size).toBe(0)
+  })
+
+  test("a wildcard takes the default entry's place at the head of both tiers", () => {
+    const reg = implicitRegistry("opencode", parseSwitches({ [SWITCH_ENV.model]: "prov/a", [SWITCH_ENV.modelFallback]: "prov/a,prov/b" }).model)
+    expect(reg.models.has(IMPLIED_MODEL)).toBe(false)
+    // A ring repeating the primary keeps it once.
+    expect(reg.tiers.deep?.names).toEqual(["prov/a", "prov/b"])
+  })
+
+  test("routes from the OPENCODE_AUTO_MODEL key grammar, each with the ring behind its own entry", () => {
+    const reg = implicitRegistry("opencode", policy)
+    expect(reg.routes.get("wrapup")).toEqual({ key: "wrapup", layer: "implied", names: ["zai/glm-4.6", "zai/glm-4.6-flash", "moonshotai/kimi-k2"] })
+    expect(reg.routes.get("m")).toEqual({ key: "m", layer: "implied", names: ["moonshotai/kimi-k2", "zai/glm-4.6-flash"] })
+    // The wildcard of the same policy routes nothing itself: it is the tier
+    // lists' head only when set (here the letter key replaced it).
+    expect(reg.routes.has("*")).toBe(false)
+  })
+
+  test("a claude agent carries no providers (the provider notion is opencode's)", () => {
+    const reg = implicitRegistry("claude", parseSwitches({ [SWITCH_ENV.model]: "anthropic/claude-opus-4-5" }).model)
+    expect(reg.models.get("anthropic/claude-opus-4-5")?.provider).toBeUndefined()
+    expect([...reg.agents.values()]).toEqual([{ name: "claude", layer: "implied", adapter: "claude" }])
   })
 })

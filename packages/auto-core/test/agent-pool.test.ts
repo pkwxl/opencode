@@ -2,8 +2,9 @@
 // one lazily started host per agent profile, cross-agent moves as new
 // sessions with the worktree-check note, the capability intersection over
 // the fleet's static records (notes naming the forcing agent), preflight's
-// bin check, the models command's probe, and the no-registry single-agent
-// parity (C2). The two fake agents register as shell adapters
+// bin check, the models command's probe, and the layer-less single-agent
+// parity (a run without a registry layer starts its one agent exactly as
+// the one-host era did). The two fake agents register as shell adapters
 // (registerAgentAdapter, §8.8) with different capabilities.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -160,7 +161,7 @@ describe("the agent pool: lazy hosts per profile (§8.1)", () => {
     expect(hosts.a.closed()).toBe(0)
   })
 
-  test("without a registry the one agent starts eagerly and prints today's lines (C2)", async () => {
+  test("without a registry layer the one agent starts eagerly and prints today's lines", async () => {
     const dir = await temp("auto-agent-pool-single-")
     // A fake opencode CLI on PATH: the eager single-agent start spawns it, as
     // startAgent did (the adapter-level parity lives in

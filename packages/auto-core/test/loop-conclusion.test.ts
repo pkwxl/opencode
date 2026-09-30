@@ -246,10 +246,10 @@ describe("roundCompleteLines round-complete lines", () => {
 })
 
 // Per-model lines of the round-complete block (plans/0055 §7.1 "Stats", §10
-// item 12): under a registry (model data booked with the sessions) the block
+// item 12): with model data booked alongside the sessions the block
 // gains one line per model — usage, sessions and the protocol-drift counters
-// of §10 item 3 — plus the per-tier summary. Without model data (always the
-// no-registry shape) the block stays byte-identical (C2).
+// of §10 item 3 — plus the per-tier summary. Without model data the block
+// stays at its two lines.
 describe("roundCompleteLines per-model lines", () => {
   let dir: string
   let now: number
@@ -326,7 +326,7 @@ describe("roundCompleteLines per-model lines", () => {
     expect(lines).toHaveLength(3)
   })
 
-  test("no model data: the block stays at its two lines, byte-identical (C2)", async () => {
+  test("no model data: the block stays at its two lines", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-001")
     await statsSessionBegin(dir, "T-001")

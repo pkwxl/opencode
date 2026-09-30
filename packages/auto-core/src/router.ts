@@ -1,13 +1,12 @@
 // The router service (the consolidation's services stage): the run-wide
 // decision state of routing and recovery that used to live in module
-// singletons — the failback holders (the phase-scoped sticky model, the
-// pending /failback order and the run-time model-order override), the down
-// marks of the model registry (per model, and per provider key for the
-// rings), the key rings themselves (the built rings, the per-provider
-// position, whether rotation is active), the usage windows last logged per
-// agent client, the model-step cache-claim checks, and the failure-message
-// classifier's run state (its answer cache, its in-flight calls, its call
-// budget and its usage sink). One instance per
+// singletons — the failback holders (the pending /failback order and the
+// run-time model-order override), the down marks of the model registry (per
+// model, and per provider key for the rings), the key rings themselves (the
+// built rings, the per-provider position, whether rotation is active), the
+// usage windows last logged per agent client, the model-step cache-claim
+// checks, and the failure-message classifier's run state (its answer cache,
+// its in-flight calls, its call budget and its usage sink). One instance per
 // run: `createServices` builds it into the run's holder, the composition
 // root installs the holder for the run, and the test preload installs a
 // fresh one before every test (so the state never leaks across test files
@@ -20,46 +19,44 @@
 // accessor: the routing facts carry it beside their clock (every
 // registry-driven selection and resume check reads it through
 // `RoutingFacts.router`), the session options carry it beside their routing
-// (`Opts.router`, for the no-registry resume checks and the pipeline's
-// failback boundary hooks), and the policies helpers that stayed below it
-// (classify) take it as a leading parameter — the key-ring functions moved
-// in as methods, leaving keyring.ts the pure library (the ring build and
-// the key labels, no state). The pure decisions keep reading state as
-// data, exactly as they read the clock.
+// (`Opts.router`, for the pipeline's failback boundary hooks), and the
+// policies helpers that stayed below it (classify) take it as a leading
+// parameter — the key-ring functions moved in as methods, leaving keyring.ts
+// the pure library (the ring build and the key labels, no state). The pure
+// decisions keep reading state as data, exactly as they read the clock.
 //
 // Construction: in the run's written order the router joins the composition
 // after the switch snapshot freezes, reading the registry and the frozen
 // switches. The failback holders, the marks, the logged windows and the
-// step claims are registry-agnostic run state (a run without a registry
-// writes no marks and never logs a step claim, byte-identical to before),
-// and the key rings read the registry only at their activation — where the
-// run's agent fleet starts (src/agent-pool.ts, after the holder exists,
-// through `activateRings`), not at construction — so `createRouter()` takes
-// no inputs and the holder may build it beside the clock, which depends on
-// nothing above it either. The routing fence — the dual registry and
-// no-registry halves of the routing decisions in one seam — reads the
-// registry and the switches per call, never at construction: the fence
-// methods take the run's routing facts (and the switches, the cap,
-// whatever the site holds) as call-time arguments, so the same
-// construction order stands and a holder the preload builds before a test
-// parses its switches never captures a stale snapshot. The no-registry
-// half behind the fence is the compatibility layer of plans/0061 §4.11:
-// one seam before F2 deletes that half.
+// step claims are registry-agnostic run state, and the key rings read the
+// registry only at their activation — where the run's agent fleet starts
+// (src/agent-pool.ts, after the holder exists, through `activateRings`),
+// not at construction — so `createRouter()` takes no inputs and the holder
+// may build it beside the clock, which depends on nothing above it either.
+// The routing decisions read the registry and the switches per call, never
+// at construction: the methods take the run's routing facts (and the
+// switches, the cap, whatever the site holds) as call-time arguments, so
+// the same construction order stands and a holder the preload builds before
+// a test parses its switches never captures a stale snapshot. Every run has
+// a registry (a layer-backed one, or the implicit registry the env switches
+// synthesize where no layer exists — 0061 F2), so the facts are always
+// defined and the routing path is single.
 // AUTO-DECISION: createRouter() is parameterless instead of receiving the registry and the frozen switch snapshot (no state it builds consults either — the key rings read the registry at their activation, not at construction — and the boundary clears keep taking the failback scope as a call argument because the switch memo is per-parse process state that a test or the pre-freeze composition must be able to change independently of the holder, and capturing the memo at construction time would freeze a stale snapshot for every holder the preload builds before a test parses its switches).
 import type { AgentClient, AgentEvent, AgentTokens, LimitScope } from "./agent/types"
 import type { Boundary } from "./control-types"
 import { phaseToRole, roleOf, type SessionChain, type WindowWait } from "./chain"
-import { modelOfChain, type ChainRoute } from "./chain-transitions"
+import type { ChainRoute } from "./chain-transitions"
 import { failbackApplies } from "./failback"
 import { HIBERNATE_JITTER_MS } from "./hibernate"
 import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
-import { formatTokens, log } from "./log"
+import { log } from "./log"
 import { formatWindowState, isoInZone } from "./model-window"
+import { implicitRegistry } from "./models"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models-schema"
 import type { PhaseKey } from "./phases/registry"
 import type { Phase } from "./resume"
-import { candidateKey, candidatesOf, recoveryAt, select, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
-import type { FailbackScope, ModelRole, Switches } from "./switches"
+import { candidateKey, candidatesOf, recoveryAt, select, selectionPolicy, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
+import { autoSwitches, type FailbackScope, type ModelRole, type Switches } from "./switches"
 import type { Usage } from "./stats"
 
 // The run-time model-order override a parameterized /failback leaves behind:
@@ -95,13 +92,6 @@ export type ClassifyUsageSink = (usage: Usage, entry: string) => void
 // exported, so the move reads as a move.
 export type Router = {
   // —— The failback holders ——
-  // sticky: the cross-task failover holder of phase granularity, written by
-  // switchModel only under scope=phase, cleared unconditionally at phase
-  // boundaries (undefined under every other granularity, the clear is a
-  // no-op).
-  stickyModel(): string | undefined
-  setSticky(model: string): void
-  clearSticky(): void
   // The run-time model-order override left after a parameterized /failback
   // is consumed; the dispatch resolvers read it ahead of switches.model
   // (without breaking the switches-memo constancy convention).
@@ -169,95 +159,51 @@ export type Router = {
   noteClassifierLimit(): void
   setClassifyUsageSink(sink: ClassifyUsageSink | undefined): void
   classifyUsageSink(): ClassifyUsageSink | undefined
-  // —— The routing fence ——
-  // The dispatch target of one routing decision, both halves behind one
-  // seam: under a registry (`facts` present) a fresh-prompt selection over
-  // the facts — the pick's candidate key, undefined = nothing usable now;
-  // without one the no-registry priority chain over `chain` (the chain's
-  // failover candidate > this instance's sticky holder > the /failback
-  // override > the routing table). The registry/no-registry branch is the
-  // fence's to own: callers pass `opts.routing` untested; the no-registry
-  // half is the compatibility layer of plans/0061 §4.11, deleted in F2.
+  // —— The routing decisions ——
+  // The dispatch target of one routing decision: a fresh-prompt selection
+  // over the facts — the pick's candidate key, undefined = nothing usable
+  // now.
   target(
-    facts: RouteFacts | undefined,
+    facts: RouteFacts,
     chain: SessionChain,
     switches: Switches,
     cap: number,
     phase: PhaseKey | undefined,
   ): string | undefined
-  // The dispatch's model pair, both halves behind one seam: under a
-  // registry (`facts` present) the plan's pick — the route the pure
-  // planner resolved before anything was created and setRoute then
-  // wrote onto the chain (`picked`, the executor passes the pick's
-  // route: `target` is the model id the prompt carries, `promptModel`
-  // the entry the strict-resume record keys on; the fence must not
-  // re-select — the pick already read the live windows and the step
-  // walk, and the chain's route fields cannot stand in because the
-  // session-scope failback clear may have wiped them after the pick) —
-  // without one the no-registry priority chain resolved at the
-  // dispatch's slot, after that clear (both reads hold the same
-  // string). The registry/no-registry branch is the fence's to own:
-  // callers pass `opts.routing` untested; the no-registry half is the
-  // compatibility layer of plans/0061 §4.11, deleted in F2.
-  dispatchModel(
-    facts: RouteFacts | undefined,
-    chain: SessionChain,
-    switches: Switches,
-    phase: PhaseKey | undefined,
-    picked: { model?: string; entry?: string } | undefined,
-  ): { target: string | undefined; promptModel: string | undefined }
-  // The ◈ announcement of the model a dispatch runs on, without a
-  // registry: the "using model" line with its source label (the chain's
-  // failover candidate, the phase-scoped sticky holder, the /failback
-  // override, else the routing table), logged for every new session and
-  // on a model change — a continuation of the same session and model is
-  // not repeated. Logs the line itself and returns the model the caller
-  // records as the chain's display memory (the caller writes the chain);
-  // undefined = nothing was announced. Under a registry the planner's
-  // own announce line already covered the dispatch, so the answer is
-  // undefined there — the registry/no-registry branch is the fence's to
-  // own: callers pass `opts.routing` untested; the no-registry half is
-  // the compatibility layer of plans/0061 §4.11, deleted in F2.
-  describe(
-    facts: RouteFacts | undefined,
-    chain: SessionChain,
-    target: string | undefined,
-    label: string,
-    resumed: boolean,
-  ): string | undefined
-  // The model failover of the session loop's escalation (§7 step 2), both
-  // halves behind one seam: under a registry (`facts` present) the model
-  // being left — the chain's selected entry — is marked down (this
+  // The dispatch's model pair: the plan's pick — the route the pure
+  // planner resolved before anything was created and setRoute then wrote
+  // onto the chain (`picked`, the executor passes the pick's route:
+  // `target` is the model id the prompt carries, `promptModel` the entry
+  // the strict-resume record keys on; the pick already read the live
+  // windows and the step walk, and the chain's route fields cannot stand
+  // in because the session-scope failback clear may have wiped them after
+  // the pick).
+  dispatchModel(picked: { model?: string; entry?: string } | undefined): { target: string | undefined; promptModel: string | undefined }
+  // The model failover of the session loop's escalation (§7 step 2): the
+  // model being left — the chain's selected entry — is marked down (this
   // instance's marks) and a fresh selection picks the next usable
   // candidate of the list, waiting through `site.waitWindow` and
-  // re-selecting when only the windows block (escalation step 3); without
-  // one the /failback or _FALLBACK ring walk with window clipping and the
-  // ladder's `tried` bookkeeping. Logs the ⇄ line itself (byte-identical
-  // text on both arms) and makes the phase-scoped sticky write (no-registry
-  // and scope=phase only); returns the decided failover — the model left
+  // re-selecting when only the windows block (escalation step 3). Logs the
+  // ⇄ line itself and returns the decided failover — the model left
   // (undefined = the primary), the candidate picked, the route value the
   // caller writes through setRoute, and the cross-agent move's target
   // agent (undefined = keep the chain's context) — or undefined = no
   // candidate (the caller falls into the wait-and-probe loop). The fork
   // walk and every chain write stay with the caller; the ladder is
-  // loop-local per-prompt state taken as the `site.ladder` argument and
-  // mutated in place, never held. The registry/no-registry branch is the
-  // fence's to own: callers pass `opts.routing` untested; the no-registry
-  // half is the compatibility layer of plans/0061 §4.11, deleted in F2.
+  // loop-local per-prompt state the caller owns.
   failover(
-    facts: RouteFacts | undefined,
+    facts: RouteFacts,
     switches: Switches,
     site: {
       chain: SessionChain
       // The run's current phase (opts.phase): its type entry feeds the
-      // selection call and the no-registry routing table.
+      // selection call.
       phase: PhaseKey | undefined
       cap: number
       // The context windows the site fetched (contextLimitsOf); the
       // failover's clipping and selection read them.
       limits: ReadonlyMap<string, number>
-      ladder: FailoverLadder
-      // The ⇄ and skipping lines' unit label (the task id).
+      // The ⇄ line's unit label (the task id).
       label: string
       // The short phrase naming the trigger; it goes into the log and the
       // failover note.
@@ -271,37 +217,30 @@ export type Router = {
     },
   ): Promise<FailoverDecision | undefined>
   // The escalation's step-1 key-rotation plan (§7 step 1), the decision
-  // without its I/O: under a registry, the provider of the chain's selected
-  // entry when its ring is active, with the rotation that would land — or,
-  // for a ring with no key left that is not down, `rotation: undefined`,
-  // naming a provider whose current key still failed and must be marked
-  // down before the fall-through to the model failover. undefined = no key
-  // rotation applies (no registry, a chain model the registry does not
-  // know, or a provider without an active ring): step 1 is a no-op and the
-  // caller falls straight through to the model failover — the
-  // registry-presence test that used to gate the escalation's first arm
-  // lives here now. The spawn config, the host restart and the re-dispatch
-  // fork stay with the caller; the commit and the marks are the router
-  // methods the caller already calls. The registry/no-registry branch is
-  // the fence's to own (plans/0061 §2.1 R2 / §4.11).
-  keyRotation(facts: RouteFacts | undefined, chain: SessionChain): KeyRotationPlan | undefined
+  // without its I/O: the provider of the chain's selected entry when its
+  // ring is active, with the rotation that would land — or, for a ring with
+  // no key left that is not down, `rotation: undefined`, naming a provider
+  // whose current key still failed and must be marked down before the
+  // fall-through to the model failover. undefined = no key rotation applies
+  // (a chain model the registry does not know, or a provider without an
+  // active ring): step 1 is a no-op and the caller falls straight through
+  // to the model failover. The spawn config, the host restart and the
+  // re-dispatch fork stay with the caller; the commit and the marks are the
+  // router methods the caller already calls.
+  keyRotation(facts: RouteFacts, chain: SessionChain): KeyRotationPlan | undefined
   // The exhaustion line of the escalation's fall-through into the
-  // wait-and-probe loop, both arms behind one seam: under a registry the
-  // tier list's down marks as they stand at the call — after the
-  // escalation wrote its own (this instance's marks, the run's router);
-  // without one the fallback candidates the ladder has tried. Byte-
-  // identical text on both arms; the no-registry half is the compatibility
-  // layer of plans/0061 §4.11, deleted in F2.
-  exhaustionWhy(facts: RouteFacts | undefined, label: string, ladder: FailoverLadder): string
+  // wait-and-probe loop: the tier list's down marks as they stand at the
+  // call — after the escalation wrote its own (this instance's marks, the
+  // run's router).
+  exhaustionWhy(facts: RouteFacts, label: string): string
   // The down marks one failure's escalation may write (§7.1): the chain's
   // selected entry and, when its provider has an active ring, the key it
   // ran on — read before the escalation moves anything, so a classifier
   // answer still on its way can extend them to the reset it names
   // (lateReset below). The registry lookup reads the facts, the rings this
   // instance's own state (the same instance the caller's mark writes went
-  // through). The registry/no-registry branch is the fence's to own:
-  // callers pass `opts.routing` untested (plans/0061 §2.1 R2 / §4.11).
-  downTarget(facts: RouteFacts | undefined, chain: SessionChain): DownTarget
+  // through).
+  downTarget(facts: RouteFacts, chain: SessionChain): DownTarget
   // A classifier answer that arrives after the turn ended (§7.1): it can
   // only set when this failure's down marks clear — each mark the
   // escalation wrote (the `target` downTarget answered, or the probe
@@ -309,53 +248,33 @@ export type Router = {
   // reset time instead of the scope boundary. The class it names comes too
   // late to change anything; only the ⏲ line (gated on the facts, whose
   // time zone renders the instant) says so. The mark extensions write this
-  // instance's own state; the registry/no-registry branch is the fence's
-  // to own: callers pass `opts.routing` untested (plans/0061 §2.1 R2 /
-  // §4.11).
+  // instance's own state.
   lateReset(
-    facts: RouteFacts | undefined,
+    facts: RouteFacts,
     pending: Promise<number | undefined> | undefined,
     target: DownTarget,
     label: string,
   ): void
-  // The model the chain's dispatches ran on, the way attempt records it for
-  // strict resume: the selected entry under a registry, else the
-  // switch-routed model string of the no-registry priority chain
-  // (modelOfChain over this instance's sticky/override holders; undefined
-  // = the agent's own default). The registry/no-registry branch is the
-  // fence's to own: callers pass `opts.routing` untested; the no-registry
-  // half is the compatibility layer of plans/0061 §4.11, deleted in F2.
-  chainModel(
-    facts: RouteFacts | undefined,
-    chain: SessionChain,
-    switches: Switches,
-    phase: PhaseKey | undefined,
-  ): string | undefined
-  // The sleep of one wait-and-probe round, both halves behind one seam:
-  // which source schedules the round — under a registry the instant the
-  // down list comes back by waiting alone (select.ts recoveryAt over the
-  // facts' context), without one the failure's stated reset or the
-  // account's learned windows — and the model the wait is for (the chain's
-  // dispatch model, the fallback cascade of the no-registry priority
-  // chain). The site keeps what the fence cannot reach: the context-window
-  // fetch (handed in as `loadLimits`, invoked in the registry arm only),
-  // the learned-window lookup (`learned`, invoked only when the cascade
-  // reaches it), and the horizon clamp with the poll fallback
-  // (RESET_HORIZON_MS stays with the caller). Under a registry whose
-  // recoveryAt answered nothing, neither the stated reset nor the learned
-  // windows apply — the round polls; the compound conditions preserve
-  // exactly that. The registry/no-registry branch is the fence's to own:
-  // callers pass `opts.routing` untested; the no-registry half is the
-  // compatibility layer of plans/0061 §4.11, deleted in F2.
+  // The sleep of one wait-and-probe round: which source schedules the
+  // round — the instant the down list comes back by waiting alone
+  // (select.ts recoveryAt over the facts' context), with a stated reset or
+  // the account's learned windows standing in when a registry answer sits
+  // in the past — and the model the wait is for (the chain's dispatch
+  // entry). The site keeps what the fence cannot reach: the context-window
+  // fetch (handed in as `loadLimits`), the learned-window lookup
+  // (`learned`, invoked only when the cascade reaches it), and the horizon
+  // clamp with the poll fallback (RESET_HORIZON_MS stays with the caller).
+  // Under a registry whose recoveryAt answered nothing, neither the stated
+  // reset nor the learned windows apply — the round polls.
   recoverySleep(
-    facts: RouteFacts | undefined,
+    facts: RouteFacts,
     switches: Switches,
     site: {
       chain: SessionChain
       phase: PhaseKey | undefined
       cap: number
-      // The context windows the registry arm selects over: loaded lazily
-      // (and only under a registry), cached by the caller.
+      // The context windows the selection reads: loaded lazily, cached by
+      // the caller.
       loadLimits: () => Promise<ReadonlyMap<string, number>>
       // The failure that led here (absent when selection found nothing
       // usable before any session ran); its stated reset and its account
@@ -365,35 +284,27 @@ export type Router = {
       // windows, fs I/O): invoked only when the cascade reaches it, with
       // the round's `now`.
       learned: (now: number) => Promise<{ resetAt: number; scope?: LimitScope; learnedAt: number } | undefined>
-      // The no-registry half's timeline: the run services' clock, read
-      // only without a registry (the registry arm reads the facts' clock,
-      // exactly as the site's branch used to).
-      now: () => number
     },
   ): Promise<RecoverySleepPlan>
-  // The probe candidate of one wait-and-probe round (§6.3), both halves
-  // behind one seam: under a registry the probe dispatches through
-  // selection like any other — this method runs the selection (waiting
-  // through `site.waitWindow` while only the windows block), then realizes
-  // the mark-clearing by clearing the probe candidate's mark before the
-  // dispatch (and its provider's ring marks with it), so the probe runs on
-  // the first in-window candidate ignoring the marks; a successful probe
-  // leaves it cleared. undefined = no registry (the probe dispatches on the
-  // chain's own model) or a non-probe decision (nothing usable — the
-  // caller's dispatch answers the rest). The re-mark on a failed probe
-  // stays with the caller (it runs after the probe session returns). The
-  // registry/no-registry branch is the fence's to own: callers pass
-  // `opts.routing` untested; the no-registry half is the compatibility
-  // layer of plans/0061 §4.11, deleted in F2.
+  // The probe candidate of one wait-and-probe round (§6.3): the probe
+  // dispatches through selection like any other — this method runs the
+  // selection (waiting through `site.waitWindow` while only the windows
+  // block), then realizes the mark-clearing by clearing the probe
+  // candidate's mark before the dispatch (and its provider's ring marks
+  // with it), so the probe runs on the first in-window candidate ignoring
+  // the marks; a successful probe leaves it cleared. undefined = a
+  // non-probe decision (nothing usable — the caller's dispatch answers the
+  // rest). The re-mark on a failed probe stays with the caller (it runs
+  // after the probe session returns).
   probeSelection(
-    facts: RouteFacts | undefined,
+    facts: RouteFacts,
     switches: Switches,
     site: {
       chain: SessionChain
       phase: PhaseKey | undefined
       cap: number
-      // The context windows the selection reads: loaded lazily (and only
-      // under a registry), cached by the caller.
+      // The context windows the selection reads: loaded lazily, cached by
+      // the caller.
       loadLimits: () => Promise<ReadonlyMap<string, number>>
       // The window wait of the wait loop (the site's own sleeper — the
       // booked sleep on the run's clock), handed the payload the fence
@@ -408,7 +319,6 @@ export type Router = {
 export function createRouter(): Router {
   // Single-run state (each run builds its own holder; tests get a fresh
   // instance from the preload, so no reset hook exists):
-  let sticky: string | undefined
   let pending: { order?: string[] } | undefined
   let override: FailbackOverride | undefined
 
@@ -581,15 +491,10 @@ export function createRouter(): Router {
   }
 
   return {
-    stickyModel: () => sticky,
-    setSticky: (model) => {
-      sticky = model
-    },
-    // The phase-boundary clear: sticky is written only under scope=phase, a
-    // no-op under every other granularity.
-    clearSticky: () => {
-      sticky = undefined
-    },
+    // The run-time model-order override left after a parameterized
+    // /failback is consumed; the dispatch resolvers read it ahead of the
+    // registry's lists (without breaking the switches-memo constancy
+    // convention).
     failbackOverride: () => override,
 
     // Set the /failback flag (the interactive sideband has validated the
@@ -604,17 +509,16 @@ export function createRouter(): Router {
 
     // The /failback consumption point shared by the three safe boundaries
     // (right after the pause hooks): a hit resets the failover state (the
-    // sticky holder + down marks), and with arguments it also redefines the
-    // run-time model order. Returns whether it consumed. The chain's
-    // selected entry is cleared with the raw candidate at the boundary that
-    // holds the chain (the next prompt re-selects from the list) — the
-    // subtask boundary calls resetRoute beside this consumption; the task
-    // and phase boundaries destroy the chain with runTask before reaching
-    // here, so they clear nothing.
+    // down marks), and with arguments it also redefines the run-time model
+    // order. Returns whether it consumed. The chain's selected entry is
+    // cleared with the raw candidate at the boundary that holds the chain
+    // (the next prompt re-selects from the list) — the subtask boundary
+    // calls resetRoute beside this consumption; the task and phase
+    // boundaries destroy the chain with runTask before reaching here, so
+    // they clear nothing.
     // AUTO-RESOLVE: does a mark with `until` survive `/failback`, as it survives a scope boundary? -> no, `/failback` clears every mark, an `until` included (the scope rules list the scope boundaries and `/failback` separately, and `until` stands in for the scope boundary; the operator's explicit command retries the primary now, so a quota reset time must not override it)
     consumeFailback: () => {
       if (pending === undefined) return false
-      sticky = undefined
       downModels.clear()
       downKeys.clear()
       const order = pending.order
@@ -826,187 +730,96 @@ export function createRouter(): Router {
     },
     classifyUsageSink: () => classifyUsageSink,
 
-    // —— The routing fence ——
-    // The dual registry/no-registry dispatch target in one seam (see the
-    // type comment). The registry half reads its live state — the marks,
-    // the override, the rings — through the facts' router, never through
-    // this instance: that half always followed the facts. The no-registry
-    // half reads this instance's holders (sticky, the /failback override) —
-    // the compatibility layer behind the fence, deleted in F2
-    // (plans/0061 §4.11).
+    // —— The routing decisions ——
+    // The dispatch target (see the type comment): a fresh selection over
+    // the facts, whose live state — the marks, the override, the rings —
+    // reads through the facts' router.
     target: (facts, chain, switches, cap, phase) => {
-      if (facts !== undefined) {
-        const decision = select(routeContext(facts, switches, cap), {
-          role: chain.role ?? phaseToRole(chain.phase) ?? "bypass",
-          entry: phase?.entry,
-          now: facts.clock.now(),
-          continuation: false,
-        })
-        return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
-      }
-      return modelOfChain(chain, switches, phase, sticky, override)
+      const decision = select(routeContext(facts, switches, cap), {
+        role: chain.role ?? phaseToRole(chain.phase) ?? "bypass",
+        entry: phase?.entry,
+        now: facts.clock.now(),
+        continuation: false,
+      })
+      return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
     },
-    // The dispatch's model pair (see the type comment). The registry half
-    // answers the pick the executor hands in — the plan's own selection,
-    // not a fresh one; the no-registry half resolves the priority chain
-    // over this instance's holders, exactly where the executor's branch
-    // used to stand (the sticky and the override are read at the call,
-    // and nothing between the two fence calls of one dispatch can write
-    // them — the dispatch slot runs synchronously between its awaits).
-    dispatchModel: (facts, chain, switches, phase, picked) => {
-      if (facts !== undefined) return { target: picked?.model, promptModel: picked?.entry }
-      const model = modelOfChain(chain, switches, phase, sticky, override)
-      return { target: model, promptModel: model }
-    },
-    // The no-registry ◈ line (see the type comment): the from label and
-    // the repeat rule moved here from the executor's branch; the chain's
-    // display memory stays the caller's write.
-    describe: (facts, chain, target, label, resumed) => {
-      if (facts !== undefined || target === undefined) return undefined
-      if (target === chain.modelShown && resumed) return undefined
-      const from =
-        chain.model !== undefined
-          ? "fallback candidate"
-          : sticky !== undefined
-            ? "fallback candidate (sticky within phase)"
-            : override !== undefined
-              ? "/failback override"
-              : "route"
-      log(`◈ ${label} using model ${target} (${from})`)
-      return target
-    },
+    // The dispatch's model pair (see the type comment): the pick the
+    // executor hands in — the plan's own selection, not a fresh one.
+    dispatchModel: (picked) => ({ target: picked?.model, promptModel: picked?.entry }),
 
     // —— The session loop's failover neighbourhood ——
-    // The dual failover decision in one seam (see the type comment). The
-    // registry half marks the model being left down on this instance and
-    // selects over the facts (routeContext reads the facts' router — the
-    // run's router, this same instance); the wait-and-reselect loop is
-    // escalation step 3. The no-registry half is the fallback-ring walk the
-    // session loop's own branch held, moved verbatim — the compatibility
-    // layer of plans/0061 §4.11, deleted in F2.
+    // The failover decision (see the type comment): the model being left is
+    // marked down on this instance and the selection runs over the facts
+    // (routeContext reads the facts' router — the run's router, this same
+    // instance); the wait-and-reselect loop is escalation step 3.
     failover: async (facts, switches, site) => {
-      const { chain, phase, cap, limits, ladder, label, why, until, classified, waitWindow } = site
-      let from: string | undefined
-      let to: string | undefined
-      let toModel: string | undefined
-      let pickAgent: string | undefined
-      let ringSize = 0
-      if (facts !== undefined) {
-        from = chain.modelEntry
-        if (from !== undefined) markModelDown(from, until, classified)
-        const ctx = routeContext(facts, switches, cap, limits)
-        const call = { role: roleOf(chain), entry: phase?.entry, now: facts.clock.now(), continuation: false as const }
-        let decision = select(ctx, call)
-        if (decision.kind === "wait") {
-          // Escalation step 3 (§7): the remaining candidates are blocked
-          // only by their windows — wait for the opening plus the jitter
-          // instead of handing a closed window to the probe loop, then
-          // select again.
-          await waitWindow(waitPayload(facts, ctx, call, decision))
-          decision = select(ctx, { ...call, now: facts.clock.now() })
-        }
-        if (decision.kind !== "pick") return undefined
-        to = candidateKey(decision.candidate)
-        // The model just marked down cannot be the pick; a same-name result
-        // would mean an override re-listed it — refuse rather than loop.
-        if (to === from) return undefined
-        toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
-        pickAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
-      } else {
-        const fallback = override?.fallback ?? switches.model.fallback
-        // Candidates with a known window < cap are skipped with the reason
-        // logged once (D.4: hitting the ceiling or the handover budget
-        // right after the failover would be worse than the original
-        // fault); an unknown window (absent from the map) is not filtered.
-        // AUTO-DECISION: the skipping line's token figures come from log.ts's formatTokens, not session-api's (the two are verbatim twins by construction; session-api type-imports opts, whose inline Router type edge would close a type-counted cycle the import-direction DAG check rejects, so the router cannot reach it)
-        for (const c of fallback) {
-          if (ladder.tried.includes(c)) continue
-          const limit = limits.get(c)
-          if (limit !== undefined && limit < cap) {
-            if (!ladder.clipped.includes(c)) {
-              ladder.clipped.push(c)
-              log(`⇄ ${label} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
-            }
-            continue
-          }
-          to = c
-          break
-        }
-        // Candidates exhausted (all tried, or all skipped by window
-        // clipping).
-        if (to === undefined) return undefined
-        // Record the model being left (for the log and the failover note):
-        // a candidate already failed over to on the chain wins, otherwise
-        // the routing primary model; without routing, from is undefined and
-        // the log renders "primary model". If from happens to be a real
-        // candidate string, mark it tried as well (so it is not picked
-        // again). The same priority chain as the dispatch target
-        // (modelOfChain: chain.model > sticky > /failback override > the
-        // routing table).
-        from = modelOfChain(chain, switches, phase, sticky, override)
-        if (from !== undefined && !ladder.tried.includes(from)) ladder.tried.push(from)
-        ladder.tried.push(to)
-        toModel = to
-        ringSize = fallback.length
+      const { chain, phase, cap, limits, label, why, until, classified, waitWindow } = site
+      // The model being left: the chain's selected entry, with the display
+      // memory standing in when the session-scope failback clear already
+      // wiped the route fields of the session that just failed (the clear
+      // runs at the create, before the failure — without the fallback the
+      // model would never be marked and the "switch" could re-pick it).
+      const from = chain.modelEntry ?? chain.modelShown
+      if (from !== undefined) markModelDown(from, until, classified)
+      const ctx = routeContext(facts, switches, cap, limits)
+      const call = { role: roleOf(chain), entry: phase?.entry, now: facts.clock.now(), continuation: false as const }
+      let decision = select(ctx, call)
+      if (decision.kind === "wait") {
+        // Escalation step 3 (§7): the remaining candidates are blocked
+        // only by their windows — wait for the opening plus the jitter
+        // instead of handing a closed window to the probe loop, then
+        // select again.
+        await waitWindow(waitPayload(facts, ctx, call, decision))
+        decision = select(ctx, { ...call, now: facts.clock.now() })
       }
+      if (decision.kind !== "pick") return undefined
+      const to = candidateKey(decision.candidate)
+      // The model just marked down cannot be the pick; a same-name result
+      // would mean an override re-listed it — refuse rather than loop.
+      if (to === from) return undefined
+      const toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
+      const pickAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
       // The route the failover picked, the value the caller writes
-      // wholesale: under a registry the selection state — the internal
-      // name and the base step — travels with the chain; the down marks
-      // replace the phase-scoped sticky holder (§6.4), so scope=phase keeps
-      // the move through the task boundaries without it. Without a registry
-      // only the model string is written.
-      const route: ChainRoute = facts !== undefined ? { model: toModel, entry: to, step: 0 } : { model: toModel }
-      if (facts === undefined && switches.modelFailbackScope === "phase") {
-        // failback scope phase: the failover stays sticky across tasks —
-        // the chain is destroyed per task, so the chosen candidate is
-        // carried into the phase's later tasks through the failback
-        // holder, and only the phase boundary (clearSticky) resets back to
-        // the preferred model. The sticky holder is this instance's own
-        // state.
-        sticky = to
-      }
+      // wholesale: the selection state — the internal name and the base
+      // step — travels with the chain; the down marks replace the
+      // phase-scoped sticky holder of the retired env-switch path (§6.4),
+      // so scope=phase keeps the move through the task boundaries without
+      // one.
+      const route: ChainRoute = { model: toModel, entry: to, step: 0 }
       // The ⇄ line and the cross-agent verdict share the one condition:
       // the pick runs on another agent than the chain's session (a session
       // never crosses agents).
       const move = pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent
       log(
-        facts !== undefined
-          ? `⇄ ${label} ${why}; ${move ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
-          : `⇄ ${label} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${ladder.tried.length}/${ringSize})`,
+        `⇄ ${label} ${why}; ${move ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`,
       )
       return { from, to, route, moveAgent: move ? pickAgent : undefined }
     },
     // The step-1 plan (see the type comment): the ring state this reads is
     // this instance's own — the same instance the escalation's commits and
-    // marks go through. The registry-presence test is the routing branch
-    // the fence owns.
+    // marks go through.
     keyRotation: (facts, chain) => {
-      if (facts === undefined) return undefined
       const provider = facts.registry.models.get(chain.modelEntry ?? "")?.provider
       if (provider === undefined || !hasActiveRing(provider)) return undefined
       return { provider, rotation: ringRotation(provider, facts.clock.now()) }
     },
-    // The exhaustion line (see the type comment): the registry arm reads
-    // this instance's marks as they stand at the call — after the
-    // escalation wrote its own.
-    exhaustionWhy: (facts, label, ladder) =>
-      facts !== undefined
-        ? `${label} and every candidate of the tier list is down (down: ${[...downModels.keys()].join(", ") || "none"})`
-        : `${label} and fallback candidates exhausted (tried: ${ladder.tried.join(", ") || "none"})`,
+    // The exhaustion line (see the type comment): reads this instance's
+    // marks as they stand at the call — after the escalation wrote its
+    // own.
+    exhaustionWhy: (facts, label) =>
+      `${label} and every candidate of the tier list is down (down: ${[...downModels.keys()].join(", ") || "none"})`,
 
     // —— The session loop's recovery-wait neighbourhood ——
     // The escalation's down-mark read (see the type comment): the rings are
     // this instance's own state, the provider lookup the facts' registry.
     downTarget: (facts, chain) => {
       const model = chain.modelEntry
-      const provider = facts?.registry.models.get(model ?? "")?.provider
+      const provider = facts.registry.models.get(model ?? "")?.provider
       const key = provider !== undefined && hasActiveRing(provider) ? currentKey(provider) : undefined
       return { model, provider, ...(key !== undefined ? { key: { ref: key.ref, label: key.label } } : {}) }
     },
     // The late classifier answer's mark extension (see the type comment):
-    // the ⏲ line renders the reset in the registry's time zone, so its
-    // guard is the routing branch the fence owns — without a registry the
-    // escalation wrote no marks, nothing extends, and the line never fired.
+    // the ⏲ line renders the reset in the registry's time zone.
     lateReset: (facts, pending, target, label) => {
       if (pending === undefined) return
       void pending.then((until) => {
@@ -1015,55 +828,49 @@ export function createRouter(): Router {
         if (target.model !== undefined && extendModelDownMark(target.model, until)) marked.push(target.model)
         if (target.provider !== undefined && target.key !== undefined && extendKeyDownMark(target.provider, target.key.ref, until))
           marked.push(`provider ${target.provider} key ${target.key.label}`)
-        if (marked.length && facts !== undefined)
+        if (marked.length)
           log(`⏲ ${label} the classifier's answer arrived after the turn ended: ${marked.join(" and ")} stay${marked.length > 1 ? "" : "s"} down until ${isoInZone(until, facts.registry.tz)}`)
       })
     },
-    // The chain's dispatch model (see the type comment): the no-registry
-    // half reads this instance's sticky/override holders at the call.
-    chainModel: (facts, chain, switches, phase) =>
-      facts !== undefined ? chain.modelEntry : modelOfChain(chain, switches, phase, sticky, override),
     // The wait-and-probe round's sleep source (see the type comment). The
-    // cascade's compound conditions are the fence's load-bearing part:
-    // under a registry whose recoveryAt answered nothing (`back` undefined
-    // with facts present), neither the stated reset nor the learned windows
-    // apply — the round polls — while without a registry both stand, and a
-    // registry answer that sits in the past (`back.at <= now`) falls
-    // through to them exactly the same way.
+    // cascade's compound conditions are the load-bearing part: under a
+    // layer-backed registry a recoveryAt that answered nothing (`back`
+    // undefined) leaves the round polling — neither the stated reset nor the
+    // learned windows apply — while an answer that sits in the past
+    // (`back.at <= now`) falls through to them. The implicit registry keeps
+    // the env path's cascade (a stated reset, else the learned windows):
+    // its single agent has no other candidate to wait for, so the account's
+    // recorded windows are the only schedule it has.
     recoverySleep: async (facts, switches, site) => {
-      const { chain, phase, cap, cause, loadLimits, learned, now: fallbackNow } = site
-      const now = facts !== undefined ? facts.clock.now() : fallbackNow()
+      const { chain, phase, cap, cause, loadLimits, learned } = site
+      const now = facts.clock.now()
       let at: number | undefined
       let reason: string | undefined
       let model: string | undefined
-      let back: ReturnType<typeof recoveryAt> | undefined
-      if (facts !== undefined) {
-        back = recoveryAt(routeContext(facts, switches, cap, await loadLimits()), { role: roleOf(chain), entry: phase?.entry, now, continuation: false })
-      }
+      const back = recoveryAt(routeContext(facts, switches, cap, await loadLimits()), { role: roleOf(chain), entry: phase?.entry, now, continuation: false })
+      const statedApplies = back !== undefined || facts.registry.implicit === true
       if (back !== undefined && back.at > now) {
         at = back.at
         model = candidateKey(back.candidate)
-        reason = `${model} is usable again at ${isoInZone(at, facts!.registry.tz)}`
-      } else if ((facts === undefined || back !== undefined) && cause?.resetAt !== undefined) {
+        reason = `${model} is usable again at ${isoInZone(at, facts.registry.tz)}`
+      } else if (statedApplies && cause?.resetAt !== undefined) {
         at = cause.resetAt
         reason = `${limitPhrase(cause.scope)} resets ${new Date(at).toISOString()}`
-      } else if (facts === undefined || back !== undefined) {
+      } else if (statedApplies) {
         const record = await learned(now)
         if (record !== undefined) {
           at = record.resetAt
           reason = `${limitPhrase(record.scope)} resets ${new Date(at).toISOString()} (recorded ${new Date(record.learnedAt).toISOString()})`
         }
       }
-      model ??= (facts !== undefined ? chain.modelEntry : modelOfChain(chain, switches, phase, sticky, override)) ?? chain.modelShown ?? "(agent default)"
+      model ??= chain.modelEntry ?? chain.modelShown ?? "(agent default)"
       return { now, at, reason, model }
     },
     // The probe candidate of one round (see the type comment): the mark
     // clears write this instance's own state; the wait loop hands the site's
-    // sleeper the payload the fence builds (the twin of the deleted
-    // session-side windowWaitOf).
+    // sleeper the payload the fence builds.
     probeSelection: async (facts, switches, site) => {
       const { chain, phase, cap, loadLimits, waitWindow } = site
-      if (facts === undefined) return undefined
       const ctx = routeContext(facts, switches, cap, await loadLimits())
       const call = { role: roleOf(chain), entry: phase?.entry, now: facts.clock.now(), continuation: false as const }
       let decision = select(ctx, call)
@@ -1087,25 +894,38 @@ export function createRouter(): Router {
   }
 }
 
-// —— The routing fence (the dual registry/no-registry path in one seam) ——
-// The registry/no-registry branch of every routing decision lives in this
-// module: the callers pass their routing facts untested and the fence
-// decides which half runs (plans/0061 §2.1 R2: one seam now, the
-// no-registry half deleted in F2 — §4.11's compatibility layer). The
-// fence's free functions are the stateless verdicts (no holder reads);
-// `target`, `dispatchModel` and `describe` above are the dispatch-side
-// holder-reading decisions as methods, `failover`, `keyRotation` and
-// `exhaustionWhy` the session loop's failover neighbourhood as methods,
-// and `downTarget`, `lateReset`, `chainModel`, `recoverySleep` and
-// `probeSelection` its recovery-wait neighbourhood as methods (the
-// instance supplies the holders and marks those decisions read and
-// write), and the record-side remainder — the fork base's agent and
-// role verdicts beside the record agent field — as the free functions
-// below.
+// —— The routing verdicts (the stateless half of the routing decisions) ——
+// Every registry/no-registry branch of the routing decisions used to live
+// in this module behind one seam (the consolidation's fence); with the
+// implicit registry every run has a registry, so the seam is gone and what
+// remains is the registry decision alone. The free functions are the
+// stateless verdicts (no holder reads); `target`, `dispatchModel` and the
+// failover, key-rotation, exhaustion and recovery decisions above are the
+// holder-reading ones as methods (the instance supplies the holders and
+// marks those decisions read and write), and the record-side remainder —
+// the fork base's agent and role verdicts — as the free functions below.
 
-// The structural slice of the run's routing facts the fence reads. The
-// run's RoutingFacts (src/routing.ts) satisfies it field for field; the
-// fence cannot name that type: routing carries the Router type, so an
+// The routing facts of a call that never knew them (a bare options literal
+// below the loop, a test's): the implicit registry over the env switches,
+// the holderless router fallback exactly as unit-commit's opts-unwrapping
+// sites resolve theirs, and the system now as the timeline (a run always
+// carries its own facts; this is the never-knew-routing corner, not a
+// second path). AUTO-DECISION: the agent follows OPENCODE_AUTO_AGENT alone here, without the shell profile's agent (router.ts must not import the shell module — the shell may register adapters that reach back here — and the fallback serves literals without a run, where the env-derived agent is the same one the run's facts would carry)
+export function implicitFacts(router: Router | undefined): RouteFacts {
+  const agent = autoSwitches().agent ?? "opencode"
+  return {
+    registry: implicitRegistry(agent, autoSwitches().model),
+    agentFilter: autoSwitches().agent,
+    defaultAgent: agent,
+    runAgent: agent,
+    router: router ?? createRouter(),
+    clock: { now: () => Date.now() },
+  }
+}
+
+// The structural slice of the run's routing facts the decisions read. The
+// run's RoutingFacts (src/routing.ts) satisfies it field for field; this
+// module cannot name that type: routing carries the Router type, so an
 // import back — type-only included — would close a cycle the
 // import-direction DAG check rejects (the same reason ClassifierAnswer
 // lives in this module, beside its cache). The clock likewise appears as
@@ -1128,22 +948,20 @@ export type RouteFacts = {
   random?: () => number
 }
 
-// The selection context the fence builds from the facts — the twin of
-// routing.ts's selectContext, optional `limits` included: a fence call
+// The selection context the routing decisions build from the facts — the
+// twin of routing.ts's selectContext, optional `limits` included: a call
 // that holds live context windows passes them (the failover's clipping and
-// selection read them), the others select without (an unknown window never
-// excluded a candidate on the no-registry path either, so the comparison
-// keeps its shape). The down marks, the /failback override and the key
-// rings are the live run state behind the facts' router, read exactly as
-// selectContext reads them.
-// AUTO-DECISION: the fence's selections carry no context windows except where the site holds them (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
+// selection read them), the others select without. The down marks, the
+// /failback override and the key rings are the live run state behind the
+// facts' router, read exactly as selectContext reads them.
+// AUTO-DECISION: the decisions' selections carry no context windows except where the site holds them (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the retired env-switch path either, so the comparison keeps its shape
 function routeContext(facts: RouteFacts, switches: Switches, cap: number, limits?: ReadonlyMap<string, number>): SelectContext {
   return {
     registry: facts.registry,
     cap,
     agentFilter: facts.agentFilter,
     defaultAgent: facts.defaultAgent,
-    policy: switches.model,
+    policy: selectionPolicy(facts.registry, switches.model),
     override: facts.router.failbackOverride(),
     marks: facts.router.downMarks(),
     ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
@@ -1153,9 +971,9 @@ function routeContext(facts: RouteFacts, switches: Switches, cap: number, limits
 
 // The wait payload of a wait decision (the model that opens first, its
 // formatted opening and the dispatch list's tier) — the one home of the
-// payload build since the recovery-wait neighbourhood fenced in: the
-// failover's wait-and-reselect and the probe loop both build it here (the
-// dispatch side builds its own from the list it already holds,
+// payload build since the recovery-wait decisions moved in: the failover's
+// wait-and-reselect and the probe loop both build it here (the dispatch
+// side builds its own from the list it already holds,
 // src/engine/dispatch.ts).
 function waitPayload(
   facts: RouteFacts,
@@ -1172,17 +990,15 @@ function waitPayload(
 }
 
 // Does a recorded session id belong to an agent this run can dispatch on?
-// `facts` undefined = no registry (no verdict, every record passes). Under
-// a registry the recorded agent (absent = the run's start profile, the
-// shape every pre-binding record reads as) must name a profile the registry
-// knows — or be the run's start agent itself, which may run profile-less
-// when the registry holds no profile of the chosen adapter — and its
-// adapter must pass the agent filter: session ids are agent-local, and a
-// filtered-out agent's model is never a candidate, so its sessions are
-// never resumed nor forked (plans/0055 §8.3). Moved from src/unit-commit.ts
-// behind the fence: its no-registry guard is a routing-truthiness branch.
-export function recordedAgentOk(facts: RouteFacts | undefined, recorded: string | undefined): boolean {
-  if (facts === undefined) return true
+// The recorded agent (absent = the run's start profile, the shape every
+// pre-binding record reads as) must name a profile the registry knows — or
+// be the run's start agent itself, which may run profile-less when the
+// registry holds no profile of the chosen adapter — and its adapter must
+// pass the agent filter: session ids are agent-local, and a filtered-out
+// agent's model is never a candidate, so its sessions are never resumed
+// nor forked (plans/0055 §8.3). Moved from src/unit-commit.ts when the
+// branch moved here.
+export function recordedAgentOk(facts: RouteFacts, recorded: string | undefined): boolean {
   const agent = recorded ?? facts.runAgent
   const adapter =
     facts.registry.agents.get(agent)?.adapter ??
@@ -1190,19 +1006,18 @@ export function recordedAgentOk(facts: RouteFacts | undefined, recorded: string 
   return adapter !== undefined && (facts.agentFilter === undefined || adapter === facts.agentFilter)
 }
 
-// The §10 item 11 eligibility of a strict resume under a registry (moved
-// from src/unit-commit.ts behind the fence): the recorded internal name is
-// judged by eligibility, not equality. Selection is asked exactly as the
-// dispatch a resumed session takes — a continuation over the recorded
-// model (§6.2 keeps the chain's model while it is usable) — and the
-// recorded model must be what it keeps. So a window change that only moves
-// the fresh pick (an earlier candidate's window reopening), a reordered
-// list or a returned primary does not roll a unit back; a model that is
-// marked down, outside its windows, excluded by the agent filter or gone
-// from the registry is not eligible. Without a registry there is no
-// verdict (false; the callers keep the raw-string comparison).
+// The §10 item 11 eligibility of a strict resume: the recorded internal
+// name is judged by eligibility, not equality. Selection is asked exactly
+// as the dispatch a resumed session takes — a continuation over the
+// recorded model (§6.2 keeps the chain's model while it is usable) — and
+// the recorded model must be what it keeps. So a window change that only
+// moves the fresh pick (an earlier candidate's window reopening), a
+// reordered list or a returned primary does not roll a unit back; a model
+// that is marked down, outside its windows, excluded by the agent filter
+// or gone from the registry is not eligible. Moved from src/unit-commit.ts
+// when the branch moved here.
 export function resumeModelEligible(
-  facts: RouteFacts | undefined,
+  facts: RouteFacts,
   switches: Switches,
   cap: number,
   phaseKey: PhaseKey | undefined,
@@ -1210,7 +1025,6 @@ export function resumeModelEligible(
   phase?: Phase,
   role?: ModelRole,
 ): boolean {
-  if (facts === undefined) return false
   const decision = select(routeContext(facts, switches, cap), {
     role: role ?? phaseToRole(phase) ?? "bypass",
     entry: phaseKey?.entry,
@@ -1221,24 +1035,22 @@ export function resumeModelEligible(
   return decision.kind === "pick" && candidateKey(decision.candidate) === recorded
 }
 
-// The §8.3 dead-session verdict of a resume record under a registry (moved
-// from src/unit-commit.ts behind the fence): a recorded session is resumed
-// only if its agent is one this run can dispatch on and its recorded model
-// is usable now; otherwise the session is dead and the resume takes the
-// existing path of a new session with the resume note (under strict
-// resume, the rollback path). Returns the reason for the log line;
-// undefined = no verdict (without a registry, or a record that names
-// nothing to check — a non-strict record carries no model, and
-// eligibility then has nothing to judge).
+// The §8.3 dead-session verdict of a resume record: a recorded session is
+// resumed only if its agent is one this run can dispatch on and its
+// recorded model is usable now; otherwise the session is dead and the
+// resume takes the existing path of a new session with the resume note
+// (under strict resume, the rollback path). Returns the reason for the
+// log line; undefined = no verdict (a record that names nothing to check —
+// a non-strict record carries no model, and eligibility then has nothing
+// to judge). Moved from src/unit-commit.ts when the branch moved here.
 export function deadSessionWhy(
-  facts: RouteFacts | undefined,
+  facts: RouteFacts,
   switches: Switches,
   cap: number,
   phaseKey: PhaseKey | undefined,
   record: { agent?: string; model?: string; phase?: Phase },
   role?: ModelRole,
 ): string | undefined {
-  if (facts === undefined) return undefined
   if (!recordedAgentOk(facts, record.agent)) {
     return `the recorded session lives on agent ${record.agent ?? facts.runAgent}, which this run does not dispatch on${facts.agentFilter ? ` (agent filter ${facts.agentFilter})` : " (no such agent profile)"}`
   }
@@ -1248,118 +1060,52 @@ export function deadSessionWhy(
   return undefined
 }
 
-// The agent field of a record the dispatch side persists (the handover
-// claim's continuation session, the progress record of a running
-// session): the field is present iff a registry drives the run and the
-// chain names its agent — absent = the default agent's, so pre-binding
-// records read correctly and a no-registry run writes byte-identical
-// files. A stateless verdict of the fence (no holder reads): callers
-// spread the result into their record literal and pass `opts.routing`
-// untested; the no-registry `{}` half is the compatibility layer of
-// plans/0061 §4.11, deleted in F2.
-export function agentField(facts: RouteFacts | undefined, agent: string | undefined): { agent?: string } {
-  return facts !== undefined && agent !== undefined ? { agent } : {}
-}
-
 // The hibernate jitter of a scheduled sleep (0–600 s on top of the
 // instant, so drivers sharing an account do not all wake the same
-// second): the facts' injected random under a registry, Math.random
-// without one. A stateless verdict of the fence (the knob the window
-// wait's and the recovery sleep's tails draw); the `facts?.random` read is
-// the routing branch the fence owns.
-export function jitterOf(facts: RouteFacts | undefined): number {
-  return (facts?.random ?? Math.random)() * HIBERNATE_JITTER_MS
+// second): the facts' injected random, absent = Math.random.
+export function jitterOf(facts: RouteFacts): number {
+  return (facts.random ?? Math.random)() * HIBERNATE_JITTER_MS
 }
 
 // The wake computation of the window wait (§6.3): the interval to sleep
 // (the distance to the opening, clamped at zero, plus the jitter) and the
-// instant the wait line announces. The registry arm reads the facts'
-// clock, exactly as the site's asserted read used to; the no-registry arm
-// never runs (a WindowWait exists only where selection produced one, and
-// selection is registry-only machinery) — it answers over the run clock
-// the site hands in, the compatibility half F2 deletes. Stateless, hence
-// a free function; the ⏸/→ lines and the booked sleep stay with the
-// caller (session I/O on the services clock).
-export function windowWake(facts: RouteFacts | undefined, wait: WindowWait, fallbackNow: () => number): { sleep: number; wakeAt: Date } {
-  const now = facts !== undefined ? facts.clock.now() : fallbackNow()
+// instant the wait line announces. The facts' clock is the timeline. The
+// ⏸/→ lines and the booked sleep stay with the caller (session I/O on the
+// services clock).
+export function windowWake(facts: RouteFacts, wait: WindowWait): { sleep: number; wakeAt: Date } {
+  const now = facts.clock.now()
   const sleep = Math.max(0, wait.until - now) + jitterOf(facts)
   return { sleep, wakeAt: new Date(now + sleep) }
 }
 
-// The chain of one recovery probe: a fresh one-off view that copies the
-// real chain's model only without a registry (what is probed is exactly
-// the model the run will continue on; under a registry the probe's own
-// dispatch selects, so the view carries the role and nothing else — no
-// phase, no progress record, the real chain's recovery point untouched).
-// Stateless verdict of the fence; callers pass `opts.routing` untested.
-export function probeChain(facts: RouteFacts | undefined, chain: SessionChain): SessionChain {
-  return { pct: 100, used: 0, at: 0, ...(facts !== undefined ? {} : { model: chain.model }), role: roleOf(chain) }
-}
-
-// The chain whose model fields name the account a recovery probe ran on:
-// the probe chain itself under a registry (the probe's dispatch wrote the
-// probed entry onto it), the interrupted chain without one (the probe
-// copied its model). Answers the chain view accountOf reads; stateless
-// verdict of the fence, callers pass `opts.routing` untested.
-export function probeAccountChain(
-  facts: RouteFacts | undefined,
-  probe: SessionChain,
-  chain: SessionChain,
-): Pick<SessionChain, "model" | "modelEntry" | "modelShown"> {
-  return facts !== undefined ? probe : chain
-}
-
-// Whether a registry drives the run — the boolean the pure ladder
-// decision's facts carry (the registry flag of LadderFacts). The
-// truthiness test is the fence's to own; callers pass `opts.routing`
-// untested.
-export function registryDriven(facts: RouteFacts | undefined): boolean {
-  return facts !== undefined
+// The chain of one recovery probe: a fresh one-off view that carries the
+// role only — no phase, no progress record, the real chain's recovery
+// point untouched (the probe's own dispatch selects the probed model).
+export function probeChain(chain: SessionChain): SessionChain {
+  return { pct: 100, used: 0, at: 0, role: roleOf(chain) }
 }
 
 // The agent whose fork-base record a forking chain reads and writes
 // (plans/0055 §8.4): the base the pipeline forks from must live on the
 // agent the forking subtask's chain runs on, so the persisted record is
-// per agent — under a registry that is the chain's agent (the decompose
-// dispatch's before the first subtask, the moved-to agent after a
-// cross-agent failover: a subtask that moved to another agent forks from
-// that agent's base, building it on first use), with the facts' runAgent
-// standing in while the chain holds no session. undefined = no registry,
-// where the plain-string record of the one-agent era applies as-is and
-// setForkBase keeps the old shape — the no-registry half is the
-// compatibility layer of plans/0061 §4.11, deleted in F2. A stateless
-// verdict (facts reads alone, no holder state); callers pass
-// `opts.routing` untested.
-export function forkAgent(facts: RouteFacts | undefined, chain: SessionChain): string | undefined {
-  return facts !== undefined ? (chain.agent ?? facts.runAgent) : undefined
-}
-
-// The role of the fork base's one-off rebuild chain (plans/0055 §8.4): a
-// base's value is a warm prefix (plans/0003), and a prefix cached under
-// one model is a miss under another, so the chain carries the `subtask`
-// role and the dispatch inside selects (and fails over) on the subtask
-// tier's list — the picked entry's variant and base step included.
-// Without a registry the field stays absent and the bypass routing of
-// the one-agent era applies unchanged (plans/0055 C2) — the compatibility
-// half of the fence (plans/0061 §4.11), deleted in F2. Callers spread
-// the verdict into the chain literal, `opts.routing` passed untested.
-export function forkBaseRole(facts: RouteFacts | undefined): { role?: ModelRole } {
-  return facts !== undefined ? { role: "subtask" } : {}
+// per agent — the chain's agent (the decompose dispatch's before the
+// first subtask, the moved-to agent after a cross-agent failover: a
+// subtask that moved to another agent forks from that agent's base,
+// building it on first use), with the facts' runAgent standing in while
+// the chain holds no session.
+export function forkAgent(facts: RouteFacts, chain: SessionChain): string {
+  return chain.agent ?? facts.runAgent
 }
 
 // The agent the fork-base record names as truly holding the built base
-// session (plans/0055 §8.2): under a registry it is the rebuild chain's
-// landed agent (the dispatch inside picked it — the subtask route's
-// first usable candidate's profile, which is where the forking subtask
-// dispatches too, so the prefix caches under the model that forks from
-// it), with the reading agent (forkAgent's answer) standing in when the
-// dispatch left no agent on the chain; with one agent a run this is
-// always the reading agent. undefined = no registry, where the record
-// keeps the old shape — the compatibility half of the fence
-// (plans/0061 §4.11), deleted in F2. A stateless verdict; callers pass
-// `opts.routing` untested.
-export function landedAgent(facts: RouteFacts | undefined, base: SessionChain, agent: string | undefined): string | undefined {
-  return facts !== undefined ? (base.agent ?? agent) : undefined
+// session (plans/0055 §8.2): the rebuild chain's landed agent (the
+// dispatch inside picked it — the subtask route's first usable
+// candidate's profile, which is where the forking subtask dispatches too,
+// so the prefix caches under the model that forks from it), with the
+// reading agent (forkAgent's answer) standing in when the dispatch left
+// no agent on the chain.
+export function landedAgent(base: SessionChain, agent: string): string {
+  return base.agent ?? agent
 }
 
 // The limits a reset instant reads as on the wait line (plans/0057 §7).
@@ -1379,25 +1125,13 @@ function limitPhrase(scope: LimitScope | undefined): string {
   }
 }
 
-// The failover fence's slice of the session loop's ladder bookkeeping: the
-// candidate strings this chain has already tried (ordered, for the
-// exhaustion line and the dedup on re-selection) and those skipped because
-// their context window falls short (for the same). A structural slice of
-// the loop's LadderState, taken as data exactly like the chain view and
-// the sticky/override holders elsewhere in the fence: the ladder is
-// loop-local, per-prompt state the fence mutates through the argument
-// (never holds), so naming the engine's type would couple the service to
-// the decision module its caller executes for no gain.
-export type FailoverLadder = { tried: string[]; clipped: string[] }
-
 // One decided model failover (the answer of `failover`): the model being
 // left (`from`, undefined = the primary — the log renders "primary model"),
 // the candidate picked (`to`: a registry entry's internal name, or the
 // ring's model string without one), the route value the caller writes
-// through setRoute (under a registry the selection state travels with the
-// chain: model id + internal entry + a reset step; without one the model
-// string alone), and the cross-agent move's target agent (undefined = keep
-// the chain's context, a fork of the failed session).
+// through setRoute (the selection state travels with the chain: model id +
+// internal entry + a reset step), and the cross-agent move's target agent
+// (undefined = keep the chain's context, a fork of the failed session).
 export type FailoverDecision = {
   from: string | undefined
   to: string

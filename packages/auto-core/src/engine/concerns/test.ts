@@ -173,10 +173,11 @@ const idleProtocol = async (test: NonNullable<TurnContext["test"]>, own: TurnSta
       n,
       script: test.pending?.script,
       seq: test.pending?.seq,
-      // The pinned session's agent profile (plans/0055 §8.2), under a
-      // registry only; absent = the default agent's, as every pre-binding
-      // record reads.
-      ...(ctx.opts.routing ? { agent: ctx.opts.routing.runAgent } : {}),
+      // The pinned session's agent profile (plans/0055 §8.2): the run's
+      // start agent stands in for the session the turn drives (the record
+      // predates the chain the re-run builds); absent = the default agent's,
+      // as every pre-binding record reads.
+      agent: ctx.opts.routing?.runAgent,
       pinSession: ctx.sessionID,
       pinMessage: view.transcript.lastMessage,
     })

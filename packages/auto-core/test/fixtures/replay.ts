@@ -55,6 +55,7 @@ import { settleToWatch } from "../../src/engine/result"
 import { runTurn } from "../../src/engine/spine"
 import type { SteerContext } from "../../src/model-step"
 import type { Opts } from "../../src/opts"
+import { routingFacts } from "../../src/routing"
 import { createServices, installServices, uninstallServices, type Clock } from "../../src/services"
 import { parseSwitches, type Switches } from "../../src/switches"
 import type { StuckTracker } from "../../src/stuck"
@@ -334,7 +335,7 @@ async function replayTurn(events: readonly RunEvent[], args: ReplayArgs): Promis
     ...(steerContext !== undefined ? { steerContext } : {}),
     policy,
     classify: (info) => classifySessionError(info, client.errorPatterns, policy),
-    classifier: classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined),
+    classifier: classifierFor(client, opts.routing ?? routingFacts(undefined, undefined, services.clock, services.router, undefined, switches), steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined),
     source: usageSource(client.capabilities.usage),
     services,
     startTime: start.start,

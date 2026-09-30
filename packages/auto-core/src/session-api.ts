@@ -123,12 +123,12 @@ export async function seedForkSession(
   }
   // The base session is agent-local (plans/0055 §8.2): the fork runs on the
   // chain's agent's host, resolved through the pool when the caller passed
-  // one (a base seeded onto this chain lives on its agent). Under a registry
-  // the base names the agent it was built on (§8.4): the fork runs there and
+  // one (a base seeded onto this chain lives on its agent). The base names
+  // the agent it was built on (§8.4): the fork runs there and
   // the chain's binding follows — the pre-created session lives on that
   // agent, so the dispatch consuming it must resolve its client, and read the
-  // cross-agent check, against the same name. Without a registry the base
-  // names no agent and the chain's stands, exactly as before (C2).
+  // cross-agent check, against the same name (every built base carries the
+  // name; `??` is the type-level fallback the optional field still allows).
   const agent = base.agent ?? chain.agent
   const baseClient = await clientOf(client, agent)
   // Sync AGENTS.md before the new session (same as the create path; the forked

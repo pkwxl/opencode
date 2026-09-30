@@ -37,10 +37,10 @@ export type ServerControl = {
 }
 
 // What the session-driving entry points accept in place of an AgentClient:
-// one client (tests, the no-registry single agent) or the run's pool control.
-// Every driver call that takes a client resolves it from the chain's agent
-// (src/agent-pool.ts clientOf); a plain client is returned as is, whatever
-// the agent, so the no-registry path is untouched.
+// one client (tests, the layer-less run's single agent) or the run's pool
+// control. Every driver call that takes a client resolves it from the chain's
+// agent (src/agent-pool.ts clientOf); a plain client is returned as is,
+// whatever the agent, so a single-client caller is untouched.
 export type ClientSource = AgentClient | ServerControl
 
 // Task outcomes. dirty (plans/0021-commit-boundary-design.md) = the dedicated
@@ -189,11 +189,14 @@ export type Opts = {
   // closed). The planning templates' question-rule branch follows the same
   // policy (the render facts' humanQuestions flag, src/prompt-facts.ts).
   humanQuestions?: boolean
-  // The run's registry routing facts (plans/0055 §6): the loaded model
-  // registry with the agent filter and the default agent, built once at run
-  // start. undefined = no registry: every dispatch resolves its model through
-  // the env-switch path, exactly as before. Type-only import; opts stays a
-  // pure type module.
+  // The run's registry routing facts (plans/0055 §6): the registry with the
+  // agent filter and the default agent, built once at run start and carried by
+  // every dispatch — always defined for a run (a layer-less run carries the
+  // implicit registry the env switches synthesize). undefined stays a legal
+  // value only for a bare literal that never knew routing (a test literal
+  // below the loop); the engine resolves such a literal onto the implicit
+  // registry at its boundary. Type-only import; opts stays a pure type
+  // module.
   routing?: import("./routing").RoutingFacts
   // The run's router service (the routing decision state: the failback
   // holders, the down marks), carried beside `routing` for the readers below

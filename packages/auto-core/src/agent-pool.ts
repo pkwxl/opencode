@@ -8,13 +8,14 @@
 // (the key rings' current keys as references, §4.3): two opencode profiles
 // run two managed servers, each spawning with its own rings (§8.10).
 //
-// Without a registry the pool holds exactly one agent, started eagerly where
-// runAll starts it, with the same `◇ agent:` line and the same startup order
-// as the one-host era (C2). With a registry no host starts here: degrade
-// runs once over the capability intersection of every agent with a candidate
-// in a list after the agent filter (§8.5, degradeAgents over the adapters'
-// static capability records — known before any host starts), and preflight
-// has already checked the fleet's bins (§8.7, checkAgentBins below).
+// Without a registry layer the pool holds exactly one agent, started eagerly
+// where runAll starts it, with the same `◇ agent:` line and the same startup
+// order as the one-host era. With a registry layer no host starts here:
+// degrade runs once over the capability intersection of every agent with a
+// candidate in a list after the agent filter (§8.5, degradeAgents over the
+// adapters' static capability records — known before any host starts), and
+// preflight has already checked the fleet's bins (§8.7, checkAgentBins
+// below).
 //
 // Sits below the session layer and above the agent domain (§12): it may name
 // the host factories, never the loop or a session-driving module.
@@ -101,12 +102,13 @@ export class AgentStartError extends Error {
   }
 }
 
-// Starts the run's agent hosts (runAll's one entry): without a registry the
-// one chosen agent starts eagerly, degraded by its live capabilities with
-// today's wording (C2); under a registry no host starts here — the pool
-// starts each profile's host on its first selection, and degrade runs once
-// over the capability intersection of every agent with a candidate in a list
-// after the agent filter (§8.5), each note naming the forcing agent.
+// Starts the run's agent hosts (runAll's one entry): without a registry
+// layer the one chosen agent starts eagerly, degraded by its live
+// capabilities with today's wording; under a registry layer no host starts
+// here — the pool starts each profile's host on its first selection, and
+// degrade runs once over the capability intersection of every agent with a
+// candidate in a list after the agent filter (§8.5), each note naming the
+// forcing agent.
 // `error` = a configuration with no fallback: the caller logs it, closes
 // what started and stops. `profileName` names the run's start profile — the
 // registry's pick for the chosen agent (agentProfileFor), else the chosen

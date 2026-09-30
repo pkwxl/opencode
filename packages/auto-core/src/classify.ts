@@ -31,9 +31,9 @@
 // Where the answers act lives with the callers: src/watch.ts asks beside the
 // event stream of a retrying turn and settles it when an answer raises the
 // class; src/session.ts writes the reset time into the down marks of the key
-// → model → wait escalation. Without a registry or without a classifier list
-// nothing here runs (C2). Sits below watch: no loop, no session-driving, no
-// agent start imports (import-direction rule).
+// → model → wait escalation. Without a classifier list — a layer-less run's
+// implicit registry carries none — nothing here runs. Sits below watch: no
+// loop, no session-driving, no agent start imports (import-direction rule).
 import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } from "./agent/types"
 import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
 import { log, vlog } from "./log"
@@ -243,17 +243,17 @@ export type Classifier = {
   timeoutMs: number
 }
 
-// The run's classifier, or undefined — no registry, or no classifier list (or
-// an empty one) — in which case nobody asks and the run is byte-identical to
-// one without the feature (C2).
+// The run's classifier, or undefined — no routing facts on the options the
+// watch saw, or no classifier list (or an empty one; the implicit registry
+// declares none) — in which case nobody asks.
 // AUTO-DECISION: the classifier's one-shot session runs on the pick entry's own host when the caller hands the pool's client resolver (the entry's agent, exactly as §7.1 settles: "the pool hands out the entry's host"); the watch's own client remains the fallback, which a no-registry caller and the tests keep passing
 export function classifierFor(
   client: AgentClient,
-  routing: RoutingFacts | undefined,
+  routing: RoutingFacts,
   label = "",
   clients?: (agent: string) => Promise<AgentClient>,
 ): Classifier | undefined {
-  if (routing === undefined || !(routing.registry.classifier?.names.length ?? 0)) return undefined
+  if (!(routing.registry.classifier?.names.length ?? 0)) return undefined
   return {
     client,
     ...(clients !== undefined ? { clientOf: clients } : {}),

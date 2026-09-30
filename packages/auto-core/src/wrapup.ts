@@ -101,8 +101,7 @@ export async function runWrapup(
     // session + the full prompt.
     shapeForked = await forkEndedSession(client, chain, subject)
     // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on the
-    // model of the wrap-up session that failed the report shape check;
-    // undefined without a registry (C2).
+    // model of the wrap-up session that failed the report shape check.
     await statsModelEvent(dir, chain.modelEntry, "reprompt")
     log(`↻ ${task.id} wrap-up session's ${rel} failed checks; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }

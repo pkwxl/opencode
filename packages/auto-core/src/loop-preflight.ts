@@ -217,16 +217,21 @@ export async function preflight(
     const types = loaded.map((entry) => entry.type)
     registry = await loadRunRegistry(directory, types)
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
-    // A dispatch the run can send with a list the agent filter emptied is a
-    // usage error, never a silent wait (plans/0055 §6.3, §10 item 7).
-    const facts = registry ? routingFacts(registry, opts.agent, run.clock, run.router) : undefined
-    const coverage = facts ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
+    // The layer-backed fleet checks run only when layers exist: a layer-less
+    // run routes on the implicit registry (the env switches synthesize it)
+    // and starts the single agent exactly as it always did — its coverage is
+    // the implicit registry's own never-empty lists, and its bins are the
+    // one agent the fleet start itself resolves. A dispatch the run can send
+    // with a list the agent filter emptied is a usage error, never a silent
+    // wait (plans/0055 §6.3, §10 item 7).
+    const facts = registry !== undefined ? routingFacts(registry, opts.agent, run.clock, run.router) : undefined
+    const coverage = facts !== undefined ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
     // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
     // references runs `<bin> --version` under its env, 10 s timeout. The
     // driver never logs in or reads credentials — an expired login surfaces
     // at runtime as an `auth`-class error. A caller-supplied host (`managed`)
     // brings its own agent; no bin of ours is checked.
-    const bins = facts && !opts.managed ? await checkAgentBins(registry!, facts.agentFilter) : []
+    const bins = facts !== undefined && !opts.managed ? await checkAgentBins(registry!, facts.agentFilter) : []
     const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage, ...bins]
     if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {

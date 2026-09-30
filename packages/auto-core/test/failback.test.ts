@@ -1,7 +1,9 @@
 // Failback and the router's failback/down-mark state: the pure granularity
 // helper of src/failback.ts, and the run-wide decision state the router
-// service holds (the sticky holder, the pending /failback order and the
-// run-time model-order override, the down marks). Every test reads the
+// service holds (the pending /failback order, the run-time model-order
+// override and the down marks — the failover state of every registry, the
+// implicit one included, since the phase-sticky holder left with the
+// env-switch path). Every test reads the
 // fresh instance the preload installed for it — the moved state has no
 // reset hook, and none may reappear (test/services.test.ts).
 import { describe, expect, test } from "bun:test"
@@ -27,25 +29,19 @@ describe("failbackApplies (inclusive granularity, the same RANK idea as step)", 
   })
 })
 
-describe("failback (the router's state for failover, failback and /failback)", () => {
-  test("sticky holder: setSticky/clearSticky read and write, default undefined", () => {
-    const router = services().router
-    expect(router.stickyModel()).toBeUndefined()
-    router.setSticky("prov/a")
-    expect(router.stickyModel()).toBe("prov/a")
-    router.clearSticky()
-    expect(router.stickyModel()).toBeUndefined()
-  })
+// Friday 2026-09-25 12:00 UTC, the instant the down-mark reads judge by.
+const NOW = Date.parse("2026-09-25T12:00:00Z")
 
+describe("failback (the router's state for failover, failback and /failback)", () => {
   test("when not requested, consumeFailback returns false and no override is set", () => {
     const router = services().router
     expect(router.consumeFailback()).toBe(false)
     expect(router.failbackOverride()).toBeUndefined()
   })
 
-  test("/failback without arguments: on consumption the failover state clears and the boundary resets the chain's route beside it", () => {
+  test("/failback without arguments: on consumption the failover state (the down marks) clears and the boundary resets the chain's route beside it", () => {
     const router = services().router
-    router.setSticky("prov/b")
+    router.markModelDown("prov/b")
     router.requestFailback()
     expect(router.failbackRequested()).toBe(true)
     expect(router.consumeFailback()).toBe(true)
@@ -57,7 +53,7 @@ describe("failback (the router's state for failover, failback and /failback)", (
     expect(chain.model).toBeUndefined()
     expect(chain.modelEntry).toBeUndefined()
     expect(chain.modelStep).toBe(0)
-    expect(router.stickyModel()).toBeUndefined()
+    expect(router.isModelDown("prov/b", NOW)).toBe(false)
     expect(router.failbackOverride()).toBeUndefined()
     expect(router.failbackRequested()).toBe(false)
   })
@@ -93,10 +89,10 @@ describe("failback (the router's state for failover, failback and /failback)", (
   })
 
   test("each test's router starts fresh (the preload installs a new instance per test)", () => {
-    // The previous tests consumed /failback orders and wrote the sticky
-    // holder; this test's instance carries none of it.
+    // The previous tests consumed /failback orders and wrote down marks;
+    // this test's instance carries none of it.
     const router = services().router
-    expect(router.stickyModel()).toBeUndefined()
+    expect(router.downMarks().size).toBe(0)
     expect(router.failbackRequested()).toBe(false)
     expect(router.failbackOverride()).toBeUndefined()
   })
@@ -107,8 +103,6 @@ describe("failback (the router's state for failover, failback and /failback)", (
 // cleared at the failback scope boundaries and by /failback, an `until` mark
 // lasting until its instant instead.
 describe("down marks (§6.4)", () => {
-  const NOW = Date.parse("2026-09-25T12:00:00Z")
-
   test("markModelDown / modelDownMark / isModelDown: down now, with or without an until", () => {
     const router = services().router
     expect(router.isModelDown("k3", NOW)).toBe(false)
@@ -179,12 +173,12 @@ describe("down marks (§6.4)", () => {
     expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(false)
   })
 
-  test("the sticky holder and the marks are independent state", () => {
+  test("an until-less mark and an until mark read independently", () => {
     const router = services().router
     router.markModelDown("k3")
-    router.setSticky("prov/a")
-    router.clearSticky()
-    expect(router.stickyModel()).toBeUndefined()
+    router.markModelDown("opus", NOW + 3_600_000)
     expect(router.isModelDown("k3", NOW)).toBe(true)
+    expect(router.isModelDown("opus", NOW)).toBe(true)
+    expect(router.isModelDown("opus", NOW + 3_600_000)).toBe(false)
   })
 })

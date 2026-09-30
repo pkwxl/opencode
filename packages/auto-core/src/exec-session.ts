@@ -16,12 +16,13 @@ import { createGitOps } from "./git-ops"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
-import type { RoutingFacts } from "./routing"
+
 import type { Plan, Task } from "./tasks"
+import { autoSwitches } from "./switches"
 import { renderTestContinue, renderTestWrapup, type TestRunInfo } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { COMMIT_CLARIFY } from "./resume-gate"
-import { runSession } from "./session"
+import { routingOf, runSession } from "./session"
 import { clientOf, forkSession, sessionAlive, sessionUsed } from "./session-api"
 import {
   archiveHandoff,
@@ -35,10 +36,9 @@ import {
   type TestRun,
 } from "./testrun"
 import { commitBlocked } from "./unit-commit"
-// The fence's registry/no-registry agent verdict (moved out of unit-commit
-// with the routing fence: its no-registry guard is a routing-truthiness
-// branch, so it lives in the router service's module).
-import { recordedAgentOk } from "./router"
+// The recorded-agent verdict of the router service's module (moved out of
+// unit-commit when the branch moved there).
+import { recordedAgentOk, type RouteFacts } from "./router"
 import { scriptTmpDir } from "./script"
 
 // The unified entry for execution-type sessions (subtask / whole task /
@@ -141,7 +141,7 @@ export async function runExecSession(
     // session from the session state at the frozen moment to redo the wrap-up;
     // after the wrap-up it proceeds as usual through archive → commit #2 →
     // run the script.
-    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, opts.routing)) {
+    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, routingOf(opts, autoSwitches()))) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
       firstPrompt = renderTestWrapup(promptFacts(opts), { handoffFile: test.handoffFile })
@@ -219,8 +219,8 @@ export async function runExecSession(
     // anchor — the fork is refused and the scope cold-starts.
     if (
       record?.nextSession &&
-      recordedAgentOk(opts.routing, record.agent) &&
-      (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`, opts.routing ? (record.agent ?? opts.routing.runAgent) : undefined))
+      recordedAgentOk(routingOf(opts, autoSwitches()), record.agent) &&
+      (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`, record.agent ?? routingOf(opts, autoSwitches()).runAgent))
     ) {
       log(`↻ ${test.label} resume after interruption: the pre-interruption continuation session ${record.nextSession} is still alive; forked a copy to resume`)
       // The fork copy carries the continuation session's full context (the
@@ -309,14 +309,15 @@ export async function runExecSession(
 // is the last one) the whole session is forked — the wrap-up prompt is
 // dispatched again, the session does the wrap-up at most twice, and nothing
 // is lost.
-// routing is the run's routing facts (undefined = no registry): a session
+// routing is the run's routing facts (always defined; a bare options
+// literal resolves onto the implicit registry): a session
 // never crosses agents (plans/0055 §8.3), so a record whose agent is not one
 // this run dispatches on (an absent field is the run's start profile's) is a
 // dead anchor — no fork, the caller cold-starts the scope. The fork runs on
 // the record's agent's host, and the chain's binding follows the fork.
-export async function seedPinFork(client: ClientSource, chain: SessionChain, record: Handover, subject: string, routing?: RoutingFacts): Promise<boolean> {
+export async function seedPinFork(client: ClientSource, chain: SessionChain, record: Handover, subject: string, routing: RouteFacts): Promise<boolean> {
   if (!record.pinSession || !recordedAgentOk(routing, record.agent)) return false
-  const agent = routing ? (record.agent ?? routing.runAgent) : undefined
+  const agent = record.agent ?? routing.runAgent
   const anchorClient = await clientOf(client, agent)
   if (!(await sessionAlive(anchorClient, record.pinSession))) return false
   let anchor: string | undefined

@@ -13,8 +13,8 @@
 // escalation its reset time (resetAt) or the promise of one (pendingReset).
 // `retrying` (the failure slice) is true from a retry event until the model
 // produces output again (the agent's retry got through), so a late answer
-// never aborts a turn that recovered. Without a classifier all of this
-// stays unset and the turn is byte-identical to before (C2).
+// never aborts a turn that recovered. Without a classifier (the implicit
+// registry carries none) all of this stays unset.
 //
 // The settle procedure's recovery steps (plans/0061 §4.4 rule 5) live here
 // too: the raised settle's abort and line, and the final classification of

@@ -18,8 +18,8 @@
 // The slice's step moves one-way, up only; `model` is the id every steer
 // names (the reached step's id, so a late steer cannot drop the session
 // back) and `reached` the record the snapshot carries to the chain.
-// Without a registry (no steer context, no entry) every cell is inert and
-// the turn is byte-identical to before (C2).
+// Without steps — an entry carrying no `wider` (the implicit registry's
+// carry none) — every cell is inert.
 import { enabledSteps, stepId, stepUpPoint } from "../../model-step"
 import { renderStepUp } from "../../prompt"
 import { promptFacts } from "../../prompt-facts"

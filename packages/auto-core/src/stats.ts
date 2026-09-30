@@ -34,8 +34,7 @@ import { currentRound } from "./phases"
 // and the history aggregate may carry two optional sections, models/tiers
 // (usage and counts per internal model name / per tier). Older documents
 // without the two sections still load (lenient parsing defaults them empty);
-// runs without a registry never write them, the shape stays byte-identical
-// (C2).
+// a document nothing books into never gains them.
 
 // Usage accumulated incrementally per step-finish part (collection wiring is in T-003; this module only handles storage and aggregation).
 export type Usage = {
@@ -59,12 +58,12 @@ export type Totals = {
   // counter, booked beside the bucket's own usage (plans/0055 §7.1 "Stats",
   // §10 item 12). A raw `provider/model` override value is keyed by its raw
   // string; the failure-message classifier's tokens sit in the `classify`
-  // bucket. Optional and absent until the first booking, so a run without a
-  // model registry persists the exact pre-registry shape (C2: byte-identical).
+  // bucket. Optional and absent until the first booking, so a document
+  // nothing books into never gains them.
   models?: Record<string, ModelStat>
   // Usage and sessions per reasoning tier of the sessions booked above
   // (plans/0055 §10 item 12): same booking point, key = the tier the dispatch
-  // was routed as. Optional for the same C2 reason.
+  // was routed as. Optional for the same reason.
   tiers?: Record<string, TierStat>
   // Time slept in the wait-and-probe loop for a quota window, in ms per
   // model (plans/0057 §11 item 7): the model whose limit the wait was for —
@@ -298,7 +297,8 @@ function parseDigestStats(raw: unknown): DigestStats | undefined {
 }
 
 // Quota-window waits per model, leniently (bad entry skipped); an absent or
-// empty section returns undefined (the C2 shape).
+// empty section returns undefined, keeping the section out of the persisted
+// shape.
 function parseQuotaWaits(raw: unknown): Record<string, number> | undefined {
   if (typeof raw !== "object" || !raw) return undefined
   const waits: Record<string, number> = {}
@@ -311,7 +311,8 @@ function parseQuotaWaits(raw: unknown): Record<string, number> | undefined {
 
 // Per-model records, leniently (mirror parseUsage: bad = missing, never
 // throws). An absent or empty section returns undefined, keeping the persisted
-// shape of an un-routed run byte-identical on load→write round trips (C2).
+// shape of a document without model data byte-identical on load→write round
+// trips.
 function parseModelStats(raw: unknown): Record<string, ModelStat> | undefined {
   if (typeof raw !== "object" || !raw) return undefined
   const models: Record<string, ModelStat> = {}
@@ -475,7 +476,7 @@ function emptyTierStat(): TierStat {
 // Sum one bucket's per-model/per-tier sections and its quota-window waits
 // into an aggregate Totals (history at round rollover): creates the sections
 // lazily, so an aggregate
-// that received no model data stays without them (C2 shape).
+// that received no model data stays without them.
 function mergeModelStats(into: Totals, from: Totals) {
   for (const [name, stat] of Object.entries(from.models ?? {})) {
     const target = ((into.models ??= {})[name] ??= emptyModelStat())
@@ -899,14 +900,15 @@ export type StatsSessionReport = {
 // failures and similar abnormal paths) thisAiMs = 0, while usage and the
 // sessions/rounds counts still record — the consumption really happened, do
 // not drop it.
-// model/tier (passed in by attempt under a registry, plans/0055 §7.1
-// "Stats"): the candidate key — an internal name, or the raw
+// model/tier (passed in by attempt over the registry in force — layered or
+// implicit, plans/0055 §7.1 "Stats"): the candidate key — an internal name,
+// or the raw
 // `provider/model` string of an override value — plus this dispatch's tier;
 // when given, usage and sessions are booked in parallel per model and per
 // tier into the three buckets (the same booking point as the buckets' own
-// usage, one cumulative criterion across interruptions). Defaulted (no
-// registry): no models/tiers sections are created, the persisted shape stays
-// byte-identical (C2).
+// usage, one cumulative criterion across interruptions). Not given: no
+// models/tiers sections are created (every run books over its registry; this
+// corner is the direct caller's alone).
 export async function statsSessionEnd(
   dir: string | undefined,
   sessionID: string,
@@ -976,8 +978,8 @@ export async function statsSessionEnd(
 // received (stuck), the shape-check re-prompts it triggered (reprompt).
 // The same parallel three-bucket criterion as usage — the count lands in the
 // three buckets of the task/phase/round the event happened in, accumulating
-// in the document across interruptions. A defaulted model (no registry, no
-// chosen entry on the chain) is a no-op and creates no models section (C2).
+// in the document across interruptions. An absent model is a no-op and
+// creates no models section.
 // The event was already judged by the caller at its observation point; this
 // only stores it.
 // AUTO-DECISION: the counts go to the three buckets in parallel (task/phase/

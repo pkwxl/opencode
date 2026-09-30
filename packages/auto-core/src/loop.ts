@@ -133,10 +133,11 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     }
     // Start the run's agent hosts (src/agent-pool.ts) and degrade the
     // switches the fleet cannot serve; a configuration with no fallback
-    // stops here. Under a model registry no host starts yet — the pool
+    // stops here. Under a registry layer no host starts yet — the pool
     // starts each agent profile's host lazily on its first selection
-    // (plans/0055 §8.1); without one this starts the single agent exactly
-    // as before (C2).
+    // (plans/0055 §8.1); a layer-less run starts the single agent exactly
+    // as before (the implicit registry exists to route, not to re-shape
+    // the fleet start).
     const started = await startPool(directory, { ...opts, registry })
     server = started.pool
     if (started.error !== undefined || server === undefined) {
@@ -149,24 +150,28 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // the one writer; a re-clamp declares its facts and re-parses instead).
     freezeSwitches()
     // The run's routing facts (plans/0055 §6): fixed once the agent choice is
-    // known, held by every dispatch through Opts.routing. The run-start block
-    // (§6.5) prints the routing in force; without a registry nothing changes.
+    // known, held by every dispatch through Opts.routing — always defined now:
+    // a layer-less run carries the implicit registry the env switches
+    // synthesize, so every dispatch resolves through selection. The run-start
+    // block (§6.5) prints the routing in force for a layer-backed registry;
+    // the implicit one is not announced at the start (it routes — the
+    // `models` command shows it).
     // runAgent is the run's start profile (§8.2): unqualified session records
     // and raw override values resolve through it, while each dispatch's chain
     // names the profile its session truly lives on. The facts carry the run
     // services' clock (the one timeline every dispatch reads).
-    const routing = registry ? routingFacts(registry, opts.agent, run.clock, run.router, started.profileName) : undefined
-    if (routing) logRunRouting(routing)
-    // The classifier's token booking (plans/0055 §7.1 "Stats"): under a
-    // registry the failure-message classifier's one-shot sessions report their
-    // usage into the stats `classify` bucket — outside the unit's session
-    // totals. The sink is the run router's (the classifier reads it through
-    // its router) and is dropped again in the finally below, before the stats
-    // handle flushes; without a registry no classifier exists, so nothing is
-    // registered and the run stays byte-identical (C2).
-    if (routing) run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
+    const routing = routingFacts(registry, opts.agent, run.clock, run.router, started.profileName)
+    if (registry !== undefined) logRunRouting(routing)
+    // The classifier's token booking (plans/0055 §7.1 "Stats"): the
+    // failure-message classifier's one-shot sessions report their usage into
+    // the stats `classify` bucket — outside the unit's session totals. The
+    // sink is the run router's (the classifier reads it through its router)
+    // and is dropped again in the finally below, before the stats handle
+    // flushes; without a classifier list nothing reports into it, so a
+    // registry without one registers harmlessly.
+    run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
     if (opts.interactive) {
-      repl = startInteractive((agent) => server!.client(agent), agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
+      repl = startInteractive((agent) => server!.client(agent), agentName, undefined, new Set(routing.registry.models.keys()))
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {

@@ -141,8 +141,10 @@ const INTERNAL_NAME = /^[a-z][a-z0-9.-]*$/
 // What parseSwitches needs to know about a loaded model registry (plans/0055
 // §9 R7): the internal names a bare OPENCODE_AUTO_MODEL value may take, and
 // the tier lists as text for the OPENCODE_AUTO_MODEL_FALLBACK refusal that
-// names them. undefined = no registry: the switches keep their exact
-// no-registry grammar and refusals.
+// names them. undefined = no layer-backed registry: the switches keep the
+// env grammar (values are provider/model, OPENCODE_AUTO_MODEL_FALLBACK
+// parses) — exactly the source the implicit registry of a layer-less run
+// synthesizes from, so the run start feeds this only when layers exist.
 export type SwitchModelRegistry = { names: ReadonlySet<string>; tiers: string }
 
 // Role words of retired sessions (plans/0044 D1): still a strict parse failure,
@@ -169,10 +171,13 @@ export function modelTypeProblems(policy: ModelPolicy, types: readonly string[])
     .map((key) => `env ${SWITCH_ENV.model} key "${key}" names no phase type (known: ${types.join(", ")})`)
 }
 
-// The normalized model-routing policy (P1 only parses and holds it; the actual
-// evaluation resolveModel lands in P2). Defaults wildcard=undefined / byLetter={} /
-// byRole={} / fallback=[] mean "unset" — with both env vars unset resolveModel must
-// start from that "without model" (byte-for-byte equivalent to the status quo).
+// The normalized model-routing policy. Defaults wildcard=undefined /
+// byLetter={} / byRole={} / fallback=[] mean "unset" — with both env vars
+// unset a run dispatches on the agent's default model (the implicit
+// registry's entry without a model). Under a layer-backed registry the
+// policy is the OPENCODE_AUTO_MODEL override that replaces candidate lists
+// (resolveModel, src/chain.ts); under no layers it is the source the
+// implicit registry synthesizes from (src/models.ts).
 export type ModelPolicy = {
   wildcard?: string
   byLetter: Partial<Record<ModelLetter, string>>
@@ -322,12 +327,13 @@ const SWITCH_DEFAULTS: Switches = {
 // contain a colon). Values must contain /; the empty string counts as unset. Bad values
 // fail strictly: throws an error message (naming the variable, an example, the offending
 // key/value).
-// Under a model registry (registry info given, plans/0055 §9 R7) a value is
-// additionally allowed to be a bare internal model name: it must match the
-// internal-name shape and be one of the registry's names, and an unknown bare
-// name is refused listing the known ones. Without the registry info the bare
-// name keeps its old refusal, byte for byte, so a run without a registry is
-// unchanged.
+// Under a layer-backed registry (registry info given, plans/0055 §9 R7) a
+// value is additionally allowed to be a bare internal model name: it must
+// match the internal-name shape and be one of the registry's names, and an
+// unknown bare name is refused listing the known ones. Without the registry
+// info the bare name keeps its refusal — the env values are provider/model,
+// which is what the implicit registry of a layer-less run synthesizes its
+// entries from.
 // AUTO-DECISION: the registry acceptance lives in the parse itself, not in a post-parse check (a value that parses differently depending on the registry cannot first parse "provisionally" and be validated later; the run start loads the registry before the switches are first parsed and feeds this flag through setSwitchModelRegistry)
 function parseModelPolicy(
   rawModel: string | undefined,
@@ -610,9 +616,10 @@ let memo: Switches | undefined
 // set once by preflight after the model registry loads and before the
 // switches are first parsed, so a run under a registry accepts internal
 // names in OPENCODE_AUTO_MODEL and refuses OPENCODE_AUTO_MODEL_FALLBACK.
-// undefined (or a run that never loads a registry) keeps the no-registry
-// grammar. Commands that never load a registry never call this, and their
-// parse stays exactly as before.
+// undefined (or a run that loads no registry layer) keeps the env grammar —
+// the implicit registry of a layer-less run is synthesized FROM the switches,
+// so it must never feed them. Commands that never load a registry never call
+// this, and their parse stays exactly as before.
 let modelRegistry: SwitchModelRegistry | undefined
 
 // Resets the memo so the next autoSwitches() re-parses with the declared

@@ -28,7 +28,7 @@ import { checklistTitle, forkBaseFor, promptViews, readChecklist, reloadTask, se
 import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
-import { runSession } from "./session"
+import { routingOf, runSession } from "./session"
 import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
 import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
@@ -213,7 +213,7 @@ export async function executeWhole(
     // over).
     coldStart(chain)
     consumeNote(chain)
-    if (opts.routing) resetRoute(chain)
+    resetRoute(chain)
     return "done"
   }
   for (;;) {
@@ -271,7 +271,7 @@ export async function executeWhole(
     // wrote the split is their fork base, per agent under a registry like
     // every base (plans/0055 §8.4). Recorded before the commit, so a split
     // whose commit landed names its base.
-    if (verdict?.type === "taken" && chain.id) await setForkBase(planDir, task.id, chain.id, opts.routing ? chain.agent : undefined)
+    if (verdict?.type === "taken" && chain.id) await setForkBase(planDir, task.id, chain.id, chain.agent)
     const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     if (verdict?.type === "taken") {
@@ -429,7 +429,7 @@ export async function ensureDecomposed(
       // the merged session lives on the agent its dispatch picked, so its id
       // is stored under that agent's key and another agent's chain reads no
       // base of its own from it.
-      if (chain.id) await setForkBase(dir, task.id, chain.id, opts.routing ? chain.agent : undefined)
+      if (chain.id) await setForkBase(dir, task.id, chain.id, chain.agent)
       const fresh = await reloadTask(plan, task.id)
       const committed = await git.afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
@@ -453,7 +453,7 @@ export async function ensureDecomposed(
     shapeForked = await forkEndedSession(client, chain, subject)
     // Per-model protocol-drift counter (plans/0055 §10 item 3): the shape-check
     // re-prompt books on the model of the session that just failed the check
-    // (the chain's selected entry); undefined without a registry (C2).
+    // (the chain's selected entry).
     await statsModelEvent(opts.dir ?? dir, chain.modelEntry, "reprompt")
     log(`↻ ${task.id} decompose session artifacts failed checks (${problems.join("; ")}); ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
@@ -490,7 +490,7 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // the same new session inside seedForkSession.
 // AUTO-RESOLVE: does OPENCODE_AUTO_FORK=off (or _FORK_BASE) stop auto's streams from forking the lead? -> no (the design rules that the pipeline's fork switches govern true alone; forking the lead is what auto's split is, and a stream without a fork still runs, in a new session)
 export async function leadForkBase(client: ClientSource, task: Task, opts: Opts, chain: SessionChain): Promise<ForkBaseInfo | undefined> {
-  const agent = opts.routing ? (chain.agent ?? opts.routing.runAgent) : undefined
+  const agent = chain.agent ?? routingOf(opts, autoSwitches()).runAgent
   const id = forkBaseFor(task.forkBase, agent)
   // A digest base is the planned pipeline's, never a lead.
   if (id === undefined || id.startsWith("digest:")) return undefined
@@ -560,7 +560,7 @@ export async function runSubtask(
   // spent quota still skips its model; a window that reopened returns to
   // the primary, as a new prompt should). Without a registry the chain's
   // candidate keeps its exact task-scoped meaning.
-  if (opts.routing) resetRoute(chain)
+  resetRoute(chain)
   const dir = opts.dir ?? plan.dir
   // The run's git service (the opts carrier, else the holderless
   // production fallback).
@@ -689,7 +689,7 @@ export async function runSubtask(
       // note; the redo is a new prompt under registry routing too.
       coldStart(chain)
       consumeNote(chain)
-      if (opts.routing) resetRoute(chain)
+      resetRoute(chain)
       // The cold-start redo forks from the base again (the same shape as the
       // subtask's first session, recovering the warm prefix).
       warm = await seedForkSession(client, opts, chain, base, subject)
@@ -802,8 +802,7 @@ export async function runSubtask(
           // falls back to a brand-new session + the full prompt + feedback.
           briefFork = await forkEndedSession(client, chain, subject)
           // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
-          // the model of the session that failed the artifact shape check;
-          // undefined without a registry (C2).
+          // the model of the session that failed the artifact shape check.
           await statsModelEvent(dir, chain.modelEntry, "reprompt")
           log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${briefFork ? "forked from the original session, " : ""}re-prompting once with feedback`)
           continue

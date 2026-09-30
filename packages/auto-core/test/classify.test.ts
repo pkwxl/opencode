@@ -82,9 +82,8 @@ describe("the construction (C2)", () => {
   // The ask policy that once sat here beside this case (shouldAsk: undecided
   // retries and session errors only, never a stated reset) moved to the
   // recovery concern's suite with the consult that applies it.
-  test("no registry, or no classifier list, means no classifier at all (C2)", () => {
+  test("no classifier list means no classifier at all", () => {
     const agent = fakeAgent()
-    expect(classifierFor(agent.client, undefined)).toBeUndefined()
     expect(classifierFor(agent.client, facts({ classifier: [] }))).toBeUndefined()
     const bare = facts()
     delete (bare.registry as { classifier?: unknown }).classifier

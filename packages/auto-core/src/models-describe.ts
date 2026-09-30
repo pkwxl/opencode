@@ -3,8 +3,10 @@
 // as data; describeModels adds the effective table, per phase type and routing
 // role: the tier, the route in force and the ordered candidates, with whether
 // each candidate is usable now and why not; formatModels renders the result as
-// the lines a shell prints. No agent is started and nothing is written, so the
-// command needs no run lock.
+// the lines a shell prints. With no layer in force the table is the implicit
+// registry a run synthesizes from the env switches (0061 F2) — the command
+// names it, and the probe handle stays undefined (nothing to probe). No
+// agent is started and nothing is written, so the command needs no run lock.
 //
 // Nothing here reads a referenced value (C4). Keys and env references appear
 // by reference name (`MOONSHOT_KEY_A`, `~/.secrets/zhipu-c`); a literal env
@@ -28,6 +30,7 @@ import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
 import {
   checkModelReferences,
+  implicitRegistry,
   layerLabel,
   loadModels,
   MODELS_FILE,
@@ -149,11 +152,16 @@ export type ModelsDescription = {
   problems: string[]
   // Things worth knowing that refuse nothing, one line each.
   notes: string[]
-  // Absent when there is no registry or it failed to load.
+  // The effective table: a loaded layer-backed registry's, or with no layer
+  // the implicit registry's (0061 F2). Absent only when problems stopped the
+  // description — a layer load failure or a phase-types failure, and
+  // layer-less any problem at all (the implicit table shows only with an
+  // empty problem list).
   table?: ModelTable
-  // The loaded registry itself (same condition as `table`): the shell hands
-  // it to the opt-in probe (plans/0055 §9 --probe), which starts agents —
-  // everything else here reads it only.
+  // The loaded layer-backed registry only — undefined for the implicit one,
+  // so the opt-in probe (plans/0055 §9 --probe), which starts agents, keeps
+  // its "nothing to probe" answer there; everything else here reads the
+  // table only.
   registry?: ModelRegistry
 }
 
@@ -183,7 +191,7 @@ export type CandidateState = { usable: boolean; reasons: string[]; notes: string
 
 export type ModelRow = {
   name: string
-  layer: RegistryLayerName
+  layer: EntryOrigin
   agent: string
   adapter: string
   // `model` then each `wider` id; [] = the agent's default model.
@@ -213,7 +221,7 @@ export type RouteRow = {
   role: ModelRole
   tier: Tier
   // The route in force; absent = the program default tier.
-  route?: { key: string; layer: RegistryLayerName; kind: "tier" | "list" }
+  route?: { key: string; layer: EntryOrigin; kind: "tier" | "list" }
   candidates: { name: string; usable: boolean }[]
   // How many leading candidates are the session's own list; the rest are
   // borrowed from the deep list.
@@ -249,8 +257,8 @@ export type ModelTable = {
   agents: AgentRow[]
   models: ModelRow[]
   rings: RingRow[]
-  tiers: { tier: Tier; names: string[]; layer: RegistryLayerName }[]
-  routes: { key: string; layer: RegistryLayerName; tier?: Tier; names?: string[] }[]
+  tiers: { tier: Tier; names: string[]; layer: EntryOrigin }[]
+  routes: { key: string; layer: EntryOrigin; tier?: Tier; names?: string[] }[]
   classifier?: { names: string[]; layer: RegistryLayerName }
   unused: string[]
   types: TypeRows[]
@@ -280,11 +288,9 @@ export async function describeModels(
   const check = await checkModels(dir, { ...options, phaseTypes: types.map((entry) => entry.type) })
   const problems = [...check.problems]
   const notes: string[] = []
-  const registry = check.registry
-  if (registry === undefined) return { operatorPath, problems, notes }
   let switches: Switches | undefined
   try {
-    switches = parseSwitches(env, registry ? switchModelRegistryInfo(registry) : undefined)
+    switches = parseSwitches(env, check.registry !== undefined ? switchModelRegistryInfo(check.registry) : undefined)
   } catch (error) {
     problems.push(`${errorText(error)} (the table below ignores the OPENCODE_AUTO_* switches)`)
   }
@@ -297,6 +303,21 @@ export async function describeModels(
     )
   }
   const profileAgent = shellProfile().agent?.name
+  // A run without layers routes on the implicit registry (0061 F2): when the
+  // layers load nothing and nothing refused, the table shows what a run will
+  // synthesize from the env switches — the `models` command names it — and
+  // `registry` (the probe handle) stays undefined, so --probe keeps its
+  // "nothing to probe" answer (the implicit entries are unverified strings,
+  // not a fleet to spend tokens on). The env override column keeps quiet
+  // there: the policy IS the registry's routes, so no list is replaced.
+  // AUTO-DECISION: the implicit table appears only with an empty problem list (a load refusal is the operator's finding and keeps the refusal form; showing a synthesized fleet beside a broken layer would read as a way around the break)
+  const implicit =
+    check.registry === undefined && !problems.length
+      ? implicitRegistry(profileAgent ?? switches?.agent ?? config.agent ?? "opencode", switches?.model ?? { byLetter: {}, byType: {}, byRole: {}, fallback: [] })
+      : undefined
+  const registry: ModelRegistry | undefined = check.registry ?? implicit
+  if (registry === undefined) return { operatorPath, problems, notes }
+  const tableSwitches = implicit !== undefined ? undefined : switches
   const filter: AgentFilter | undefined = profileAgent
     ? { agent: profileAgent, source: "shell profile" }
     : switches?.agent
@@ -318,7 +339,7 @@ export async function describeModels(
     operatorPath,
     problems,
     notes,
-    registry,
+    ...(check.registry !== undefined ? { registry: check.registry } : {}),
     table: {
       now,
       tz: registry.tz,
@@ -327,7 +348,7 @@ export async function describeModels(
       ...(filter ? { filter } : {}),
       cap,
       defaultAgent,
-      ...(switches && overrideText ? { override: overrideText } : {}),
+      ...(tableSwitches && overrideText ? { override: overrideText } : {}),
       agents: [...registry.agents.values()].map(agentRow),
       models,
       rings,
@@ -344,7 +365,7 @@ export async function describeModels(
         ...(entry.letter ? { letter: entry.letter } : {}),
         origin: entry.origin,
         reasoning: entry.reasoning,
-        rows: MODEL_ROLES.map((role) => routeRow(entry, role, ctx, states, switches)),
+        rows: MODEL_ROLES.map((role) => routeRow(entry, role, ctx, states, tableSwitches)),
       })),
     },
   }
@@ -483,16 +504,16 @@ function overrideRow(value: string, ctx: StateContext, states: Map<string, Candi
 // AUTO-DECISION: the rendering is a core function next to the data, not shell code (every shell prints the same table, and the core tests pin its wording; the shell only prints the lines, as it does renderStatus's)
 export function formatModels(description: ModelsDescription): string[] {
   const { table, problems, notes } = description
-  if (table === undefined) {
-    if (!problems.length)
-      return [
-        `no model registry: neither the operator layer ${description.operatorPath} nor the project layer ${MODELS_FILE} exists`,
-      ]
-    return [...problems.map((line) => `⚠ ${line}`), refusedLine(problems)]
-  }
+  if (table === undefined) return [...problems.map((line) => `⚠ ${line}`), refusedLine(problems)]
   const lines: string[] = []
   const mark = (layer: EntryOrigin) => `[${layer}]`
-  lines.push(`model registry: ${table.layers.map((layer) => `${layer.name} layer ${layerPath(layer)}`).join(" · ")}`)
+  // An empty layer list is the implicit registry: no file was read, a run
+  // synthesizes it from the env switches (0061 F2).
+  lines.push(
+    table.layers.length
+      ? `model registry: ${table.layers.map((layer) => `${layer.name} layer ${layerPath(layer)}`).join(" · ")}`
+      : `model registry: implicit — no layer file (${description.operatorPath} nor ${MODELS_FILE}); a run synthesizes it from ${SWITCH_ENV.model} / ${SWITCH_ENV.modelFallback}`,
+  )
   lines.push(`now: ${wallClock(table.tz, table.now)} (tz ${table.tzLayer ? `from the ${table.tzLayer} layer` : "default"})`)
   lines.push(
     table.filter

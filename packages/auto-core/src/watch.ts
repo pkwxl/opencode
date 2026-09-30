@@ -34,6 +34,7 @@ import { makeTurnSources } from "./engine/sources"
 import { runTurn, type ConcernRoster } from "./engine/spine"
 import type { SteerContext } from "./model-step"
 import type { Opts } from "./opts"
+import { routingFacts } from "./routing"
 import { services } from "./services"
 import type { StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
@@ -82,9 +83,9 @@ export async function watch(
   // which attempt announces the model really in effect.
   onModel?: (model: string) => void,
   // Steer context under the registry (plans/0055 §4.5): the context steps of
-  // the entry the session runs in, and the model id a steer must name. Without
-  // a registry (the default) everything stays as before — steers carry no
-  // model key, byte-for-byte equivalent to the status quo (C2).
+  // the entry the session runs in, and the model id a steer must name. An
+  // entry without steps (the implicit registry's carry none) names no model
+  // id, so steers stay model-less, as before.
   steerContext?: SteerContext,
   // A usage-window observation that changed (the `limit` event, plans/0057
   // §5.2): attempt records it for the chain's account (§8).
@@ -103,10 +104,10 @@ export async function watch(
   // concern reads its used() at the measurement points and the test
   // protocol's handover decision at idle. The agent's retry policy
   // (plans/0057 §4) is the adapter's record with the registry entry's
-  // override. The failure-message classifier (plans/0055 §7.1) exists under
-  // a registry with a classifier list and is carried on the context;
-  // without one it is undefined, nobody asks and the watch is
-  // byte-identical to before (C2).
+  // override. The failure-message classifier (plans/0055 §7.1) exists only
+  // under a registry layer with a classifier list and is carried on the
+  // context; without one (the implicit registry carries no classifier) it is
+  // undefined and nobody asks.
   const policy = retryPolicyOf(client.retryPolicy, steerContext?.entry?.retry)
   const ctx: TurnContext = {
     client,
@@ -119,7 +120,12 @@ export async function watch(
     steerContext,
     policy,
     classify: (info: ErrorInfo): ErrorClass => classifySessionError(info, client.errorPatterns, policy),
-    classifier: classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined),
+    classifier: classifierFor(
+      client,
+      opts.routing ?? routingFacts(undefined, undefined, svcs.clock, svcs.router, undefined, switches),
+      steerContext?.label,
+      opts.server ? (agent) => opts.server!.client(agent) : undefined,
+    ),
     source: usageSource(client.capabilities.usage),
     services: svcs,
     startTime,

@@ -26,7 +26,8 @@ import { bookedSleep } from "./hibernate"
 import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
-import { agentField, forkAgent, forkBaseRole, jitterOf, landedAgent, probeAccountChain, probeChain, registryDriven, windowWake } from "./router"
+import { forkAgent, jitterOf, landedAgent, probeChain, windowWake } from "./router"
+import { routingFacts, type RoutingFacts } from "./routing"
 import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
@@ -60,12 +61,11 @@ import { strictResumeActive } from "./unit-commit"
 // session-mode base persists across runs, with usage rebuilt from the last
 // message in messages (an approximation suffices; within the same run, when
 // the base is the session on the chain, the tracked value is taken directly).
-// Per agent under a model registry (plans/0055 §8.4): the record is a map from
+// Per agent (plans/0055 §8.4): the record is a map from
 // agent profile to base, read and written for the forking chain's agent alone,
 // and the digest rebuild is dispatched with the model selected for the
 // `subtask` route (see the body) — so a base exists per agent, built lazily on
-// the agent of the first subtask that forks on it. Without a registry the
-// one-agent-era behavior is byte-identical (C2).
+// the agent of the first subtask that forks on it.
 export async function ensureForkBase(
   client: ClientSource,
   plan: Plan,
@@ -76,18 +76,18 @@ export async function ensureForkBase(
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
   const dir = opts.dir ?? plan.dir
+  // The run's routing facts, always defined: the opts' own for a run, else
+  // the implicit registry over the env switches (a bare options literal).
+  const routing = routingOf(opts, switches)
   // The reading agent (plans/0055 §8.4): the base the pipeline forks from
   // must live on the agent the forking subtask's chain runs on, so the
   // persisted record is read and written for that agent alone. The
-  // registry/no-registry verdict sits behind the router's routing fence
-  // (`forkAgent`, the facts passed untested): under a registry it answers
-  // the chain's agent — the decompose dispatch's before the first subtask,
-  // the moved-to agent after a cross-agent failover (a subtask that moved
-  // to another agent forks from that agent's base, building it on first
-  // use) — with the facts' runAgent standing in while the chain holds no
-  // session; undefined = no registry, where the plain-string record of the
-  // one-agent era applies as-is and setForkBase keeps the old shape.
-  const agent = forkAgent(opts.routing, chain)
+  // reading agent is the chain's agent — the decompose dispatch's before
+  // the first subtask, the moved-to agent after a cross-agent failover (a
+  // subtask that moved to another agent forks from that agent's base,
+  // building it on first use) — with the run agent standing in while the
+  // chain holds no session (`forkAgent`).
+  const agent = forkAgent(routing, chain)
   // A persistent digest base is told from the understand-session id (the
   // session base) by the `digest:` prefix — an unprefixed value in digest mode
   // is only the fallback for a failed rebuild and takes no part in "alive
@@ -99,16 +99,15 @@ export async function ensureForkBase(
   // host (a session id is agent-local, §8.2), resolved through the pool when
   // the caller passes one.
   const baseClient = await clientOf(client, agent)
-  // The base lines name the agent under a registry (the base is agent-local,
-  // §8.4); without one the lines stay exactly as they were (C2).
-  const onAgent = agent !== undefined ? ` on agent ${agent}` : ""
+  // The base lines name the agent (the base is agent-local, §8.4).
+  const onAgent = ` on agent ${agent}`
   const persistID = forkBaseRecord?.startsWith("digest:") ? forkBaseRecord.slice("digest:".length) : undefined
   if (switches.forkBase === "digest") {
     if (persistID !== undefined) {
       if (await sessionAlive(baseClient, persistID)) {
         const used = await sessionUsed(baseClient, persistID)
         log(`⑂ ${task.id} digest base reuse: session ${persistID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
-        return { id: persistID, used, ...(agent !== undefined ? { agent } : {}), digest: true }
+        return { id: persistID, used, agent, digest: true }
       }
       log(`↻ ${task.id} persistent digest base ${persistID}${onAgent} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
     }
@@ -120,32 +119,24 @@ export async function ensureForkBase(
       // prefix cached under one model is a miss under another — the one-shot
       // chain carries the `subtask` role so the dispatch inside selects (and
       // fails over) on the subtask tier's list for the current phase type,
-      // the picked entry's variant and base step included. The conditional
-      // role sits behind the router's routing fence (`forkBaseRole`, the
-      // facts passed untested): without a registry the chain stays roleless
-      // and the bypass routing of the one-agent era applies unchanged (C2).
-      const base: SessionChain = { pct: 100, used: 0, at: 0, subject, ...forkBaseRole(opts.routing) }
+      // the picked entry's variant and base step included.
+      const base: SessionChain = { pct: 100, used: 0, at: 0, subject, role: "subtask" }
       const result = await runSession(client, task, renderContextBase(promptFacts(opts), task, digest), opts, base)
       if (result.type === "idle" && base.id) {
         // The record names the agent the base session truly lives on (the
         // dispatch inside picked it; §8.2) — the subtask route's first usable
         // candidate's profile, which is where the forking subtask dispatches
-        // too, so the prefix caches under the model that forks from it. The
-        // registry/no-registry verdict is the fence's `landedAgent` (the
-        // facts passed untested, the reading agent standing in when the
-        // dispatch left no agent on the chain — with one agent a run it is
-        // always the reading agent).
-        const landed = landedAgent(opts.routing, base, agent)
+        // too, so the prefix caches under the model that forks from it (the
+        // reading agent stands in when the dispatch left no agent on the
+        // chain, `landedAgent`).
+        const landed = landedAgent(base, agent)
         await setForkBase(dir, task.id, `digest:${base.id}`, landed)
-        // The ready line names the agent and the model under a registry (the
-        // base is agent-local, §8.4, and was built for the subtask route's
-        // model); without one it stays exactly the old line (C2).
+        // The ready line names the agent and the model (the base is
+        // agent-local, §8.4, and was built for the subtask route's model).
         log(
-          landed !== undefined
-            ? `⑂ ${task.id} digest base ready: session ${base.id} on agent ${landed} (model ${base.modelEntry ?? "unrouted"}, digest prefix ${formatTokens(base.used)} tokens)`
-            : `⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`,
+          `⑂ ${task.id} digest base ready: session ${base.id} on agent ${landed} (model ${base.modelEntry ?? "unrouted"}, digest prefix ${formatTokens(base.used)} tokens)`,
         )
-        return { id: base.id, used: base.used, ...(landed !== undefined ? { agent: landed } : {}), digest: true }
+        return { id: base.id, used: base.used, agent: landed, digest: true }
       }
       log(`↻ ${task.id} digest base session not established${result.type === "blocked" ? ` (${firstLine(result.question)})` : ""}; falling back to the session base`)
     } else {
@@ -163,7 +154,7 @@ export async function ensureForkBase(
       const used = sessionID === chain.id ? chain.used : await sessionUsed(baseClient, sessionID)
       log(`⑂ ${task.id} session base ready: session ${sessionID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
       // A digest base read in session mode still holds the digest alone.
-      return { id: sessionID, used, ...(agent !== undefined ? { agent } : {}), ...(sessionID === persistID ? { digest: true } : {}) }
+      return { id: sessionID, used, agent, ...(sessionID === persistID ? { digest: true } : {}) }
     }
     log(`↻ ${task.id} session base ${sessionID}${onAgent} is stale; falling back to cold start`)
   }
@@ -191,6 +182,17 @@ const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with j
 //    duplicating appended output and re-running finished steps (same wording as
 //    the cross-run resumeNote: check the disk state, do not redo).
 const retryNote = worktreeNote
+
+// The routing facts of a session-options literal: the opts' own for a run,
+// else the implicit registry over the given switch snapshot on the installed
+// services' clock and router (a bare literal that never knew routing —
+// every run has a registry, so this always answers complete facts). The
+// session-driving callers below the loop (runner, execute, artifact,
+// exec-session) resolve their reads through this one helper; the switches
+// argument is the snapshot the caller drives everything else with.
+export function routingOf(opts: Pick<Opts, "routing" | "router">, switches: Switches): RoutingFacts {
+  return opts.routing ?? routingFacts(undefined, undefined, services().clock, opts.router ?? services().router, undefined, switches)
+}
 
 // Runs one prompt on the session chain (a fresh session per prompt, except a
 // resumed takeover of the recorded session). Transient
@@ -237,6 +239,10 @@ export async function runSession(
   // clock's sleepUnlessExit delegates to the same instance, so the wait's
   // sleep and the head check see one request.
   const control = services().control
+  // The run's routing facts, always defined: the loop's own for a run, else
+  // the implicit registry over the env switches on the installed services'
+  // clock and router (a bare options literal that never knew routing).
+  const routing = routingOf(opts, switches)
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
   // retry ladder (the ladder's counter resets to 1 when the candidate
@@ -273,13 +279,11 @@ export async function runSession(
   // hour-scaled, extra attempts do not help, waiting is all there is.
   const waits = switches.retryWaits
   let i = 1
-  // The effective failover candidate ring's length, as the ladder facts
-  // report it: when /failback with arguments has redefined the model order,
-  // its override ring applies, otherwise the OPENCODE_AUTO_MODEL_FALLBACK
-  // parse result from switches (the switches memo is constant; the override
-  // lives in the failback module's state). The failover's own candidate walk
-  // (behind the router's fence) reads the same one source.
-  const fallbackRing = () => router.failbackOverride()?.fallback ?? switches.model.fallback
+  // The /failback override ring's current length, as the ladder facts
+  // report it (the registry's tier lists are the candidate table otherwise;
+  // the override replaces every list while it is in force). The registry
+  // flag itself is constant now — every run has a registry.
+  const overrideRing = () => router.failbackOverride()?.fallback ?? []
   // The common action of a candidate failover (shared by the two trigger
   // faces: the quota-failover branch below and the fallback after ladder
   // exhaustion): pick the next usable candidate, switch the chain's route,
@@ -289,32 +293,27 @@ export async function runSession(
   // Returns true on a successful switch (the caller continues); returns false
   // on candidate exhaustion (the caller falls into the wait-and-probe loop).
   // why is a short phrase naming the trigger; it goes into the log and the failover note.
-  // Under a model registry (plans/0055 §7 step 2) the current model is marked
-  // down and selection picks the next usable candidate of the tier's list,
-  // which replaces the global _FALLBACK ring; on this run's single agent the
-  // move is today's path unchanged (fork copy, the chain's model, the
-  // failover note, the ladder reset). Key rotation (step 1, above) runs
-  // before this; cross-agent candidates are a later step.
+  // The current model is marked down and selection picks the next usable
+  // candidate of the list in force (plans/0055 §7 step 2) — the registry's
+  // tier lists, or the /failback override's ring while it replaces them; on
+  // this run's single agent the move is a fork copy, the chain's model, the
+  // failover note and the ladder reset. Key rotation (step 1, above) runs
+  // before this.
   // `until` is a reset time the failure-message classifier read (§7.1): the
   // model's down mark lasts until then instead of the scope boundary;
   // `classified` records that the class came from the classifier, so the ◈
   // line names the move "quota (classifier)" (§6.5).
   const switchModel = async (why: string, until?: number, classified?: boolean): Promise<boolean> => {
     limits ??= await contextLimitsOf(client)
-    // The dual decisions of the failover — the candidate choice (a fresh
-    // selection under a registry, the fallback-ring walk without one), the
-    // route value, the phase-scoped sticky write, the ⇄ line and the
-    // cross-agent verdict — sit behind the router's routing fence: the
-    // routing facts pass in untested and the registry/no-registry branch
-    // lives in src/router.ts. The ladder is this loop's own per-prompt
-    // bookkeeping: the fence mutates it through the argument and never
-    // holds it.
-    const decision = await router.failover(opts.routing, switches, {
+    // The failover decision — the candidate choice (a fresh selection over
+    // the list in force), the route value, the ⇄ line and the cross-agent
+    // verdict — is the router's; the ladder is this loop's own per-prompt
+    // bookkeeping and stays here.
+    const decision = await router.failover(routing, switches, {
       chain,
       phase: opts.phase,
       cap,
       limits,
-      ladder,
       label: task.id,
       why,
       until,
@@ -322,13 +321,10 @@ export async function runSession(
       waitWindow: waitForWindow,
     })
     if (decision === undefined) return false
-    // The route the failover picked, written wholesale (setRoute): under a
-    // registry the selection state — the internal name and the base step —
-    // travels with the chain; the down marks replace the phase-scoped
-    // sticky holder (§6.4), so scope=phase keeps the move through the task
-    // boundaries without it. Without a registry only the model string is
-    // written (entry and step have never held a defined value on that
-    // path, so the wholesale clear is a no-op there).
+    // The route the failover picked, written wholesale (setRoute): the
+    // selection state — the internal name and the base step — travels with
+    // the chain; the down marks keep the move through the task boundaries
+    // under scope=phase (§6.4).
     setRoute(chain, decision.route)
     // This candidate gets its own full round of the retry ladder.
     ladder.i = 1
@@ -427,12 +423,11 @@ export async function runSession(
   // `until` as for switchModel: the failed key's mark lasts until the reset
   // time the classifier read.
   const rotateProviderKey = async (why: string, until?: number): Promise<boolean> => {
-    // The step-1 decision fences in the router (the registry-presence test
-    // is the routing branch the fence owns): the plan names the provider
-    // and the rotation that would land, or an exhausted ring whose current
-    // key still failed. The I/O — the spawn config, the host restart, the
+    // The step-1 decision is the router's: the plan names the provider and
+    // the rotation that would land, or an exhausted ring whose current key
+    // still failed. The I/O — the spawn config, the host restart, the
     // re-dispatch fork — stays here.
-    const plan = router.keyRotation(opts.routing, chain)
+    const plan = router.keyRotation(routing, chain)
     if (plan === undefined) return false
     if (plan.rotation === undefined) {
       // No key is left that is not down (an exhausted or single-key ring):
@@ -488,14 +483,13 @@ export async function runSession(
     return true
   }
   // The down marks one failure's escalation may write (plans/0055 §7.1)
-  // and the late classifier answer's extension of them both sit behind
-  // the router's routing fence: the registry lookup, the ring reads and
-  // the ⏲ line's guard (with its registry time zone) are the fence's
-  // `downTarget`/`lateReset`, and the facts pass in untested. The mark
-  // writes themselves go through the router methods, as before.
-  const downTarget = () => router.downTarget(opts.routing, chain)
+  // and the late classifier answer's extension of them both are the
+  // router's: the registry lookup, the ring reads and the ⏲ line (with its
+  // registry time zone). The mark writes themselves go through the router
+  // methods, as before.
+  const downTarget = () => router.downTarget(routing, chain)
   const lateReset = (pending: Promise<number | undefined> | undefined, target: ReturnType<typeof downTarget>): void => {
-    router.lateReset(opts.routing, pending, target, task.id)
+    router.lateReset(routing, pending, target, task.id)
   }
   // The window wait (plans/0055 §6.3): every candidate is blocked only by
   // its windows and one that is not down opens later. The dispatch sleeps
@@ -511,12 +505,11 @@ export async function runSession(
   // and a wake past a short window simply waits for its next opening — the
   // wait never exits on its own (§10 item 7).
   // AUTO-DECISION: the wait decision is honored at every selection site — the dispatch target (attempt returns the facts, this loop sleeps), the failover (switchModel below) and the probe loop (awaitRecovery below) wait and re-select in place — instead of only at the dispatch (a failover onto a window-blocked list or a probe round after the marks clear would otherwise burn wait-and-probe rounds against a closed window; the wait line keeps the designed text and adds hibernate's resuming/force-quit hint, which §6.3's force-quit promise asks to be visible)
-  // The wake computation (the facts' clock, the jitter knob) sits behind
-  // the router's routing fence — `windowWake`, with the facts passed
-  // untested and the run clock as the no-registry fallback — so the lines
-  // and the booked sleep are the site's whole remaining body.
+  // The wake computation (the facts' clock, the jitter knob) is the
+  // router's `windowWake`, so the lines and the booked sleep are the
+  // site's whole remaining body.
   const waitForWindow = async (wait: WindowWait): Promise<void> => {
-    const { sleep, wakeAt } = windowWake(opts.routing, wait, clockNow)
+    const { sleep, wakeAt } = windowWake(routing, wait)
     log(
       `⏸ ${task.id} ${roleOf(chain)} waits for a ${wait.tier} model: ${wait.model} ${wait.opens}` +
         `, resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
@@ -525,11 +518,9 @@ export async function runSession(
     log(`→ window wait over: continuing after ${wait.model} opened`)
   }
   // The model the chain's dispatches ran on, the way attempt records it for
-  // strict resume: the selected entry under a registry, else the switch-
-  // routed model string of the no-registry priority chain (undefined = the
-  // agent's own default) — both halves behind the router's routing fence,
-  // the facts passed untested.
-  const chainModel = (): string | undefined => router.chainModel(opts.routing, chain, switches, opts.phase)
+  // strict resume: the selected entry (undefined = the agent's own default
+  // model).
+  const chainModel = (): string | undefined => chain.modelEntry
   // The sleep of one wait-and-probe round (plans/0057 §6): until the known
   // instant plus hibernate's random delay of 0–600 s (drivers sharing an
   // account do not all probe the same second after a reset), else the
@@ -554,24 +545,22 @@ export async function runSession(
   // says when that reset was recorded.
   const planSleep = async (cause: WaitCause | undefined): Promise<{ ms: number; wake?: Date; reason?: string; model: string }> => {
     // The sleep-source cascade (which instant the round sleeps to and why)
-    // sits behind the router's routing fence — `recoverySleep`, the facts
-    // passed untested — with this loop's own I/O handed in as callbacks:
-    // the context-window fetch (registry arm only, cached in `limits`) and
-    // the learned-window lookup (third arm only, with the account the
-    // failure or the chain names). The horizon clamp and the poll fallback
-    // stay here (RESET_HORIZON_MS is the learned-window policy, not a
-    // routing decision), as does the jitter draw on the scheduled tail.
-    const sleep = await router.recoverySleep(opts.routing, switches, {
+    // is the router's `recoverySleep`, with this loop's own I/O handed in
+    // as callbacks: the context-window fetch (cached in `limits`) and the
+    // learned-window lookup (with the account the failure or the chain
+    // names). The horizon clamp and the poll fallback stay here
+    // (RESET_HORIZON_MS is the learned-window policy, not a routing
+    // decision), as does the jitter draw on the scheduled tail.
+    const sleep = await router.recoverySleep(routing, switches, {
       chain,
       phase: opts.phase,
       cap,
       loadLimits: async () => (limits ??= await contextLimitsOf(client)),
       cause,
-      learned: (now) => learnedReset(opts.dir, cause?.account ?? accountOf(chain, opts.routing), now),
-      now: clockNow,
+      learned: (now) => learnedReset(opts.dir, cause?.account ?? accountOf(chain, routing), now),
     })
     if (sleep.at === undefined || sleep.at - sleep.now > RESET_HORIZON_MS) return { ms: switches.recoveryWait * 60_000, model: sleep.model }
-    const ms = Math.max(0, sleep.at - sleep.now) + jitterOf(opts.routing)
+    const ms = Math.max(0, sleep.at - sleep.now) + jitterOf(routing)
     return { ms, wake: new Date(sleep.now + ms), reason: sleep.reason, model: sleep.model }
   }
   // /exit inside the wait (plans/0057 §6, §11 item 9): no session is active,
@@ -596,7 +585,7 @@ export async function runSession(
         active: true,
         phase: chain.phase,
         ...(strictResumeActive(opts, switches) ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: chainModel() } : {}),
-        ...agentField(opts.routing, chain.agent),
+        ...(chain.agent !== undefined ? { agent: chain.agent } : {}),
         used: best.used,
       })
       kept = `the re-run resumes the ${best.why} ${best.id} (${formatTokens(best.used)} tokens)`
@@ -671,11 +660,11 @@ export async function runSession(
       // never moves.
       // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared mark (the probe ran on the current key alone; the earlier keys' marks would have cleared at the same boundaries anyway, and a wrapped rotation onto them later is the §6.4 semantics a boundary clear already has)
       // The selection itself (the wait-and-reselect loop and the clear half
-      // of the mark dance) sits behind the router's routing fence —
-      // `probeSelection`, the facts passed untested, this loop's limits
-      // fetch and window sleeper handed in as callbacks; the re-mark on a
-      // failed probe runs below, after the probe session returns.
-      const probePick = await router.probeSelection(opts.routing, switches, {
+      // of the mark dance) is the router's `probeSelection`, with this
+      // loop's limits fetch and window sleeper handed in as callbacks; the
+      // re-mark on a failed probe runs below, after the probe session
+      // returns.
+      const probePick = await router.probeSelection(routing, switches, {
         chain,
         phase: opts.phase,
         cap,
@@ -684,7 +673,7 @@ export async function runSession(
       })
       const probed = probePick?.model
       const probedProvider = probePick?.provider
-      const probe: SessionChain = probeChain(opts.routing, chain)
+      const probe: SessionChain = probeChain(chain)
       let ping: SessionResult
       try {
         // The probe chain carries no agent on purpose (§8.1): attempt's own
@@ -702,10 +691,9 @@ export async function runSession(
         cause = cause?.account !== undefined ? { account: cause.account } : undefined
         continue
       }
-      // The account the probe ran on: the probed candidate's under a
-      // registry (the fence's chain pick — the probe's own dispatch wrote
-      // the entry onto it), else the chain's (the probe copies its model).
-      const probeAccount = accountOf(probeAccountChain(opts.routing, probe, chain), opts.routing)
+      // The account the probe ran on: the probed candidate's (the probe's
+      // own dispatch wrote the entry onto the probe chain).
+      const probeAccount = accountOf(probe, routing)
       if (ping.type !== "idle") {
         await learnFailure(opts.dir, probeAccount, ping, clockNow())
         cause = { ...ping, account: probeAccount }
@@ -908,13 +896,14 @@ export async function runSession(
       // the run.
       result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
     }
-    const account = accountOf(chain, opts.routing)
-    // The registry flag the pure ladder decision reads comes from the
-    // routing fence (the truthiness test is the fence's `registryDriven`),
-    // like every other routing branch this loop executes.
+    const account = accountOf(chain, routing)
+    // The registry flag the pure ladder decision reads is constant now:
+    // every run has a registry, the implicit one included, so the tier
+    // lists (or the /failback override that replaces them) are always the
+    // candidate table.
     const facts: LadderFacts = {
-      registry: registryDriven(opts.routing),
-      ringLength: fallbackRing().length,
+      registry: true,
+      ringLength: overrideRing().length,
       waits,
       server: opts.server !== undefined,
       account,
@@ -984,7 +973,7 @@ export async function runSession(
           // interrupted session. The message (the fence's rendering) names the
           // marks and candidates as they stand now, after the escalation wrote
           // its own.
-          await awaitRecovery(router.exhaustionWhy(opts.routing, step.label, ladder), step.cause)
+          await awaitRecovery(router.exhaustionWhy(routing, step.label), step.cause)
           continue
         }
         // Ladder exhausted: the failover candidates are tried first (switching

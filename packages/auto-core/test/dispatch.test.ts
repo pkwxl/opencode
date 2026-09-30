@@ -7,6 +7,7 @@
 // planner is pure, the chain is an input, and the executor (attempt) owns
 // every write.
 import { describe, expect, test } from "bun:test"
+import { implicitRegistry } from "../src/models"
 import { parseWindow, type ModelWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, RegistryAgentProfile, TierList } from "../src/models-schema"
 import type { SessionChain } from "../src/chain"
@@ -22,7 +23,6 @@ const NOW = Date.parse("2026-09-25T12:00:00Z")
 const AT = (clock: string): number => Date.parse(`2026-09-25T${clock}:00Z`)
 
 const DEFAULTS = parseSwitches({})
-const SESSION_SCOPE = parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "session" })
 const fresh = (): SessionChain => ({ pct: 100, used: 0, at: 0 })
 
 const window = (text: string): ModelWindow => {
@@ -70,12 +70,15 @@ const factsOf = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingF
 })
 
 // The test's dispatch facts; `limits` is not a plan fact but the selection
-// context's window map, threaded to the production seam below.
+// context's window map, threaded to the production seam below. reg undefined
+// = no layers: the facts of the implicit registry the env switches
+// synthesize, exactly what a layer-less run dispatches on.
 const plan = (chain: SessionChain, reg: ModelRegistry | undefined, over: Partial<DispatchFacts> & { limits?: ReadonlyMap<string, number> } = {}) => {
   const { limits, ...rest } = over
+  const facts = factsOf(reg ?? implicitRegistry("opencode", DEFAULTS.model))
   return planDispatch(chain, {
-    ...(reg !== undefined ? { routing: factsOf(reg), ctx: selectContext(factsOf(reg), DEFAULTS, 64_000, limits) } : {}),
-    switches: DEFAULTS,
+    routing: facts,
+    ctx: selectContext(facts, DEFAULTS, 64_000, limits),
     resumable: true,
     label: "T-001",
     ...rest,
@@ -90,17 +93,19 @@ describe("the dispatch plan", () => {
     const chain: SessionChain = { ...fresh(), id: "ses_9", note: "[DRIVER] continuation after interruption" }
     expect(plan(chain, undefined).resumed).toBe(true)
     // The takeover gate's capability (the chain's agent cannot resume) vetoes it.
-    expect(planDispatch(chain, { switches: DEFAULTS, resumable: false, label: "T-001" }).resumed).toBe(false)
+    const noResume = plan(chain, undefined, { resumable: false })
+    expect(noResume.resumed).toBe(false)
     // A one-shot note still pending on a pre-created fork is not a takeover:
     // the dispatch consumes the fork first.
     expect(plan({ ...chain, pending: "ses_7" }, undefined).resumed).toBe(false)
     expect(plan({ ...fresh(), id: "ses_9" }, undefined).resumed).toBe(false)
-    // Without routing facts the plan answers the takeover and the failback
-    // flag alone: no pick, no blocked outcome, no move.
-    const noRegistry = plan(chain, undefined)
-    expect(noRegistry.pick).toBeUndefined()
-    expect(noRegistry.blocked).toBeUndefined()
-    expect(noRegistry.move).toBeUndefined()
+    // Over the implicit registry (no layers) the plan always picks: the
+    // entry without a model, whose prompt carries no model key, and no
+    // blocked outcome, no move.
+    const implicit = plan(chain, undefined)
+    expect(implicit.pick?.route).toEqual({ entry: "default", step: 0 })
+    expect(implicit.blocked).toBeUndefined()
+    expect(implicit.move).toBeUndefined()
   })
 
   test("registry pick: the first usable candidate of the role's tier, with its route, variant, agent and ◈ line", () => {
@@ -147,7 +152,6 @@ describe("the dispatch plan", () => {
     const outcome = planDispatch(fresh(), {
       routing: facts,
       ctx: selectContext(facts, DEFAULTS, 64_000),
-      switches: DEFAULTS,
       resumable: true,
       label: "T-001",
     })
@@ -211,12 +215,4 @@ describe("the dispatch plan", () => {
     expect(plan({ ...fresh(), agent: "a", pending: "ses_7" }, reg).move).toBeUndefined()
   })
 
-  test("failback-scope create: only scope=session clears the failback scope at a create", () => {
-    const reg = registry([entry("s1", { model: "prov/s" })])
-    expect(plan(fresh(), undefined).clearsFailback).toBe(false)
-    expect(plan(fresh(), reg).clearsFailback).toBe(false)
-    expect(
-      planDispatch(fresh(), { routing: factsOf(reg), ctx: selectContext(factsOf(reg), SESSION_SCOPE, 64_000), switches: SESSION_SCOPE, resumable: true, label: "T-001" }).clearsFailback,
-    ).toBe(true)
-  })
 })

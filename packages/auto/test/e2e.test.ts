@@ -2261,17 +2261,22 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
   }
   const SECRETS = { CLAUDE_PROXY: "http://user:secret-proxy@10.0.0.1:3128", MOONSHOT_KEY_A: "sk-secret-a", MOONSHOT_KEY_B: "sk-secret-b" }
 
-  test("without a registry: one line, exit 0, and nothing is written", async () => {
+  test("without a layer: the implicit registry's table, exit 0, and nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const none = await runCli(["models", dir])
       expect(none.code).toBe(0)
-      expect(none.out).toBe(
-        `no model registry: neither the operator layer ${join(EMPTY_CONFIG_HOME, "opencode-auto", "models.json")} nor the project layer .opencode/auto/models.json exists\n`,
+      const lines = none.out.split("\n")
+      // No layer file exists: the command names the implicit registry the
+      // env switches synthesize (0061 F2) and shows its table.
+      expect(lines[0]).toBe(
+        `model registry: implicit — no layer file (${join(EMPTY_CONFIG_HOME, "opencode-auto", "models.json")} nor .opencode/auto/models.json); a run synthesizes it from OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK`,
       )
+      expect(lines).toContain("  opencode  [implied]  adapter opencode")
+      expect(lines).toContain("  default  [implied]  agent opencode (opencode) · the agent's default model")
       expect(none.err).toBe("")
       const missing = join(dir, "missing.json")
-      expect((await runCli(["models", dir], { OPENCODE_AUTO_MODELS: missing })).out).toContain(`neither the operator layer ${missing} nor`)
+      expect((await runCli(["models", dir], { OPENCODE_AUTO_MODELS: missing })).out).toContain(`no layer file (${missing} nor`)
       expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -3311,7 +3316,7 @@ describe("CLI: run under --subtask auto over the claude adapter (auto-core plans
       expect(streams[1]!.text).toContain("This is the last stream")
       // No history on claude: the second stream's guard read the recorded
       // figure, so neither stream started cold.
-      expect(run.out.split("\n").filter((line) => line.includes(`lead base: session ${lead} (70.0k tokens)`))).toHaveLength(2)
+      expect(run.out.split("\n").filter((line) => line.includes(`lead base: session ${lead} on agent claude (70.0k tokens)`))).toHaveLength(2)
       expect(run.out).not.toContain("base usage unknown")
       // The wrap-up is a session of its own, not a fork.
       const wrapup = all.find((turn) => turn.text.includes("This session only performs the wrap-up"))

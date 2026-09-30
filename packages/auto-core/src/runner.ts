@@ -13,7 +13,7 @@ import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
 import { phaseText, resumeNote, unitReruns } from "./resume-gate"
-import { ensureForkBase, runSession } from "./session"
+import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
 import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
@@ -191,11 +191,15 @@ export async function runTask(
     // resume takes the existing new-session path (strict resume: the rollback
     // path). Without a registry there is no verdict (undefined).
     const dead = deadSessionWhy(opts, switches, recalled)
+    // The run's routing facts, always defined (the implicit registry where
+    // no layer exists): the record's agent resolves through them, as does
+    // the strict-resume model check below.
+    const routing = routingOf(opts, switches)
     // The recorded session's liveness runs on its own agent's host (§8.2:
     // the record carries it; absent = the run's start profile, the shape
     // every pre-binding record reads as), resolved through the pool when the
     // caller passed one.
-    const recalledClient = await clientOf(client, opts.routing ? (recalled.agent ?? opts.routing.runAgent) : undefined)
+    const recalledClient = await clientOf(client, recalled.agent ?? routing.runAgent)
     const alive =
       !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(recalledClient, recalled.session))
     // Inherit the interrupted session's real context usage (rebuilt from the
@@ -240,15 +244,11 @@ export async function runTask(
         return { type: "dirty", files: drift }
       }
       const modelNow = resumeModelNow(opts, switches, recalled.phase)
-      // §10 item 11 (plans/0055): under a registry the recorded internal name
-      // and agent are judged by eligibility — the recorded model must still be
-      // usable now, so a window change that only moves the fresh pick does not
-      // roll the unit back; without a registry the raw-string comparison is
-      // unchanged.
-      const modelOk =
-        opts.routing !== undefined
-          ? recalled.model !== undefined && resumeModelEligible(opts, switches, recalled.model, recalled.phase)
-          : recalled.model !== undefined && recalled.model === modelNow
+      // §10 item 11 (plans/0055): the recorded internal name and agent are
+      // judged by eligibility — the recorded model must still be usable now,
+      // so a window change that only moves the fresh pick does not roll a
+      // unit back.
+      const modelOk = recalled.model !== undefined && resumeModelEligible(opts, switches, recalled.model, recalled.phase)
       if (dead !== undefined || !(alive && usage && !errorStub) || opts.newSession || !modelOk) {
         const why = opts.newSession
           ? "--new-session specified"
@@ -260,9 +260,7 @@ export async function runTask(
                 ? "original session only hit an error, no real output"
                 : recalled.model === undefined
                   ? "no effective model recorded (an old record from before strict resume)"
-                  : opts.routing !== undefined
-                    ? `the recorded model ${recalled.model} is not usable now`
-                    : `model mismatch (recorded ${recalled.model}, current ${modelNow ?? "no routing configured"})`
+                  : `the recorded model ${recalled.model} is not usable now`
         const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
         rolledBack = true
@@ -274,17 +272,14 @@ export async function runTask(
       if (dead === undefined && alive && usage && !errorStub) {
         resumeSession(chain, recalled.session!, usage, Date.now(), resumeNote(recalled.phase, true, strict))
         // Session-agent binding and the continuation's model (plans/0055 §8.2,
-        // §6.2): the resumed session stays bound to the run's agent and — a
-        // registry record naming its model — the first dispatch continues on
-        // that model while it is still usable (selection keeps the chain's
-        // entry on a continuation), instead of a fresh pick moving the live
-        // session's model.
-        if (opts.routing) {
-          // The resumed session stays on the agent its record names (§8.3:
-          // absent = the run's start profile, the pre-binding shape).
-          bindAgent(chain, recalled.agent ?? opts.routing.runAgent)
-          if (recalled.model !== undefined) setRoute(chain, { entry: recalled.model, model: opts.routing.registry.models.get(recalled.model)?.model })
-        }
+        // §6.2): the resumed session stays bound to the agent its record
+        // names (§8.3: absent = the run's start profile, the pre-binding
+        // shape) and — a record naming its model — the first dispatch
+        // continues on that model while it is still usable (selection keeps
+        // the chain's entry on a continuation), instead of a fresh pick
+        // moving the live session's model.
+        bindAgent(chain, recalled.agent ?? routing.runAgent)
+        if (recalled.model !== undefined) setRoute(chain, { entry: recalled.model, model: routing.registry.models.get(recalled.model)?.model })
         log(
           `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${recalled.session} to continue (context intact, ` +
             `${formatTokens(usage.used)} used${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens, limit unknown"})`,
@@ -335,9 +330,9 @@ export async function runTask(
         at: Date.now(),
         active: false,
         phase,
-        // The session's agent rides along when a session is named (§8.2,
-        // under a registry only; attempt keeps chain.agent current).
-        ...(opts.routing && chain.id !== undefined && chain.agent !== undefined ? { agent: chain.agent } : {}),
+        // The session's agent rides along when a session is named (§8.2;
+        // attempt keeps chain.agent current).
+        ...(chain.id !== undefined && chain.agent !== undefined ? { agent: chain.agent } : {}),
       })
     }
   }
@@ -397,7 +392,6 @@ export async function runTask(
     // under the same protocol, plus its split clause).
     const selfHandover = mode === "ondemand" || mode === "auto"
     if (mode === "true") {
-      const sw = autoSwitches()
       // Merged understand + decompose session (M1.0, plans/0030): entered
       // when subtasks.md has no checklist items (tasks that already have
       // items — hand-written or left over from an earlier decomposition — are
@@ -411,14 +405,6 @@ export async function runTask(
       const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
       if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
-      // ①′ (digest) / base verification (session) — every subtask afterwards
-      // forks from the same base (with fork=off, fork stays undefined, zero
-      // behavioral difference from the status quo). Without a
-      // registry this single resolution after decompose is the unchanged
-      // one-agent era behavior (C2); under a registry it is the subtask
-      // loop's job (see the comment at `let fork`), so nothing resolves
-      // here.
-      fork = sw.fork && !opts.routing ? await ensureForkBase(client, plan, task, opts, chain, sw) : undefined
       // Stale cleanup of subtask handover documents (mirrors the ondemand
       // semantics): a non-resumed run clears the previous attempt's
       // leftovers; a resumed run (active record) keeps them for the subtask
@@ -540,9 +526,9 @@ export async function runTask(
         // subtask itself will dispatch on), and leaving the other agents'
         // entries untouched. A subtask that moved to another agent forks from
         // that agent's base, building it on first use. The reload at the loop
-        // tail keeps the record fresh; without a registry the one base
-        // resolved after decompose serves every subtask, exactly as before
-        // (C2).
+        // tail keeps the record fresh; a layer-less run's single agent keeps
+        // the map at one entry, so the one base resolved after decompose
+        // still serves every subtask.
         // auto's streams (plans/0059 D5): a checklist the lead's split
         // produced (its split point recorded, Task.split) runs as forks of the
         // lead — the lead's session is each stream's base, resolved per
@@ -552,7 +538,7 @@ export async function runTask(
         // AUTO-RESOLVE: under auto, how does a checklist with state files but no split record run (a split taken by a release before the streams forked the lead, a checklist the planned pipeline left, or a split whose record was lost between its commit and the record)? -> as plain subtasks, the pre-fan-out path (no lead to fork is known; the record is written by the release that forks, so the path stays for as long as such checklists may exist)
         const fanout = mode === "auto" ? task.split : undefined
         if (fanout) fork = await leadForkBase(client, task, opts, chain)
-        else if (opts.routing && switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
+        else if (switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
         const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit, fanout)
         if (blocked) return blocked
         // The post-tick mirror refresh already happened inside runSubtask
@@ -628,8 +614,7 @@ export async function runTask(
     if (result?.type === "fail") {
       // Per-model protocol-drift counter (plans/0055 §10 item 3): the FAIL
       // verdict was written by the wrap-up session, whose selected entry the
-      // chain still holds. Undefined without a registry; the counter then
-      // books nothing (C2).
+      // chain still holds.
       await statsModelEvent(dir, chain.modelEntry, "fail")
       const { bin } = shellProfile()
       enterPhase(chain, { kind: "wrapup" })

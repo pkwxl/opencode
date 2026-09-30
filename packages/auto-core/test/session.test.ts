@@ -114,7 +114,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("retryable error + chain.id already holds real accumulated context: retries by forking the original session, promoted to chain.id on success", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -124,7 +124,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("forked-copy retry fails again: discards the copy and re-forks the same original session (not a fork of the failed copy)", async () => {
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -133,7 +133,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("chain.id empty from the start (the first message fails): nothing worth protecting, keeps the current behavior of opening a blank new session", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -147,7 +147,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     // A subtask has a single prompt round, so at the moment of failure the chain necessarily holds no session — the old
     // strategy opened a blank new session here, throwing away the session's verified research wholesale and hitting the
     // same wall again at the same point after the restart.
-    const { client, calls } = retryClient(["error-retryable", "ok"], [168_000])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [168_000], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -157,7 +157,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("failed session's usage above the chain's original session: takes the failed session (value = accumulated context)", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"], [50_000])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [50_000], "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -168,7 +168,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     // Three failures in a row (50k usage per session) → ladder exhausted, enters wait-and-probe → probe succeeds → forks
     // the most valuable failed session (ses_fork_2, 50k) → the copy carries the prefix usage, and the 2×cap handover
     // threshold counts prefix + new work.
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"], 50_000)
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"], 50_000, "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -178,7 +178,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("failed session's usage below the chain's original session: still takes the original session (having just failed does not mean more valuable)", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"], [800])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [800], "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -186,7 +186,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("no session on the chain to fork but the fork base is alive: re-seeds from the base, regaining the warm prefix instead of a pure cold start", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0, forkBase: "ses_base" }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -196,14 +196,14 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("failed session is a pure error stub (0 usage) with no fork base: keeps the blank new session, does not carry the error stub into the copy", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(calls.forks).toEqual([])
   })
 
   test("chain.failed clears after a successful retry, leaving no residue into the next round", async () => {
-    const { client } = retryClient(["error-retryable", "ok"], [9000])
+    const { client } = retryClient(["error-retryable", "ok"], [9000], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(chain.failed).toBeUndefined()
@@ -216,7 +216,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     // degraded to base/blank cold seeding. After the fix: a 0-token error stub neither enters the candidates nor
     // displaces the record, and every retry round re-forks that 41.3k session.
     const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], [41_300])
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], [41_300], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER3)
     expect(result.type).toBe("idle")
@@ -236,7 +236,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     // The copy carried the old prefix and produced new content on top, so its usage is larger at failure — the record
     // should move to the copy, and the next round forks the copy instead of going back to the old session.
     const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"], [41_300, 52_000])
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"], [41_300, 52_000], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER3)
     expect(result.type).toBe("idle")
@@ -252,7 +252,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   // work from scratch — the same basis as the cross-run recovery resumeNote's worktree check.
 
   test("retry by forking the failed session itself: the re-dispatch carries a one-time note; with note and pending coexisting, what is taken over is the copy, not a reuse of the original session", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"], 50_000)
+    const { client, calls } = retryClient(["error-retryable", "ok"], 50_000, "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -269,7 +269,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("failed session is a pure error stub, retry forks the original session: the original session lacks this attempt's context, so the worktree-check note is attached", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -281,7 +281,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   })
 
   test("nothing forkmable on the chain, falls back to a blank new session: the re-dispatch carries the worktree-check note (the worktree may hold partial output)", async () => {
-    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -299,7 +299,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     // 0,0,0 = three retries → four attempts including the first; only a fourth failure enters the wait-and-probe loop;
     // here the fourth succeeds, so probing never happens.
     const three = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, three)
     expect(result.type).toBe("idle")
@@ -309,7 +309,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
   test("backoff truly waits: waits' minutes land on actual sleep", async () => {
     // 0.002 minutes = 120ms, enough to tell apart from a zero wait without slowing the test.
     const slow = parseSwitches({ [SWITCH_ENV.retryWaits]: "0.002", [SWITCH_ENV.recoveryWait]: "0" })
-    const { client } = retryClient(["error-retryable", "ok"])
+    const { client } = retryClient(["error-retryable", "ok"], [], "stream disconnected")
     const began = Date.now()
     const result = await runSession(client, task, "prompt text", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
     expect(result.type).toBe("idle")
@@ -337,7 +337,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
       },
       close() {},
     }
-    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", { interactive: silent }, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
@@ -349,7 +349,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
 
   test("waits=off: the first failure goes straight to the wait-and-probe loop, no ladder retries", async () => {
     const none = parseSwitches({ [SWITCH_ENV.retryWaits]: "off", [SWITCH_ENV.recoveryWait]: "0" })
-    const { client, calls } = retryClient(["error-retryable", "ok", "ok"])
+    const { client, calls } = retryClient(["error-retryable", "ok", "ok"], [], "stream disconnected")
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, none)
     expect(result.type).toBe("idle")
@@ -387,7 +387,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
       // Peek at progress.json the instant a probe session is established: it must still be the prior real record, not
       // displaced by any failed session's claim (the probe itself included).
       const seen: (string | undefined)[] = []
-      const { client, sdk } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
+      const { client, sdk } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"], [], "stream disconnected")
       const raw = sdk as unknown as { session: { create: () => Promise<unknown> } }
       const origCreate = raw.session.create.bind(raw.session)
       raw.session.create = async () => {
@@ -526,7 +526,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1 })
       // Part two: the continuation session fails retryably in all three rounds (pure error stub, no context) → ladder
       // exhausted into wait-and-probe → probe succeeds → blank new session re-dispatch succeeds.
-      const retry = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"])
+      const retry = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"], [], "stream disconnected")
       const outcome = await runSession(retry.client, task, "continuation prompt", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(outcome.type).toBe("idle")
       // The retry/recovery fork sources exclude the frozen session (before the fix: chain.id was restored to the frozen
@@ -553,7 +553,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-stub-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
-      const { client } = retryClient(["error-retryable"])
+      const { client } = retryClient(["error-retryable"], [], "stream disconnected")
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
@@ -567,7 +567,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-content-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_old" })
-      const { client } = retryClient(["error-retryable"], [41_300])
+      const { client } = retryClient(["error-retryable"], [41_300], "stream disconnected")
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
@@ -725,19 +725,23 @@ describe("quota failover (D.3/D.4): candidate switch keeps context / clamping sk
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, FAILOVER)
     expect(result.type).toBe("idle")
-    // Model order: first round no model → prov/b → prov/c → (probe) prov/c → (recovery re-dispatch) prov/c.
+    // Model order: first round no model → prov/b → prov/c → (probe) no model →
+    // (recovery re-dispatch) no model — the wait-and-probe loop takes the
+    // registry form: the probe clears the list's first candidate (the
+    // implicit registry's `default` entry, the agent's own model) and the
+    // recovery re-dispatch continues on it.
     expect("model" in calls.prompts[0]!).toBe(false)
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "c" })
-    expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "c" })
-    expect(calls.prompts[4]!.model).toEqual({ providerID: "prov", modelID: "c" })
+    expect("model" in calls.prompts[3]!).toBe(false)
+    expect("model" in calls.prompts[4]!).toBe(false)
     // The 4th dispatch is the probe (minimal prompt, fresh session); the 5th is the recovery re-dispatch (task prompt + recovery note).
     expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     const text = (calls.prompts[4]!.parts[0] as { text: string }).text
     expect(text).toContain("prompt text")
     expect(text).toContain("service has recovered")
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
-    expect(chain.model).toBe("prov/c")
+    expect(chain.model).toBeUndefined()
   })
 
   test("candidate window clamping: prov/b's context window < cap is skipped, the first effective switch is prov2/c with a sufficient window", async () => {
@@ -818,23 +822,28 @@ describe("failback scope and the /failback override: failback timing / cross-tas
     // The migrated session forked out by the failover still uses candidate prov/b (not zeroed at the fork consumption point, to prevent oscillation).
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(chain.model).toBe("prov/b")
-    // Second runSession: reuse off → a brand-new create; at the start the state is zeroed back to primary prov/a.
+    // Second runSession: reuse off → a brand-new create; at the start the
+    // marks clear and the route resets back to primary prov/a (the new pick
+    // writes the entry's model onto the chain).
     await runSession(client, task, "prompt text 2", {}, chain, undefined, undefined, SCOPED("session"))
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "a" })
-    expect(chain.model).toBeUndefined()
+    expect(chain.model).toBe("prov/a")
+    expect(chain.modelEntry).toBe("prov/a")
   })
 
-  test("phase scope: the failover stays sticky across chains via the sticky holder (simulating the next task's new chain); after clearSticky (a phase boundary) it returns to the primary", async () => {
+  test("phase scope: the failover stays sticky across chains via the down marks (simulating the next task's new chain); after the phase boundary's mark clear it returns to the primary", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("phase"))
-    expect(services().router.stickyModel()).toBe("prov/b")
-    // New chain (next task): no chain.model on it; the sticky fallback still uses prov/b.
+    // The primary's mark is what the phase scope keeps across tasks (the
+    // down marks subsume the retired sticky holder, plans/0055 §6.4).
+    expect(services().router.isModelDown("prov/a", Date.now())).toBe(true)
+    // New chain (next task): no chain.model on it; the marked-down primary is skipped, prov/b still picks.
     const next: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text 2", {}, next, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
-    // Phase-boundary clear: the chain after that returns to primary prov/a.
-    services().router.clearSticky()
+    // Phase-boundary clear (every scope covers it): the chain after that returns to primary prov/a.
+    services().router.clearDownMarks("phase", "phase")
     const third: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text 3", {}, third, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "a" })
@@ -865,16 +874,16 @@ describe("failback scope and the /failback override: failback timing / cross-tas
       console.log = orig
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // Primary prov/a (route) once + failover prov/b (fallback candidate) once; the second runSession's model is
-    // unchanged (prov/b sticky) but reuse is off and a new session opens — a new session always announces, so the same
-    // model gets another line.
+    // The registry ◈ form (the implicit registry's entries carry the model
+    // strings as their names): primary prov/a once + failover prov/b once;
+    // the second runSession's model is unchanged (prov/b sticky) but reuse is
+    // off and a new session opens — a new session always announces, so the
+    // same model gets another line.
     expect(shown.length).toBe(3)
     expect(shown[0]).toContain("prov/a")
-    expect(shown[0]).toContain("route")
+    expect(shown[0]).toContain("route bypass")
     expect(shown[1]).toContain("prov/b")
-    expect(shown[1]).toContain("fallback candidate")
     expect(shown[2]).toContain("prov/b")
-    expect(shown[2]).toContain("fallback candidate")
   })
 
   test("no route set: announces the model the server actually resolved (observed from the event stream), the prompt still carries no model key, a new session announces again", async () => {
@@ -957,17 +966,20 @@ describe("ladder-exhaustion fallback → candidate failover: switch models and r
     expect(result.type).toBe("idle")
     // 9 ladder attempts + 1 probe + 1 recovery re-dispatch = 11 dispatches.
     expect(calls.prompts.length).toBe(11)
-    // The three ladder rounds' model order: no model → prov/b → prov/c; the probe and the recovery re-dispatch keep the last candidate.
+    // The three ladder rounds' model order: no model → prov/b → prov/c; the
+    // probe and the recovery re-dispatch take the registry form (the list's
+    // first candidate, the implicit registry's `default` entry).
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(calls.prompts[6]!.model).toEqual({ providerID: "prov", modelID: "c" })
-    expect(calls.prompts[9]!.model).toEqual({ providerID: "prov", modelID: "c" })
+    expect("model" in calls.prompts[9]!).toBe(false)
     expect((calls.prompts[9]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     expect((calls.prompts[10]!.parts[0] as { text: string }).text).toContain("prompt text")
+    expect("model" in calls.prompts[10]!).toBe(false)
     // The recovery re-dispatch lands on a forked copy of the interrupted session (the last failed session ses_fork_8,
     // 50k prefix); the probe goes through a fresh temporary session (the 2nd create).
     expect(calls.prompts[9]!.sessionID).toBe("ses_new_2")
     expect(calls.prompts[10]!.sessionID).toBe("ses_fork_9")
-    expect(chain.model).toBe("prov/c")
+    expect(chain.model).toBeUndefined()
   })
 
   test("candidate window clamping applies here too: a candidate with an insufficient window is skipped, never dispatched as the fallback target", async () => {

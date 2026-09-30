@@ -23,8 +23,9 @@
 // external server (--server, OPENCODE_AUTO_SERVER, an agent profile's
 // `server`) rings are inactive: no spawn config, no rotation, no §6.2 rule-4
 // exclusion — and the run-start routing block says so. Without a registry
-// nothing here runs (C2). Sits below the session layer and above the agent
-// domain (§12): no loop, no session-driving, no agent host imports.
+// layer nothing here runs (the implicit registry carries no key rings). Sits
+// below the session layer and above the agent domain (§12): no loop, no
+// session-driving, no agent host imports.
 import type { ModelReference, ModelRegistry } from "./models-schema"
 
 // The registry's rings, by provider, in registry order. The loader

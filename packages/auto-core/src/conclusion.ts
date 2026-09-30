@@ -134,15 +134,14 @@ export async function phaseCloseLines(directory: string | undefined, phase: Phas
 }
 
 // Per-model and per-tier lines of the round-complete block (plans/0055 §7.1
-// "Stats", §10 item 12): under a registry the round bucket carries each
+// "Stats", §10 item 12): the round bucket carries each
 // model's usage, sessions and protocol-drift counters, and each tier's usage
 // and sessions — so the savings of tier routing and each model's protocol
 // drift can be read off the run's conclusion. The model keys are internal
 // names, raw `provider/model` override values, and the classifier's
 // `classify` bucket. Names sort alphabetically (booking order is runtime
 // detail); a counter only prints when non-zero (the 0-omission convention of
-// the cost/reasoning items). No model data — always the case without a
-// registry — returns nothing, and the conclusion is byte-identical (C2).
+// the cost/reasoning items). No model data returns nothing.
 // AUTO-DECISION: the per-model lines cover this round only; the cross-round
 // history keeps its two existing cumulative lines. The plan asks for
 // per-model lines on the conclusion without naming a scope, and this round's
@@ -204,10 +203,9 @@ function digestLine(digests: DigestStats | undefined): string[] {
 // phaseCount is only provided on the phased path (the phase index done count =
 // phases handed over this round); the non-phased path omits the phase segment (it is
 // the single pseudo-phase "m" throughout, a count carries no information).
-// Under a registry, per-model lines and the per-tier summary follow the
-// tokens line (plans/0055 §10 item 12); with no model data they are absent
-// and the block is byte-identical to the pre-registry form (C2). The
-// quota-window line follows them (plans/0057 §11 item 7), registry or not,
+// Per-model lines and the per-tier summary follow the
+// tokens line (plans/0055 §10 item 12); with no model data they are absent.
+// The quota-window line follows them (plans/0057 §11 item 7),
 // only when a wait was booked; the digest line follows that (plans/0061
 // R3/A7), only when a digest counter is non-zero.
 // When history.rounds > 0, two cross-round cumulative lines are appended

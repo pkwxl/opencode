@@ -11,6 +11,7 @@ import { attempt } from "../src/attempt"
 import { degrade, permissionPreset } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import { seedPinFork } from "../src/exec-session"
+import { implicitFacts } from "../src/router"
 import { forkSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -157,7 +158,7 @@ describe("helper guards", () => {
     const { client, calls } = fakeClient({ messages: () => (reads++, { data: [] }) })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const record = { task: "T-001", scope: "docs/T-001/testhandoff.md", unit: "execute", n: 1, pinSession: "ses_pin", pinMessage: "msg_1" }
-    expect(await seedPinFork(without(client, { history: false }), chain, record, "T-001 wrapup")).toBe(true)
+    expect(await seedPinFork(without(client, { history: false }), chain, record, "T-001 wrapup", implicitFacts(undefined))).toBe(true)
     expect(reads).toBe(0)
     expect(calls.forkAnchors).toEqual([undefined])
   })

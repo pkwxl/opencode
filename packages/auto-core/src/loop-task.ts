@@ -239,10 +239,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // (plans/0027-hibernate-design.md).
     await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
     // the /failback consumption point (task boundary): the chain was
-    // destroyed with runTask, no chain.model to clear; reset the phase-scope
-    // sticky holder and apply the model-order override (if any). Registry
-    // routing (plans/0055 §6.4): the chain's destruction is also where the
-    // task-scope down marks clear — the marks are run state, not chain state.
+    // destroyed with runTask, no chain.model to clear; apply the model-order
+    // override (if any). Registry routing (plans/0055 §6.4): the chain's
+    // destruction is also where the task-scope down marks clear — the marks
+    // are run state, not chain state.
     ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
     ctx.router.consumeFailback()
   }

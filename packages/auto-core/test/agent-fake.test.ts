@@ -221,7 +221,9 @@ describe("usage tiers", () => {
     expect(agent.steers).toEqual([])
     expect(chain.used).toBe(0)
     expect(chain.pct).toBe(100)
-    expect(agent.argsOf("contextLimits")).toEqual([])
+    // The dispatch still reads the context windows (every registry selects
+    // over them); nothing is measured from the turn itself.
+    expect(agent.argsOf("contextLimits").length).toBeGreaterThan(0)
   })
 })
 
@@ -520,7 +522,7 @@ describe("forks, history and liveness", () => {
 })
 
 describe("the barest agent", () => {
-  test("degrade clamps every switch it can, and a session still runs on create + events + prompt alone", async () => {
+  test("degrade clamps every switch it can, and a session still runs on create + events + prompt (plus the context-window read) alone", async () => {
     const on = parseSwitches({
       [SWITCH_ENV.fork]: "on",
       [SWITCH_ENV.steer]: "on",
@@ -539,8 +541,10 @@ describe("the barest agent", () => {
       { type: "idle", lastText: "done: one", testHandover: false },
       { type: "idle", lastText: "done: two", testHandover: false },
     ])
-    // One session per prompt, nothing but the three calls a one-shot agent needs.
-    expect(new Set(names(agent))).toEqual(new Set<AgentCall>(["create", "events", "prompt"]))
+    // One session per prompt, nothing but the calls a one-shot agent needs:
+    // the three of the turn plus the dispatch's context-window read (every
+    // dispatch selects over a registry now, the implicit one included).
+    expect(new Set(names(agent))).toEqual(new Set<AgentCall>(["create", "events", "prompt", "contextLimits"]))
     expect(agent.argsOf("create")).toHaveLength(2)
   })
 
@@ -1275,12 +1279,13 @@ describe("context steps (plans/0055 §4.5)", () => {
     expect(chain.modelStep).toBe(1)
   })
 
-  test("no registry: steers stay exactly as today (no model key)", async () => {
+  test("without a layer the implicit registry dispatches: steers stay exactly as today (no model key)", async () => {
     const agent = make({ turn: (ctx) => [ev.message(ctx.session, `m_${ctx.n}`, 30_000), ev.idle(ctx.session)] })
     const chain = fresh()
     await runSession(agent.client, task, "p", opts, chain, { limit: 30_000, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(agent.argsOf("promptAsync")).toEqual([[{ session: "ses_1", text: "hand over" }]])
-    expect(chain.modelStep).toBeUndefined()
+    // The implicit registry's `default` entry dispatches at the base step.
+    expect(chain.modelStep).toBe(0)
   })
 })
 
@@ -1653,11 +1658,11 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     expect(result.type).toBe("idle")
     // Slept to the reset (zero jitter), not the 30-minute poll.
     expect(Date.now() - began).toBeGreaterThanOrEqual(100)
-    expect(waitLine(out.lines)).toContain(`; the five-hour usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    expect(waitLine(out.lines)).toContain(`default is usable again at ${new Date(resetAt).toISOString().slice(0, 19)}+00:00, sleeping until about `)
     expect(waitLine(out.lines)).toContain("(local ")
     expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
     expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
-    const booked = (await quotaWaits(dir))?.[MODEL] ?? 0
+    const booked = (await quotaWaits(dir))?.default ?? 0
     expect(booked).toBeGreaterThan(0)
     expect(booked).toBeLessThanOrEqual(300)
   })
@@ -1771,8 +1776,10 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     expect(result.type).toBe("idle")
     // The ladder's first rung (0 minutes) would have retried at once.
     expect(out.lines.some((line) => line.includes("transient session error"))).toBe(false)
-    expect(waitLine(out.lines)).toContain("⏳ T-001 the weekly usage window is spent (session error: ")
-    expect(waitLine(out.lines)).toContain(`; the weekly usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    // The escalation's exhaustion line names the marks (the registry form);
+    // the sleep still goes to the stated reset via the mark's end.
+    expect(waitLine(out.lines)).toContain("⏳ T-001 weekly usage window spent and every candidate of the tier list is down (down: default)")
+    expect(waitLine(out.lines)).toContain(`default is usable again at ${new Date(resetAt).toISOString().slice(0, 19)}+00:00, sleeping until about `)
     expect(plain.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
     expect(plain.argsOf("fork")).toEqual([["ses_1", undefined]])
 
@@ -1816,8 +1823,8 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     // Settled on the first retry signal, not after the agent's own retrying.
     expect(agent.argsOf("abort")).toContainEqual(["ses_1"])
     expect(out.lines.some((line) => line.includes("transient session error"))).toBe(false)
-    expect(waitLine(out.lines)).toContain("⏳ T-001 the weekly usage window is spent (session error: Weekly/Monthly Limit Exhausted.")
-    expect(waitLine(out.lines)).toContain(`; the weekly usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    expect(waitLine(out.lines)).toContain("⏳ T-001 quota restricted and every candidate of the tier list is down (down: default)")
+    expect(waitLine(out.lines)).toContain(`default is usable again at ${new Date(resetAt).toISOString().slice(0, 19)}+00:00, sleeping until about `)
     expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
     expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
   })
@@ -1850,8 +1857,8 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   })
 
   // Learned windows (plans/0057 §8, S5): the record in .auto/windows.json,
-  // keyed by the account — without a registry the provider of the model the
-  // terminal was shown, `fake` here.
+  // keyed by the account — the implicit registry's dispatch account here
+  // (`opencode`, the default entry's agent with no provider to name).
   const windowsFile = () => join(dir, ".auto", "windows.json")
   const recorded = async (): Promise<Record<string, unknown>[]> => JSON.parse(await Bun.file(windowsFile()).text()).windows
   const seedWindows = async (windows: Record<string, unknown>[]) => {
@@ -1874,7 +1881,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       out.restore()
     }
     const [entry] = await recorded()
-    expect(await recorded()).toEqual([{ account: "fake", scope: "7d", resetAt, learnedAt: expect.any(Number), source: "stated", spent: true }])
+    expect(await recorded()).toEqual([{ account: "opencode", scope: "7d", resetAt, learnedAt: expect.any(Number), source: "stated", spent: true }])
     // The re-run, a new process: its failure says nothing of the limit. A
     // fresh services holder is the new process's fresh control (the /exit
     // flag never clears within one instance).
@@ -1887,7 +1894,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     } finally {
       out.restore()
     }
-    expect(waitLine(out.lines)).toContain("⏳ T-001 non-retryable session error encountered (session error: usage limit reached, quota exceeded)")
+    expect(waitLine(out.lines)).toContain("⏳ T-001 quota restricted and every candidate of the tier list is down (down: default)")
     expect(waitLine(out.lines)).toContain(
       `; the weekly usage window resets ${new Date(resetAt).toISOString()} (recorded ${new Date(entry!.learnedAt as number).toISOString()}), sleeping until about `,
     )
@@ -1897,7 +1904,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   test("a probe that errors on its own sleeps to the account's recorded reset, not the poll (S5)", async () => {
     const random = spyOn(Math, "random").mockReturnValue(0)
     const weekEnd = Date.now() + 3 * 86_400_000
-    await seedWindows([{ account: "fake", scope: "7d", resetAt: weekEnd, learnedAt: Date.now() - 86_400_000, source: "observed", spent: true, utilization: 1 }])
+    await seedWindows([{ account: "opencode", scope: "7d", resetAt: weekEnd, learnedAt: Date.now() - 86_400_000, source: "observed", spent: true, utilization: 1 }])
     const fiveEnd = Date.now() + 300
     const agent = make({ turn: failsFirst((session) => [limitError(session, { resetAt: fiveEnd, scope: "5h" }), ev.idle(session)]) })
     // The probe's session cannot be created: it errors on its own.
@@ -1920,9 +1927,11 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       random.mockRestore()
     }
     const waits = out.lines.filter((line) => line.includes("then probing service recovery"))
-    // The failure's own reset first; after the failed probe, the recorded one.
+    // The failure's own reset first (the marked-down entry's return instant,
+    // the registry form of the same sleep); after the failed probe, the
+    // recorded one.
     expect(out.lines.some((line) => line.includes("probe session itself errored (socket hang up)"))).toBe(true)
-    expect(waits[0]).toContain(`; the five-hour usage window resets ${new Date(fiveEnd).toISOString()}, sleeping until about `)
+    expect(waits[0]).toContain(`default is usable again at ${new Date(fiveEnd).toISOString().slice(0, 19)}+00:00, sleeping until about `)
     expect(waits[1]).toContain(`; the weekly usage window resets ${new Date(weekEnd).toISOString()} (recorded `)
     expect(waits[1]).not.toContain("waiting 30 minutes")
   })
@@ -1930,7 +1939,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   test("a turn that goes through clears the account's spent windows, and a usage-window observation is recorded (S5)", async () => {
     const ahead = Date.now() + 86_400_000
     await seedWindows([
-      { account: "fake", scope: "7d", resetAt: ahead, learnedAt: Date.now(), source: "stated", spent: true },
+      { account: "opencode", scope: "7d", resetAt: ahead, learnedAt: Date.now(), source: "stated", spent: true },
       { account: "other", scope: "7d", resetAt: ahead, learnedAt: Date.now(), source: "stated", spent: true },
     ])
     const week = Date.now() + 2 * 86_400_000
@@ -1952,7 +1961,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     const byAccount = (await recorded()).map((w) => [w.account, w.scope, w.source, w.spent])
     expect(byAccount).toEqual([
       ["other", "7d", "stated", true],
-      ["fake", "7d", "observed", false],
+      ["opencode", "7d", "observed", false],
     ])
   })
 
@@ -2002,8 +2011,9 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     expect(await recallProgress(dir, task.id)).toMatchObject({ session: "ses_1", active: true, phase: { kind: "decompose" }, used: 5000 })
     // No probe ran.
     expect(agent.prompts).toHaveLength(1)
-    // The part slept before the pause is booked, not the planned half hour.
-    const booked = (await quotaWaits(dir))?.[MODEL] ?? 0
+    // The part slept before the pause is booked, not the planned half hour
+    // (keyed on the implicit registry's `default` entry).
+    const booked = (await quotaWaits(dir))?.default ?? 0
     expect(booked).toBeGreaterThan(0)
     expect(booked).toBeLessThan(10_000)
   })
@@ -2017,12 +2027,23 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     const out = capture()
     try {
       await expect(runSession(phased.client, task, "p", { dir }, { ...fresh(), phase: { kind: "whole" } }, undefined, undefined, noLadder)).rejects.toBeInstanceOf(ExitRequested)
-      await expect(runSession(oneOff.client, task, "p", opts, fresh(), undefined, undefined, noLadder)).rejects.toBeInstanceOf(ExitRequested)
     } finally {
       out.restore()
     }
     expect(out.lines).toContain("⏸ T-001 /exit inside the recovery wait: the re-run resumes the failed session ses_1 (5000 tokens)")
-    expect(out.lines).toContain(
+    // The one-off run is a fresh process shape: a fresh holder, so the first
+    // run's after-ladder mark (the implicit registry's only entry, written
+    // when the failover found no other candidate) does not block its
+    // dispatch — the wording under test is the phase-less no-record branch.
+    installServices(createServices())
+    services().control.requestExit()
+    const oneOffOut = capture()
+    try {
+      await expect(runSession(oneOff.client, task, "p", opts, fresh(), undefined, undefined, noLadder)).rejects.toBeInstanceOf(ExitRequested)
+    } finally {
+      oneOffOut.restore()
+    }
+    expect(oneOffOut.lines).toContain(
       "⏸ T-001 /exit inside the recovery wait: the failed session ses_1 is a one-off session with no progress record, so the re-run starts it anew",
     )
     expect(await recallProgress(dir, task.id)).toMatchObject({ session: "ses_1", used: 5000 })
@@ -2394,22 +2415,22 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     }
   })
 
-  test("without a registry the base lines and the record keep the one-agent era's shape", async () => {
+  test("without a layer the implicit registry gives the base lines and record the registry form", async () => {
     const agent = make()
     const dir = await mkdtemp(join(tmpdir(), "auto-fork-plain-"))
     try {
       const plan = await seedUnits(dir, `## T-001: plain base [in_progress]\nBody.\n`)
       await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
       const base = await ensureForkBase(agent.client, plan, plan.tasks[0]!, {}, { pct: 100, used: 0, at: 0 }, DEFAULTS)
-      expect(base).toEqual({ id: "ses_1", used: 1000, digest: true })
-      // The record stays the plain string and the ready line names neither
-      // an agent nor a model.
-      expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_1"')
-      expect(lines.some((line) => line.includes("digest base ready: session ses_1 (digest prefix 1000 tokens)"))).toBe(true)
+      expect(base).toEqual({ id: "ses_1", used: 1000, agent: "opencode", digest: true })
+      // The record is the per-agent map and the ready line names the agent
+      // and the model (the implicit registry's `default` entry).
+      expect(await unitsText(dir)).toContain('"forkBase": {\n        "opencode": "digest:ses_1"\n      }')
+      expect(lines.some((line) => line.includes("digest base ready: session ses_1 on agent opencode (model default, digest prefix 1000 tokens)"))).toBe(true)
       const chain: SessionChain = { pct: 10, used: 5, at: 0, id: "ses_prev" }
       await expect(seedForkSession(agent.client, {}, chain, base, "T-001 S1 x")).resolves.toBe(true)
       expect(chain.pending).toBe("ses_2")
-      expect(lines.some((line) => line.includes("forked a new session from base ses_1 (prefix 1000 tokens)"))).toBe(true)
+      expect(lines.some((line) => line.includes("forked a new session from base ses_1 on agent opencode (prefix 1000 tokens)"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2619,7 +2640,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts[2]).toContain("This is the last stream")
       // S02 declares no prerequisite: no changed-files list.
       expect(prompts[2]).toContain("Do not re-read what you already read")
-      expect(lines.some((line) => line.includes(`lead base: session ${lead} (50.0k tokens)`))).toBe(true)
+      expect(lines.some((line) => line.includes(`lead base: session ${lead} on agent opencode (50.0k tokens)`))).toBe(true)
       // The driver's scope files, renamed to done.md at each stream's close-out.
       expect(read(dir, "docs/T-001/S01/done.md")).toBe(
         "Depends: none\nTouches: src/alpha.ts\n\n## Scope\n\nalpha: the alpha module in src/alpha.ts, verify by reading it back\n\n## Artifacts\n\n- src/alpha.ts\n\n<!-- auto: eof -->\n",
@@ -2943,7 +2964,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(agent.argsOf("fork").map((args) => args[0])).toEqual(["ses_lead", "ses_lead"])
       expect(prompts[0]).toStartWith("[DRIVER] Your split was taken")
       expect(prompts[1]).toContain("This is the last stream")
-      expect(lines.some((line) => line.includes("lead base: session ses_lead (50.0k tokens)"))).toBe(true)
+      expect(lines.some((line) => line.includes("lead base: session ses_lead on agent opencode (50.0k tokens)"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2971,7 +2992,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts[1]).toStartWith("[DRIVER] Your split was taken")
       expect(prompts[2]).toStartWith("[DRIVER] Your split was taken")
       // The first stream reads the lead's chain, the second the record.
-      expect(lines.filter((line) => line.includes(`lead base: session ${lead} (50.0k tokens)`))).toHaveLength(2)
+      expect(lines.filter((line) => line.includes(`lead base: session ${lead} on agent opencode (50.0k tokens)`))).toHaveLength(2)
       expect(lines.some((line) => line.includes("base usage unknown"))).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2999,7 +3020,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts).toHaveLength(2)
       expect(agent.argsOf("fork").map((args) => args[0])).toEqual(["ses_lead", "ses_lead"])
       expect(prompts[0]).toStartWith("[DRIVER] Your split was taken")
-      expect(lines.filter((line) => line.includes("lead base: session ses_lead (50.0k tokens)"))).toHaveLength(2)
+      expect(lines.filter((line) => line.includes("lead base: session ses_lead on agent opencode (50.0k tokens)"))).toHaveLength(2)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

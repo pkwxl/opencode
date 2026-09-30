@@ -146,10 +146,8 @@ describe("the services holder", () => {
   test("the fresh holder extends to the router: state one test writes never leaks to the next", () => {
     // The pair's writer: mark through this test's instance…
     const router = services().router
-    router.setSticky("prov/a")
     router.requestFailback()
     router.markModelDown("k3")
-    expect(router.stickyModel()).toBe("prov/a")
     expect(router.failbackRequested()).toBe(true)
     expect(router.isModelDown("k3", 0)).toBe(true)
     // …the key rings too: activate them over a one-ring registry.
@@ -172,7 +170,6 @@ describe("the services holder", () => {
     // …and the preload's install before this test gave a fresh instance:
     // the moved state has no reset hook because none is needed.
     const router = services().router
-    expect(router.stickyModel()).toBeUndefined()
     expect(router.failbackRequested()).toBe(false)
     expect(router.downMarks().size).toBe(0)
     // The rings never activated on this instance: every read answers
@@ -266,9 +263,6 @@ describe("the services holder", () => {
 // (the answer cache, the in-flight calls, the budget, the limit line's
 // once flag and the sink) that classify.ts held as module variables.
 const MOVED_TO_ROUTER = [
-  "stickyModel",
-  "setSticky",
-  "clearSticky",
   "failbackOverride",
   "requestFailback",
   "failbackRequested",

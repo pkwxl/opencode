@@ -240,9 +240,23 @@ describe("checkModels", () => {
 })
 
 describe("describeModels", () => {
-  test("no registry: no table, and the operator path it looked at", async () => {
+  test("no layer in force: the table is the implicit registry, and the operator path it looked at", async () => {
     const description = await describeTarget()
-    expect(description).toEqual({ operatorPath: operator, problems: [], notes: [] })
+    expect(description.operatorPath).toBe(operator)
+    expect(description.problems).toEqual([])
+    expect(description.notes).toEqual([])
+    // The probe handle stays undefined (nothing to probe); the table names
+    // the implicit registry the env switches synthesize (0061 F2).
+    expect(description.registry).toBeUndefined()
+    expect(description.table?.layers).toEqual([])
+    expect(description.table!.agents).toEqual([{ name: "opencode", layer: "implied", adapter: "opencode", env: [] }])
+    expect(description.table!.models).toEqual([
+      { name: "default", layer: "implied", agent: "opencode", adapter: "opencode", steps: [], state: { usable: true, reasons: [], notes: [expect.stringContaining("context window is unknown")] } },
+    ])
+    expect(description.table!.tiers).toEqual([
+      { tier: "deep", names: ["default"], layer: "implied" },
+      { tier: "simple", names: ["default"], layer: "implied" },
+    ])
   })
 
   test("tiers per phase type and role, with the project's custom types", async () => {
@@ -540,10 +554,16 @@ describe("describeModels", () => {
 })
 
 describe("formatModels", () => {
-  test("no registry: one line naming both layers", async () => {
-    expect(formatModels(await describeTarget())).toEqual([
-      `no model registry: neither the operator layer ${operator} nor the project layer ${MODELS_FILE} exists`,
-    ])
+  test("no layer in force: the head line names the implicit registry and its source", async () => {
+    const lines = formatModels(await describeTarget())
+    expect(lines[0]).toBe(
+      `model registry: implicit — no layer file (${operator} nor ${MODELS_FILE}); a run synthesizes it from OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK`,
+    )
+    // One profile, one entry without a model, both tiers the same list.
+    expect(lines).toContain("  opencode  [implied]  adapter opencode")
+    expect(lines).toContain("  default  [implied]  agent opencode (opencode) · the agent's default model")
+    expect(lines).toContain("  deep    [implied]  default")
+    expect(lines).toContain("  simple  [implied]  default")
   })
 
   test("a registry that does not load: the problems and the refusal line", async () => {

@@ -65,19 +65,16 @@ const FILE = join(".auto", "windows.json")
 const loaded = new Map<string, Promise<LearnedWindow[]>>()
 const writing = new Map<string, Promise<void>>()
 
-// The account a chain's dispatch runs on. Under a registry: the entry's
-// agent profile, its provider and the ring's current key by name (a raw
-// override value runs on the default agent, its provider the model string's
-// prefix); without one: the provider of the chain's model — the routed one,
-// else the one the terminal was shown — or `default`.
-export function accountOf(chain: Pick<SessionChain, "model" | "modelEntry" | "modelShown">, routing: RoutingFacts | undefined): string {
-  if (routing !== undefined) {
-    const entry = routing.registry.models.get(chain.modelEntry ?? "")
-    const provider = entry !== undefined ? entry.provider : providerOf(chain.modelEntry)
-    const key = provider !== undefined && routing.router.hasActiveRing(provider) ? routing.router.currentKey(provider) : undefined
-    return `${entry?.agent ?? routing.defaultAgent}${provider !== undefined ? `/${provider}` : ""}${key !== undefined ? `#${key.label}` : ""}`
-  }
-  return providerOf(chain.model ?? chain.modelShown) ?? "default"
+// The account a chain's dispatch runs on: the entry's agent profile, its
+// provider and the ring's current key by name (a raw override value runs on
+// the default agent, its provider the model string's prefix). Every run has
+// a registry (the implicit one where no layer exists), so the facts are
+// always present.
+export function accountOf(chain: Pick<SessionChain, "model" | "modelEntry" | "modelShown">, routing: RoutingFacts): string {
+  const entry = routing.registry.models.get(chain.modelEntry ?? "")
+  const provider = entry !== undefined ? entry.provider : providerOf(chain.modelEntry)
+  const key = provider !== undefined && routing.router.hasActiveRing(provider) ? routing.router.currentKey(provider) : undefined
+  return `${entry?.agent ?? routing.defaultAgent}${provider !== undefined ? `/${provider}` : ""}${key !== undefined ? `#${key.label}` : ""}`
 }
 
 function providerOf(model: string | undefined): string | undefined {

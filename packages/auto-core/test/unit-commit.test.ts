@@ -203,16 +203,14 @@ describe("resumeModelNow (strict-resume model check)", () => {
 
     test("an agent this run cannot dispatch on is a dead session; absent = the run's start profile", () => {
       const models = [entry("a", { model: "prov/a" })]
-      const opts: import("../src/opts").Opts = { routing: factsOf(models) }
-      expect(recordedAgentOk(opts.routing, undefined)).toBe(true)
-      expect(recordedAgentOk(opts.routing, "opencode")).toBe(true)
+      const routing = factsOf(models)
+      const opts: import("../src/opts").Opts = { routing }
+      expect(recordedAgentOk(routing, undefined)).toBe(true)
+      expect(recordedAgentOk(routing, "opencode")).toBe(true)
       // No registry profile of that name at all.
-      expect(recordedAgentOk(opts.routing, "claude-b")).toBe(false)
-      expect(recordedAgentOk(undefined, "claude-b")).toBe(true)
+      expect(recordedAgentOk(routing, "claude-b")).toBe(false)
       expect(deadSessionWhy(opts, bare, { agent: "claude-b", phase: step })).toContain("lives on agent claude-b")
       expect(deadSessionWhy(opts, bare, { agent: "opencode", phase: step })).toBeUndefined()
-      // Without a registry there is no verdict at all.
-      expect(deadSessionWhy({}, bare, { agent: "claude-b", model: "whatever", phase: step })).toBeUndefined()
       // A record naming no model has nothing to judge: only the agent half.
       expect(deadSessionWhy(opts, bare, { phase: step })).toBeUndefined()
     })

@@ -113,13 +113,15 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     const taskNoBase = await setupTask()
     const { client, calls } = fakeClient()
     const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_1", used: 0, digest: true })
+    expect(base).toEqual({ id: "ses_new_1", used: 0, agent: "opencode", digest: true })
     // One-shot session build (the title is the commit title), no fork, no rename (a new session is already named)
     expect(calls.creates).toBe(1)
     expect(calls.forks).toEqual([])
     expect(calls.updates).toEqual([])
-    // fork-base persists with the digest: prefix as the new base session id
-    expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
+    // fork-base persists with the digest: prefix as the new base session id,
+    // under the reading agent's key (every registry records per agent, the
+    // implicit one included).
+    expect(await unitsText(dir)).toContain('"forkBase": {\n        "opencode": "digest:ses_new_1"\n      }')
   })
 
   test("persistent digest base alive (re-run after an interruption / a task resumed unfinished): the same base session reused, no rebuild, the field untouched", async () => {
@@ -130,7 +132,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
     // Usage rebuilt from the last assistant message (400 + 100)
-    expect(base).toEqual({ id: "ses_P", used: 500, digest: true })
+    expect(base).toEqual({ id: "ses_P", used: 500, agent: "opencode", digest: true })
     expect(calls.creates).toBe(0)
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_P"')
   })
@@ -140,9 +142,9 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     const taskPersisted = await setupTask("digest:ses_dead")
     const { client, calls } = fakeClient({ get: () => undefined })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_1", used: 0, digest: true })
+    expect(base).toEqual({ id: "ses_new_1", used: 0, agent: "opencode", digest: true })
     expect(calls.creates).toBe(1)
-    expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
+    expect(await unitsText(dir)).toContain('"forkBase": {\n        "opencode": "digest:ses_new_1"\n      }')
   })
 
   test("persistent digest base dead + rebuild blocked (a blocking question inside the session): the dead base is not re-validated, falls back to a cold start", async () => {
@@ -179,7 +181,9 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     })
     const stubbed = opencodeAgent({ ...sdk, permission: { reply: async () => ({}) } } as unknown as OpencodeClient)
     const base = await ensureForkBase(stubbed, await reloadUnits(dir), taskWithBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_U", used: 1000 })
+    expect(base).toEqual({ id: "ses_U", used: 1000, agent: "opencode" })
+    // The session-base fallback never rewrites the record: the seeded plain
+    // string stands (a plain string still reads as the run's agent's base).
     expect(await unitsText(dir)).toContain('"forkBase": "ses_U"')
   })
 
@@ -194,8 +198,8 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
       },
     })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_2", used: 0, digest: true })
-    expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_2"')
+    expect(base).toEqual({ id: "ses_new_2", used: 0, agent: "opencode", digest: true })
+    expect(await unitsText(dir)).toContain('"forkBase": {\n        "opencode": "digest:ses_new_2"\n      }')
   })
 
   test("digest missing → falls back to the session base", async () => {
@@ -203,7 +207,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskWithBase, {}, chain, digest)
     // The session base is alive but its usage is unreadable → counted as 0
-    expect(base).toEqual({ id: "ses_U", used: 0 })
+    expect(base).toEqual({ id: "ses_U", used: 0, agent: "opencode" })
   })
 
   test("session mode with a dead base (storage cleanup) → falls back to a cold start (undefined)", async () => {
@@ -215,7 +219,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
   test("session mode meeting a leftover digest: prefix (the base mode switched mid-run): shelled and validated, reused as the warm prefix when alive", async () => {
     const taskPersisted = await setupTask("digest:ses_P")
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
-    expect(await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0, digest: true })
+    expect(await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0, agent: "opencode", digest: true })
   })
 
   test("fork=off: always undefined (the current pipeline)", async () => {

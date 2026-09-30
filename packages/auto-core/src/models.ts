@@ -15,8 +15,10 @@
 //     $XDG_CONFIG_HOME/<configDir>/models.json (XDG_CONFIG_HOME defaults to
 //     ~/.config; configDir comes from the shell profile).
 //   - project layer: .opencode/auto/models.json in the target directory.
-//   A missing file is no layer, and with neither layer there is no registry:
-//   loadModels returns undefined and the run stays as it is without one.
+//   A missing file is no layer, and with neither layer there is no file
+//   registry: loadModels returns undefined and the run synthesizes the
+//   implicit registry from the env switches instead (implicitRegistry
+//   below, 0061 F2) — the run's routing decisions always have a registry.
 // AUTO-RESOLVE: does an explicitly set OPENCODE_AUTO_MODELS that names a missing file fail, or fall back to the XDG path? -> neither: it is no operator layer, with no fallback (a missing file is no layer, as the design states for both layers; pointing the variable at a missing path is how a test or a machine turns the operator layer off without touching the operator's file)
 // AUTO-RESOLVE: is a relative XDG_CONFIG_HOME used? -> no, it is ignored and ~/.config applies (the XDG base directory specification declares relative values invalid)
 //
@@ -78,7 +80,7 @@ import {
 } from "./models-schema"
 import { PHASE_LETTERS, TIERS } from "./phases/registry"
 import { registeredAdapterNames, shellProfile } from "./shell"
-import { MODEL_ROLES, SWITCH_ENV } from "./switches"
+import { MODEL_ROLES, SWITCH_ENV, type ModelPolicy } from "./switches"
 
 // The project layer, relative to the target directory.
 export const MODELS_FILE = join(".opencode", "auto", "models.json")
@@ -136,6 +138,100 @@ async function readLayer(layer: RegistryLayer, problems: string[]): Promise<stri
     if (code === "ENOENT" || code === "ENOTDIR") return undefined
     problems.push(`${layerLabel(layer)}: cannot be read (${code ?? String(error)})`)
     return undefined
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The implicit registry (0061 F2, ruling R2's step 2)
+// ---------------------------------------------------------------------------
+
+// The internal name of the implicit registry's entry without a model — the
+// agent's own default model, where a dispatch lands when nothing routes.
+export const IMPLIED_MODEL = "default"
+
+// Synthesizes the registry a run uses when no layer exists (0061 §2.1 R2):
+// the env switches become the registry's source, so every dispatch resolves
+// through selection and the dual routing path is gone. From the switches:
+//   - one entry per model string in OPENCODE_AUTO_MODEL / _FALLBACK values,
+//     on the run's agent profile (the entry keeps the model string as its
+//     internal name, so down marks, strict-resume records and stats buckets
+//     key on exactly the string the switches name);
+//   - routes from the OPENCODE_AUTO_MODEL key grammar (the vocabulary the
+//     registry's routes already share, src/model-route.ts): every role,
+//     phase-type or letter key routes to its own entry first, the _FALLBACK
+//     ring behind it — a keyed model's failover walks the ring exactly as
+//     the env path did;
+//   - the _FALLBACK ring as the tier lists' order, behind the wildcard's
+//     entry when one is set, else behind the entry without a model (the
+//     agent's default, which is where a dispatch lands when nothing
+//     routes — no model key in the prompt, the agent resolves it);
+//   - no windows, key rings or classifier (the switches carry none), and no
+//     layers — the registry is in memory only, and its `implicit` flag says
+//     so (the switch grammar stays the no-registry one: OPENCODE_AUTO_MODEL
+//     values keep requiring the slash, OPENCODE_AUTO_MODEL_FALLBACK keeps
+//     parsing, and setSwitchModelRegistry is fed by layer-backed registries
+//     alone).
+// `agent` names the run's agent (the adapter the fleet runs); the profile
+// carries the agent's own name, exactly the fallback agentProfileFor answers
+// for it, so the agent filter (the same source) always passes its entries.
+// MODEL_FAILBACK_SCOPE keeps its registry meaning here (down-mark scope): the
+// marks the failover writes clear at the scope boundaries instead of the
+// phase-sticky holder of the env path, which 0055 §6.4 designed this to
+// subsume.
+// AUTO-DECISION: both tier lists hold the same names (the env path routed
+// every role through one policy; a tier split would invent a distinction the
+// switches never had, and a simple tier borrowing the deep list dedups to
+// itself)
+export function implicitRegistry(agent: string, policy: ModelPolicy): ModelRegistry {
+  const agentProfile: RegistryAgentProfile = { name: agent, layer: "implied", adapter: agent }
+  // One entry per model string, the entry's name the string itself.
+  const models = new Map<string, ModelEntry>()
+  const entryOf = (model: string): ModelEntry => {
+    const found = models.get(model)
+    if (found !== undefined) return found
+    const slash = model.indexOf("/")
+    const entry: ModelEntry = {
+      name: model,
+      layer: "implied",
+      agent,
+      model,
+      ...(agent === "opencode" && slash > 0 ? { provider: model.slice(0, slash) } : {}),
+    }
+    models.set(model, entry)
+    return entry
+  }
+  // The ring behind every list: the _FALLBACK order, a repeat of the list's
+  // own head removed (the env path's `tried` bookkeeping never re-picked the
+  // model it failed over from).
+  const ring = (head: string): string[] => [head, ...policy.fallback.filter((model) => model !== head)]
+  const wildcard = policy.wildcard
+  const primary = wildcard !== undefined ? wildcard : IMPLIED_MODEL
+  if (wildcard === undefined) models.set(IMPLIED_MODEL, { name: IMPLIED_MODEL, layer: "implied", agent })
+  else entryOf(wildcard)
+  for (const model of policy.fallback) entryOf(model)
+  const routes = new Map<string, ModelRoute>()
+  const route = (key: string, model: string): void => {
+    entryOf(model)
+    routes.set(key, { key, layer: "implied", names: ring(model) })
+  }
+  for (const [key, model] of Object.entries(policy.byType)) route(key, model)
+  for (const letter of PHASE_LETTERS) {
+    const model = policy.byLetter[letter]
+    if (model !== undefined) route(letter, model)
+  }
+  for (const role of MODEL_ROLES) {
+    const model = policy.byRole[role]
+    if (model !== undefined) route(role, model)
+  }
+  return {
+    layers: [],
+    implicit: true,
+    tz: DEFAULT_WINDOW_TZ,
+    agents: new Map([[agent, agentProfile]]),
+    models,
+    tiers: { deep: { tier: "deep", names: ring(primary), layer: "implied" }, simple: { tier: "simple", names: ring(primary), layer: "implied" } },
+    routes,
+    unused: [],
   }
 }
 
@@ -762,7 +858,10 @@ class Validator {
     }
   }
 
-  private layerOf(name: RegistryLayerName): RegistryLayer {
+  private layerOf(name: EntryOrigin): RegistryLayer {
+    // File entries' origins are always among the loaded layers; "implied"
+    // never reaches the validator (only the in-memory implicit registry
+    // carries it, and nothing validates that).
     return this.layers.find((layer) => layer.name === name)!
   }
 }

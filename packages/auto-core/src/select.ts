@@ -11,10 +11,10 @@
 //      window opening, probe with the first in-window candidate, or the
 //      empty-tier error.
 //
-// Every dispatch resolver under a registry calls this module (§12: attempt's
+// Every dispatch resolver calls this module (§12: attempt's
 // target, the session failover, unit-commit's resume, the `/failback`
-// override); `resolveModel` (src/chain.ts) stays the no-registry path, so a
-// run without a registry is untouched. Everything here is pure over the
+// override); `resolveModel` (src/chain.ts) stays as the layer-backed
+// registry's `OPENCODE_AUTO_MODEL` override. Everything here is pure over the
 // loaded registry, the run state and an injected clock: the down marks, the
 // key-ring predicate and the context windows are inputs, never module state,
 // and no window or clock is read behind the caller's back.
@@ -133,11 +133,22 @@ export type EmptyTier = {
   filter?: string
 }
 
+// The empty policy: what a selection reads when the switches carry nothing
+// (and the only form the implicit registry's selections ever see).
+export const EMPTY_MODEL_POLICY: ModelPolicy = { byLetter: {}, byType: {}, byRole: {}, fallback: [] }
+
+// The policy a selection reads (§9's OPENCODE_AUTO_MODEL override): the
+// switches' values — except under the implicit registry, whose routes and
+// tiers ARE those values (the switches are that registry's source, so they
+// must not also replace its lists; the /failback override still applies).
+export function selectionPolicy(registry: Pick<ModelRegistry, "implicit">, policy: ModelPolicy): ModelPolicy {
+  return registry.implicit ? EMPTY_MODEL_POLICY : policy
+}
+
 // The candidate list of a dispatch (§6.1): route, tier and list from
 // src/model-route.ts (lines 1–3), then the overrides of §9 — an
 // OPENCODE_AUTO_MODEL match for (role, phase type) replaces the list, and so
-// does the `/failback` order; the env switch wins between the two, as it
-// does on the no-registry path.
+// does the `/failback` order; the env switch wins between the two.
 // AUTO-DECISION: a `/failback` order value resolves through the same internal-name-or-raw rule as an OPENCODE_AUTO_MODEL value, although the design names internal names for it (one rule for every override value keeps this module total; the interactive input check owns refusing unknown names)
 export function candidatesOf(ctx: SelectContext, call: SelectCall): SelectList {
   const list = candidateList(ctx.registry, call.entry, call.role)

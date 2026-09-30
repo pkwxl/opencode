@@ -63,10 +63,12 @@ export type RegistryAgentProfile = {
 }
 
 // A model entry (`models.<internal name>`, §4.2). Structurally a WindowSpec
-// of src/model-window.ts (`avoid` / `only`).
+// of src/model-window.ts (`avoid` / `only`). `layer` is an EntryOrigin: the
+// implicit registry of a run without layers (0061 F2) synthesizes its
+// entries with the "implied" origin.
 export type ModelEntry = {
   name: string
-  layer: RegistryLayerName
+  layer: EntryOrigin
   // The agent profile that runs it.
   agent: string
   // The adapter's model id; absent = the agent's own default model.
@@ -94,15 +96,20 @@ export type ModelEntry = {
 // agent's retry policy.
 export type RetryOverride = Partial<AgentRetryPolicy>
 
-export type TierList = { tier: Tier; names: string[]; layer: RegistryLayerName }
+export type TierList = { tier: Tier; names: string[]; layer: EntryOrigin }
 
 // A route (`routes.<key>`): a role word, a phase type id or a preset letter,
 // mapped to a tier or to an ordered list of internal names.
-export type ModelRoute = { key: string; layer: RegistryLayerName } & ({ tier: Tier } | { names: string[] })
+export type ModelRoute = { key: string; layer: EntryOrigin } & ({ tier: Tier } | { names: string[] })
 
 export type ModelRegistry = {
   // The layers that exist, operator first.
   layers: RegistryLayer[]
+  // The implicit registry of a run without layers (0061 F2): synthesized in
+  // memory from the env switches, never loaded from a file. The flag names
+  // it wherever a reader must tell it from a layer-backed registry (the
+  // switch grammar stays the no-registry one, the probe takes only layers).
+  implicit?: true
   // Canonical IANA spelling; DEFAULT_WINDOW_TZ when no layer sets it.
   tz: string
   tzLayer?: RegistryLayerName

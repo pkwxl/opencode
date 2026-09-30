@@ -535,8 +535,10 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     }
   })
 
-  test("switch default off: the same model-mismatched record is still reused under the existing semantics (status-quo equivalent)", async () => {
-    const { dir } = await seeded({ model: "kimi/old" })
+  test("switch default off: a record without the strict fields is still reused under the existing semantics (status-quo equivalent)", async () => {
+    // A loose run writes no model into the record; nothing is checked, the
+    // session reuses.
+    const { dir } = await seeded({})
     try {
       const { client, state } = stepClient("ses_plan_old")
       let resetCalled = false
@@ -544,6 +546,20 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
       expect(resetCalled).toBe(false)
       expect(state.creates).toBe(0)
       expect(state.prompts).toEqual(["ses_plan_old"])
+      expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a record naming a model this run's registry does not know is dead even with strict off (the registry form: the implicit registry judges records like every registry)", async () => {
+    const { dir } = await seeded({ model: "kimi/old" })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), LOOSE)).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
       expect(await git(dir, "stash", "list")).toBe("")
     } finally {
       await rm(dir, { recursive: true, force: true })

@@ -795,7 +795,9 @@ describe("claudeAgent: process manager", () => {
     expect(procs).toHaveLength(3)
     expect(procs[2]!.args).toContain("--fork-session")
     expect(argOf(procs[2]!, "--resume")).toBe(interrupted)
-    expect(log).toContain("non-retryable session error encountered")
+    // The escalation's exhaustion line names the marks (the registry form);
+    // the wait itself and the fork re-dispatch are unchanged.
+    expect(log).toContain("quota restricted and every candidate of the tier list is down")
     expect(log).not.toContain("retrying with a new session")
     expect(log).toContain(`forked copy of the original session ${interrupted} (206.2k tokens)`)
     expect(log).toContain("context 21% (206.2k/1000.0k tokens)")
@@ -817,9 +819,10 @@ describe("claudeAgent: process manager", () => {
     try {
       const { procs, log } = await interruptedRun([ahead, syntheticLine, failedResult], parseSwitches({}))
       expect(procs).toHaveLength(3)
-      // The timeline advanced across the whole second to the reset.
+      // The timeline advanced across the whole second to the reset; the
+      // reason names the registry form (the marked-down entry's return).
       expect(mc.at).toBeGreaterThanOrEqual(resetsAt * 1000)
-      expect(log).toContain(`; the five-hour usage window resets ${new Date(resetsAt * 1000).toISOString()}, sleeping until about `)
+      expect(log).toContain(`default is usable again at ${new Date(resetsAt * 1000).toISOString().slice(0, 19)}+00:00, sleeping until about `)
       expect(log).not.toContain("waiting 30 minutes")
     } finally {
       random.mockRestore()

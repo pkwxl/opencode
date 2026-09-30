@@ -8,16 +8,21 @@
 // the context windows) and owns the run-start routing block (§6.5) and the
 // dispatch-coverage refusal of the run start (§6.3).
 //
-// Without a registry nothing here runs: the dispatch resolvers keep their
-// env-switch path (resolveModel, src/chain.ts), byte for byte.
+// A run without registry layers passes undefined: routingFacts then builds
+// the facts over the implicit registry (0061 F2, implicitRegistry in
+// src/models.ts) — the env switches become that registry's source, so every
+// dispatch resolves through selection and the engine's routing facts are
+// always defined. The run-start block and the coverage refusal stay
+// layer-backed (a layer-less run starts exactly as it did: the fleet is the
+// single started agent, whose bins and lists nobody re-checks).
 import { log } from "./log"
 import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
-import { layerLabel } from "./models"
+import { implicitRegistry, layerLabel } from "./models"
 import type { ModelRegistry, RegistryAgentProfile } from "./models-schema"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { Router } from "./router"
-import { candidateKey, select, type Candidate, type SelectContext } from "./select"
+import { candidateKey, select, selectionPolicy, type Candidate, type SelectContext } from "./select"
 import type { Clock } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
@@ -63,8 +68,8 @@ export type RoutingFacts = {
 
 // The routing facts of a run: the agent filter follows the same precedence
 // the agent choice uses minus the configured agent (shell profile >
-// OPENCODE_AUTO_AGENT, src/agent-choice.ts) — under a registry the filter is
-// only those two (§9 R6: the project's configured agent is the default agent
+// OPENCODE_AUTO_AGENT, src/agent-choice.ts) — the filter names an adapter,
+// never a profile (§9 R6: the project's configured agent is the default agent
 // raw override values and unqualified records use, never a filter, so a
 // single-agent fleet keeps working on a project initialized with
 // `--agent claude`). The default agent is the configured agent alone.
@@ -77,18 +82,30 @@ export type RoutingFacts = {
 // caller (the module must not reach the run's services itself); they ride the
 // facts so the pure dispatch decision reads the same timeline and the same
 // routing state the engine runs on.
+// `registry` undefined = no layer exists: the facts are then built over the
+// implicit registry synthesized from the env switches (0061 F2) on the
+// agent the filter names (else the configured agent, else opencode — the
+// same precedence the fleet start uses), so the caller hands one registry
+// value in and always gets complete facts back.
 // AUTO-DECISION: the filter names an adapter, never a profile (the filter values — the shell profile's agent and OPENCODE_AUTO_AGENT — name adapters by the agent-choice rule, and every profile of that adapter passes; a profile-name filter would silently empty every list when no profile bears the name, which §6.3 already reports better at its own layer)
 export function routingFacts(
-  registry: ModelRegistry,
+  registry: ModelRegistry | undefined,
   configuredAgent: AgentChoice | undefined,
   clock: Clock,
   router: Router,
   runAgent?: string,
+  // The switch snapshot the facts read (the filter source and the implicit
+  // registry's policy); defaults to the parsed memo. The session-driving
+  // layer passes its own `switches` argument so an injected snapshot (tests,
+  // a re-parsed composition) drives the implicit registry exactly as it
+  // drives everything else.
+  switches: Switches = autoSwitches(),
 ): RoutingFacts {
   const profile = shellProfile().agent?.name
-  const env = autoSwitches().agent
+  const env = switches.agent
+  const agent = profile ?? env ?? configuredAgent ?? "opencode"
   return {
-    registry,
+    registry: registry ?? implicitRegistry(agent, switches.model),
     agentFilter: profile ?? env,
     filterSource: profile ? "shell profile" : env ? "OPENCODE_AUTO_AGENT" : undefined,
     defaultAgent: configuredAgent ?? "opencode",
@@ -120,7 +137,7 @@ export function selectContext(
     cap,
     agentFilter: facts.agentFilter,
     defaultAgent: facts.defaultAgent,
-    policy: switches.model,
+    policy: selectionPolicy(facts.registry, switches.model),
     override: facts.router.failbackOverride(),
     marks: facts.router.downMarks(),
     ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),

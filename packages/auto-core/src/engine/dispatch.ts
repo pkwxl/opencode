@@ -12,9 +12,9 @@
 //
 // Pure means: no I/O, no module state, no chain write. The registry, the
 // selection context and the clock ride the facts; the chain is read only.
-// Without a registry (no routing facts) the plan answers resumed and the
-// failback flag alone — the no-registry target resolves after the session
-// exists, exactly as before, and stays the executor's to compute.
+// The facts are always present: every run has a registry (a layer-backed
+// one, or the implicit registry the env switches synthesize where no layer
+// exists), so the plan always answers a pick or a blocked outcome.
 import { roleOf, type SessionChain, type SessionResult } from "../chain"
 import type { ChainRoute } from "../chain-transitions"
 import { usableAt, formatWindowState } from "../model-window"
@@ -24,21 +24,19 @@ import type { PhaseTypeEntry, Tier } from "../phases/registry"
 import { nowOf, type RoutingFacts } from "../routing"
 import { worktreeNote } from "../session-api"
 import { candidatesOf, candidateKey, select, type DownMark, type SelectContext } from "../select"
-import { SWITCH_ENV, type Switches } from "../switches"
+import { SWITCH_ENV } from "../switches"
 
-// What one dispatch is decided on. `routing` and `ctx` are present iff a
-// model registry drives the run: the routing facts carry the clock (nowOf)
-// and the default agent, the selection context is selectContext(routing,
-// switches, cap, limits) as the executor built it — the one injection point
-// of the down marks, the /failback override, the key rings and the live
-// context windows. `resumable` is the takeover gate's capability (the
-// chain's agent can resume sessions), which only the executor can read.
-// `label` is the dispatch's log label (the task id). `entry` is the current
-// phase type's registry entry, a routing key.
+// What one dispatch is decided on. `routing` carries the routing facts
+// (the clock — nowOf — and the default agent) and `ctx` is
+// selectContext(routing, switches, cap, limits) as the executor built it —
+// the one injection point of the down marks, the /failback override, the
+// key rings and the live context windows. `resumable` is the takeover
+// gate's capability (the chain's agent can resume sessions), which only
+// the executor can read. `label` is the dispatch's log label (the task
+// id). `entry` is the current phase type's registry entry, a routing key.
 export type DispatchFacts = {
-  routing?: RoutingFacts
-  ctx?: SelectContext
-  switches: Switches
+  routing: RoutingFacts
+  ctx: SelectContext
   resumable: boolean
   label: string
   entry?: PhaseTypeEntry
@@ -72,13 +70,14 @@ export type AgentMove = { note: string; pendingLog: string | undefined }
 
 // The plan attempt() executes: `resumed` (after the move cancelled it, if
 // one fired), the pick or the blocked outcome of the registry selection,
-// the move, and whether a create clears the failback scope.
+// and the move. (The session-scope failback clear once rode the plan as a
+// flag; it runs ahead of the selection now — the pick must see the cleared
+// marks — so the executor owns it.)
 export type DispatchPlan = {
   resumed: boolean
   pick?: DispatchPick
   blocked?: SessionResult
   move?: AgentMove
-  clearsFailback: boolean
 }
 
 // Registry selection runs before anything is created (plans/0055 §8.3): a
@@ -90,8 +89,7 @@ export function planDispatch(chain: SessionChain, facts: DispatchFacts): Dispatc
   // a recorded session and a one-shot note awaits injection (interruption
   // recovery). Every other prompt opens a fresh session.
   let resumed = facts.resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
-  const plan: DispatchPlan = { resumed, clearsFailback: facts.switches.modelFailbackScope === "session" }
-  if (facts.routing === undefined || facts.ctx === undefined) return plan
+  const plan: DispatchPlan = { resumed }
   const { routing, ctx, label } = facts
   const role = roleOf(chain)
   const list = candidatesOf(ctx, { role, entry: facts.entry, now: nowOf(routing) })
@@ -167,10 +165,16 @@ export function planDispatch(chain: SessionChain, facts: DispatchFacts): Dispatc
         : `route ${list.route?.key ?? roleOf(chain)}`
   const previous = chain.modelShown !== undefined && chain.modelShown !== key ? chain.modelShown : undefined
   const reason = moveReason(ctx, routing, previous)
+  // A model-less pick (the implicit registry's `default`, or an entry the
+  // operator declared without a model) names nothing to announce — the
+  // watch's server-resolved observation announces the session's real model
+  // instead, once per session, exactly as it always did.
   const announce =
-    key !== chain.modelShown || !resumed
-      ? `◈ ${label} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`
-      : undefined
+    target === undefined
+      ? undefined
+      : key !== chain.modelShown || !resumed
+        ? `◈ ${label} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`
+        : undefined
   // §8.3: a session never crosses agents. A pick on another agent than
   // the chain's live session (or its pre-created fork) cannot take this
   // prompt: the id/pending session is left behind and the dispatch opens

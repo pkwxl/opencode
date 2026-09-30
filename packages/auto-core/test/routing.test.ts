@@ -8,6 +8,7 @@ import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierL
 import { phaseType } from "../src/phases/registry"
 import { dispatchCoverageProblems, logRunRouting, routingFacts, type DispatchNeed, type RoutingFacts } from "../src/routing"
 import { services } from "../src/services"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { clockAt } from "./fixtures/clock"
 
 const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
@@ -207,5 +208,30 @@ describe("routingFacts (the filter and the default agent)", () => {
     expect(routingFacts(reg, undefined, clockAt(0), services().router, "claude-b").runAgent).toBe("claude-b")
     expect(routingFacts(reg, "claude", clockAt(0), services().router).runAgent).toBe("claude")
     expect(routingFacts(reg, undefined, clockAt(0), services().router).runAgent).toBe("opencode")
+  })
+
+  // No layer in force (0061 F2): the facts are built over the implicit
+  // registry the env switches synthesize, so a run's routing facts are
+  // always defined.
+  test("registry undefined = the implicit registry over the env switches, on the agent the filter names", () => {
+    const ambient = process.env.OPENCODE_AUTO_AGENT
+    delete process.env.OPENCODE_AUTO_AGENT
+    try {
+      const facts = routingFacts(undefined, undefined, clockAt(0), services().router)
+      expect(facts.registry.implicit).toBe(true)
+      expect(facts.registry.layers).toEqual([])
+      // An empty policy: the default entry alone, in both tiers.
+      expect(facts.registry.tiers.deep?.names).toEqual(["default"])
+      expect(facts.agentFilter).toBeUndefined()
+      expect(facts.defaultAgent).toBe("opencode")
+      // The loop hands the layer registry in when layers exist; the switches
+      // the session layer injected drive the synthesis exactly as they drive
+      // everything else (the runtime reader, not the ambient memo).
+      const claudeFacts = routingFacts(undefined, "claude", clockAt(0), services().router, undefined, parseSwitches({ [SWITCH_ENV.agent]: "claude" }))
+      expect(claudeFacts.agentFilter).toBe("claude")
+      expect([...claudeFacts.registry.agents.keys()]).toEqual(["claude"])
+    } finally {
+      if (ambient !== undefined) process.env.OPENCODE_AUTO_AGENT = ambient
+    }
   })
 })

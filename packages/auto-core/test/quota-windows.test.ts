@@ -10,6 +10,8 @@ import type { AgentEvent } from "../src/agent/types"
 import type { ModelEntry, ModelRegistry } from "../src/models-schema"
 import { accountAnswered, accountOf, learnedReset, learnFailure, learnObserved, resetQuotaWindows } from "../src/quota-windows"
 import type { RoutingFacts } from "../src/routing"
+import { implicitRegistry } from "../src/models"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { services } from "../src/services"
 
 const NOW = Date.parse("2026-09-26T17:15:19Z")
@@ -32,6 +34,16 @@ const restart = () => resetQuotaWindows()
 
 describe("the account key", () => {
   const entry = (name: string, fields: Partial<ModelEntry>): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  // The implicit registry of a layer-less run with a wildcard and a ring.
+  const factsOfImplicit = (): RoutingFacts => ({
+    registry: implicitRegistry("opencode", parseSwitches({ [SWITCH_ENV.model]: "zai-coding-plan/glm-5.3", [SWITCH_ENV.modelFallback]: "moonshotai/kimi-k2" }).model),
+    agentFilter: undefined,
+    filterSource: undefined,
+    defaultAgent: "opencode",
+    runAgent: "opencode",
+    router: services().router,
+    clock: clockAt(0),
+  })
   const facts = (): RoutingFacts => {
     const registry: ModelRegistry = {
       layers: [{ name: "operator", path: "/unused/models.json" }],
@@ -61,13 +73,14 @@ describe("the account key", () => {
     return { registry, agentFilter: undefined, filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode", router: services().router, clock: clockAt(0) }
   }
 
-  test("without a registry: the provider of the routed model, else of the model shown, else default", () => {
-    expect(accountOf({ model: "zai-coding-plan/glm-5.3" }, undefined)).toBe("zai-coding-plan")
-    expect(accountOf({ modelShown: "zai-coding-plan/glm-5.3" }, undefined)).toBe("zai-coding-plan")
-    expect(accountOf({ model: "anthropic/claude-opus", modelShown: "zai-coding-plan/glm-5.3" }, undefined)).toBe("anthropic")
-    // claude's model ids name no provider: the agent's own login.
-    expect(accountOf({ modelShown: "claude-opus-4-5" }, undefined)).toBe("default")
-    expect(accountOf({}, undefined)).toBe("default")
+  test("over the implicit registry: the entry's agent and provider; the default entry names the agent alone", () => {
+    const routing = factsOfImplicit()
+    expect(accountOf({ modelEntry: "zai-coding-plan/glm-5.3" }, routing)).toBe("opencode/zai-coding-plan")
+    // The entry without a model (the agent's default): the agent alone.
+    expect(accountOf({ modelEntry: "default" }, routing)).toBe("opencode")
+    // A model id without a slash names no provider.
+    expect(accountOf({ modelEntry: "claude-opus-4-5" }, routing)).toBe("opencode")
+    expect(accountOf({}, routing)).toBe("opencode")
   })
 
   test("under a registry: the profile, the provider and the ring's current key by name", () => {

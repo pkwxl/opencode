@@ -13,9 +13,10 @@
 // Nothing here starts an agent or reads a clock.
 //
 // Everything takes the windows as a map (the agent's contextLimits() data),
-// never reading the agent behind the caller's back, and a run without a
-// registry never calls in: `wider` exists only on registry entries, so the
-// no-registry run stays byte-identical (plans/0055 C2).
+// never reading the agent behind the caller's back, and the planner calls in
+// for every pick: `wider` exists only on layered entries — the implicit
+// registry's carry none, so their step walk stays at the base and nothing
+// observable changes.
 // AUTO-DECISION: the module is model-step.ts, in the model-window / model-route family, not steps.ts (src/step.ts is the graceful-exit boundary module of plans/0014; a steps/steps pair would read as one mechanism split in two)
 import type { ModelEntry, ModelRegistry } from "./models-schema"
 import { formatTokens } from "./session-api"

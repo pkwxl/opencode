@@ -234,11 +234,10 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   // until wake inside the window before entering the next phase
   // (plans/0027-hibernate-design.md).
   await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory })
-  // failback retry (phase boundary): every scope resets at the phase boundary
-  // — the phase-scope cross-task sticky holder clears here; /failback requests
-  // are consumed at the same point. Registry routing (plans/0055 §6.4): every
-  // scope covers the phase boundary, so the down marks clear here.
-  ctx.router.clearSticky()
+  // failback retry (phase boundary): every scope resets at the phase
+  // boundary; /failback requests are consumed at the same point. Registry
+  // routing (plans/0055 §6.4): every scope covers the phase boundary, so the
+  // down marks clear here.
   ctx.router.clearDownMarks("phase", autoSwitches().modelFailbackScope)
   ctx.router.consumeFailback()
   return 0

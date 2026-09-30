@@ -131,7 +131,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
       const reloaded = await reloadUnits(dir)
       expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["subtask one Artifacts: docs/T-001/S01/index.md"])
       // A successful merged session records the session-mode fork base (plans/0030 D4)
-      expect(reloaded.tasks[0]!.forkBase).toBe("ses_fork_1")
+      expect(reloaded.tasks[0]!.forkBase).toEqual({ opencode: "ses_fork_1" })
       const message = await git(dir, "log", "-1", "--format=%B")
       expect(message).toContain("Auto-Stage: decompose")
     } finally {

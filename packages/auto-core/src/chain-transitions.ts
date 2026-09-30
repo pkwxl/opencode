@@ -7,9 +7,12 @@
 // ratchet: a per-file count table that only goes down, reaching zero when the
 // mutations have all moved here).
 //
-// This file starts with the two pure computations that were copied four times
-// each (plans/0061 §1 F5): the fork-source list and the no-registry model
-// priority chain. The mutating transitions land here together with the
+// This file starts with the pure computation that was copied four times
+// (plans/0061 §1 F5): the fork-source list. (The no-registry model priority
+// chain that once lived here — modelOfChain over the env-switch policy — was
+// the env-policy path of the dispatch resolvers and left with it: every run
+// dispatches through selection now, the implicit registry included.) The
+// mutating transitions land here together with the
 // conversion of their callers: runSession's paths (the retry ladder, the model
 // failover, the provider-key rotation, the recovery loop and the blank
 // fallbacks), the dispatch side (the executor is attempt, over the pure
@@ -18,7 +21,7 @@
 // interruption-recovery takeover and the pre-created fork seedings) — with
 // those converted, every chain mutation in the driver lives here.
 
-import { resolveModel, roleOf, type FailedSession, type SessionChain, type Watch } from "./chain"
+import { roleOf, type FailedSession, type SessionChain, type Watch } from "./chain"
 import { type UnitBaseline } from "./git"
 import type { PhaseKey } from "./phases/registry"
 import { type Phase } from "./resume"
@@ -49,35 +52,6 @@ export function forkSources(chain: SessionChain): ForkSource[] {
   return sources.sort((a, b) => b.used - a.used)
 }
 
-// The model a no-registry dispatch runs on, as one priority chain: the chain's
-// failover candidate > the phase-scoped sticky holder > the /failback
-// wildcard override > the routing table (role > phase type id > preset letter
-// > wildcard). Without a model registry this decides every dispatch target,
-// the failover's "from" label and the strict-resume record's model; under a
-// registry the selection core decides instead, so callers test their routing
-// facts before reaching for this. `phase` is the run's current phase
-// reference (its type entry feeds the routing table) while the role comes
-// from the chain itself (an explicit role wins over the chain's phase, which
-// wins over bypass). `sticky` and `override` are the router service's
-// failback holders, passed in as data by the caller (the entries read them
-// from the installed services; the strict-resume checks read them from the
-// session options' router) — the pure transition reaches no run state behind
-// its arguments. A resume has no live chain: its caller passes a minimal
-// chain view built from the record's role and phase, so the priority chain
-// starts at the sticky holder — the record predates this run's chain and no
-// candidate of it can carry over. Undefined = no routing configured; the
-// dispatch then sends no model key and the agent's default applies.
-// AUTO-DECISION: the override arrives under its structural type ({ wildcard, fallback } — what the router's failbackOverride() returns) instead of importing the Router type (the transition stays a pure function over data; naming the service type would couple the chain's vocabulary to the services for two fields it reads through one accessor's result)
-export function modelOfChain(
-  chain: SessionChain,
-  switches: Switches,
-  phase: PhaseKey | undefined,
-  sticky: string | undefined,
-  override: { wildcard: string; fallback: string[] } | undefined,
-): string | undefined {
-  return chain.model ?? sticky ?? override?.wildcard ?? resolveModel(switches.model, phase?.entry, roleOf(chain))
-}
-
 // ---------------------------------------------------------------------------
 // The mutating transitions. Each owns the field writes of one named chain
 // state change; a caller converts by computing the decision (which candidate,
@@ -97,13 +71,9 @@ export type ChainRoute = { model?: string; entry?: string; step?: number }
 // Replaces the chain's route wholesale — a route is one decision's outcome,
 // not a merge, so the fields the route leaves out are cleared and `step`
 // defaults to the base step. The failover's model switch writes through here
-// (under a registry the selection state travels with the chain; the down
-// marks replace the phase-scoped sticky holder, so scope=phase keeps the
-// move through the task boundaries without it), and so does the dispatch
-// pick. A no-registry caller passes the model alone: entry and step have
-// never held a defined value on that path, so the wholesale clear is a no-op
-// there. The sticky holder of scope=phase failback is module state, not a
-// chain field, and stays the caller's call.
+// (the selection state travels with the chain; the down marks keep the
+// move through the task boundaries under scope=phase), and so does the
+// dispatch pick.
 export function setRoute(chain: SessionChain, route: ChainRoute): void {
   chain.model = route.model
   chain.modelEntry = route.entry
