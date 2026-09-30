@@ -17,6 +17,10 @@
 //                         until they physically move (transition-era guard)
 //   8. hygiene          — shells are never imported; relative imports either stay
 //                         inside src/ or embed assets via `with { type: "file" }`
+//   9. sub-domains      — driver modules carry a sub-domain (R10); the value
+//                         edges between sub-domains stay inside SUBDOMAIN_EDGES,
+//                         a seed that may only shrink, with contract a leaf over
+//                         types and no engine → pipeline edge
 // Any violation lists the offending edges; a legitimate new dependency means a
 // conscious, reviewed edit to the tables below — never a silent one.
 // Type-only edges count for every direction rule. For cycles they are checked
@@ -359,6 +363,183 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   doccheck: [],
   protect: ["document/roles"],
 }
+
+// The driver domain's logical sub-domains (R10, plans/0061 §2.2/§4.10): the
+// one column CLASSIFIED's driver rows carry besides their domain. No barrels
+// and no physical moves came with it (R9/R10's rejections) — the column is
+// the whole mechanism. Every driver-classified module carries exactly one
+// sub-domain; provider-domain modules never do. The ratchet over the column
+// (SUBDOMAIN_EDGES below) runs on the value graph: a type-only import binds
+// no run time, and the contract sub-domain is exactly the shape that stays
+// reachable as types ("leaf over types") — the type side stays governed by
+// the type-counted acyclicity rule and by RANK, which do count type edges.
+//
+// Members as §4.10 lists them, with the landing-time facts beside them:
+// - `check` (runtime until A4) is gone — A4 retired it.
+// - `protect` (runtime in §4.10) is a document-domain flat file since M2.3,
+//   not a driver module, so it carries no sub-domain.
+// - `models-schema` (policies) does not exist yet; E4 adds the entry with
+//   the module.
+// - AUTO-DECISION: §4.10 lists `lock` in both kernel and runtime; it sits in
+//   runtime (its only src imports are log and shell — both runtime — and the
+//   run lock is a process-level facility, not task-store or commit state).
+// - AUTO-RESOLVE: may `testrun` and `script` sit in §4.10's pipeline when the
+//   no-engine→pipeline rule must be green at this unit's seed? -> no, they sit
+//   in kernel (with them in pipeline the rule cannot hold: engine/fx
+//   value-imports testrun's executeTest/resolveTestScript — §4.2's own "the
+//   production TurnFx over … testrun" — and exec-session value-imports both
+//   testrun and script, while the plan itself calls these the engine's
+//   "kernel fx calls" (§6.3 D8) and kernel is the sub-domain the engine
+//   already reaches for its effects (git, handover, stats); keeping them in
+//   pipeline would force a permanent exception list onto a rule the plan
+//   states as absolute, and E1's touch set allows no src edit that would
+//   remove the edges instead).
+// - AUTO-DECISION: §4.10 names no home for some driver modules; the omitted
+//   get the placement their imports and role give them: `git-ops` (kernel —
+//   the git service's home, beside git and unit-commit), `resolve` (kernel —
+//   the proxy-answer ledger, run-recorded state beside stats and handover;
+//   a pure leaf), `prompt-plan` (pipeline — the planning renderers, beside
+//   loop-plan), `round-close` (pipeline — plan's prelude gate), `clean`,
+//   `confirm`, `reset` (runtime — the destructive-op guards and the reset
+//   command, beside config and shell), `templates.d` (runtime — the ambient
+//   asset declarations; it imports nothing, so the placement is nominal).
+type Subdomain = "contract" | "kernel" | "engine" | "policies" | "pipeline" | "runtime"
+
+const SUBDOMAIN: Record<string, Subdomain> = {
+  // contract — types and pure functions only, a leaf over types: engine and
+  // policies both depend on it; it takes values from neither (rule 9).
+  chain: "contract",
+  "control-types": "contract",
+  "engine/contract": "contract",
+  // kernel — the task store, the git/commit boundary and the run's records:
+  // what every session-driving layer stands on and reaches for its effects.
+  tasks: "kernel",
+  git: "kernel",
+  "git-ops": "kernel",
+  "unit-commit": "kernel",
+  numbering: "kernel",
+  stats: "kernel",
+  resume: "kernel",
+  "resume-gate": "kernel",
+  handover: "kernel",
+  resolve: "kernel",
+  testrun: "kernel",
+  script: "kernel",
+  // engine — one turn, one dispatch, one ladder: watch and the modules it
+  // drives. The concerns are policies and the contract is contract, even
+  // where they physically sit under engine/.
+  watch: "engine",
+  attempt: "engine",
+  session: "engine",
+  "exec-session": "engine",
+  "session-api": "engine",
+  "chain-transitions": "engine",
+  "engine/dispatch": "engine",
+  "engine/fx": "engine",
+  "engine/ladder": "engine",
+  "engine/result": "engine",
+  "engine/spine": "engine",
+  "engine/sources": "engine",
+  // policies — the run's decision rules: the turn concerns, the router and
+  // everything routing, usage, recovery and control decides by.
+  "engine/concerns/failure": "policies",
+  "engine/concerns/guard": "policies",
+  "engine/concerns/liveness": "policies",
+  "engine/concerns/questions": "policies",
+  "engine/concerns/recovery": "policies",
+  "engine/concerns/step-up": "policies",
+  "engine/concerns/stuck": "policies",
+  "engine/concerns/test": "policies",
+  "engine/concerns/transcript": "policies",
+  "engine/concerns/usage": "policies",
+  "engine/concerns/windows": "policies",
+  router: "policies",
+  usage: "policies",
+  "quota-windows": "policies",
+  classify: "policies",
+  stuck: "policies",
+  "model-step": "policies",
+  capability: "policies",
+  failback: "policies",
+  step: "policies",
+  hibernate: "policies",
+  exit: "policies",
+  interactive: "policies",
+  select: "policies",
+  routing: "policies",
+  "model-route": "policies",
+  "model-window": "policies",
+  tier: "policies",
+  keyring: "policies",
+  models: "policies",
+  "models-describe": "policies",
+  // pipeline — the task pipeline: the loops and plans that decide what runs,
+  // runner at the top, down to the bypass and wrap-up halves.
+  runner: "pipeline",
+  execute: "pipeline",
+  split: "pipeline",
+  loop: "pipeline",
+  "loop-phase": "pipeline",
+  "loop-plan": "pipeline",
+  "loop-preflight": "pipeline",
+  "loop-progress": "pipeline",
+  "loop-task": "pipeline",
+  plan: "pipeline",
+  "plan-input": "pipeline",
+  "prompt-plan": "pipeline",
+  close: "pipeline",
+  "task-add": "pipeline",
+  wrapup: "pipeline",
+  artifact: "pipeline",
+  knowledge: "pipeline",
+  conclusion: "pipeline",
+  status: "pipeline",
+  "round-close": "pipeline",
+  // runtime — the process plane: switches, logging, services, options,
+  // config, the agent start, the shell profile and the run lock.
+  switches: "runtime",
+  log: "runtime",
+  services: "runtime",
+  opts: "runtime",
+  config: "runtime",
+  "config-fix": "runtime",
+  "agent-choice": "runtime",
+  "agent-env": "runtime",
+  "agent-pool": "runtime",
+  shell: "runtime",
+  gitignore: "runtime",
+  "agents-block": "runtime",
+  clean: "runtime",
+  confirm: "runtime",
+  reset: "runtime",
+  "templates.d": "runtime",
+  lock: "runtime",
+}
+
+// The cross-sub-domain value edges measured at E1's commit (0061 §4.10): the
+// seed of the ratchet. The list may only shrink — an edge not listed here
+// fails the suite, and a listed edge the graph no longer produces is stale
+// and must be removed. Two pairs are forbidden outright, in src/ and in this
+// table alike: `contract → any other sub-domain` and `engine → pipeline`.
+const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
+  ["engine", "contract"],
+  ["engine", "kernel"],
+  ["engine", "policies"],
+  ["engine", "runtime"],
+  ["kernel", "pipeline"],
+  ["kernel", "policies"],
+  ["kernel", "runtime"],
+  ["pipeline", "engine"],
+  ["pipeline", "kernel"],
+  ["pipeline", "policies"],
+  ["pipeline", "runtime"],
+  ["policies", "contract"],
+  ["policies", "engine"],
+  ["policies", "kernel"],
+  ["policies", "runtime"],
+  ["runtime", "kernel"],
+  ["runtime", "policies"],
+]
 
   // Session-driving chain, bottom → top (0024 §D.2): imports between ranked
   // modules must go strictly downward in rank.
@@ -711,6 +892,9 @@ function domainOf(key: string): Domain | "unclassified" {
 // a flat src/phases.ts must not be mistaken for a file inside a phases/ directory
 const inDomainDir = (key: string): boolean => key.includes("/") && DOMAIN_DIRS.has(key.split("/")[0])
 const entriesOf = (d: Domain): string[] => (d === "driver" ? [] : DOMAIN_ENTRIES[d])
+// Driver modules carry their sub-domain beside the domain; every other
+// module (provider domain, unclassified) has none.
+const subdomainOf = (key: string): Subdomain | undefined => (domainOf(key) === "driver" ? SUBDOMAIN[key] : undefined)
 
 // ---------------------------------------------------------------------------
 // Rules
@@ -880,6 +1064,47 @@ function checkHygiene(): string[] {
   return problems
 }
 
+function checkSubdomains(): string[] {
+  const problems: string[] = []
+  const known = new Set(modules)
+  for (const key of modules) {
+    if (domainOf(key) === "driver" && !(key in SUBDOMAIN)) problems.push(`sub-domain missing: src/${key}.ts is a driver module without a SUBDOMAIN entry — every driver module carries a sub-domain (R10)`)
+  }
+  for (const key of Object.keys(SUBDOMAIN)) {
+    if (!known.has(key)) problems.push(`SUBDOMAIN lists src/${key}.ts which does not exist — remove the stale entry`)
+    else if (domainOf(key) !== "driver") problems.push(`SUBDOMAIN lists src/${key}.ts which is not a driver module (${domainOf(key)}) — sub-domains classify the driver domain only (R10)`)
+  }
+  return problems
+}
+
+// Sub-domain edges are measured over value imports only (the column comment
+// above states why); the table is the ratchet: no unlisted pair, no stale
+// entry, and the two forbidden pairs hold in src/ and in the table alike.
+function checkSubdomainEdges(): string[] {
+  const problems: string[] = []
+  const measured = new Set<string>()
+  for (const [from, list] of edges) {
+    const a = subdomainOf(from)
+    if (a === undefined) continue
+    for (const e of list) {
+      if (e.typeOnly) continue
+      const b = subdomainOf(e.to)
+      if (b === undefined || a === b) continue
+      measured.add(`${a}→${b}`)
+      if (a === "contract") problems.push(`contract not a leaf: src/${from}.ts (contract) value-imports src/${e.to}.ts (${b}) — the contract sub-domain is types and pure functions only; it takes no value from any other sub-domain (R10)`)
+      if (a === "engine" && b === "pipeline") problems.push(`engine reaches the pipeline: src/${from}.ts (engine) value-imports src/${e.to}.ts (pipeline) — the turn engine must not know the task pipeline (R10)`)
+      if (!SUBDOMAIN_EDGES.some(([x, y]) => x === a && y === b)) problems.push(`new sub-domain edge: ${a} → ${b} (src/${from}.ts → src/${e.to}.ts) is outside SUBDOMAIN_EDGES — the allowlist may only shrink, so a new cross-sub-domain dependency is an architecture event, never a silent edit (R10)`)
+    }
+  }
+  for (const [a, b] of SUBDOMAIN_EDGES) {
+    const pair = `${a}→${b}`
+    if (a === "contract") problems.push(`SUBDOMAIN_EDGES lists ${pair} — the contract sub-domain holds no edge to another sub-domain, not even an allowlisted one (R10)`)
+    else if (a === "engine" && b === "pipeline") problems.push(`SUBDOMAIN_EDGES lists ${pair} — engine → pipeline is forbidden outright and may never be allowlisted (R10)`)
+    else if (!measured.has(pair)) problems.push(`stale SUBDOMAIN_EDGES entry: ${pair} no longer occurs among src/'s value imports — remove it (the list may only shrink, and a dead entry hides the shrink)`)
+  }
+  return problems
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -923,5 +1148,13 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("no shell imports (core does not know shells)", () => {
     expect(checkHygiene().join("\n")).toBe("")
+  })
+
+  test("every driver module carries a sub-domain (R10)", () => {
+    expect(checkSubdomains().join("\n")).toBe("")
+  })
+
+  test("sub-domain value edges stay inside the seeded allowlist; contract is a leaf, no engine → pipeline (R10)", () => {
+    expect(checkSubdomainEdges().join("\n")).toBe("")
   })
 })
