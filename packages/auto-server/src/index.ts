@@ -7,7 +7,8 @@
 // daemon with its CLI-side duties (P1c — serve, plus the whitelist and token
 // management in the daemon's own data directory). The REST lifecycle surface
 // (config ops, units, models, the P1 plan boundary) is served by the daemon
-// (P1d, src/ops.ts); SSE observability arrives with P1e.
+// (P1d, src/ops.ts), as is the disk observability surface (P1e, src/observe.ts
+// — the polled status read model and the SSE log/journal tails).
 //
 // Dependency line (constitutional): this package imports @opencode-ai/auto-core
 // and Node/Bun builtins only — never @opencode-ai/core, @opencode-ai/protocol,
@@ -39,7 +40,7 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d/P1e). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
   boundary). The run-control REST surface: GET /health, GET /runs, POST /runs,
   GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
@@ -47,8 +48,14 @@ serve — the daemon (P1c/P1d). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   /projects/<project>/<op>: init, amend, fix, reset (the config scope),
   close, tasks (task-add), plan (the P1 no-agent boundary; agent-planning
   routes answer 501 until the P3 interactive transport) and models
-  (read-only, runs beside a live run). Destructive operations take two
-  separate fields — "confirm" (the answer routed through the core's
+  (read-only, runs beside a live run); the observability surface (P1e, the
+  read scope): GET /projects/<project>/status (the polled read model over
+  .auto/*.json, git dirty/clean per worktree, the core's rendered status tree
+  and its commit-verdict completion — commit-is-completion, agent self-report
+  never trusted), GET /projects/<project>/log and /events (SSE tails of the
+  newest .auto/logs/run-*.log and the .auto/run-events.jsonl journal —
+  whole-line delivery, re-seek on run rotation). Destructive operations take
+  two separate fields — "confirm" (the answer routed through the core's
   confirmation gate) and "cleanTree" (the worktree check's opt-out) — never
   one bundled force. Stopping the daemon leaves live workers running to
   completion; the run lock arbitrates any successor.

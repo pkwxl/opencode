@@ -1,6 +1,7 @@
-// The daemon of the headless service shell (P1c/P1d, auto-core plans/0067):
-// self-contained on Bun.serve (HTTP now, SSE with P1e, WebSocket with P3 —
-// zero added runtime dependencies, the isolation line of T-086). Its duties:
+// The daemon of the headless service shell (P1c/P1d/P1e, auto-core
+// plans/0067): self-contained on Bun.serve (HTTP and SSE now, WebSocket with
+// P3 — zero added runtime dependencies, the isolation line of T-086). Its
+// duties:
 //   - the whitelist: daemon-owned, in the daemon's own data directory
 //     (src/store.ts); a run request names a registered project and the
 //     daemon resolves the target only against that registry — never against
@@ -21,9 +22,13 @@
 //     vocabulary mapped onto run states and lock conflicts mapped onto
 //     HTTP;
 //   - the lifecycle operations (P1d, src/ops.ts): config ops, units, models
-//     and the P1 plan boundary, run in this process as library calls into
-//     the core (an operation is a synchronous request/response — no session,
-//     no exit vocabulary of its own), never a worker child.
+//     and the P1 plan boundary, run in this process as library calls into the
+//     core (an operation is a synchronous request/response — no session,
+//     no exit vocabulary of its own), never a worker child;
+//   - the disk observability surface (P1e, src/observe.ts): the polled status
+//     read model over `.auto/*.json` plus git, and the SSE tails of the run
+//     log and the engine journal — every fact read from disk the run itself
+//     wrote, beside a live run, never a write into the target.
 //
 // v1 boundary (assessment §8 Q4): single machine, multiple directories. The
 // daemon binds 127.0.0.1 by default, the run lock's stale detection is
@@ -39,6 +44,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
+import { readStatusModel, tailResponse, type TailChannel } from "./observe"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, RequestError, type RunOptions } from "./request"
@@ -484,6 +490,34 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
       }
     }
+    // The P1e observability surface: /projects/<project>/{status,log,events}
+    // — the polled status read model (plain JSON) and the two SSE tails (the
+    // run log and the engine journal). Read-only by construction (pure disk
+    // reads, no lock, src/observe.ts), so they run beside a live run with no
+    // refusal path. The whitelist and the scope are the rules every project
+    // route shares: the project resolves only against the registry, the token
+    // needs `read`.
+    if (segments[0] === "projects" && segments.length === 3 && method === "GET" && ["status", "log", "events"].includes(segments[2]!)) {
+      const denied = needScope(request, `the ${segments[2]} feed`, "read")
+      if (denied) return denied
+      const name = safeDecode(segments[1]!)
+      const project = name ? store.resolveProject(name) : undefined
+      if (!project) {
+        return json(404, { error: `"${segments[1]}" is not a registered project: the whitelist resolves observability targets only against the registry (register with: opencode-auto-server register <dir>)` })
+      }
+      if (segments[2] === "status") {
+        // An unexpected throw here is a daemon bug the operator must see
+        // (the model itself never errors for target-state reasons — a torn
+        // or missing state file is a fact it reports, not a failure).
+        try {
+          return json(200, await readStatusModel(project.directory))
+        } catch (error) {
+          console.error(`the status read model on ${project.directory} failed unexpectedly:`, error)
+          return json(500, { error: `the status read model failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
+        }
+      }
+      return tailResponse(project.directory, (segments[2] === "log" ? "log" : "events") as TailChannel)
+    }
     // The P1d operation surface: /projects/<project>/<op>, one entry per
     // OP_DEFINITIONS (config ops, units, models, the plan boundary). The
     // whitelist is the same absolute rule as POST /runs — the project
@@ -494,7 +528,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>)`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events)`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -557,7 +591,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations)` })
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails)` })
   }
 
   const server = Bun.serve({ port: options.port ?? DEFAULT_PORT, hostname: options.hostname ?? DEFAULT_HOSTNAME, fetch: fetchHandler })

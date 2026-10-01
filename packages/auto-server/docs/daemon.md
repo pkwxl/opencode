@@ -1,12 +1,13 @@
-# The opencode-auto-server daemon (P1c/P1d)
+# The opencode-auto-server daemon (P1c/P1d/P1e)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
 entry, `opencode-auto-server worker '<json>'`), serves the run-control REST
-surface (P1c) and the REST lifecycle operations (P1d — config ops, units,
-models, the P1 `plan` boundary) on `Bun.serve` — self-contained, zero added
-runtime dependencies (the isolation line of T-086; the core never knows HTTP).
-SSE observability arrives with P1e.
+surface (P1c), the REST lifecycle operations (P1d — config ops, units, models,
+the P1 `plan` boundary) and the disk observability surface (P1e — the polled
+status read model and the SSE log/journal tails) on `Bun.serve` —
+self-contained, zero added runtime dependencies (the isolation line of T-086;
+the core never knows HTTP).
 
 ## v1 boundary: single machine, multiple directories
 
@@ -52,7 +53,7 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
-| `read`   | run status, list, detail (logs/events feeds with P1e); the models operation | active |
+| `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails | active |
 | `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the pending-question queue                                        | schema now, surface with P3c |
@@ -245,12 +246,95 @@ directory at a time (a second answers 409; the run lock arbitrates processes,
 not requests of this one). `models` and `fix` dryrun take no lock and run
 beside a live run.
 
+## The observability surface (P1e)
+
+Everything the daemon knows about a run, it reads from disk — the run itself
+wrote it. Two shapes, both read-only (pure disk reads, no lock taken, no write
+into the target — beside a live run with no refusal path), both under the
+`read` scope and the same absolute whitelist as every project route:
+
+| route                             | shape | meaning |
+| --------------------------------- | ----- | ------- |
+| `GET /projects/<p>/status`        | JSON (poll) | the status read model |
+| `GET /projects/<p>/log`           | SSE (`text/event-stream`) | the newest `.auto/logs/run-*.log`, whole lines |
+| `GET /projects/<p>/events`        | SSE (`text/event-stream`) | `.auto/run-events.jsonl` as structured payloads |
+
+### The status read model (polling)
+
+One response, assembled per poll:
+
+- `status` — the core's own `renderStatus(dir)` lines (the round → phase →
+  task → subtask tree with its marks), imported and called as-is; the daemon
+  never re-derives a tree for the human view.
+- `verdicts` — the machine-readable **completion verdicts**, computed here at
+  the API's read seam: a unit is `done` exactly when its `done.md` exists (the
+  rename rides the driver's closing commit — **commit-is-completion**, agent
+  self-report is never trusted), a phase likewise, and the tree's verdicts are
+  settled only over a clean worktree. `in_progress`/`blocked` come from the
+  runtime state the driver writes (`.auto/units.json`), never from the log.
+- `git` — dirty/clean **per worktree** (the project tree's every repository,
+  nested ones included; entries as `XY <path>` relative to the project
+  directory), plus the overall verdict. The status is read with git's
+  `--no-optional-locks`: a concurrent poller must never take `.git/index.lock`
+  — without the flag, a poll can collide with the observed run's own
+  `git add` and block the run it is watching.
+- `lock` — `null`, or the `lockStatusLine` holder text of a live run lock
+  (`▶ run in progress (pid … on …, since …)`; an unreadable lock carries its
+  own line) with the holder record.
+- `state` — the raw `.auto/units.json`, `stats.json`, `windows.json` and
+  `progress.json`, defensively parsed.
+- `logFile` — the newest discovered run log (the file the `/log` tail follows).
+
+**Defensive parsing is load-bearing**: `.auto/progress.json` is written
+non-atomically (a direct `Bun.write` in the core), so a poll can read torn
+JSON — and every atomic writer has a rename window that reads as absent. A
+read that does not parse is served as `null` with the file named under
+`unparsable`: **"no change / retry next tick", never an error state**. The
+response is 200 either way; the next poll sees whatever the writer settled on.
+
+### The SSE tails
+
+Both tails deliver whole lines promptly (the audit log and the journal are
+`writeSync` per entry, no buffering — even a kill -9'd worker leaves complete
+lines), polled at 100 ms; a client sees a line within one tick of its
+newline. The log's prose lines are for humans and are delivered verbatim —
+**never parsed for state**. The events channel delivers the typed engine
+journal (`turn-start | input | fx | fx-result | fx-reject | settle`) verbatim
+as structured payloads; a line that does not parse (a torn mid-write read) is
+skipped, not delivered and not an error.
+
+```
+event: tail        ← the tail target: {file, from, reason: start|rotated|truncated}
+event: line        ← one whole line of the run log (log channel only)
+event: run-event   ← one typed journal entry, verbatim JSON (events channel only)
+: keep-alive       ← a comment frame every 15 s on an idle stream
+```
+
+Two rotation rules, one per channel:
+
+- **The log rotates by new name**: log files are per-run
+  (`run-<ISO-to-seconds>.log`), and the newest file is **discovered by
+  listing, never constructed** — a newer name is a new run, and the tail
+  re-seeks to the new file's start (never appended across runs). Two runs in
+  the same second share one name (the core opens it to append), so the
+  "newest file" is still one file and the tail keeps following it.
+- **The journal rotates by truncation**: `.auto/run-events.jsonl` is truncated
+  at each run start, so a shrink is a new run and the tail re-seeks to 0.
+
+A tail attaches at the current run's file **beginning** (the newest file *is*
+the current run's — a per-run log, banner included), so a connecting client
+sees the whole run it came to watch; there is no resume cursor in P1 (the
+poll model is the durable view — a reconnect re-reads from the run's start).
+
+<!-- AUTO-DECISION: this document (T-088's) is extended in place by T-090 — the P1c/P1d sections already promised "SSE observability arrives with P1e", so the extension is the designed continuation of the package's own living documentation. -->
+
 ## Supervision and the daemon's lifetime
 
 Workers are cattle, not pets. Exit, crash and kill are all observed and recorded
 (the registry maps them per the table above); the output tail is kept (last 8
 KiB) in the run resource, and the run's full audit trail is on disk where the
-worker wrote it (`.auto/logs/run-*.log`; SSE tailing arrives with P1e).
+worker wrote it (`.auto/logs/run-*.log` — tailed live by the observability
+surface above).
 
 The run registry is in-memory: it lives exactly as long as the daemon. Stopping
 the daemon stops serving but does **not** kill live workers — they run to
