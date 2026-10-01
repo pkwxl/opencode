@@ -27,8 +27,8 @@ Read first: `docs/<task id>/todo.md` — your task document (title line, `Phase:
 2. A decision that should have been the person's gets an `AUTO-RESOLVE: <question> -> <choice> (<reason>)` line
    in the relevant document or code comment; a plain engineering call of your own gets
    `AUTO-DECISION: <decision> (<reason>)`.
-3. Do not run git commit or any commit command — the DRIVER commits in one pass after the session ends and a
-   separate verification session has judged this task complete.
+3. Do not run git commit or any commit command — a separate verification session judges this task complete and
+   performs the close-out commits; you never commit.
 4. Every Markdown document you create (or rewrite in full) ends, once finished, with a line holding only
    `<!-- auto: eof -->` as its last line of body text (only blank lines may follow).
 
