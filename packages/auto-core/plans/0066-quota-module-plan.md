@@ -18,7 +18,7 @@
 
 ## 3. 端点规格
 
-> 实测状态（2026-10-01）：zhipu 已实测完毕（最小头集、错误形态、窗口语义见 §3.2 实测结论）；kimi 因抓包令牌在探测前过期，仅确认错误形态（§3.1 实测结论），最小头集待新令牌补测。结论一并回填包 README（实施时）。
+> 实测状态：**两家均已完成（2026-10-01，两轮）**——最小头集、错误形态、窗口语义见各节实测结论；实施时同步进包 README。
 
 ### 3.1 kimi（www.kimi.com）
 
@@ -42,10 +42,11 @@
 
 - 字段语义：`ratelimitCode5h` → scope `5h`；`ratelimitCode7d` → scope `7d`；`ratio` 即 utilization；`resetTime` 是 ISO 带微秒字符串（`Date.parse` 可解析，注意截断精度）；`subscriptionBalance` → 月度订阅（`amountUsedRatio`/`kimiCodeUsedRatio`/`expireTime`）。
 - 抓包响应头参考：200，`Content-Type: application/json`，gzip。
-- **实测结论（2026-10-01）**：抓包的 Bearer 与 `kimi-auth` cookie 在探测时均已过期（cookie exp 2026-07-29；Bearer 精确 900s 时效，探测晚于 exp 95s），最小头集仍未定，仅得：
-  - `Content-Type: application/json` 必带：缺失时网关先于鉴权返回 HTTP 415（空 body）。
-  - 401 形态（Bearer 过期与 cookie 过期同形）：HTTP 401 + `{"code":"unauthenticated","message":"invalid user token: …","details":[{"type":"common.error.v1.ErrorDetail","value":"<base64>","debug":{"reason":"REASON_INVALID_AUTH_TOKEN","localizedMessage":{"locale":"en-US|zh-CN","message":"…"}}}]}`。adapter 对 401 一律输出打码的"凭据已失效，请重新粘贴"，不透传 message 原文。
-  - 待补测（需新令牌，抓包后 ~10 分钟内完成）：Bearer alone 能否过（裁 `x-msh-*` 等）；`kimi-auth` cookie 单独能否过（长命凭据，本模块优先引导存储的形态）。
+- **实测结论（2026-10-01，两轮：第一轮令牌过期仅得错误形态，第二轮新鲜 Bearer 实测通过）**：
+  - **最小头集 = `Authorization: Bearer <JWT>` + `Content-Type: application/json` 两项**。`connect-protocol-version` 可省（有/无均 200）；`x-msh-*`、`x-language`、`r-timezone`、`origin`、`referer`、`user-agent` 全部可省。缺 `Content-Type` 时网关先于鉴权返回 HTTP 415（空 body），必带。
+  - **`kimi-auth` cookie 查不了本端点**：单独发、带全量浏览器头（含 `x-msh-device-id`/`x-msh-session-id`/`x-traffic-id`）、乃至整份 cookie jar 均复现 401 `REASON_INVALID_AUTH_TOKEN`——浏览器现持那枚 exp 2026-07-29/30，服务端照 exp 拒收。本端点唯一有效凭据类 = 15 分钟 Bearer；"存长命凭据"对 kimi 不成立，v1 只能抓即查（复制 Bearer → 15 分钟内查询），可持续方案 = 二期观察网页端的 Bearer 续期调用（§4 末段）。
+  - Bearer 时效精确 900s（iat→exp）；第一轮探测晚于 exp 95s 即全数 401。401 形态（过期与无效同形）：HTTP 401 + `{"code":"unauthenticated","message":"invalid user token: …","details":[{"type":"common.error.v1.ErrorDetail","value":"<base64>","debug":{"reason":"REASON_INVALID_AUTH_TOKEN","localizedMessage":{"locale":"en-US|zh-CN","message":"…"}}}]}`。adapter 对 401 一律输出打码的"凭据已失效，请重新粘贴"，不透传 message 原文。
+  - 响应确认（200 直接 JSON，无信封）：`ratelimitCode5h`/`ratelimitCode7d` 的 **`ratio` 可缺失**——实测全新 5h 窗（当期零消费）只回 `enabled` + `resetTime`；规范化把缺失 ratio 置 utilization 0。`resetTime` 语义与 zhipu 的 `nextResetTime` 同款 = 窗口内最近一次消费 + 窗长（实测 5h 边界 = 当日消费 + 5h、7d 边界 = 一周前消费 + 7d），同样不得当固定周期缓存。`subscriptionBalance` 字段齐全（amountUsedRatio/kimiCodeUsedRatio/expireTime/domain），expireTime 即订阅到期。
 
 ### 3.2 zhipu / bigmodel.cn
 
@@ -85,7 +86,7 @@
 
 - **多账号存储**：`~/.config/quota/<provider>/<label>.token`（0600），`label` 用户自取（默认 `default`）；可选伴随 `<label>.json`（0600）存非敏感元数据（zhipu 的 org/project、备注）。目录尊重 `XDG_CONFIG_HOME`。
 - **令牌解析顺序**：CLI `--token` > env（`KIMI_WEB_TOKEN` / `ZHIPU_WEB_TOKEN`）> 令牌文件。前两者一次性使用，不落盘。
-- **首登（无 device-flow）**：浏览器登录 → 打开配额页（kimi `https://www.kimi.com/settings/subscription?tab=quota`；zhipu `https://bigmodel.cn/coding-plan/personal/usage`）→ DevTools Network 复制 Authorization 头值（或长命 cookie：kimi `kimi-auth` / bigmodel `bigmodel_token_production`）→ `echo <值> | quota <provider> token <label> --stdin`。存储时回显打码（掩码指纹 + 解码出的 exp）。
+- **首登（无 device-flow）**：浏览器登录 → 打开配额页（kimi `https://www.kimi.com/settings/subscription?tab=quota`；zhipu `https://bigmodel.cn/coding-plan/personal/usage`）→ DevTools Network 复制 Authorization 头值 → `echo <值> | quota <provider> token <label> --stdin`。存储时回显打码（掩码指纹 + 解码出的 exp）。实测修订（2026-10-01）：kimi 的 `kimi-auth` cookie 查不了配额端点（§3.1），**kimi 只能存 15 分钟 Bearer（抓即查）**，长命凭据仅 zhipu 成立（其 web JWT 无 exp，长期有效）；kimi 的可持续方案 = 二期观察网页端 Bearer 续期调用（见下段）。
 - **保持登录**：CLI 解码 JWT payload（base64，**不验签**）取 `exp`：`list` 与每次查询结果带 `tokenExpiresAt`；剩余 <24h 标 `tokenStale: true`；401 时输出明确的"token 已失效，请重新粘贴"JSON 错误。v1 策略 = 存"最长命的有效凭据"、过期手动重贴；实施时顺带观察网页端在 access token 过期后的续期调用，若存在稳定可模仿的 renew/refresh connect 端点，二期加 `quota <provider> refresh <label>`（可选，不承诺）。
 - 不做：读浏览器 cookie 库、自动化无头登录、验证码/扫码流程。
 
@@ -117,7 +118,7 @@
 
 ## 8. 实施步骤（延后，届时按序执行）
 
-1. curl 实测（zhipu 半边已于 2026-10-01 完成，结论回填 §3.2；kimi 半边待补，需**未过期**新令牌，可请用户提供）：kimi 补测 Bearer alone（裁 `x-msh-*` 等）与 `kimi-auth` cookie 单独能否过 → 最小头集定案。**Bearer 精确 900s 时效，须在抓包后 ~10 分钟内探测**（上一轮即因晚 95s 全数 401）；结论回填 §3.1 与包 README。
+1. curl 实测：**已完成（2026-10-01，两轮）**。zhipu 结论回填 §3.2，kimi 结论回填 §3.1（最小头集 = Bearer + Content-Type；`kimi-auth` cookie 无效；`ratio` 可缺失）。实施时把结论同步进包 README。
 2. 建包骨架 + 根 `bun install`。
 3. `src/types.ts` + 两 adapter + 规范化 + 单测。
 4. `src/store.ts`（多账号）+ 单测。
