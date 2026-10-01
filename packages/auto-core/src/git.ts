@@ -732,13 +732,25 @@ async function hasChanges(root: string): Promise<boolean> {
 // commit applies) — the unified commit is the completion condition, so a
 // missing identity means every later commit fails. A non-git directory (where
 // the driver never commits) returns undefined.
+// The probes run with `-c user.useConfigOnly=true`: plain `git var` also
+// succeeds with an auto-detected ident (username@hostname, fabricated from the
+// machine without any config file) on machines where git can build one, while
+// a real commit still refuses that ident (strict mode) — useConfigOnly
+// disables exactly that auto-detection fallback and nothing else, so the probe
+// fails precisely when the identity is not explicit (config or env), matching
+// "nothing to fall back to" semantics.
+// AUTO-DECISION: inject user.useConfigOnly=true into both `git var` probes
+// (auto-detected user@host idents pass plain `git var` on machines that can
+// fabricate them, so init would wrongly accept a repository whose commits all
+// fail; useConfigOnly makes the probe fail exactly when no explicit identity
+// resolves, while env-provided identity is still honored).
 export async function commitIdentityProblem(dir: string): Promise<string | undefined> {
   const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
     .then((result) => result.code === 0)
     .catch(() => false)
   if (!inRepo) return undefined
   for (const [variable, role] of [["GIT_AUTHOR_IDENT", "author"], ["GIT_COMMITTER_IDENT", "committer"]] as const) {
-    const result = await git(dir, ["var", variable]).catch(() => undefined)
+    const result = await git(dir, ["-c", "user.useConfigOnly=true", "var", variable]).catch(() => undefined)
     if (result?.code !== 0) return `${role} identity unknown (${result?.err.trim().split("\n").at(-1) ?? "git is not available"})`
   }
   return undefined
