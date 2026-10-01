@@ -18,7 +18,7 @@
 
 ## 3. 端点规格
 
-> 两家的最小必要请求头集合未定，实施第 1 步先用 curl 实测（Bearer alone / +cookie / +x-msh-* 逐项裁剪），结论回填本节与包 README。401/403 时按抓包头全量兜底。
+> 实测状态（2026-10-01）：zhipu 已实测完毕（最小头集、错误形态、窗口语义见 §3.2 实测结论）；kimi 因抓包令牌在探测前过期，仅确认错误形态（§3.1 实测结论），最小头集待新令牌补测。结论一并回填包 README（实施时）。
 
 ### 3.1 kimi（www.kimi.com）
 
@@ -42,6 +42,10 @@
 
 - 字段语义：`ratelimitCode5h` → scope `5h`；`ratelimitCode7d` → scope `7d`；`ratio` 即 utilization；`resetTime` 是 ISO 带微秒字符串（`Date.parse` 可解析，注意截断精度）；`subscriptionBalance` → 月度订阅（`amountUsedRatio`/`kimiCodeUsedRatio`/`expireTime`）。
 - 抓包响应头参考：200，`Content-Type: application/json`，gzip。
+- **实测结论（2026-10-01）**：抓包的 Bearer 与 `kimi-auth` cookie 在探测时均已过期（cookie exp 2026-07-29；Bearer 精确 900s 时效，探测晚于 exp 95s），最小头集仍未定，仅得：
+  - `Content-Type: application/json` 必带：缺失时网关先于鉴权返回 HTTP 415（空 body）。
+  - 401 形态（Bearer 过期与 cookie 过期同形）：HTTP 401 + `{"code":"unauthenticated","message":"invalid user token: …","details":[{"type":"common.error.v1.ErrorDetail","value":"<base64>","debug":{"reason":"REASON_INVALID_AUTH_TOKEN","localizedMessage":{"locale":"en-US|zh-CN","message":"…"}}}]}`。adapter 对 401 一律输出打码的"凭据已失效，请重新粘贴"，不透传 message 原文。
+  - 待补测（需新令牌，抓包后 ~10 分钟内完成）：Bearer alone 能否过（裁 `x-msh-*` 等）；`kimi-auth` cookie 单独能否过（长命凭据，本模块优先引导存储的形态）。
 
 ### 3.2 zhipu / bigmodel.cn
 
@@ -66,7 +70,14 @@
 
 - 成功判定：`code === 200 && success === true`；其余 code 视为该账号查询失败（把 `msg` 打码后放进 error）。
 - 字段语义：`percentage`（0-100 整数）→ `utilization = percentage / 100`（亦可 `currentValue / usage` 交叉校验）；`nextResetTime` 已是 epoch ms；`usage`=总额、`currentValue`=已用、`remaining`=剩余，透传为 `limit`/`used`/`remaining`。
-- **窗口语义待实测**：抓包两档 `{unit:3, number:5}` 疑似 5 小时档、`{unit:6, number:1}` 疑似周/日/月档（用 `nextResetTime` 与请求时刻的差值判断：≈5h 滚动 → `5h`；≈7d → `7d`；≈次日零点 → `day`；吃不准一律 `unknown` 并把 `unit/number` 保留在 `raw` 里）。映射表结论回填本节。
+- **窗口语义：已实测确认（2026-10-01，level=max 单账号）**，见下方实测结论；未知档位仍按 delta 规则兜底，吃不准一律 `unknown` 并把 `unit/number` 保留在 `raw` 里。
+- **实测结论（2026-10-01）**：
+  - 最小头集 = `Authorization: <裸 JWT>` 单独一项即 200；`Accept`/`Set-Language`/`bigmodel-organization`/`bigmodel-project`/`referer`/`user-agent` 全部可省（org/project 填非法值也被忽略，个人账号）。`Bearer ` 前缀服务端同样接受（宽容），adapter 统一按裸 JWT 发送。
+  - **HTTP 状态码不是错误信号**：无 Authorization 头 → HTTP 200 + `{"code":1001,"success":false,"msg":"Header中未收到Authorization参数…"}`；伪令牌 → HTTP 200 + `{"code":401,"success":false,"msg":"令牌已过期或验证不正确"}`。成功判定只看信封 `code===200 && success===true`；信封 `code:401` → 打码的"凭据已失效，请重新粘贴"，其余非 200 code → 通用失败（msg 打码）。响应头 `Content-Type: application/json;charset=UTF-8`，解析须容忍 charset 后缀。
+  - scope 映射：`(unit:3, number:5)` → `5h`、`(unit:6, number:1)` → `7d`，均滚动窗。行为学确认：unit=6 行在其 `nextResetTime` 指定时刻整点重置（pct 85→23、used 骤降），unit=3 行边界随消费在小时尺度推进。
+  - `nextResetTime` = 最近一次消费时刻 + 窗口长度：只在发生消费时推进，窗口闲置时可停留在**过去**（实测见某行 nextResetTime 落后当下 ~15h 而窗口仍在计用）。adapter 不得把过去的 nextResetTime 当作未来等待时刻——视为"下次消费时才重置"，scope 照映射表归类。
+  - 字段语义修正：`percentage` = `currentValue/usage` 四舍五入；`remaining` 与 `usage−currentValue` 可差 1（舍入），原样透传不重算；`usage` 是当期额度且**会变**（同一账号一天内随 pro→max 套餐升级观测到 12000→28000、60000→140000），不得当固定 limit 缓存；`level` 为套餐档字符串（"pro"、"max" 均观测到）。
+  - JWT 形态：payload **无 `exp`**（仅 user_type/user_channel/user_id/user_key/customer_id/username），且含一个被控制字节替换的逗号、**不是合法 JSON**——exp 解码必须软失败；zhipu 的 `tokenExpiresAt`/`tokenStale` 恒空，信封 `code:401` 是唯一失效信号。
 
 ## 4. 凭据与登录状态设计
 
@@ -106,7 +117,7 @@
 
 ## 8. 实施步骤（延后，届时按序执行）
 
-1. curl 实测：两家最小请求头集合；kimi 用 Bearer vs `kimi-auth` cookie 哪个能过；zhipu `unit/number` → scope 映射（用 nextResetTime 差值）。结论回填 §3 与包 README。（需**未过期**新令牌，可请用户提供。）
+1. curl 实测（zhipu 半边已于 2026-10-01 完成，结论回填 §3.2；kimi 半边待补，需**未过期**新令牌，可请用户提供）：kimi 补测 Bearer alone（裁 `x-msh-*` 等）与 `kimi-auth` cookie 单独能否过 → 最小头集定案。**Bearer 精确 900s 时效，须在抓包后 ~10 分钟内探测**（上一轮即因晚 95s 全数 401）；结论回填 §3.1 与包 README。
 2. 建包骨架 + 根 `bun install`。
 3. `src/types.ts` + 两 adapter + 规范化 + 单测。
 4. `src/store.ts`（多账号）+ 单测。
@@ -170,7 +181,7 @@
           "level": "pro",
           "windows": [
             { "scope": "5h", "utilization": 0.07, "resetAt": 1790762886638, "used": 852, "limit": 12000, "remaining": 11147 },
-            { "scope": "unknown", "utilization": 0.85, "resetAt": 1790821003984, "used": 51461, "limit": 60000, "remaining": 8538, "raw": { "unit": 6, "number": 1 } }
+            { "scope": "7d", "utilization": 0.85, "resetAt": 1790821003984, "used": 51461, "limit": 60000, "remaining": 8538 }
           ]
         }
       }
