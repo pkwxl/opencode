@@ -25,27 +25,38 @@
 // frame is answered unapplied, never dropped on a holder nobody reads.
 //
 // Degradation is the contract (the task's scope; auto-core
-// src/opts.ts:184-185's never-a-hang rule): transport loss during an open
-// question resolves undefined (the run degrades to blocked/exit 2 — or
-// auto-continues a pause — never hangs); a question asked while the bridge
-// is down waits out a short reconnect grace and degrades the same way; a
-// daemon restart that never learns the run again (its registry is
-// in-memory) keeps refusing the reconnect and every question degrades. The
-// core's own timer discipline is preserved verbatim: the timer arms only
-// when minutes is given (auto-core src/interactive.ts:163-191), and minutes
-// omitted hard-waits on the answer or the channel's end.
+// src/opts.ts:184-185's never-a-hang rule): the timer arms only when minutes
+// is given (auto-core src/interactive.ts:163-191), and minutes omitted
+// hard-waits on the answer or the channel's end. A bridge loss does NOT
+// resolve the open asks at once (P3c): the worker blocks inside question()
+// exactly as askHuman with minutes === undefined does, holding every ask
+// across the loss while the daemon may come back — a restart, the case the
+// persistent queue exists for. The bound is the reconnect grace (the same
+// 5 s window an ask raised while down waits out): a bridge that has not
+// returned by its end degrades every still-pending ask (undefined — the run
+// reaches blocked/exit 2, or the configured fallback — never a hang), and a
+// daemon that never learns the run again (nothing journaled, its reconnect
+// refused with 404) degrades the same way. On a reconnect the still-held
+// asks are RE-RAISED on the fresh socket (after the session frame and the
+// settles the down bridge owes), so the daemon's hub regains them whether
+// or not its journal replay already held them — the two halves of the
+// reconstruction, the journal and the worker's still-blocking state, meet.
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
 import { log } from "@opencode-ai/auto-core/log"
 import { services } from "@opencode-ai/auto-core/services"
 import { encodeFrame, type ControlAction, type FrameBody, type WsFrame } from "./ws-protocol"
 
-// How long a question asked while the bridge is down waits for a reconnect
-// before degrading to undefined. Long enough to cover a daemon restart's
-// downtime gap, short enough that a hard-wait question (minutes undefined —
-// plan's humanQuestions) still degrades in seconds, not forever.
-// AUTO-DECISION (5 s): the grace is degradation, not a wait feature — a
-// question that cannot reach a client must resolve within a bounded window
-// so the run reaches its own exit vocabulary (blocked/2 or auto-continue).
+// How long the bridge has to come back after a loss (or to appear for an
+// ask raised while it is down) before every still-pending ask degrades to
+// undefined. Long enough to cover a daemon restart's downtime gap, short
+// enough that even a hard-wait ask (minutes undefined — plan's
+// humanQuestions) degrades in seconds, not forever.
+// AUTO-DECISION (5 s, now the loss grace too): T-094 resolved an open ask
+// the instant its socket dropped; P3c holds it across the drop for the same
+// window a down bridge gets — a restart is the expected reason for a loss,
+// and the queue's whole point is that the ask survives it. The window stays
+// degradation, not a wait feature: past it the run reaches its own exit
+// vocabulary.
 export const RECONNECT_GRACE_MS = 5_000
 
 // The keep-alive cadence over an idle bridge (the question channel can sit
@@ -63,6 +74,10 @@ export type TransportConfig = { url: string; token: string }
 
 type Pending = {
   id: string
+  // The ask's own payload, held for the re-raise a reconnect sends (the
+  // worker's half of the restart reconstruction).
+  text: string
+  minutes: number | undefined
   resolve: (answer: string | undefined) => void
   timer: ReturnType<typeof setTimeout> | undefined
 }
@@ -73,11 +88,17 @@ type Pending = {
 export function wsInteractive(config: TransportConfig): Interactive {
   const url = `${config.url}?token=${encodeURIComponent(config.token)}`
   const pending = new Map<string, Pending>()
-  // The questions the transport itself degraded (a socket loss): their
-  // settle frames ride the next open socket, so the daemon's clients learn
-  // the asks are gone even across a reconnect.
-  const stale: string[] = []
+  // The questions the transport itself degraded (a socket loss whose grace
+  // ran out): their settle frames ride the next open socket, so the
+  // daemon's clients — and its journal — learn the asks are gone even
+  // across a reconnect.
+  const stale: Array<{ id: string; how: "timeout" | "transport" | "closed" }> = []
   let socket: WebSocket | undefined
+  // The loss grace: armed when the bridge drops with asks still pending,
+  // cancelled by any reconnect. REF'd deliberately — a hard-wait ask has no
+  // timer of its own, and the grace is what holds the process (and bounds
+  // the wait) while no socket does.
+  let grace: ReturnType<typeof setTimeout> | undefined
   let attempt = 0
   let closed = false
   // Whether the run is live enough to take control: set by the run's first
@@ -93,10 +114,10 @@ export function wsInteractive(config: TransportConfig): Interactive {
     if (entry.timer) clearTimeout(entry.timer)
     entry.resolve(answer)
     send({ type: "settled", id: entry.id, how })
-    if (how !== "answered") stale.push(entry.id)
+    if (how !== "answered") stale.push({ id: entry.id, how })
   }
 
-  const degradeAll = (how: "transport" | "closed"): void => {
+  const degradeAll = (how: "transport" | "closed" | "timeout"): void => {
     for (const entry of [...pending.values()]) settle(entry, undefined, how)
   }
 
@@ -180,12 +201,25 @@ export function wsInteractive(config: TransportConfig): Interactive {
     ws.onopen = () => {
       attempt = 0
       socket = ws
+      // The loss grace is satisfied: every still-held ask stays pending.
+      if (grace !== undefined) {
+        clearTimeout(grace)
+        grace = undefined
+      }
       // The run's current session first (a client connecting now learns
-      // where input would go), then the settles the down bridge owes.
+      // where input would go), then the settles the down bridge owes, then
+      // the still-held asks RE-RAISED — the worker's half of the restart
+      // reconstruction: whether or not the daemon's journal replay already
+      // holds them (idempotent on the hub by frame id), the fresh socket
+      // re-states them, so a client connecting after a loss re-sees the
+      // ask it came to answer.
       if (sessionID !== undefined) send({ type: "session", session: sessionID, ...(sessionAgent !== undefined ? { agent: sessionAgent } : {}) })
       while (stale.length) {
-        const id = stale.shift()!
-        send({ type: "settled", id, how: "transport" })
+        const owed = stale.shift()!
+        send({ type: "settled", id: owed.id, how: owed.how })
+      }
+      for (const entry of pending.values()) {
+        send({ type: "question", id: entry.id, text: entry.text, ...(entry.minutes !== undefined ? { minutes: entry.minutes } : {}) })
       }
     }
     ws.onmessage = (event) => {
@@ -202,9 +236,17 @@ export function wsInteractive(config: TransportConfig): Interactive {
       // superseded attempt closes unnoticed).
       if (ws !== socket) return
       socket = undefined
-      // Transport loss during open questions resolves undefined — the
-      // never-a-hang contract; the run degrades to its own vocabulary.
-      degradeAll("transport")
+      // Transport loss with asks open holds them for the reconnect grace —
+      // a daemon restart is the expected reason, and the persistent queue
+      // exists so the ask survives it. Past the grace the asks degrade
+      // (undefined — the run reaches its own vocabulary, never a hang) and
+      // their settles ride the next socket if one ever comes.
+      if (pending.size && grace === undefined) {
+        grace = setTimeout(() => {
+          grace = undefined
+          if (socket === undefined || socket.readyState !== WebSocket.OPEN) degradeAll("timeout")
+        }, RECONNECT_GRACE_MS)
+      }
       if (!closed) {
         const wait = backoffOf(attempt++)
         setTimeout(connect, wait).unref?.()
@@ -212,8 +254,8 @@ export function wsInteractive(config: TransportConfig): Interactive {
     }
     ws.onerror = () => {
       // The refusal surface (an unknown run, a bad secret): onclose follows
-      // and schedules the retry; a restarted daemon that never learns this
-      // run keeps refusing, and every question degrades — by design.
+      // and schedules the retry; a daemon that keeps refusing this run
+      // leaves the grace to bound every open ask — by design.
     }
   }
   connect()
@@ -255,7 +297,7 @@ export function wsInteractive(config: TransportConfig): Interactive {
       send({ type: "question", id, text: promptText, ...(minutes !== undefined ? { minutes } : {}) })
       log(promptText)
       return new Promise<string | undefined>((resolve) => {
-        const entry: Pending = { id, resolve, timer: undefined }
+        const entry: Pending = { id, text: promptText, minutes, resolve, timer: undefined }
         // The timer arms only when minutes is given (auto-core
         // src/interactive.ts:163-191 — omitted minutes hard-waits on the
         // answer or the channel's end).
@@ -268,6 +310,10 @@ export function wsInteractive(config: TransportConfig): Interactive {
       closed = true
       live = false
       clearInterval(ping)
+      if (grace !== undefined) {
+        clearTimeout(grace)
+        grace = undefined
+      }
       degradeAll("closed")
       socket?.close(1000, "run closed")
       socket = undefined

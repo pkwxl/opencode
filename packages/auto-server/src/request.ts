@@ -246,3 +246,40 @@ export function parseTransport(raw: unknown): TransportPayload {
   }
   return { run, url, token }
 }
+
+// The plan payload (P3c, the plan unlock): a request carrying `plan` runs
+// the worker as the CLI's `plan` command does — runAll under
+// stopBefore === "execute" (humanQuestions armed,
+// auto-core src/opts.ts:346/:179-185), its questions riding the interactive
+// transport like every other ask. `input` is the planning input (the CLI's
+// -p; the API carries the text itself — `--file` is the CLI's local-file
+// convenience, and the daemon reads no request-named files outside its own
+// data directory and registered projects); `append` rides an input exactly
+// as the CLI's --append does. Daemon-written on the worker payload (the
+// plan operation builds it after planPrelude's no-agent routes had their
+// fast path), never client-written: POST /runs refuses a `plan` field — the
+// plan surface is POST /projects/<project>/plan.
+export type PlanPayload = { input?: string; append: boolean }
+
+export function parsePlan(raw: unknown): PlanPayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail('plan must be an object: { "input"?: "<the planning input text>", "append"?: true|false }')
+  }
+  const given = raw as Record<string, unknown>
+  for (const key of Object.keys(given)) {
+    if (key === "input" || key === "append") continue
+    fail(`plan.${key} is not a plan field (input, append)`)
+  }
+  let input: string | undefined
+  if ("input" in given) {
+    if (typeof given.input !== "string" || !given.input.trim()) fail("plan.input takes the planning input text (the CLI's plan -p <text>; the whole document, not a file path)")
+    input = given.input
+  }
+  let append = false
+  if ("append" in given) {
+    if (typeof given.append !== "boolean") fail("plan.append takes true|false (append the tasks planned from the input to the current phase; requires input)")
+    append = given.append
+  }
+  if (append && input === undefined) fail('plan.append rides a planning input: pass "input" with it (appending adds the tasks planned from the input)')
+  return { ...(input !== undefined ? { input } : {}), append }
+}

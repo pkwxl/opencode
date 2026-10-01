@@ -81,7 +81,7 @@ import { SUBTASK_MODES } from "@opencode-ai/auto-core/opts"
 import { loadIntents } from "@opencode-ai/auto-core/intent/load"
 import { usePromptLibrary } from "@opencode-ai/auto-core/template"
 import type { RegisteredProject, Scope } from "./store"
-import { RequestError } from "./request"
+import { RequestError, type PlanPayload } from "./request"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // The canonical unit refs closeUnit takes (the CLI's CLOSE_REF): a round
@@ -97,6 +97,13 @@ export type OpRequest = {
   // the query.
   body: Record<string, unknown> | undefined
   query: URLSearchParams
+  // The daemon's planning-run spawner (P3c, the plan unlock): the plan
+  // operation's loop route calls it to start the agent planning session as
+  // a run — the same startRun POST /runs uses, carrying the plan payload
+  // (stopBefore === "execute" through the worker entry, humanQuestions
+  // armed, questions over the interactive transport). Only the daemon
+  // provides it; an operation that never spawns ignores it.
+  spawnPlanningRun: (plan: PlanPayload) => OpOutcome
 }
 
 export type OpOutcome = { status: number; body: Record<string, unknown> }
@@ -141,17 +148,17 @@ const locked = (directory: string, holder: LockState): OpOutcome => {
   }
 }
 
-// The P1 plan boundary (assessment §5, the todo's own boundary statement):
-// any route that would start an agent planning session is refused until the
-// P3c unit lifts the restriction. plan's sessions run with humanQuestions —
-// the human's questions wait with no timeout and never proxy-answer
-// (auto-core src/opts.ts:179-185, armed by stopBefore === "execute" at
-// src/opts.ts:346) — and a headless worker's closed stdin only degrades such
-// a session to blocked / exit 2, so serving the route would be a parked
-// request, not a plan.
-const P3_REFUSAL =
-  "this route requires the interactive transport (P3): it would start an agent planning session whose human questions wait with no timeout (humanQuestions), and a headless worker's closed stdin leaves such a session blocked — " +
-  "the WebSocket question queue that carries it arrives with the P3c unit. Until then the no-agent routes are served (round establishment, the round-close gate, the phase-index re-sync, the refusal stops and the task-add operation), and interactive planning stays with the CLI: opencode-auto plan <dir>"
+// The plan unlock (P3c): the P1 boundary is lifted — planPrelude's no-agent
+// routes keep their fast path (round establishment, the round-close gate,
+// the drift re-sync, the refusal stops — served here, in-process, exactly
+// as P1d served them), and every route that continues into an agent
+// planning session now spawns one as a run: `spawnPlanningRun` starts the
+// worker with the plan payload (stopBefore === "execute", humanQuestions
+// armed — auto-core src/opts.ts:346/:179-185 — the questions riding the
+// interactive transport and the persistent queue this unit adds). The CLI's
+// `plan --force-close <ref> --reason` composes over the API as the close
+// operation followed by the plan operation: close-then-continue, each half
+// its own surface.
 
 // The environment the daemon's runs see: the daemon's own environment with
 // the ambient OPENCODE_AUTO_* layer dropped — the same filter spawnWorker
@@ -844,27 +851,58 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
     lock.release()
   }
   if (prelude.type === "stop") return preludeOutcome(prelude.lines, prelude.code)
-  return notImplemented(P3_REFUSAL)
+  // planPrelude's newTask route always stops (the add or its refusal); a
+  // loop outcome here is a routing fact this surface did not know — the
+  // honest answer names it rather than inventing a planning session the
+  // caller did not describe.
+  return notImplemented(`the task-add route of ${dir} unexpectedly continued past its add (planPrelude returned a loop outcome for --new-task); report this as a daemon routing bug`)
 }
 
-// The P1 plan boundary: the API's plan surface serves only planPrelude's
-// no-agent outcomes — round establishment (the round-start gate), the
-// round-close gate, the phase-index drift re-sync, and the refusal stops.
-// Every route that would continue into runAll under stopBefore === "execute"
-// (planning a phase, finishing an interrupted planning step) waits for the
-// P3c unit; `plan --force-close`'s close half is the close operation, and
-// its continue-into-planning half waits with the rest.
+// plan (P3c, the unlock): planPrelude's no-agent routes are served exactly
+// as P1d served them (round establishment, the round-close gate, the drift
+// re-sync, the refusal stops — in-process, their own lines and codes), and
+// the loop route spawns the agent planning session as a run over
+// `spawnPlanningRun`. The request fields are the planning surface:
+//   "input"  the planning input text (the CLI's plan -p) — carried to the
+//            planning step, which persists it to the phase's plan-input.md;
+//   "append" true = append the tasks planned from the input to the current
+//            phase (the CLI's --append; rides an input).
+// `--file` is the CLI's local-file spelling of the input; the API takes the
+// text itself (the daemon reads no request-named files). `--new-task` is
+// the task-add operation (the pointer says so). `plan --force-close`'s
+// close half is the close operation: close-then-continue over the API is
+// POST close, then POST plan.
+// AUTO-DECISION (the prelude and the spawn share the op's lock window, not
+// one lock span): the CLI holds one run lock across the prelude and
+// runAll; the daemon's op releases the lock before spawning (the worker's
+// own runAll must acquire it, and the daemon's in-process hold would refuse
+// its own child). The window between release and acquire is the lock's own
+// jurisdiction — whichever driver process takes it first wins, the same
+// rule the CLI and the daemon already share — and the registry's run entry
+// exists from the spawn, so this daemon's own guards see the directory
+// held.
 async function runPlan(request: OpRequest): Promise<OpOutcome> {
   const { project, body } = request
   const dir = project.directory
+  const input = body?.input
+  const append = body?.append
   for (const key of Object.keys(body ?? {})) {
-    if (key === "input" || key === "prompt" || key === "file" || key === "append") {
-      return notImplemented(`"${key}" rides an agent planning session (the planning input is what such a session plans from): ${P3_REFUSAL}`)
-    }
+    if (key === "input" || key === "append") continue
+    if (key === "prompt") return bad('"prompt" is the CLI flag spelling; the API takes the planning input as "input": { "input": "<text>" } (the CLI\'s plan -p <text>)')
+    if (key === "file") return bad('"file" is the CLI\'s local-file spelling; the API takes the planning input text itself: read the file client-side and send { "input": "<text>" } (the daemon reads no request-named files)')
     if (key === "newTask") {
       return bad(`"newTask" is the task-add operation, served as its own unit op: POST ${route(project, "tasks")} with {"title": …} (the CLI's plan --new-task route)`)
     }
-    return bad(`unknown plan field "${key}" (the P1 plan operation takes no fields: it serves the no-agent routes only — round establishment, the round-close gate, the phase-index re-sync and the refusal stops; the task-add operation is ${route(project, "tasks")})`)
+    return bad(`unknown plan field "${key}" (the plan operation takes "input" — the planning input text, the CLI's plan -p — and "append" — append to the current phase; the no-agent routes take neither)`)
+  }
+  if ("input" in (body ?? {}) && (typeof input !== "string" || !input.trim())) {
+    return bad('"input" takes the planning input text (the CLI\'s plan -p <text>; the whole document, not a file path)')
+  }
+  if ("append" in (body ?? {}) && typeof append !== "boolean") {
+    return bad('"append" takes true|false (append the tasks planned from the input to the current phase; requires input)')
+  }
+  if (append === true && (typeof input !== "string" || !input.trim())) {
+    return bad('"append" rides a planning input: pass "input" with it — appending adds the tasks planned from the input (the CLI\'s --append without -p is the same usage error)')
   }
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return refused(1, [legacy])
@@ -881,17 +919,19 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
       build: loaded.config.build,
       scanExempt: loaded.config.scanExempt,
       autoNumber: loaded.config.autoNumber,
+      ...(typeof input === "string" && input.trim() ? { input: { text: input } } : {}),
+      ...(append === true ? { append: true } : {}),
     })
   } finally {
     lock.release()
   }
   if (prelude.type === "stop") return preludeOutcome(prelude.lines, prelude.code)
-  // { type: "loop" } is the agent-planning route: planning this phase (or
-  // finishing an interrupted planning step) starts the session whose
-  // humanQuestions would wait indefinitely — refused until P3c lifts it.
-  return notImplemented(
-    `the current route of ${dir} would start an agent planning session (planning its current phase, or finishing an interrupted planning step): ${P3_REFUSAL}`,
-  )
+  // { type: "loop" } is the agent-planning route: the planning session runs
+  // as a spawned run — humanQuestions armed, its questions over the
+  // interactive transport and the persistent queue, the run's own exit
+  // vocabulary mapping its outcome (0 planned, 1 usage/environment, 2
+  // blocked for a human, 3 the graceful /exit pause).
+  return request.spawnPlanningRun({ ...(typeof input === "string" && input.trim() ? { input } : {}), append: append === true })
 }
 
 // models (shell-contract §9): the registry's effective table, read-only —

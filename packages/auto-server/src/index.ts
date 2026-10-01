@@ -40,14 +40,17 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d/P1e/P3b). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d/P1e/P3). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
   boundary). The run-control REST surface: GET /health, GET /runs, POST /runs,
   GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
   force-terminate, mapped to killed/130); the lifecycle operations under
   /projects/<project>/<op>: init, amend, fix, reset (the config scope),
-  close, tasks (task-add), plan (the P1 no-agent boundary; agent-planning
-  routes answer 501 until the P3 interactive transport) and models
+  close, tasks (task-add), plan (P3c-unlocked: the no-agent routes served
+  in-process, the agent-planning routes spawned as runs under
+  stopBefore: execute with their questions over the interactive transport —
+  the request takes "input" and "append"; plan --force-close composes as
+  the close operation followed by the plan operation) and models
   (read-only, runs beside a live run); the observability surface (P1e, the
   read scope): GET /projects/<project>/status (the polled read model over
   .auto/*.json, git dirty/clean per worktree, the core's rendered status tree
@@ -56,16 +59,20 @@ serve — the daemon (P1c/P1d/P1e/P3b). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT
   newest .auto/logs/run-*.log and the .auto/run-events.jsonl journal —
   whole-line delivery, re-seek on run rotation) and
   GET /projects/<project>/status-events (P2b: the typed driver-events stream
-  with event-id cursoring); the interactive transport (P3b): the WebSocket
+  with event-id cursoring); the interactive transport (P3b/P3c): the WebSocket
   endpoint GET /runs/<id>/interactive, multiplexing the question channel
   (the "answer" scope — a question raised inside the run reaches connected
-  clients, an answer returns, the run proceeds) and the control channel (the
+  clients, an answer returns, the run proceeds; the still-open questions
+  are journaled in the daemon's data dir, so a reconnecting client is
+  replayed them and a daemon restart restores the pending set and
+  redelivers it) and the control channel (the
   "control" scope — /exit produces the graceful pause/exit 3 with progress
   persisted and a re-run resumes precisely; /failback reaches the router).
   Destructive operations take two separate fields — "confirm" (the answer
   routed through the core's confirmation gate) and "cleanTree" (the worktree
   check's opt-out) — never one bundled force. Stopping the daemon leaves live
-  workers running to completion; the run lock arbitrates any successor.
+  workers running to completion; the run lock arbitrates any successor, and
+  a restart restores every run that still holds an open question.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
@@ -99,6 +106,13 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
              its Interactive implementation from it and injects it through
              runAll's io/Interactive seam, so questions and /exit, /failback
              control are bridged to the daemon's WebSocket endpoint
+  plan       the plan payload (P3c, daemon-written — the plan operation's
+             loop route): { "input"?: "<planning input text>",
+             "append"?: true|false }. The run performs the CLI plan
+             command's work: runAll under stopBefore: execute
+             (humanQuestions armed — the sessions' questions wait for the
+             human with no timeout over the transport), the planning input
+             persisted by the planning step, --append's semantics
 
 the worker's stdin is closed: without a transport payload, questions degrade
 to the unanswered path (permission questions block the run with exit 2),

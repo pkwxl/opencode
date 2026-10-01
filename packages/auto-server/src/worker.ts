@@ -50,7 +50,7 @@ import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parseTransport, type RunOptions, type TransportPayload } from "./request"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parsePlan, parseSwitches, parseTransport, type PlanPayload, type RunOptions, type TransportPayload } from "./request"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -74,6 +74,12 @@ import { wsInteractive } from "./worker-interactive"
 //              /exit, /failback are reachable over the network. Absent (a
 //              hand-spawned worker): no interactive channel, the stdin-closed
 //              question semantics of P1 unchanged.
+//   plan       the plan payload (P3c, daemon-written — the plan operation's
+//              loop route): the run performs the CLI `plan` command's work —
+//              runAll under stopBefore === "execute" (humanQuestions armed,
+//              the planning input persisted by the planning step). The
+//              daemon already served planPrelude's no-agent routes; the
+//              worker never re-runs the prelude.
 // The vocabulary itself — the option keys, the frozen-key table, the switch
 // registry — lives in src/request.ts, the one module the daemon (P1c) and
 // this entry share: the daemon pre-validates a POST /runs body with it, so
@@ -85,6 +91,7 @@ export type RunRequest = {
   options?: RunOptions
   switches?: Record<string, string>
   transport?: TransportPayload
+  plan?: PlanPayload
 }
 
 // Usage refusal: exit 1 with the message on stderr (the CLI convention —
@@ -122,7 +129,7 @@ function applySwitches(switches: Record<string, string>): void {
 // changes — parse/validate/run stay put.
 export async function runWorker(argv: string[]): Promise<void> {
   if (argv.length !== 1 || !argv[0]) {
-    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { "OPENCODE_AUTO_…": "…" }, "transport": { "run": "…", "url": "ws://…", "token": "…" } })`)
+    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … } })`)
   }
   let document: unknown
   try {
@@ -131,11 +138,11 @@ export async function runWorker(argv: string[]): Promise<void> {
     refuse(`the run request is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … } }")
+    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … } }")
   }
   const request = document as Record<string, unknown>
   for (const key of Object.keys(request)) {
-    if (key === "directory" || key === "options" || key === "switches" || key === "transport") continue
+    if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan") continue
     // A dedicated config carrier gets the same answer as a config key in
     // options: there is no per-run config surface, by constitution.
     if (key === "config") {
@@ -143,7 +150,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     }
     if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
-    refuse(`unknown request field "${key}" (the run request takes directory, options, switches and transport)`)
+    refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport and plan)`)
   }
   if (typeof request.directory !== "string" || !request.directory.trim()) {
     refuse(`the run request requires "directory": the target directory of the run (resolved against the worker's working directory)`)
@@ -155,10 +162,12 @@ export async function runWorker(argv: string[]): Promise<void> {
   let options: RunOptions
   let switches: Record<string, string>
   let transport: TransportPayload | undefined
+  let plan: PlanPayload | undefined
   try {
     options = parseOptions(request.options)
     switches = parseSwitches(request.switches)
     transport = "transport" in request ? parseTransport(request.transport) : undefined
+    plan = "plan" in request ? parsePlan(request.plan) : undefined
   } catch (error) {
     refuseRequest(error)
   }
@@ -189,6 +198,14 @@ export async function runWorker(argv: string[]): Promise<void> {
   const interactive: Interactive | undefined = transport ? wsInteractive({ url: transport.url, token: transport.token }) : undefined
   if (transport) {
     log(`🔗 interactive transport: questions and /exit, /failback control are served by the daemon over the bridge ${transport.url} (run ${transport.run}); a transport loss degrades every open question to the unanswered path — never a hang`)
+  }
+  // The plan payload's own banner (P3c): the run stops before execution,
+  // its sessions' questions are the human's (humanQuestions — no timeout,
+  // no proxy answer), and they ride the transport like every other ask.
+  if (plan) {
+    log(
+      `⏸ planning run: the run stops once a planning step has succeeded (stopBefore: execute; humanQuestions armed${plan.input ? ", planning from the request's input" : ""}${plan.append ? ", appending to the current phase" : ""}) — its questions wait for the human over the interactive transport with no timeout`,
+    )
   }
 
   // The strict config load (the CLI's loadRunConfig): a broken file is an
@@ -236,11 +253,12 @@ export async function runWorker(argv: string[]): Promise<void> {
 
   // The run itself, under its own lock (acquire is runAll's — a refusal is
   // runAll's refusal, holder lines and exit 1, never worked around here),
-  // and the run's exit code propagates verbatim: 0 all complete, 1
-  // usage/environment, 2 blocked for a human, 3 a graceful /exit pause with
-  // progress persisted (reachable over the daemon's control channel when
-  // the transport is attached, 130 force-terminated).
-  const code = await runAll(directory, runOptions(config, mode, options, interactive))
+  // and the run's exit code propagates verbatim: 0 all complete (or, under
+  // the plan payload, a planning step succeeded), 1 usage/environment, 2
+  // blocked for a human, 3 a graceful /exit pause with progress persisted
+  // (reachable over the daemon's control channel when the transport is
+  // attached, 130 force-terminated).
+  const code = await runAll(directory, runOptions(config, mode, options, interactive, plan))
   process.exit(code)
 }
 
@@ -250,8 +268,12 @@ export async function runWorker(argv: string[]): Promise<void> {
 // refusal's whole point. The interactive channel is the transport's
 // implementation when the daemon attached one (the P3a seam's injected
 // shape); the request's options never carry it (parseOptions refuses
-// options.interactive — the terminal sideband has no terminal here).
-function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined): RunAllOpts {
+// options.interactive — the terminal sideband has no terminal here). The
+// plan payload maps onto the CLI `plan` command's three additions:
+// stopBefore "execute" (which arms humanQuestions inside the core,
+// auto-core src/opts.ts:346), the planning input (persisted by the
+// planning step) and the append flag.
+function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined, plan: PlanPayload | undefined): RunAllOpts {
   return {
     agent: config.agent,
     server: options.server,
@@ -277,6 +299,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, 
     dryrun: options.dryrun,
     maxSessions: options.maxSessions,
     ...(interactive ? { interactive } : {}),
+    ...(plan ? { stopBefore: "execute" as const, ...(plan.input !== undefined ? { planInput: { text: plan.input } } : {}), append: plan.append } : {}),
   }
 }
 

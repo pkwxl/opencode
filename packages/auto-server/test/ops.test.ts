@@ -19,8 +19,9 @@
 //     probe refused (not exposed in P1);
 //   - the planPrelude boundary matrix: the no-agent routes served with
 //     their lines and codes (round establishment, the round-close gate,
-//     the drift re-sync, the refusal stops), every agent-planning route
-//     refused with the named interactive-transport (P3) reason;
+//     the drift re-sync, the refusal stops), and — since the P3c unlock —
+//     the agent-planning routes spawning planning runs (202 + the run
+//     resource, the task landing through the core's planning step);
 //   - the auth matrix per scope and the whitelist for operations;
 //   - the lock rules: the config ops' 423 under a planted live holder, the
 //     lock-acquiring ops' 423, and the registry's retryable 409 beside a
@@ -100,9 +101,11 @@ async function gitBlank(prefix: string): Promise<string> {
 // A configured, committed, fully-initialized project in a phased mode (the
 // round established, nothing done): the plan-boundary and config-op fixture —
 // every artifact init itself writes, so a clean fixture has no fix findings.
-async function phasedProject(prefix: string, phases: string): Promise<string> {
+// The config partial merges over the defaults (e.g. agent: "claude" for the
+// suites that spawn a planning run over the fake agent).
+async function phasedProject(prefix: string, phases: string, config: Partial<import("@opencode-ai/auto-core/config").ProjectConfig> = {}): Promise<string> {
   const dir = await gitBlank(prefix)
-  await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, phases })
+  await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, phases, ...config })
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
@@ -556,28 +559,75 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("the planPrelude boundary matrix — every agent-planning route is refused with the interactive-transport (P3) reason", async () => {
+  test("the plan unlock (P3c) — the agent-planning routes spawn planning runs; the request fields are the planning surface", async () => {
     await withOps(async (h) => {
+      // The field vocabulary first (no spawn): input takes the text itself,
+      // append rides an input, the CLI's local-file and flag spellings get
+      // their pointers, newTask stays the task-add operation.
       const dir = await phasedProject("auto-ops-loop-", "am")
       const name = h.register(dir)
-      // the current phase is unplanned: the route would start a planning session
-      const loop = await h.call("POST", `/projects/${name}/plan`, h.control)
-      expect(loop.status).toBe(501)
-      expect(String(loop.body.error)).toContain("requires the interactive transport (P3)")
-      expect(String(loop.body.error)).toContain("humanQuestions")
-      // the planning-input fields ride exactly that session
-      const input = await h.call("POST", `/projects/${name}/plan`, h.control, { input: { text: "plan this" } })
-      expect(input.status).toBe(501)
-      expect(String(input.body.error)).toContain("agent planning session")
-      expect((await h.call("POST", `/projects/${name}/plan`, h.control, { append: true })).status).toBe(501)
-      // newTask is the task-add operation, not a plan field
+      expect((await h.call("POST", `/projects/${name}/plan`, h.control, { prompt: "plan this" })).status).toBe(400)
+      expect((await h.call("POST", `/projects/${name}/plan`, h.control, { file: "/tmp/input.txt" })).status).toBe(400)
+      const bareAppend = await h.call("POST", `/projects/${name}/plan`, h.control, { append: true })
+      expect(bareAppend.status).toBe(400)
+      expect(String(bareAppend.body.error)).toContain("append")
+      expect(String(bareAppend.body.error)).toContain("input")
+      const badInput = await h.call("POST", `/projects/${name}/plan`, h.control, { input: { text: "nested" } })
+      expect(badInput.status).toBe(400)
+      expect(String(badInput.body.error)).toContain('"input" takes the planning input text')
       const newTask = await h.call("POST", `/projects/${name}/plan`, h.control, { newTask: "a task" })
       expect(newTask.status).toBe(400)
       expect(String(newTask.body.error)).toContain("task-add operation")
       expect((await h.call("POST", `/projects/${name}/plan`, h.control, { bogus: 1 })).status).toBe(400)
+      // The loop route now spawns the planning session as a run (P1's 501
+      // is lifted): a real worker over the fake `claude`, the m-mode
+      // project with an empty index and a planning input — the planning
+      // session lands the task and the run completes with the plan exit 0.
+      const manual = await phasedProject("auto-ops-mspawn-", "m", { agent: "claude" })
+      await Bun.write(join(manual, "docs", "R-01", "P01-implement", "tasks.md"), "# Tasks\n")
+      await gitOf(manual)("add", "-A")
+      await gitOf(manual)("commit", "-qm", "empty the index")
+      const manualName = h.register(manual)
+      const agent = await fakeAgent()
+      const before: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(agent.env)) {
+        before[key] = process.env[key]
+        process.env[key] = value
+      }
+      try {
+        const started = await h.call("POST", `/projects/${manualName}/plan`, h.control, { input: "plan the widget migration" })
+      expect(started.status).toBe(202)
+      expect(String(started.body.id)).toMatch(/^run-/)
+      expect(String(started.body.interactive)).toBe(`/runs/${started.body.id}/interactive`)
+      expect(has(started.body, "planning session started as run"))
+      // The spawned planning run reaches the plan stop condition: exit 0,
+      // the task landed in the phase's index through the core's planning
+      // step (the fake agent writes exactly one).
+      const id = String(started.body.id)
+      const deadline = Date.now() + 120_000
+      for (;;) {
+        const run = (await (await fetch(`${h.daemon.url}/runs/${id}`, { headers: { authorization: `Bearer ${h.read}` } })).json()) as { state: string; code: number | null; live: boolean; tail: string }
+        if (!run.live) {
+          expect(run.state, run.tail).toBe("completed")
+          expect(run.code).toBe(0)
+          break
+        }
+        if (Date.now() > deadline) throw new Error(`the planning run never settled: ${JSON.stringify(run)}`)
+        await Bun.sleep(200)
+      }
+      const index = await Bun.file(join(manual, "docs", "R-01", "P01-implement", "tasks.md")).text()
+      expect(index).toMatch(/- \[ \] T-\d{3} task T-\d{3}/)
+      } finally {
+        for (const [key, value] of Object.entries(before)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+        await agent.done()
+      }
       await rm(dir, { recursive: true, force: true })
+      await rm(manual, { recursive: true, force: true })
     })
-  })
+  }, 180_000)
 
   test("models: read-only, no lock, the table's own exit vocabulary; probe is not exposed in P1", async () => {
     await withOps(async (h) => {

@@ -164,6 +164,13 @@ describe("worker: the run request's usage vocabulary", () => {
         ["unknown switch", { directory: dir, switches: { OPENCODE_AUTO_NOPE: "on" } }, /is not a known switch/],
         ["switch name without the prefix", { directory: dir, switches: { STEP: "task" } }, /OPENCODE_AUTO_\*/],
         ["switch value not a string", { directory: dir, switches: { OPENCODE_AUTO_STEP: 1 } }, /takes a string value/],
+        // The plan payload (P3c, daemon-written — the plan operation's loop
+        // route): the vocabulary the entry enforces on its own half.
+        ["plan not an object", { directory: dir, plan: "soon" }, /plan must be an object/],
+        ["unknown plan field", { directory: dir, plan: { force: true } }, /plan\.force is not a plan field/],
+        ["plan input not text", { directory: dir, plan: { input: { text: "nested" } } }, /plan\.input takes the planning input text/],
+        ["plan append without input", { directory: dir, plan: { append: true } }, /plan\.append rides a planning input/],
+        ["plan append not a boolean", { directory: dir, plan: { input: "x", append: "yes" } }, /plan\.append takes true\|false/],
       ]
       for (const [name, request, pattern] of cases) {
         const run = await runWorker(request)

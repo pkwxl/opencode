@@ -12,17 +12,21 @@
 // the question's lifecycle belongs to the P2 event stream the status-events
 // channel already serves).
 //
-// The daemon owns no interactive state beyond this routing: the hub holds
-// the run secret, the connected sockets and the still-open questions (for
-// the replay a connecting client receives), lives beside the in-memory run
-// registry in this process, and dies with it — a daemon restart drops the
-// bridge, the worker's transport degrades every open question to undefined
-// (the never-a-hang contract), and its reconnect is refused until a run of
-// the new registry connects again (404: the restarted daemon does not know
-// the run; inventing one is not the registry's to do).
+// The daemon's interactive state is this routing plus, since P3c, the
+// pending-question journal (src/question-journal.ts): the hub holds the run
+// secret, the connected sockets and the still-open questions (the replay a
+// connecting client receives), and every durable settlement is journaled —
+// the worker's own settled frames and the run's terminal retire — so a
+// restarted daemon rebuilds the pending set from the journal (the runs it
+// restores) and redelivers it. A bridge-socket loss settles the open
+// questions for the CLIENTS as a transport loss but journals nothing: the
+// worker holds a hard-wait ask across the loss (its reconnect grace,
+// src/worker-interactive.ts) and re-raises it on reconnect, so the loss is
+// not a settlement — the question's durable lifecycle stays with the worker
+// and the P2b event stream.
 import type { ServerWebSocket } from "bun"
 import type { Scope } from "./store"
-import { encodeFrame, parseFrame, type FrameBody, type WsFrame } from "./ws-protocol"
+import { encodeFrame, parseFrame, type FrameBody, type Settlement, type WsFrame } from "./ws-protocol"
 
 // What each socket is, stamped at upgrade time (the auth the daemon did
 // before accepting the connection): the worker of the run (the run secret
@@ -83,9 +87,17 @@ const protocolError = (socket: ServerWebSocket<SocketData>, error: WsFrame): voi
 // What the handlers need from the daemon: the hub of a run (undefined when
 // the run is unknown — the registry is the authority) and the run's registry
 // state (for the hello frames; undefined names an unknown run the same way).
+// Since P3c the two journal hooks make the queue durable: `onRaise` when the
+// daemon first holds an ask (a re-raise of an id the hub still holds writes
+// nothing — the fold is idempotent), `onSettle` for every durable settlement
+// (the worker's own settled frame, whatever its word, and the daemon's
+// run-terminal retire). Absent hooks serve an in-memory-only hub — the stub
+// servers of the tests, or any embedder that opts out of persistence.
 export type InteractiveContext = {
   hubOf: (run: string) => InteractiveHub | undefined
   stateOf: (run: string) => string | undefined
+  onRaise?: (run: string, question: OpenQuestion) => void
+  onSettle?: (run: string, id: string, how: Settlement) => void
 }
 
 // The open-question replay a client receives after its hello: every question
@@ -96,6 +108,19 @@ function replay(hub: InteractiveHub, client: ServerWebSocket<SocketData>): void 
   for (const question of hub.questions.values()) {
     send(client, { type: "question", id: question.id, text: question.text, ...(question.minutes !== undefined ? { minutes: question.minutes } : {}) })
   }
+}
+
+// Settle every open question of a hub for the clients (`how` names the
+// transport-level event) and clear them from the replay. The CALLER owns
+// durability: a bridge-socket loss settles `transport` in memory only (the
+// worker may still hold the asks and re-raise them on reconnect), while a
+// run's terminal retire settles `closed` and journals each id. Returns the
+// ids cleared, in arrival order.
+export function settleOpenQuestions(hub: InteractiveHub, how: Settlement): string[] {
+  const ids = [...hub.questions.keys()]
+  for (const id of ids) broadcast(hub, { type: "settled", id, how })
+  hub.questions.clear()
+  return ids
 }
 
 // The websocket handlers of Bun.serve (one set for the whole server; every
@@ -146,14 +171,24 @@ export function interactiveHandlers(ctx: InteractiveContext) {
     const frame = parsed.frame
     if (ws.data.kind === "worker") {
       switch (frame.type) {
-        case "question":
+        case "question": {
+          // A re-raise (the worker's reconnect after a bridge loss — its
+          // still-held asks ride the fresh socket) journals only when the
+          // hub had cleared the id; the fold is idempotent either way.
+          if (!hub.questions.has(frame.id)) {
+            ctx.onRaise?.(ws.data.run, { id: frame.id, text: frame.text, ...(frame.minutes !== undefined ? { minutes: frame.minutes } : {}), at: Date.now() })
+          }
           hub.questions.set(frame.id, { id: frame.id, text: frame.text, ...(frame.minutes !== undefined ? { minutes: frame.minutes } : {}), at: Date.now() })
           broadcast(hub, frame)
           return
+        }
         case "settled":
-          // Idempotent: a settle for an id the worker's own socket loss (or
-          // a replacement) already cleared is simply dropped.
+          // The worker's own word is durable whatever it says — answered,
+          // its own timeout, a transport degradation it already decided, or
+          // the run closing its channel. Idempotent in memory: a settle for
+          // an id a bridge loss already cleared simply re-clears.
           hub.questions.delete(frame.id)
+          ctx.onSettle?.(ws.data.run, frame.id, frame.how)
           broadcast(hub, frame)
           return
         case "session":
@@ -217,11 +252,13 @@ export function interactiveHandlers(ctx: InteractiveContext) {
       if (hub.worker !== ws) return
       hub.worker = undefined
       // The bridge is gone: every still-open question settles as a
-      // transport loss for the clients (the worker resolves its own pending
-      // asks undefined the same way — both ends degrade, never hang). A
-      // reconnecting worker re-opens the flow; these ids are gone.
-      for (const id of hub.questions.keys()) broadcast(hub, { type: "settled", id, how: "transport" })
-      hub.questions.clear()
+      // transport loss for the clients (in memory only — the worker may
+      // still hold a hard-wait ask across the loss and re-raise it on its
+      // reconnect, so this is not a durable settlement; the journal keeps
+      // the ask open for a restarted daemon to redeliver). Both ends
+      // degrade, never hang: the worker resolves its own pending asks
+      // undefined once its reconnect grace runs out.
+      settleOpenQuestions(hub, "transport")
       return
     }
     hub.clients.delete(ws)

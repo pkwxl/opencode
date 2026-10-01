@@ -1,13 +1,15 @@
-# The opencode-auto-server daemon (P1c/P1d/P1e/P3b)
+# The opencode-auto-server daemon (P1c/P1d/P1e/P3)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
 entry, `opencode-auto-server worker '<json>'`), serves the run-control REST
 surface (P1c), the REST lifecycle operations (P1d — config ops, units, models,
-the P1 `plan` boundary), the disk observability surface (P1e — the polled
-status read model and the SSE log/journal tails) and the WebSocket interactive
+the plan surface), the disk observability surface (P1e — the polled status
+read model and the SSE log/journal tails), the WebSocket interactive
 transport (P3b — questions and run control bridged between a run's worker and
-its clients) on `Bun.serve` — self-contained, zero added runtime dependencies
+its clients) and the persistent pending-question queue with its journal (P3c —
+reconnect-safe, restart-safe question delivery, and the unlocked plan
+sessions) on `Bun.serve` — self-contained, zero added runtime dependencies
 (the isolation line of T-086; the core never knows HTTP).
 
 ## v1 boundary: single machine, multiple directories
@@ -57,7 +59,7 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 | `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream | active |
 | `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
-| `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` (the persistent pending-question queue itself arrives with P3c) | active |
+| `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` — the persistent pending-question queue (P3c) | active |
 | `probe`  | `models --probe` — burns tokens by starting agents                | opt-in, **disabled by default**: no route requires it; its confirmation parameter and per-daemon rate limit land with the Web write surface |
 
 Tokens are managed beside the whitelist (`tokens.json` in the data directory,
@@ -171,7 +173,7 @@ CLI shell does and never touch `.auto/`, `docs/` unit state or an index tick
 | `POST /projects/<p>/reset`          | `config` | planReset / applyReset (keeps a filled brief, removes a stub one) |
 | `POST /projects/<p>/close`          | `control`| closeUnit over a ref — the explicit ref and reason are the confirmation |
 | `POST /projects/<p>/tasks`          | `control`| task-add: one task by title, no session (the CLI's `plan --new-task` route, over addTask) |
-| `POST /projects/<p>/plan`           | `control`| the P1 plan boundary: planPrelude's no-agent routes only (see below) |
+| `POST /projects/<p>/plan`           | `control`| the plan surface: planPrelude's no-agent routes served in-process; the agent-planning routes spawned as runs (see below) |
 | `GET  /projects/<p>/models`         | `read`   | the model registry's effective table (describeModels / formatModels) |
 
 `<p>` is a registered project (name or registered absolute path,
@@ -201,20 +203,40 @@ worktree, `cleanTree` alone does not confirm the write. `amend` takes neither
 are the confirmation). `fix` accepts both beside `"dryrun"` (inert under a
 dryrun, like `-f` beside the CLI's `--dryrun`).
 
-### The plan boundary (P1)
+### The plan surface (P3c: unlocked)
 
-`POST /projects/<p>/plan` serves only `planPrelude`'s **no-agent** outcomes:
-round establishment (the round-start gate), the round-close gate (opening the
-next round), the phase-index drift re-sync, and the refusal stops — with
-their own lines and codes. Any route that would continue into an agent
-planning session (`planPrelude` → `{ type: "loop" }`) is refused with
-**501** naming the reason: such a session runs with `humanQuestions` (the
-human's questions wait with no timeout, `auto-core src/opts.ts:179-185`), and
-a headless worker's closed stdin only degrades it to blocked — the WebSocket
-question queue that carries it arrives with the P3c unit. The planning-input
-fields (`input`/`prompt`/`file`/`append`) are refused the same way;
-`plan --force-close`'s close half is the close operation, and its
-continue-into-planning half waits with the rest.
+`POST /projects/<p>/plan` serves both halves of the CLI's `plan`:
+
+- **The no-agent routes** (planPrelude's stop outcomes) run in the daemon
+  process exactly as P1d served them — round establishment (the round-start
+  gate), the round-close gate (opening the next round), the phase-index drift
+  re-sync, and the refusal stops — with their own lines and codes.
+- **The agent-planning routes** (planPrelude → `{ type: "loop" }`) spawn the
+  planning session as a run: **202** with the run resource and its
+  interactive endpoint. The run performs the CLI `plan` command's work —
+  `runAll` under `stopBefore: "execute"`, which arms `humanQuestions`
+  (`auto-core src/opts.ts:346`, the no-timeout human wait of `:179-185`) —
+  so its questions ride the interactive transport and the persistent
+  pending-question queue like every other ask, and its outcome maps through
+  the run's own exit vocabulary (0 a planning step succeeded and the tasks
+  landed for review; 2 blocked for a human; 3 the graceful `/exit` pause).
+
+The request fields are the planning surface:
+
+- `"input"`: string — the planning input text (the CLI's `plan -p`); the
+  planning step persists it to the phase's `plan-input.md` and plans against
+  it. `--file` is the CLI's local-file spelling; the API takes the text
+  itself (the daemon reads no request-named files).
+- `"append"`: boolean — append the tasks planned from the input to the
+  current phase (the CLI's `--append`); it rides an input (the API's
+  `"append": true` without `"input"` is the CLI's same usage error).
+
+`plan --force-close <ref> --reason` composes over the API as the **close
+operation followed by the plan operation** — close-then-continue, each half
+its own surface (the CLI holds one lock across both; the daemon's op
+releases its lock before the spawn, and the worker's own `runAll` takes it —
+the window between is the lock's own jurisdiction, whichever driver process
+takes it first wins, the same rule the CLI and the daemon already share).
 
 ### Operation status vocabulary
 
@@ -225,12 +247,13 @@ vocabulary through either shell:
 | status | meaning |
 | ------ | ------- |
 | 200 | served (`code: 0`) |
+| 202 | an operation that spawned a run (the plan operation's agent-planning route): the body is the run resource |
 | 400 | request-shape error (unknown fields, bad values) |
 | 404 | unregistered project / unknown route |
 | 409 | the target's state refuses — the CLI's exit-1/2 refusals (body carries `code` 1 or 2 and the `lines`); the clean-tree gate (`gate: "cleanTree"`); a live registry run or an in-flight operation on the directory (retryable) |
 | 423 | a live run lock holder (the CLI's `lockLines` holder text) |
 | 428 | the confirmation gate unanswered (`gate: "confirm"`, the question included) |
-| 501 | a route this version refuses: agent planning (the P3 interactive transport), the models probe |
+| 501 | a route this version refuses: the models probe (agent planning's 501 ended with the P3c unlock) |
 
 `fix` with `"dryrun": true` is the scriptable config-drift gate: findings
 answer 409 with `code: 1` (the CLI's `fix --dryrun` exit 1), a consistent
@@ -413,15 +436,21 @@ Frames (JSON, one per message; `v` on every one):
   question, a control with no bridge connected) and leaves the socket open.
 
 **Degradation is the contract** (`auto-core src/opts.ts:184-185`'s
-never-a-hang rule): transport loss during an open question resolves the
-question `undefined` on the worker (the run degrades to blocked/exit 2, or
-the configured fallback — never a hang), and every client hears the
-`transport` settle; a question asked while the bridge is down waits out a
-short reconnect grace (5 s) and degrades the same way. The worker keeps
-retrying the bridge (a daemon restart is expected back); a restarted daemon
-that lost the in-memory registry keeps refusing the reconnect (404 — it does
-not know the run), and every question degrades — the run always reaches its
-own exit vocabulary.
+never-a-hang rule): the core's own timer discipline rides verbatim — the ask's
+timer arms only when `minutes` is given, and minutes omitted hard-waits on the
+answer or the channel's end. A bridge loss does not resolve the open asks at
+once (P3c): the worker holds them across the loss for the reconnect grace
+(5 s — a daemon restart is the expected reason, the case the persistent queue
+below exists for), re-raising them on its reconnect; past the grace every
+still-pending ask resolves `undefined` on the worker (the run degrades to
+blocked/exit 2, or the configured fallback — never a hang), and every client
+heard the `transport` settle when the socket dropped. A question asked while
+the bridge is down waits out the same grace and degrades the same way. The
+worker keeps retrying the bridge (a daemon restart is expected back); a daemon
+that stays gone leaves the grace to bound every open ask — the run always
+reaches its own exit vocabulary. A transport settle may be superseded by the
+same id's re-raise when the worker survived the loss — the frame `id` is the
+join key; treat a `question` frame as (re)delivery.
 
 **The scope matrix**: opening the client endpoint requires `answer` or
 `control`; then each frame is checked against its own scope — a token with
@@ -433,6 +462,90 @@ memory, gone with it.
 <!-- AUTO-DECISION: this document (T-088's) is extended in place by T-090 — the P1c/P1d sections already promised "SSE observability arrives with P1e", so the extension is the designed continuation of the package's own living documentation. -->
 <!-- AUTO-DECISION: extended in place again by T-092 (P2b) — the status-events channel is this document's own "SSE observability" family, and the P2 phase it belongs to was promised by the same living documentation. -->
 <!-- AUTO-DECISION: extended in place again by T-094 (P3b) — the interactive transport section: the header and the scope table promised the WebSocket surface ("WebSocket with P3", "surface with P3c" for the answer scope), and the kill section's "the graceful pause needs the P3 transport" pointed here; the pending-question QUEUE itself still belongs to P3c and stays promised, not described. -->
+<!-- AUTO-DECISION: extended in place again by T-095 (P3c) — the queue section below is the surface the answer scope's own row and the P3b section's degradation paragraph promised ("the persistent pending-question queue itself arrives with P3c"), and the plan-unlock rewrite is the boundary section's own designed end. -->
+
+## The persistent pending-question queue (P3c)
+
+The interactive transport's question channel, made durable across the two
+disconnections that can lose an ask — a **client** that goes away and comes
+back, and a **daemon restart** mid-question. The queue itself is the
+in-memory per-run hub of P3b (the still-open questions, replayed to every
+connecting client); what P3c adds is the journal that rebuilds it and the
+worker-side hold that survives the restart.
+
+### The journal: data-directory layout and format
+
+Daemon-owned state, in the daemon's own data directory — **never under a
+target directory's `.auto/`** (whose writes are driver-exclusive by
+constitution; the direction draft §六.2's "a new file under `.auto/`" option
+is rejected on exactly that ground):
+
+```
+<dataDir>/projects.json    the whitelist (P1c)
+<dataDir>/tokens.json      the auth tokens, digests only (mode 0600)
+<dataDir>/questions.jsonl  the pending-question journal (mode 0600)
+```
+
+`questions.jsonl` is an append-only JSON-lines journal (one record per line,
+`v: 1` on every record — a torn crash tail and a newer format's records are
+skipped at replay, never misread), compacted at each daemon start down to the
+runs that still hold open questions. Three record kinds:
+
+```jsonl
+{"v":1,"at":"…","run":"run-000001","event":"opened","project":"aseo","directory":"/…","secret":"oar_…","started":"…","request":{"options":{…},"switches":{…}}}
+{"v":1,"at":"…","run":"run-000001","event":"raised","id":"q1","text":"⏸ pause between tasks: …","minutes":1}
+{"v":1,"at":"…","run":"run-000001","event":"settled","id":"q1","how":"answered"}
+```
+
+- `opened` — written once per run at spawn, before the worker can raise
+  anything: the run identity a restart reconstructs from (the `secret` is the
+  per-run bridge credential, so the orphan worker's reconnect authenticates
+  against the restored run; the file is 0600, daemon-local, single-machine).
+- `raised` — written when the daemon first holds an ask. A re-raise (the
+  worker's reconnect re-stating a still-held ask) appends only if the hub had
+  cleared the id; the replay fold is idempotent by id either way.
+- `settled` — written for **durable** settlements only: the worker's own
+  `settled` frame (its word — `answered`/`timeout`/`transport`/`closed`) and
+  the daemon's run-terminal retire (`closed`). A live-socket bridge blip
+  deliberately journals nothing — the worker may still hold the ask and
+  re-raise it on reconnect, so the loss is not a settlement.
+
+The journal is a **rebuild aid, not the system of record**: the durable
+question lifecycle is the P2b event stream the run itself writes
+(`question-raised`/`question-answered` in `.auto/run-status.jsonl`, served by
+`status-events`); the journal holds the daemon's own half — the pending set
+plus the run identity needed to serve it again.
+
+### Restart reconstruction and the `restored` run state
+
+At startup the daemon replays the journal: every run left with an open
+question comes back as a registry entry in the **`restored`** state, beside
+its hub (the journaled secret, the journaled questions). Then:
+
+- the orphan worker's bridge reconnect (its backoff caps at 2 s) is answered,
+  not 404'd — it re-raises its still-held asks on the fresh socket, and the
+  answer flows to a run that can take it;
+- a client connecting to `/runs/<id>/interactive` receives `hello` (state
+  `restored`, the bridge's presence) and the replay of every open question —
+  **journal replay redelivers to a new client**;
+- delivery and answering are idempotent: a settled question is never
+  re-delivered (the fold drops it), a stale or double answer is a no-op
+  answered with a diagnostic `error` frame (the socket stays open);
+- an unanswered question still degrades — never a hang: the worker's
+  reconnect grace (5 s) bounds every ask it holds across a loss, so a daemon
+  that stays gone leaves the run to reach its own exit vocabulary
+  (blocked/exit 2 under `humanQuestions`).
+
+A `restored` run is not live and never terminal: its worker is not this
+daemon's child (no process to supervise, no exit to observe — `DELETE
+/runs/<id>` answers **409** naming that), the on-disk lock arbitrates its
+directory exactly as for any other driver process, and the run's own state
+lives on the disk it writes. One documented edge: a worker that dies in a
+restart window without ever reconnecting leaves its journaled questions
+pending in the daemon's view (answers get the honest "bridge not connected"
+refusal; the P2b stream carries the true lifecycle). Run **history** still
+does not survive a restart (P1's own decision, unchanged) — only the pending
+set does.
 
 ## Supervision and the daemon's lifetime
 
@@ -446,6 +559,9 @@ The run registry is in-memory: it lives exactly as long as the daemon. Stopping
 the daemon stops serving but does **not** kill live workers — they run to
 completion, their state stays on disk, and the lock arbitrates any successor (a
 restarted daemon answers 423 while an orphan still holds a directory). Run
-history does not survive a restart; nothing else depends on it.
+history does not survive a restart; nothing else depends on it — except, since
+P3c, the **pending questions**: a run that still holds an open question when
+the daemon stopped is restored from the journal as described in the queue
+section above, so its worker reconnects and its client still finds the ask.
 
 <!-- auto: eof -->
