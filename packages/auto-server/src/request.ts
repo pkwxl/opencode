@@ -184,8 +184,8 @@ function parseMinutes(raw: unknown, key: string, what: string): number {
 }
 
 // The per-run switch overrides, validated only (the caller decides what to
-// do with them: the worker sets them on its own process environment ahead of
-// the core's single parse — autoSwitches memoizes on first access inside
+// do with them: the worker sets them on its own process environment ahead
+// of the core's single parse — autoSwitches memoizes on first access inside
 // runAll's preflight, a fresh process per run is what makes this layer
 // per-run). Names are validated against the registry so a typo is a usage
 // error, never a silent no-op (the CLI's unknown-option interception rule);
@@ -208,4 +208,41 @@ export function parseSwitches(raw: unknown): Record<string, string> {
     switches[name] = value
   }
   return switches
+}
+
+// The interactive transport payload (P3b): what the daemon writes into the
+// spawn request — the worker bridge URL (ws://…/runs/<id>/worker) and the
+// per-run secret that authenticates the connection — and what the worker
+// entry builds its Interactive implementation from. Daemon-written, never
+// client-written: POST /runs does not accept it (the interactive transport
+// is the daemon's own surface, on for every run it spawns), so a request
+// carrying it by hand is a usage error on the daemon side and a validated
+// field on the worker side.
+export type TransportPayload = { run: string; url: string; token: string }
+
+export function parseTransport(raw: unknown): TransportPayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail("transport must be an object: { \"run\": \"<run id>\", \"url\": \"ws://…/runs/<run id>/worker\", \"token\": \"<the per-run secret>\" }")
+  }
+  const given = raw as Record<string, unknown>
+  for (const key of Object.keys(given)) {
+    if (key === "run" || key === "url" || key === "token") continue
+    fail(`transport.${key} is not a transport field (run, url, token)`)
+  }
+  const run = given.run
+  const url = given.url
+  const token = given.token
+  if (typeof run !== "string" || !run.trim()) fail('transport.run takes the run id the daemon assigned ("run-<n>")')
+  if (typeof token !== "string" || !token.trim()) fail("transport.token takes the per-run secret the daemon generated for the worker bridge")
+  if (typeof url !== "string" || !url.trim()) fail('transport.url takes the worker bridge WebSocket URL ("ws://<host>:<port>/runs/<run id>/worker")')
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    fail(`transport.url is not a URL: ${url}`)
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    fail(`transport.url takes a ws:// or wss:// URL (the worker bridge WebSocket endpoint), not ${parsed.protocol}`)
+  }
+  return { run, url, token }
 }

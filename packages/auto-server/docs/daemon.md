@@ -1,13 +1,14 @@
-# The opencode-auto-server daemon (P1c/P1d/P1e)
+# The opencode-auto-server daemon (P1c/P1d/P1e/P3b)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
 entry, `opencode-auto-server worker '<json>'`), serves the run-control REST
 surface (P1c), the REST lifecycle operations (P1d — config ops, units, models,
-the P1 `plan` boundary) and the disk observability surface (P1e — the polled
-status read model and the SSE log/journal tails) on `Bun.serve` —
-self-contained, zero added runtime dependencies (the isolation line of T-086;
-the core never knows HTTP).
+the P1 `plan` boundary), the disk observability surface (P1e — the polled
+status read model and the SSE log/journal tails) and the WebSocket interactive
+transport (P3b — questions and run control bridged between a run's worker and
+its clients) on `Bun.serve` — self-contained, zero added runtime dependencies
+(the isolation line of T-086; the core never knows HTTP).
 
 ## v1 boundary: single machine, multiple directories
 
@@ -54,9 +55,9 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
 | `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream | active |
-| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations | active |
+| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
-| `answer` | the pending-question queue                                        | schema now, surface with P3c |
+| `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` (the persistent pending-question queue itself arrives with P3c) | active |
 | `probe`  | `models --probe` — burns tokens by starting agents                | opt-in, **disabled by default**: no route requires it; its confirmation parameter and per-daemon rate limit land with the Web write surface |
 
 Tokens are managed beside the whitelist (`tokens.json` in the data directory,
@@ -111,11 +112,12 @@ message ("frozen by init … revise with amend") as a **400**.
   | 130  | `killed`         | force-terminated (the double-SIGINT path)       |
 
   A death by signal (no exit code — e.g. a `SIGKILL` from outside, or a kill
-  that arrived before the run installed its handler) is `killed` too, with the
-  signal recorded in `signal`: crash and kill are isomorphic scenes
-  (`auto-core src/exit.ts:1-14`). In P1 no daemon-driven path produces exit 3 —
-  the graceful pause needs the P3 transport (`Control.requestExit` is an
-  in-process service) — but the mapping is in place for the runs that will.
+  that arrived before the run installed its handler) is `killed` too, with
+  the signal recorded in `signal`: crash and kill are isomorphic scenes
+  (`auto-core src/exit.ts:1-14`). Exit 3 is reachable over the daemon's
+  control channel since P3b — `/exit` over the interactive transport maps
+  onto the run's own graceful-exit request (see the interactive transport
+  below), while the kill remains the force-terminate path beside it.
 
 ### Lock conflicts
 
@@ -141,13 +143,15 @@ escape hatch; assessment §8 Q8). On `POST /runs`:
 
 ### Kill
 
-`DELETE /runs/<id>` is P1's only mid-run control. The run's process owns
-SIGINT (a single press is captured and logged; a second within the window
-force-terminates with exit 130 — `auto-core src/loop.ts:82-96`), so the
-daemon's kill is that double press: two SIGINTs inside the window, producing
-exactly the 130 the vocabulary maps to `killed`. A kill of a still-`starting`
-worker lands before the handler exists and ends as a signal death — `killed`
-with `signal: "SIGINT"`.
+`DELETE /runs/<id>` is the force-terminate half of mid-run control. The run's
+process owns SIGINT (a single press is captured and logged; a second within
+the window force-terminates with exit 130 — `auto-core src/loop.ts:82-96`),
+so the daemon's kill is that double press: two SIGINTs inside the window,
+producing exactly the 130 the vocabulary maps to `killed`. A kill of a
+still-`starting` worker lands before the handler exists and ends as a signal
+death — `killed` with `signal: "SIGINT"`. The graceful half of mid-run
+control — pause, with progress persisted and a re-run resuming precisely —
+is the `/exit` action of the interactive transport below.
 
 ## The lifecycle operations (P1d)
 
@@ -363,8 +367,72 @@ event: dropped       ← the subscriber fell > 256 events behind; reconnect afte
   above (over the unit state files) remains the durable fallback — the two
   agree because both read what the driver wrote.
 
+## The interactive transport (P3b)
+
+The WebSocket surface that carries **human interaction and run control**
+between a run's worker and its clients: a question asked inside a run is
+answerable from outside the process, and the graceful `/exit` (exit 3) is
+reachable over the network. Two endpoints per run, one typed versioned
+protocol (`src/ws-protocol.ts`, `v: 1` on every frame — a version skew is one
+error frame and a close):
+
+| route                          | auth | meaning |
+| ------------------------------ | ---- | ------- |
+| `GET /runs/<id>/interactive`   | an operator token with the `answer` **or** `control` scope (the `Authorization` header, or `?token=` — a browser WebSocket cannot set headers) | the client socket: the question channel and the control channel, multiplexed |
+| `GET /runs/<id>/worker`        | the per-run secret the daemon wrote into the worker's spawn payload | the run's own bridge — the worker entry's injected `Interactive` implementation (`src/worker-interactive.ts`) connects back here through the P3a seam (`RunAllOpts.interactive`) |
+
+Frames (JSON, one per message; `v` on every one):
+
+- **question channel** (`answer` scope): the worker's `question {id, text,
+  minutes?}` fans out to every connected client (a connecting client is
+  replayed every still-open question, so a reconnect re-sees the ask it came
+  to answer); a client answers with `answer {id, text}`; the worker resolves
+  the ask and everyone hears `settled {id, how}` (`answered | timeout |
+  transport | closed`). The prompt `text` is an opaque payload carried
+  verbatim — **never parsed for state** (the direction draft §五's
+  no-scraping rule): the question's lifecycle belongs to the P2 event stream
+  (`question-raised`/`question-answered` over `status-events`), and this
+  channel's correlation is the frame `id` and nothing else.
+- **control channel** (`control` scope): `control {action: "exit"}` maps onto
+  the run's own graceful-exit request (`Control.requestExit`,
+  `auto-core src/exit.ts`) — the run pauses at its next safe boundary with
+  progress persisted, exits 3, and a re-run resumes precisely;
+  `control {action: "failback", order?}` maps onto `Router.requestFailback`
+  (`auto-core src/router.ts`) — the failover state resets (or the model order
+  is redefined) at the next safe boundary. This is **mid-run control, never
+  config mutation** — the config freeze is untouched. The worker answers
+  `control-done {action, applied, reason?}`: a frame that arrived before the
+  run opened its interactive channel (the starting window) is answered
+  `applied: false` — retry once the run is running — and a malformed failback
+  order is refused with the sideband's own usage rule (models are
+  `provider/model` with a slash).
+- **informational**: `hello {run, state, worker}` on connect (the daemon's
+  registry state, the bridge's presence); `session {session, agent?}` when
+  the run attaches its channel to a session; `ping`/`pong` keep-alive; an
+  `error {message}` frame refuses one frame (a scope miss, an unknown
+  question, a control with no bridge connected) and leaves the socket open.
+
+**Degradation is the contract** (`auto-core src/opts.ts:184-185`'s
+never-a-hang rule): transport loss during an open question resolves the
+question `undefined` on the worker (the run degrades to blocked/exit 2, or
+the configured fallback — never a hang), and every client hears the
+`transport` settle; a question asked while the bridge is down waits out a
+short reconnect grace (5 s) and degrades the same way. The worker keeps
+retrying the bridge (a daemon restart is expected back); a restarted daemon
+that lost the in-memory registry keeps refusing the reconnect (404 — it does
+not know the run), and every question degrades — the run always reaches its
+own exit vocabulary.
+
+**The scope matrix**: opening the client endpoint requires `answer` or
+`control`; then each frame is checked against its own scope — a token with
+`answer` alone can answer questions but not control the run (and vice
+versa), and each refusal names the scope it wanted. The worker bridge takes
+no operator token at all: its secret is one run's, held in the daemon's
+memory, gone with it.
+
 <!-- AUTO-DECISION: this document (T-088's) is extended in place by T-090 — the P1c/P1d sections already promised "SSE observability arrives with P1e", so the extension is the designed continuation of the package's own living documentation. -->
 <!-- AUTO-DECISION: extended in place again by T-092 (P2b) — the status-events channel is this document's own "SSE observability" family, and the P2 phase it belongs to was promised by the same living documentation. -->
+<!-- AUTO-DECISION: extended in place again by T-094 (P3b) — the interactive transport section: the header and the scope table promised the WebSocket surface ("WebSocket with P3", "surface with P3c" for the answer scope), and the kill section's "the graceful pause needs the P3 transport" pointed here; the pending-question QUEUE itself still belongs to P3c and stays promised, not described. -->
 
 ## Supervision and the daemon's lifetime
 

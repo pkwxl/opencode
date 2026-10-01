@@ -26,10 +26,17 @@
 //     worker never works around a refusal.
 //
 // stdin is closed / not a TTY by construction (a daemon-spawned child): the
-// worker never enables interactive mode, and its question handling rides the
-// core's defaults — with waitAnswer 0 (this entry's default) a permission
-// question blocks the run (exit 2) and a non-permission question is
-// auto-answered, never a hang (auto-core src/engine/concerns/questions.ts).
+// worker never builds the terminal sideband. Its question handling is the
+// daemon's interactive transport (P3b, src/worker-interactive.ts): when the
+// request carries the transport payload, every human-interaction route is
+// bridged to the daemon's WebSocket surface as typed frames — questions
+// answerable from outside the process, /exit and /failback reachable over
+// the network, a transport loss degrading each open question to the
+// unanswered path (blocked/exit 2, or the configured fallback — never a
+// hang). Without the payload, the P1 semantics stand: with waitAnswer 0
+// (this entry's default) a permission question blocks the run (exit 2) and
+// a non-permission question is auto-answered (auto-core
+// src/engine/concerns/questions.ts).
 import { resolve } from "node:path"
 import {
   formatProjectConfig,
@@ -42,7 +49,9 @@ import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, type RunOptions } from "./request"
+import type { Interactive } from "@opencode-ai/auto-core/control-types"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parseTransport, type RunOptions, type TransportPayload } from "./request"
+import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
 // argv token holding the JSON document — is the daemon's choice):
@@ -55,7 +64,16 @@ import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitch
 //   switches   per-run OPENCODE_AUTO_* experimental switch overrides,
 //              applied to this process's environment before the core parses
 //              them once (parse-memoization is why each run is a fresh
-//              process).
+//              process);
+//   transport  the P3b interactive transport (daemon-written): the worker
+//              bridge URL and the per-run secret. Present on every run this
+//              daemon spawns — the entry builds its Interactive
+//              implementation from it and injects it through
+//              RunAllOpts.interactive (the P3a seam), so a question raised
+//              inside the run is answerable from outside the process and
+//              /exit, /failback are reachable over the network. Absent (a
+//              hand-spawned worker): no interactive channel, the stdin-closed
+//              question semantics of P1 unchanged.
 // The vocabulary itself — the option keys, the frozen-key table, the switch
 // registry — lives in src/request.ts, the one module the daemon (P1c) and
 // this entry share: the daemon pre-validates a POST /runs body with it, so
@@ -66,6 +84,7 @@ export type RunRequest = {
   directory: string
   options?: RunOptions
   switches?: Record<string, string>
+  transport?: TransportPayload
 }
 
 // Usage refusal: exit 1 with the message on stderr (the CLI convention —
@@ -103,7 +122,7 @@ function applySwitches(switches: Record<string, string>): void {
 // changes — parse/validate/run stay put.
 export async function runWorker(argv: string[]): Promise<void> {
   if (argv.length !== 1 || !argv[0]) {
-    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { "OPENCODE_AUTO_…": "…" } })`)
+    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { "OPENCODE_AUTO_…": "…" }, "transport": { "run": "…", "url": "ws://…", "token": "…" } })`)
   }
   let document: unknown
   try {
@@ -112,11 +131,11 @@ export async function runWorker(argv: string[]): Promise<void> {
     refuse(`the run request is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … } }")
+    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … } }")
   }
   const request = document as Record<string, unknown>
   for (const key of Object.keys(request)) {
-    if (key === "directory" || key === "options" || key === "switches") continue
+    if (key === "directory" || key === "options" || key === "switches" || key === "transport") continue
     // A dedicated config carrier gets the same answer as a config key in
     // options: there is no per-run config surface, by constitution.
     if (key === "config") {
@@ -124,7 +143,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     }
     if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
-    refuse(`unknown request field "${key}" (the run request takes directory, options and switches)`)
+    refuse(`unknown request field "${key}" (the run request takes directory, options, switches and transport)`)
   }
   if (typeof request.directory !== "string" || !request.directory.trim()) {
     refuse(`the run request requires "directory": the target directory of the run (resolved against the worker's working directory)`)
@@ -135,9 +154,11 @@ export async function runWorker(argv: string[]): Promise<void> {
   // the texts the daemon's 400s carry.
   let options: RunOptions
   let switches: Record<string, string>
+  let transport: TransportPayload | undefined
   try {
     options = parseOptions(request.options)
     switches = parseSwitches(request.switches)
+    transport = "transport" in request ? parseTransport(request.transport) : undefined
   } catch (error) {
     refuseRequest(error)
   }
@@ -156,6 +177,19 @@ export async function runWorker(argv: string[]): Promise<void> {
   // here (see parseOptions).
   setVerbose(options.verbose)
   log(`📝 log file: ${setLogFile(directory)}`)
+
+  // The interactive transport (P3b): the daemon's payload becomes the run's
+  // interactive channel — the entry constructs the implementation here
+  // (after the audit log starts, so the bridge's own lines land in it) and
+  // injects it through RunAllOpts.interactive (the P3a seam). The
+  // announcement is the transport's own banner: the loop logs the 💬 line
+  // only for the terminal sideband shapes, and an injected implementation
+  // is announced by its owner. Without a payload, no channel: the
+  // stdin-closed question semantics of P1 stand.
+  const interactive: Interactive | undefined = transport ? wsInteractive({ url: transport.url, token: transport.token }) : undefined
+  if (transport) {
+    log(`🔗 interactive transport: questions and /exit, /failback control are served by the daemon over the bridge ${transport.url} (run ${transport.run}); a transport loss degrades every open question to the unanswered path — never a hang`)
+  }
 
   // The strict config load (the CLI's loadRunConfig): a broken file is an
   // environment error with exit 1, strict failure beats silent fallback, and
@@ -204,18 +238,20 @@ export async function runWorker(argv: string[]): Promise<void> {
   // runAll's refusal, holder lines and exit 1, never worked around here),
   // and the run's exit code propagates verbatim: 0 all complete, 1
   // usage/environment, 2 blocked for a human, 3 a graceful /exit pause with
-  // progress persisted (in P1 a worker exits 3 only when the run requests
-  // its own exit — the daemon-driven graceful pause arrives with the P3
-  // transport), 130 force-terminated.
-  const code = await runAll(directory, runOptions(config, mode, options))
+  // progress persisted (reachable over the daemon's control channel when
+  // the transport is attached, 130 force-terminated).
+  const code = await runAll(directory, runOptions(config, mode, options, interactive))
   process.exit(code)
 }
 
 // The runAll options, the CLI's runOptions for this request: the config
 // init froze (loaded strictly above) plus the request's per-run options.
 // Config values never come from the request — that is the frozen-flag
-// refusal's whole point.
-function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions): RunAllOpts {
+// refusal's whole point. The interactive channel is the transport's
+// implementation when the daemon attached one (the P3a seam's injected
+// shape); the request's options never carry it (parseOptions refuses
+// options.interactive — the terminal sideband has no terminal here).
+function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined): RunAllOpts {
   return {
     agent: config.agent,
     server: options.server,
@@ -240,6 +276,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions):
     newSession: options.newSession,
     dryrun: options.dryrun,
     maxSessions: options.maxSessions,
+    ...(interactive ? { interactive } : {}),
   }
 }
 

@@ -1,7 +1,7 @@
-// The daemon of the headless service shell (P1c/P1d/P1e, auto-core
-// plans/0067): self-contained on Bun.serve (HTTP and SSE now, WebSocket with
-// P3 — zero added runtime dependencies, the isolation line of T-086). Its
-// duties:
+// The daemon of the headless service shell (P1c/P1d/P1e/P3b, auto-core
+// plans/0067): self-contained on Bun.serve (HTTP, SSE and the WebSocket
+// interactive transport — zero added runtime dependencies, the isolation
+// line of T-086). Its duties:
 //   - the whitelist: daemon-owned, in the daemon's own data directory
 //     (src/store.ts); a run request names a registered project and the
 //     daemon resolves the target only against that registry — never against
@@ -28,7 +28,13 @@
 //   - the disk observability surface (P1e, src/observe.ts): the polled status
 //     read model over `.auto/*.json` plus git, and the SSE tails of the run
 //     log and the engine journal — every fact read from disk the run itself
-//     wrote, beside a live run, never a write into the target.
+//     wrote, beside a live run, never a write into the target;
+//   - the interactive transport (P3b, src/interactive-ws.ts): the WebSocket
+//     endpoints of a run — `/runs/<id>/worker` (the run's bridge, the
+//     per-run secret the spawn payload carried) and `/runs/<id>/interactive`
+//     (the clients, operator tokens) — carrying the question channel and
+//     the control channel (/exit, /failback) as typed versioned frames
+//     (src/ws-protocol.ts), multiplexed on one client socket.
 //
 // v1 boundary (assessment §8 Q4): single machine, multiple directories. The
 // daemon binds 127.0.0.1 by default, the run lock's stale detection is
@@ -44,10 +50,12 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
+import { createHub, freshRunSecret, interactiveHandlers, type InteractiveHub, type SocketData } from "./interactive-ws"
 import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, RequestError, type RunOptions } from "./request"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, RequestError, type RunOptions, type TransportPayload } from "./request"
+import { PROTOCOL_VERSION } from "./ws-protocol"
 
 export const DEFAULT_PORT = 4770
 export const DEFAULT_HOSTNAME = "127.0.0.1"
@@ -158,6 +166,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // which no child process can be spawned in (posix_spawn answers ENOENT).
   const spawnCwd = import.meta.dir.includes("$bunfs") ? process.cwd() : import.meta.dir
   const runs = new Map<string, RunRecord>()
+  // One interactive hub per run (P3b, src/interactive-ws.ts): the run
+  // secret the spawn payload carries, the worker bridge socket, the client
+  // sockets and the still-open questions. Beside the registry (not on the
+  // record) so the run view stays the wire shape it always was; it lives
+  // exactly as long as the registry entry does — this process.
+  const hubs = new Map<string, InteractiveHub>()
   let counter = 0
   // The P1d operation surface runs in this process (library calls into the
   // core, never a worker child: an operation is a synchronous
@@ -245,10 +259,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // worker to its own fresh process) and keeps everything else, PATH and
   // XDG_CONFIG_HOME included (one operator, one agent tooling, one model
   // registry). The directory is the registry's absolute path, so the cwd is
-  // only the spawn's working directory, never the run's target.
-  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>): void => {
+  // only the spawn's working directory, never the run's target. The payload
+  // carries the P3b interactive transport (the worker bridge URL and the
+  // per-run secret) whenever the daemon is serving it: the worker entry
+  // builds its Interactive implementation from it and injects it through
+  // RunAllOpts.interactive (the P3a seam), so a question raised inside the
+  // run is answerable from outside the process.
+  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload): void => {
     const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
-    const proc = Bun.spawn([worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches })], {
+    const proc = Bun.spawn([worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}) })], {
       cwd: spawnCwd,
       env,
       stdin: "ignore",
@@ -281,6 +300,23 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     return { status: 0, body: {}, scopes }
   }
 
+  // The WebSocket clients' variant (P3b): a browser WebSocket cannot set
+  // headers, so the token may ride the query string instead — either way
+  // the same store, the same digest check, the same scope tiers.
+  const scopesForSocket = (request: Request, url: URL): { status: number; body: Record<string, unknown>; scopes?: Scope[] } => {
+    const query = url.searchParams.get("token")
+    if (!request.headers.get("authorization") && query === null) {
+      return { status: 401, body: { error: "authentication required: send 'Authorization: Bearer <token>', or '?token=<token>' on the query string (a browser WebSocket cannot set headers)" } }
+    }
+    const presented = /^Bearer\s+(.+)$/i.exec((request.headers.get("authorization") ?? "").trim())?.[1] ?? query ?? ""
+    if (!presented.trim()) {
+      return { status: 401, body: { error: "the Authorization header must be 'Bearer <token>' (or '?token=<token>' on the query string)" } }
+    }
+    const scopes = store.verifyToken(presented.trim())
+    if (!scopes) return { status: 401, body: { error: "unknown token" } }
+    return { status: 0, body: {}, scopes }
+  }
+
   const needScope = (request: Request, what: string, scope: Scope): Response | undefined => {
     const auth = scopesOf(request)
     if (auth.scopes === undefined) return json(auth.status, auth.body)
@@ -306,7 +342,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // fields plus per-run env-switch overrides only — never config keys,
   // the same shared validator the worker enforces), refuse on conflicts,
   // spawn one worker, answer 202 with the run id.
-  const postRuns = async (request: Request): Promise<Response> => {
+  const postRuns = async (request: Request, server: Bun.Server<SocketData>): Promise<Response> => {
     let body: unknown
     try {
       body = await request.json()
@@ -415,8 +451,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       watcher: undefined,
     }
     runs.set(id, run)
-    spawnWorker(project, run, options, switches)
-    return json(202, { ...view(run), note: "the run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail)" }, { location: `/runs/${id}` })
+    // The interactive hub (P3b): the per-run secret exists before the spawn
+    // — the worker's bridge URL names this daemon's address, and its token
+    // is the secret the upgrade compares. The registry entry and the hub
+    // are created together; the worker connects back within seconds of its
+    // start.
+    const secret = freshRunSecret()
+    hubs.set(id, createHub(secret))
+    // The transport URL names this daemon's own bound address (the worker
+    // connects back on the loopback or whatever host the operator bound;
+    // the spawn and the bridge are the same machine in v1).
+    const transport: TransportPayload = { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker`, token: secret }
+    spawnWorker(project, run, options, switches, transport)
+    return json(202, { ...view(run), note: "the run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and drive it interactively over the WebSocket endpoint /runs/<id>/interactive (questions and /exit, /failback control)", interactive: `/runs/${id}/interactive` }, { location: `/runs/${id}` })
   }
 
   // DELETE /runs/<id>: mid-run control in P1 is kill-only. The core's
@@ -452,7 +499,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     return json(202, { ...view(run), note: "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)" })
   }
 
-  const fetchHandler = async (request: Request): Promise<Response> => {
+  const fetchHandler = async (request: Request, server: Bun.Server<SocketData>): Promise<Response> => {
     const url = new URL(request.url)
     const segments = url.pathname.split("/").filter(Boolean)
     const method = request.method
@@ -472,7 +519,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       if (segments.length === 1 && method === "POST") {
         const denied = needScope(request, "starting a run", "control")
         if (denied) return denied
-        return await postRuns(request)
+        return await postRuns(request, server)
       }
       if (segments.length === 2) {
         const run = findRun(segments[1]!)
@@ -489,6 +536,45 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return deleteRun(run)
         }
       }
+    }
+    // The P3b interactive surface (src/interactive-ws.ts): the worker
+    // bridge and the client endpoint, both WebSocket upgrades over the same
+    // typed versioned protocol (src/ws-protocol.ts). The client endpoint
+    // multiplexes the question channel (`answer` scope) and the control
+    // channel (`control` scope); the worker bridge authenticates with the
+    // per-run secret the spawn payload carried — never an operator token,
+    // so a bridge socket can do exactly one run's interactive work and
+    // nothing else. Auth precedes the upgrade (a refusal is the plain JSON
+    // status, the same family as every route above).
+    if (segments[0] === "runs" && segments.length === 3 && method === "GET" && (segments[2] === "worker" || segments[2] === "interactive")) {
+      const run = findRun(segments[1]!)
+      if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
+      // Auth precedes the websocket check (the refusals are the same plain
+      // JSON statuses every route above answers, so a probe or a misrouted
+      // client learns its fate without a handshake).
+      const hub = hubs.get(run.id)!
+      if (segments[2] === "worker") {
+        const presented = url.searchParams.get("token")
+        if (presented !== hub.secret) {
+          return json(401, { error: "unknown run secret: the worker bridge authenticates with the per-run secret the run's spawn payload carried" })
+        }
+      } else {
+        const auth = scopesForSocket(request, url)
+        if (auth.scopes === undefined) return json(auth.status, auth.body)
+        if (!auth.scopes.includes("answer") && !auth.scopes.includes("control")) {
+          return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
+        }
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+          return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
+        }
+        if (server.upgrade(request, { data: { kind: "client", run: run.id, scopes: auth.scopes } satisfies SocketData })) return new Response(null)
+        return json(400, { error: "the websocket upgrade failed" })
+      }
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+        return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
+      }
+      if (server.upgrade(request, { data: { kind: "worker", run: run.id } satisfies SocketData })) return new Response(null)
+      return json(400, { error: "the websocket upgrade failed" })
     }
     // The P1e observability surface plus the P2b structured events channel:
     // /projects/<project>/{status,log,events,status-events} — the polled
@@ -538,7 +624,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events)`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge))`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -601,10 +687,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream)` })
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge))` })
   }
 
-  const server = Bun.serve({ port: options.port ?? DEFAULT_PORT, hostname: options.hostname ?? DEFAULT_HOSTNAME, fetch: fetchHandler })
+  const server = Bun.serve<SocketData>({
+    port: options.port ?? DEFAULT_PORT,
+    hostname: options.hostname ?? DEFAULT_HOSTNAME,
+    fetch: fetchHandler,
+    // The P3b interactive transport's sockets (src/interactive-ws.ts): the
+    // run's worker bridge and the interactive clients, dispatched by the
+    // SocketData each upgrade stamped. Bun.serve's own WebSocket support —
+    // the isolation line holds (zero added runtime dependencies).
+    websocket: interactiveHandlers({ hubOf: (run) => hubs.get(run), stateOf: (run) => runs.get(run)?.state }),
+  })
 
   const handle: DaemonHandle = {
     port: server.port ?? options.port ?? DEFAULT_PORT,

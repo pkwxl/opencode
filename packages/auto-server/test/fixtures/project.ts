@@ -53,16 +53,21 @@ export const gitOf = (dir: string) => {
 
 export const TASK = "T-001"
 export const TASK_DOC = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
+// The second task's document (the two-task fixture the interactive e2e
+// uses: waitBetween's between-tasks pause only fires with a next task
+// waiting — the question the WebSocket client answers).
+export const TASK_2 = "T-002"
+export const TASK_2_DOC = `# ${TASK_2}: the second widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the second widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
 
-// A committed one-task project in m mode. With no `config` the core's
-// defaults apply (exactly the values init would freeze); with one, the full
+// A committed one-task (or two-task) project in m mode. With no `config` the
+// core's defaults apply (exactly the values init would freeze); with one, the full
 // config is written through the core's own saver — the acceptance-gate
 // variant (acceptanceGate: ["implement"], no acceptance document) is how a
 // fixture run reaches the phase gate's exit 2. The agent contract is the one
 // artifact preflight hard-requires; the round setup and the task documents
 // ride the core's own writers (establishRound), committed as the clean
 // baseline the start gate demands.
-export async function fixtureProject(prefix: string, config?: Partial<ProjectConfig>): Promise<string> {
+export async function fixtureProject(prefix: string, config?: Partial<ProjectConfig>, tasks: 1 | 2 = 1): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix))
   const git = gitOf(dir)
   await git("init")
@@ -72,9 +77,14 @@ export async function fixtureProject(prefix: string, config?: Partial<ProjectCon
   await git("config", "user.email", "worker@auto-server.test")
   await git("config", "user.name", "worker e2e")
   await establishRound(dir, { phases: "m" })
-  await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+  const index = tasks === 2 ? `# Tasks\n\n- [ ] ${TASK} the widget\n- [ ] ${TASK_2} the second widget\n` : `# Tasks\n\n- [ ] ${TASK} the widget\n`
+  await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), index)
   await mkdir(join(dir, "docs", TASK), { recursive: true })
   await Bun.write(join(dir, "docs", TASK, "todo.md"), TASK_DOC)
+  if (tasks === 2) {
+    await mkdir(join(dir, "docs", TASK_2), { recursive: true })
+    await Bun.write(join(dir, "docs", TASK_2, "todo.md"), TASK_2_DOC)
+  }
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   if (config) await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, ...config })

@@ -40,7 +40,7 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d/P1e). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d/P1e/P3b). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
   boundary). The run-control REST surface: GET /health, GET /runs, POST /runs,
   GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
@@ -54,11 +54,18 @@ serve — the daemon (P1c/P1d/P1e). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   and its commit-verdict completion — commit-is-completion, agent self-report
   never trusted), GET /projects/<project>/log and /events (SSE tails of the
   newest .auto/logs/run-*.log and the .auto/run-events.jsonl journal —
-  whole-line delivery, re-seek on run rotation). Destructive operations take
-  two separate fields — "confirm" (the answer routed through the core's
-  confirmation gate) and "cleanTree" (the worktree check's opt-out) — never
-  one bundled force. Stopping the daemon leaves live workers running to
-  completion; the run lock arbitrates any successor.
+  whole-line delivery, re-seek on run rotation) and
+  GET /projects/<project>/status-events (P2b: the typed driver-events stream
+  with event-id cursoring); the interactive transport (P3b): the WebSocket
+  endpoint GET /runs/<id>/interactive, multiplexing the question channel
+  (the "answer" scope — a question raised inside the run reaches connected
+  clients, an answer returns, the run proceeds) and the control channel (the
+  "control" scope — /exit produces the graceful pause/exit 3 with progress
+  persisted and a re-run resumes precisely; /failback reaches the router).
+  Destructive operations take two separate fields — "confirm" (the answer
+  routed through the core's confirmation gate) and "cleanTree" (the worktree
+  check's opt-out) — never one bundled force. Stopping the daemon leaves live
+  workers running to completion; the run lock arbitrates any successor.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
@@ -69,11 +76,12 @@ register — add a target directory to the daemon's whitelist. The whitelist
   project, never under .auto/.
 
 token — manage bearer tokens and their scopes: read (status/logs/events),
-  control (run control, close, task-add), config (init/amend/fix/reset),
-  answer (the question queue), probe (models --probe; opt-in, disabled by
-  default — no route requires it yet). Unauthenticated requests get 401, a
-  token without the route's scope 403. The plaintext token is printed once
-  at issue; the store keeps only its digest.
+  control (run control, close, task-add, /exit and /failback over the
+  interactive transport), config (init/amend/fix/reset), answer (answering
+  questions over the interactive transport), probe (models --probe; opt-in,
+  disabled by default — no route requires it yet). Unauthenticated requests
+  get 401, a token without the route's scope 403. The plaintext token is
+  printed once at issue; the store keeps only its digest.
 
 worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
   document holds:
@@ -86,10 +94,16 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
   switches   per-run OPENCODE_AUTO_* experimental switch overrides, applied
              to the worker's environment before the run starts (each run is
              a fresh process, so the switch layer is safely per-run)
+  transport  the interactive transport (P3b, daemon-written): the worker
+             bridge WebSocket URL and the per-run secret. The worker builds
+             its Interactive implementation from it and injects it through
+             runAll's io/Interactive seam, so questions and /exit, /failback
+             control are bridged to the daemon's WebSocket endpoint
 
-the worker's stdin is closed: questions degrade to the unanswered path
-(permission questions block the run with exit 2), never a hang; interactive
-input arrives with the WebSocket transport of the later units`
+the worker's stdin is closed: without a transport payload, questions degrade
+to the unanswered path (permission questions block the run with exit 2),
+never a hang; with one, every human interaction rides the bridge as typed
+frames, and a transport loss degrades the same way`
 
 // The profile is set before anything else (shell-contract §E.2: set once at
 // shell-entry startup), so every core message the entry reaches is shaped by

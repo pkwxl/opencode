@@ -20,11 +20,22 @@
 //
 // This is the auto-server package's copy of packages/auto's fixture
 // (test/fixtures/fake-claude.ts there, byte-identical behavior), extended
-// with one knob of its own (T-087, P1b):
-//   FAKE_CLAUDE_DELAY_MS — sleep this many milliseconds before answering
-//     each turn, stretching the run so a test can observe a live run from
-//     the outside (the second-worker lock test spawns another worker on the
-//     same directory while the first still holds .auto/run.lock).
+// with knobs of its own:
+//   FAKE_CLAUDE_DELAY_MS (T-087, P1b) — sleep this many milliseconds before
+//     answering each turn, stretching the run so a test can observe a live
+//     run from the outside (the second-worker lock test spawns another
+//     worker on the same directory while the first still holds
+//     .auto/run.lock).
+//   the interruption-resume branches (T-094, P3b) — the stream flow's
+//     after-the-restart shapes, which the reference fixture never meets
+//     (its suites interrupt nothing mid-split): a stream whose fork base
+//     did not survive the restart runs in a fresh session over the generic
+//     subtask prompt (the item's own line rides it, Artifacts included),
+//     and a stream re-prompted after a shape-check failure names the
+//     subtask whose artifacts are missing. Both write exactly the item's
+//     declared artifacts, so a run interrupted mid-split — the graceful
+//     /exit pause over the WebSocket transport, exit 3 with progress
+//     persisted — resumes to completion.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
@@ -148,6 +159,32 @@ function execute(text: string): boolean {
     const stream = /runs stream (T-\d+\.S\d+)/.exec(text)?.[1] ?? "stream"
     const paths = /Artifacts:\s*(.+)$/.exec(line)?.[1]?.split(/[\s,]+/).filter(Boolean) ?? []
     for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(stream)}\n`)
+    return true
+  }
+  // A stream in a fresh session (T-094): an interruption restart lost the
+  // lead's session, so the stream does not fork — the generic subtask
+  // prompt carries the item's own line ("You are responsible for item N of
+  // that list only: - [ ] <item>"), the Artifacts declaration included.
+  // Write exactly those files; the stream's content names its unit.
+  const freshItem = /You are responsible for (?:item [^\n]* of that list|this single subtask) only:\s*- \[ \] (.+)$/m.exec(text)?.[1]
+  if (freshItem !== undefined && freshItem.includes("Artifacts:")) {
+    const stream = /runs stream (T-\d+\.S\d+)/.exec(text)?.[1] ?? /(?:^|\s)(T-\d+\.S\d+)(?:\s|$)/.exec(text)?.[1] ?? "stream"
+    const paths = /Artifacts:\s*(.+)$/.exec(freshItem)?.[1]?.split(/[\s,]+/).filter(Boolean) ?? []
+    for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(stream)}\n`)
+    return true
+  }
+  // A stream re-prompted after a shape-check failure (T-094): the feedback
+  // names the subtask whose artifacts did not land; its checklist line
+  // declares them — read subtasks.md and write the declared files.
+  if (text.startsWith("You ended the session last time, but this subtask's")) {
+    const [, task, sub] = /\((T-\d+)\.(S\d+)\)/.exec(text) ?? []
+    if (task && sub) {
+      const checklist = readFileSync(join("docs", task, "subtasks.md"), "utf8")
+      const at = Number(sub.slice(1)) - 1
+      const line = checklist.split("\n").filter((l) => l.startsWith("- [ ] "))[at] ?? ""
+      const paths = /Artifacts:\s*(.+)$/.exec(line)?.[1]?.split(/[\s,]+/).filter(Boolean) ?? []
+      for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(`${task}.${sub}`)}\n`)
+    }
     return true
   }
   // The rejected lead's fork: the whole remaining work in this session.
