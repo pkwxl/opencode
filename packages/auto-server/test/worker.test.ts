@@ -10,14 +10,13 @@
 // code propagating verbatim, the frozen-config refusal (the API-side
 // equivalent of the CLI's refuseFrozenFlags), the usage vocabulary of the
 // run request, and the second worker's refusal on a locked directory.
+// The fixture helpers live in test/fixtures/project.ts (shared with the
+// daemon suite since P1c).
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
-import { chmod, mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
-import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
-import { establishRound } from "@opencode-ai/auto-core/phases"
+import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
 
@@ -28,12 +27,7 @@ const PACKAGE_ROOT = join(import.meta.dir, "..")
 // XDG_CONFIG_HOME points at an empty directory — the packages/auto e2e
 // CLI_ENV_BASE pattern. The per-run switches the requests below carry are
 // applied by the worker itself, which is the thing under test.
-const EMPTY_CONFIG_HOME = mkdtempSync(join(tmpdir(), "auto-server-worker-xdg-"))
-process.on("exit", () => rmSync(EMPTY_CONFIG_HOME, { recursive: true, force: true }))
-const ENV_BASE: Record<string, string | undefined> = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
-  XDG_CONFIG_HOME: EMPTY_CONFIG_HOME,
-}
+const ENV_BASE: Record<string, string | undefined> = scrubbedEnv()
 
 type WorkerResult = { code: number; out: string; err: string }
 
@@ -58,60 +52,6 @@ function spawnWorker(arg: string | undefined, env: Record<string, string> = {}) 
 
 async function runWorker(request: unknown, env: Record<string, string> = {}): Promise<WorkerResult> {
   return spawnWorker(JSON.stringify(request), env).done
-}
-
-// The fake agent's environment (the B6/C5 convention): a PATH with the fake
-// `claude` first; the adapter selection rides the request's per-run switches
-// (OPENCODE_AUTO_AGENT=claude), proving the switch layer reaches the core.
-// `extra` goes into the same environment (the fake's own FAKE_CLAUDE_* knobs).
-async function fakeAgent(extra: Record<string, string> = {}) {
-  const binDir = await mkdtemp(join(tmpdir(), "auto-server-agent-"))
-  await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`)
-  await chmod(join(binDir, "claude"), 0o755)
-  return { env: { PATH: `${binDir}:${process.env.PATH ?? ""}`, ...extra }, done: () => rm(binDir, { recursive: true, force: true }) }
-}
-
-// A git helper over a fixture dir: asserts exit 0 and returns stdout.
-const gitOf = (dir: string) => {
-  return async (...args: string[]) => {
-    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-    expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
-    return out
-  }
-}
-
-const TASK = "T-001"
-const TASK_DOC = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
-
-// A committed one-task project in m mode under the default config (no
-// config.json: the core's defaults apply, exactly the values init would
-// freeze — subtask auto, wrapup on, auto-number on). The agent contract is
-// the one artifact preflight hard-requires; the round setup and the task
-// documents ride the core's own writers (establishRound), committed as the
-// clean baseline the start gate demands.
-async function fixtureProject(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
-  const git = gitOf(dir)
-  await git("init")
-  // A repo-local identity: the run's commits are the core's, but their
-  // identity must resolve deterministically here (the auto package's e2e
-  // leans on the ambient account, which a shielded environment lacks).
-  await git("config", "user.email", "worker@auto-server.test")
-  await git("config", "user.name", "worker e2e")
-  await establishRound(dir, { phases: "m" })
-  await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-  await mkdir(join(dir, "docs", TASK), { recursive: true })
-  await Bun.write(join(dir, "docs", TASK, "todo.md"), TASK_DOC)
-  await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
-  await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
-  // The ignore set init writes (tmp/, .auto/): without it the run's own
-  // state files (its log, the lock, the stats segment) would reach the
-  // start-clean gate as untracked dirt.
-  await ensureGitignore(dir)
-  await git("add", "-A")
-  await git("commit", "-qm", "baseline")
-  return dir
 }
 
 describe("worker: a fixture run is a fully-formed shell run, observable on disk", () => {

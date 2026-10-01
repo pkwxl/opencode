@@ -41,9 +41,8 @@ import { fixHint } from "@opencode-ai/auto-core/config-fix"
 import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
-import type { PermissionMode } from "@opencode-ai/auto-core/opts"
 import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
-import { RETIRED_SWITCHES, SWITCH_ENV } from "@opencode-ai/auto-core/switches"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, type RunOptions } from "./request"
 
 // The run request (the payload the daemon sends; the transport — here one
 // argv token holding the JSON document — is the daemon's choice):
@@ -57,198 +56,40 @@ import { RETIRED_SWITCHES, SWITCH_ENV } from "@opencode-ai/auto-core/switches"
 //              applied to this process's environment before the core parses
 //              them once (parse-memoization is why each run is a fresh
 //              process).
-export type RunRequestOptions = {
-  verbose?: boolean
-  waitAnswer?: number
-  waitBetween?: number
-  permission?: PermissionMode
-  newSession?: boolean
-  dryrun?: boolean
-  maxSessions?: number
-  server?: string
-}
-
+// The vocabulary itself — the option keys, the frozen-key table, the switch
+// registry — lives in src/request.ts, the one module the daemon (P1c) and
+// this entry share: the daemon pre-validates a POST /runs body with it, so
+// an invalid request is a 400 there instead of a 202 whose run dies on
+// arrival, while this entry remains the enforcer (it re-validates the
+// payload it actually received).
 export type RunRequest = {
   directory: string
-  options?: RunRequestOptions
+  options?: RunOptions
   switches?: Record<string, string>
 }
 
-// The options after validation, defaults resolved (the CLI's parse* helpers'
-// absent-value semantics: waitAnswer/waitBetween 0 = no wait, permission
-// ask-deny, maxSessions 1 — the only value the core accepts today).
-type ParsedOptions = {
-  verbose: boolean
-  waitAnswer: number
-  waitBetween: number
-  permission: PermissionMode
-  newSession: boolean
-  dryrun: boolean
-  maxSessions: number
-  server: string | undefined
-}
-
-// The constitutional config keys (the CLI's CONFIG_FLAGS plus the two
-// hand-edited-only keys): frozen by init into .opencode/auto/config.json,
-// revised by amend, never set on a run. Both the config-file spelling and
-// the CLI's flag spelling are recognized, each mapping to its revision hint
-// (the CLI's amendHint shapes).
-// AUTO-DECISION (refusal wording): the frozen-key refusal names the CLI's
-// `opencode-auto amend` because that is today's revision surface — the
-// server's own REST config ops arrive with P1d (T-089) and can take the
-// hint over then; the CLI stays the escape hatch beside the daemon either
-// way (plans/0067 §三 item 5).
-const CONFIG_KEYS: Record<string, string> = {
-  mode: "-m <value>",
-  agent: "--agent <value>",
-  contextLimit: "--context-limit <value>",
-  "context-limit": "--context-limit <value>",
-  subtask: "--subtask <value>",
-  idleTime: "--idle-time <value>",
-  "idle-time": "--idle-time <value>",
-  idleMax: "--idle-max <value>",
-  "idle-max": "--idle-max <value>",
-  testByDriver: "--test-by-driver",
-  "test-by-driver": "--test-by-driver",
-  handoverTest: "--handover-test",
-  "handover-test": "--handover-test",
-  autoNumber: "--auto-number (use --no-auto-number to turn off)",
-  "auto-number": "--auto-number (use --no-auto-number to turn off)",
-  "no-auto-number": "--no-auto-number (use --auto-number to turn on)",
-  wrapup: "--wrapup (use --no-wrapup to turn off)",
-  "no-wrapup": "--no-wrapup (use --wrapup to turn on)",
-  phases: "--phases <value>",
-  parallel: "--parallel <value>",
-  scanExempt: "--scan-exempt <value>",
-  "scan-exempt": "--scan-exempt <value>",
-}
-// Keys no flag reaches (plans/0049 G9): the refusal names the file alone.
-const HAND_EDITED_KEYS = new Set(["acceptanceGate", "build"])
-
-// The per-run options this entry accepts (the CLI `run` session flags' JSON
-// form); interactive is deliberately absent — see parseOptions.
-const OPTION_KEYS = new Set(["verbose", "waitAnswer", "waitBetween", "permission", "newSession", "dryrun", "maxSessions", "server"])
-const PERMISSION_MODES: readonly PermissionMode[] = ["auto-allow", "ask-allow", "ask-deny", "ask-fail"]
-
-// Every name the env-switch registry answers to: the live switches plus the
-// env-only names it registers (models, server) and the retired variables
-// (which the core answers with their notice when set — passed through, not
-// refused here).
-const KNOWN_SWITCHES = new Set([...Object.values(SWITCH_ENV), ...Object.keys(RETIRED_SWITCHES)])
-
 // Usage refusal: exit 1 with the message on stderr (the CLI convention —
 // usage errors are stderr; driver messages go to stdout through log()).
+// The shared validators raise RequestError instead of exiting (they run in
+// the daemon too); here at the entry their messages become the same stderr
+// refusals they always were.
 function refuse(message: string): never {
   console.error(message)
   process.exit(1)
 }
 
-// The frozen-key refusal, the API-side equivalent of the CLI's
-// refuseFrozenFlags line (packages/auto test/e2e.test.ts pins its shape):
-// "was frozen by init", the config file, the amend revision hint.
-function refuseFrozen(where: string, key: string, hint: string): never {
-  return refuse(`${where}${key} was frozen by init (.opencode/auto/config.json). To change: opencode-auto amend <dir> ${hint}, or edit that file directly`)
+function refuseRequest(error: unknown): never {
+  if (error instanceof Error) refuse(error.message)
+  refuse(String(error))
 }
 
-// The run request's options: strict allowlist, values validated like the
-// CLI's parse* helpers. A config key in any spelling gets the frozen
-// refusal; interactive gets its own refusal — a worker has no terminal to
-// host the resident input line, and the interactive transport (io-injected
-// Interactive over WebSocket) arrives with P3 (plans/0067 §四, T-093/T-094);
-// accepting it here would be a silent no-op or a hang, so it is a usage
-// error pointing at the CLI until that unit lands.
-function parseOptions(raw: unknown): ParsedOptions {
-  if (raw === undefined) return defaults()
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) refuse("options must be an object holding the run's per-run options (verbose, waitAnswer, waitBetween, permission, newSession, dryrun, maxSessions, server)")
-  const given = raw as Record<string, unknown>
-  for (const key of Object.keys(given)) {
-    if (key in CONFIG_KEYS) refuseFrozen("options.", key, CONFIG_KEYS[key]!)
-    if (HAND_EDITED_KEYS.has(key)) refuse(`options.${key} is a config key with no flag (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
-    if (key === "interactive") {
-      refuse(
-        `options.interactive is refused: a worker has no terminal (its stdin is closed), so the resident input line cannot live here — ` +
-          `interactive input arrives with the WebSocket transport of the later units (P3); until then drive interactive runs with opencode-auto run <dir> -i`,
-      )
-    }
-    if (!OPTION_KEYS.has(key)) {
-      refuse(`options.${key} is not a run option (accepted: ${[...OPTION_KEYS].sort().join(", ")}); the project's config keys are frozen by init (.opencode/auto/config.json), revised with opencode-auto amend <dir>`)
-    }
-  }
-  const parsed = defaults()
-  if ("verbose" in given) {
-    if (typeof given.verbose !== "boolean") refuse("options.verbose takes true|false")
-    parsed.verbose = given.verbose
-  }
-  if ("newSession" in given) {
-    if (typeof given.newSession !== "boolean") refuse("options.newSession takes true|false")
-    parsed.newSession = given.newSession
-  }
-  if ("dryrun" in given) {
-    if (typeof given.dryrun !== "boolean") refuse("options.dryrun takes true|false")
-    parsed.dryrun = given.dryrun
-  }
-  if ("waitAnswer" in given) parsed.waitAnswer = parseMinutes(given.waitAnswer, "waitAnswer", "the minutes to wait for the human's answer before the fallback applies")
-  if ("waitBetween" in given) parsed.waitBetween = parseMinutes(given.waitBetween, "waitBetween", "the pause between tasks (the timeout auto-continues; no terminal input arrives here)")
-  if ("permission" in given) {
-    const value = given.permission
-    if (typeof value !== "string" || !(PERMISSION_MODES as readonly string[]).includes(value)) {
-      refuse(`options.permission takes ${PERMISSION_MODES.join("|")}; defaults to ask-deny`)
-    }
-    parsed.permission = value as PermissionMode
-  }
-  if ("maxSessions" in given) {
-    const value = given.maxSessions
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-      refuse("options.maxSessions takes a positive integer (concurrent AI sessions); defaults to 1")
-    }
-    if (value > 1) {
-      refuse(`options.maxSessions ${value}: concurrent execution is not supported yet; only 1 is accepted (plan for parallelism at init --parallel; tasks still run one at a time)`)
-    }
-    parsed.maxSessions = value
-  }
-  if ("server" in given) {
-    const value = given.server
-    if (typeof value !== "string" || !value.trim()) refuse("options.server takes a URL string (the external agent server this run talks to)")
-    parsed.server = value
-  }
-  return parsed
-}
-
-function defaults(): ParsedOptions {
-  return { verbose: false, waitAnswer: 0, waitBetween: 0, permission: "ask-deny", newSession: false, dryrun: false, maxSessions: 1, server: undefined }
-}
-
-// --wait-answer/--wait-between absent = 0 (no wait — this entry's default,
-// since no human attends a worker); given: an integer 0..60 minutes.
-function parseMinutes(raw: unknown, key: string, what: string): number {
-  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0 || raw > 60) {
-    refuse(`options.${key} takes an integer 0..60 (minutes; 0 = no wait) — ${what}`)
-  }
-  return raw
-}
-
-// The per-run switch overrides: applied to this process's environment ahead
+// The per-run switch overrides, applied to this process's environment ahead
 // of the core's single parse (autoSwitches memoizes on first access inside
 // runAll's preflight — a fresh process per run is what makes this layer
-// per-run). Names are validated against the registry so a typo is a usage
-// error, never a silent no-op (the CLI's unknown-option interception rule);
-// values are strings (environment variables are strings, and the core reads
-// the empty string as unset).
-function applySwitches(raw: unknown): void {
-  if (raw === undefined) return
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) refuse("switches must be an object of OPENCODE_AUTO_* names to string values (the per-run experimental switch overrides)")
-  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!name.startsWith("OPENCODE_AUTO_")) {
-      refuse(`switches.${name}: a switch name is an OPENCODE_AUTO_* environment variable name (the registry of auto-core src/switches.ts)`)
-    }
-    if (typeof value !== "string") {
-      refuse(`switches.${name} takes a string value (environment variables are strings; the empty string counts as unset)`)
-    }
-    if (!KNOWN_SWITCHES.has(name)) {
-      refuse(`switches.${name} is not a known switch (check the name against the OPENCODE_AUTO_* registry, auto-core src/switches.ts)`)
-    }
-    process.env[name] = value
-  }
+// per-run). Validation is the shared module's; only the env write is this
+// process's own.
+function applySwitches(switches: Record<string, string>): void {
+  for (const [name, value] of Object.entries(switches)) process.env[name] = value
 }
 
 // The worker entry: argv is everything after the `worker` command — exactly
@@ -281,7 +122,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     if (key === "config") {
       refuse(`a run request carries no config: the constitutional keys are frozen by init (.opencode/auto/config.json); revise them with opencode-auto amend <dir>, or edit that file directly`)
     }
-    if (key in CONFIG_KEYS) refuseFrozen("", `"${key}" `, CONFIG_KEYS[key]!)
+    if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
     refuse(`unknown request field "${key}" (the run request takes directory, options and switches)`)
   }
@@ -289,8 +130,18 @@ export async function runWorker(argv: string[]): Promise<void> {
     refuse(`the run request requires "directory": the target directory of the run (resolved against the worker's working directory)`)
   }
   const directory = resolve(request.directory)
-  const options = parseOptions(request.options)
-  applySwitches(request.switches)
+  // The shared validators (src/request.ts) raise RequestError; at this entry
+  // their messages are the stderr refusals with exit 1 — byte-identical to
+  // the texts the daemon's 400s carry.
+  let options: RunOptions
+  let switches: Record<string, string>
+  try {
+    options = parseOptions(request.options)
+    switches = parseSwitches(request.switches)
+  } catch (error) {
+    refuseRequest(error)
+  }
+  applySwitches(switches)
 
   // Legacy layout (M3.7): an old-layout project is a usage error before the
   // worker reads or writes anything — the core's own check, like the CLI's.
@@ -364,7 +215,7 @@ export async function runWorker(argv: string[]): Promise<void> {
 // init froze (loaded strictly above) plus the request's per-run options.
 // Config values never come from the request — that is the frozen-flag
 // refusal's whole point.
-function runOptions(config: ProjectConfig, mode: ModeSpec, options: ParsedOptions): RunAllOpts {
+function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions): RunAllOpts {
   return {
     agent: config.agent,
     server: options.server,
