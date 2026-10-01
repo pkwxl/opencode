@@ -28,6 +28,10 @@
     "@opencode-ai/session-ui#test": {
       "dependsOn": ["^build"],
       "outputs": []
+    },
+    "@opencode-ai/quota#test": {
+      "dependsOn": [],
+      "outputs": []
     }
   }
 }
