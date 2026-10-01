@@ -48,6 +48,8 @@ import { physicalDir, repoRoots } from "@opencode-ai/auto-core/git"
 import { RUN_EVENTS_FILE } from "@opencode-ai/auto-core/engine/events"
 import { liveRunLock, lockStatusLine, type LockHolder } from "@opencode-ai/auto-core/lock"
 import { currentPhase, currentRound, phaseLabel, readPhases } from "@opencode-ai/auto-core/phases"
+import { RUN_STATUS_FILE } from "@opencode-ai/auto-core/run-status"
+import { RUN_STATUS_EVENT_TYPES } from "@opencode-ai/auto-core/run-status-schema"
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
 
@@ -298,6 +300,201 @@ const concat = (head: Uint8Array, tail: Uint8Array): Uint8Array => {
   merged.set(head)
   merged.set(tail, head.length)
   return merged
+}
+
+// —— the structured driver-events tail (P2b) ——
+
+// The driver-status journal the tail follows (the core emitter's own file,
+// auto-core src/run-status.ts — the run-events journal's own mechanics over
+// the RunStatusEvent vocabulary of src/run-status-schema.ts: append-only
+// within a run, truncated per run start, one JSON line per event). The
+// daemon only reads it, exactly as it reads the engine journal: writes into
+// the driver's state directory stay driver-exclusive.
+// The bounded subscriber capacity is the monorepo server's SSE pattern
+// (event ids, a bounded subscriber buffer — its handler caps at 256),
+// re-implemented here on Bun.serve primitives: the isolation line forbids
+// importing its code.
+const SUBSCRIBER_CAPACITY = 256
+
+// One line of the journal is a deliverable event only when it parses AND its
+// type is a member of the frozen vocabulary (a torn mid-write read parses
+// not; a hand-planted line of another shape is not this stream's content).
+// A skipped line still consumes its event id — the id is the line's number,
+// so a cursor never resyncs onto the wrong line.
+function statusLineOf(line: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(line)
+    if (parsed !== null && typeof parsed === "object" && (RUN_STATUS_EVENT_TYPES as readonly string[]).includes(String((parsed as { type?: unknown }).type))) return line
+  } catch {
+    // A torn line: not delivered, not an error — the next tick retries.
+  }
+  return undefined
+}
+
+// The SSE response streaming the typed driver events of one registered
+// project, with event-id cursoring and bounded subscriber capacity:
+//   - every delivered event carries an SSE `id:` — the 1-based line number
+//     within the journal's current run (the emitter's own sequence,
+//     restarted by its per-run truncation);
+//   - a connecting client resumes after a cursor: the `Last-Event-ID` header
+//     (the SSE reconnect standard) or `?after=<id>`; the stream re-reads the
+//     journal from its start and skips exactly that many lines — no event is
+//     ever delivered twice to a cursoring client. A cursor beyond the file's
+//     current lines predates a rotation (a new run truncated the journal):
+//     the stream starts over at line 1 and says so (`truncated`); the new
+//     run-start's `run` join key tells the story the ids alone cannot;
+//   - a rotation observed mid-stream (the file shrinks — the emitter
+//     truncates per run start) re-seeks to 0 and restarts the ids;
+//   - a subscriber that falls more than SUBSCRIBER_CAPACITY frames behind is
+//     dropped: a `dropped` event, then the stream closes — the daemon never
+//     buffers unboundedly for a client that cannot keep up.
+// Framing is whole-line like the two tails below (bytes after the last
+// newline stay buffered until the line completes), the same 100 ms poll and
+// 15 s heartbeat cadence, and the payloads are the typed events verbatim —
+// never log prose (the vocabulary's own rule, the draft's no-scraping line).
+export function statusEventsResponse(directory: string, after: number): Response {
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  const target = join(directory, RUN_STATUS_FILE)
+  let poller: ReturnType<typeof setInterval> | undefined
+  let heart: ReturnType<typeof setInterval> | undefined
+  let stopped = false
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const stop = (): void => {
+        if (stopped) return
+        stopped = true
+        if (poller) clearInterval(poller)
+        if (heart) clearInterval(heart)
+        try {
+          controller.close()
+        } catch {
+          // Already torn down by the runtime; nothing to close.
+        }
+      }
+      // One frame out; a failed enqueue means the client is gone. The
+      // backpressure watch rides the stream's own desiredSize (highWaterMark
+      // 1, one chunk per frame): it falls by one per enqueued frame and
+      // recovers as the consumer reads — a subscriber stuck below
+      // -SUBSCRIBER_CAPACITY is the slow one the cap exists for.
+      const send = (event: string, data: string, id?: number): void => {
+        if (stopped) return
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\n${id === undefined ? "" : `id: ${id}\n`}data: ${data}\n\n`))
+        } catch {
+          stop()
+        }
+      }
+      const behind = (): boolean => (controller.desiredSize ?? 0) < -SUBSCRIBER_CAPACITY
+      const drop = (): void => {
+        if (stopped) return
+        send("dropped", JSON.stringify({ reason: `the subscriber fell more than ${SUBSCRIBER_CAPACITY} events behind; reconnect after the last received event id to resume` }))
+        stop()
+      }
+
+      // The read state: `offset` is the byte position already read, `carry`
+      // holds the bytes of a line still waiting for its newline, `lastId` is
+      // the id of the last line passed (delivered or skipped — both consume
+      // their id), and `skip` is the cursor's remaining lines to pass
+      // silently. `announced` guards the one attach frame.
+      let offset = 0
+      let carry: Uint8Array = EMPTY
+      let lastId = 0
+      let skip = Math.max(0, Math.floor(after))
+      let announced = false
+
+      // The attach frame: resolve the cursor against the file as it stands
+      // now (fewer complete lines than the cursor names = the rotation
+      // case), then announce where the delivery starts.
+      const announce = async (): Promise<void> => {
+        announced = true
+        const text = await Bun.file(target).text().catch(() => "")
+        const lines = text.split("\n").filter(Boolean).length
+        const reason = skip > lines ? "truncated" : skip > 0 ? "resumed" : "start"
+        if (reason === "truncated") skip = 0
+        send("tail", JSON.stringify({ file: RUN_STATUS_FILE, from: skip + 1, reason }))
+      }
+
+      // Ticks never overlap (the tailResponse rule — two in-flight ticks
+      // would read the same range twice).
+      let ticking = false
+      const tick = async (): Promise<void> => {
+        if (stopped || ticking) return
+        ticking = true
+        try {
+          if (!announced) await announce()
+          const file = Bun.file(target)
+          if (!(await file.exists())) return // no run wrote one yet (caveat 2)
+          if (file.size < offset) {
+            // The journal is truncated at each run start: a shrink is a new
+            // run. Re-seek to 0 and restart the ids.
+            offset = 0
+            carry = EMPTY
+            lastId = 0
+            skip = 0
+            send("tail", JSON.stringify({ file: RUN_STATUS_FILE, from: 1, reason: "truncated" }))
+          }
+          if (file.size === offset) return
+          const chunk = new Uint8Array(await file.slice(offset, file.size).arrayBuffer())
+          offset = file.size
+          const merged = concat(carry, chunk)
+          const last = merged.lastIndexOf(NEWLINE)
+          if (last < 0) {
+            carry = merged // the line is still being written; hold its bytes
+            return
+          }
+          carry = merged.subarray(last + 1)
+          for (const line of decoder.decode(merged.subarray(0, last + 1)).split("\n")) {
+            const text = line.endsWith("\r") ? line.slice(0, -1) : line
+            if (!text) continue
+            lastId += 1
+            if (skip > 0) {
+              skip -= 1
+              continue
+            }
+            const payload = statusLineOf(text)
+            if (payload !== undefined) send("status-event", payload, lastId)
+            if (behind()) {
+              drop()
+              return
+            }
+          }
+        } catch {
+          // A tick's read failure (the file vanishing mid-stat) is retried
+          // on the next tick — never an error frame.
+        } finally {
+          ticking = false
+        }
+      }
+
+      void tick()
+      poller = setInterval(() => void tick(), TAIL_POLL_MS)
+      heart = setInterval(() => {
+        if (stopped) return
+        try {
+          controller.enqueue(encoder.encode(": keep-alive\n\n"))
+        } catch {
+          stop()
+        }
+      }, TAIL_HEARTBEAT_MS)
+    },
+    cancel() {
+      // The client went away: stop polling immediately — an unwatched tail
+      // holds a timer and a stat per interval for nothing.
+      stopped = true
+      if (poller) clearInterval(poller)
+      if (heart) clearInterval(heart)
+    },
+  })
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      // A reconnect resumes after the last delivered id (Last-Event-ID); the
+      // journal itself is the durable history of the current run.
+      connection: "keep-alive",
+    },
+  })
 }
 
 // The SSE response tailing one channel of one registered project:

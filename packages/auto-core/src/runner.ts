@@ -6,7 +6,7 @@ import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeAct
 import { handoffFile, taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
-import { checklistProblems, nextChecklistIndex, scanSubtaskStates } from "./document/state"
+import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
 import { failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
@@ -15,9 +15,10 @@ import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opt
 import { phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
-import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
+import { begin, checklistTitle, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
+import { emitStatus } from "./run-status"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
@@ -539,8 +540,25 @@ export async function runTask(
         const fanout = mode === "auto" ? task.split : undefined
         if (fanout) fork = await leadForkBase(client, task, opts, chain)
         else if (switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
+        // The subtask bracket (P2b, src/run-status.ts): the qualified id is
+        // the task id plus S<nn> — the pair the vocabulary's subtask events
+        // carry (the subtask's own close-out transition emits from
+        // execute.ts, where the state-file rename lands).
+        const subtask = subtaskId(index + 1)
+        const title = checklistTitle(items[index]!.text)
+        emitStatus({ type: "subtask-start", task: task.id, subtask, title })
         const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit, fanout)
-        if (blocked) return blocked
+        if (blocked) {
+          emitStatus({
+            type: "subtask-end",
+            task: task.id,
+            subtask,
+            outcome: blocked.type,
+            ...(blocked.type === "blocked" ? { detail: blocked.question } : { detail: blocked.files.join("; ") }),
+          })
+          return blocked
+        }
+        emitStatus({ type: "subtask-end", task: task.id, subtask, outcome: "completed" })
         // The post-tick mirror refresh already happened inside runSubtask
         // before the unified commit; here the task is only re-read.
         task = await reloadTask(plan, task.id)

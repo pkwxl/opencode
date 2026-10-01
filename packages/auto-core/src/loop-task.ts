@@ -18,6 +18,7 @@ import { sessionOpts } from "./opts"
 import { block, loadPlan, next } from "./tasks"
 import { phaseKey, type PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
+import { emitStatus } from "./run-status"
 import { runTask } from "./runner"
 import type { AgentPool } from "./agent-pool"
 import type { RoutingFacts } from "./routing"
@@ -123,6 +124,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
         if (gate.type === "dirty") {
           log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
           for (const file of gate.files) log(`  ${file}`)
+          emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
           return 2
         }
         taskBaseline = gate.baseline
@@ -130,6 +132,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     }
     banner(`${task.id} ${task.title}`)
     log(`▶ ${task.id} starting execution (attempt ${task.attempts + 1})`)
+    // The task bracket (P2b, src/run-status.ts): the task unit's start — the
+    // gates above passed, beginUnit recorded the baseline, and the unit
+    // transition itself was booked by begin() inside runTask.
+    emitStatus({ type: "task-start", task: task.id, title: task.title })
     // the task-switch hook point (STATS_PLAN §3): reset the task bucket (when
     // the id changes) and clear the per-session map; the same id is
     // idempotent — an interruption resuming the same task neither resets nor
@@ -143,6 +149,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       // human (plans/0021-commit-boundary-design.md).
       log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
       for (const file of outcome.files) log(`  ${file}`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
       return 2
     }
     if (outcome.type === "blocked") {
@@ -171,6 +178,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       // ok answer keeps this warning dead.
       const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
       if (!settledBlocked.ok) log(`⚠ interruption-scene commit failed: ${settledBlocked.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: outcome.question })
       return 2
     }
     if (outcome.type === "incomplete") {
@@ -183,6 +191,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       }
       const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
       if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "incomplete", detail: outcome.reason })
       return 2
     }
     {
@@ -215,13 +224,24 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
         `⏸ ${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
           `The task mark is still in the worktree; commit manually and re-run`,
       )
+      // A close-out violation (the failure vocabulary's own row): the task's
+      // work finished, but the run stops for the human — blocked, with the
+      // close-out failure as both the task-end detail and the failure event.
+      const failure = `${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}`
+      emitStatus({ type: "failure", message: failure })
+      emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: failure })
       return 2
     }
+    // The unit's work closed out (the terminal commit landed; the done.md
+    // rename and the index tick were booked inside runTask's pipeline) — the
+    // bracket closes before the isolation check below, which only reports.
+    emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
     if (taskBaseline) {
       const violations = await unitViolations(directory, taskBaseline)
       if (violations.length) {
         log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
         for (const problem of violations) log(`  ${problem}`)
+        emitStatus({ type: "failure", message: `${task.id} unit close-out check failed (isolation boundary violated): ${violations.join("; ")}` })
         return 2
       }
     }

@@ -19,6 +19,7 @@ import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
 import { promptFacts } from "./prompt-facts"
+import { emitStatus } from "./run-status"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
 import { autoSwitches } from "./switches"
@@ -151,6 +152,12 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     logGateStop(directory, phase, gated, acceptance)
     return 2
   }
+  // The phase's unit transition (P2b, src/run-status.ts): completePhase's
+  // rename (todo.md → done.md inside the phase directory) is the fact; this
+  // is the push of the same fact, keyed by the qualified phase id the stats
+  // buckets and the fields use. A phase being handed over reads as having
+  // been in_progress (the phase index records no runtime status).
+  emitStatus({ type: "unit-transition", unit: phaseKey(phase).id, level: "phase", from: "in_progress", to: "done" })
   // the handover commit is the phase unit's close-out booking (completion
   // rename + index tick); commit failure → exit 2 blocked for human
   // attention: the phase is already renamed done, a re-run routes to the

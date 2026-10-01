@@ -25,13 +25,54 @@ export type { Interactive }
 const PROMPT = "💬 "
 const ASK_PROMPT = "❓ "
 
+// The io pair the terminal sideband runs on (startInteractive's io parameter
+// below): absent = the process's own stdin/stdout. Named so the RunAllOpts
+// seam (InteractiveOption) can hand a pair in — the sideband then lives on
+// streams the caller owns (a test harness, a worker's pipe) instead of the
+// process terminal.
+export type InteractiveIo = { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }
+
+// RunAllOpts.interactive's accepted shapes (the io/Interactive seam, the
+// headless direction's P3a — plans/0067 §二 item 3/§四 P3):
+//   boolean       today's --interactive: the terminal sideband over the
+//                 process stdin/stdout, byte-identical behavior;
+//   Interactive   an injected implementation (the 3-method leaf interface,
+//                 control-types.ts) taken as is — the run threads it into
+//                 every human-interaction route (askHuman's wait, the
+//                 between-tasks pause, the step pauses), so it receives each
+//                 as a typed call and never as prompt prose to parse; the
+//                 shape the WebSocket transport (P3b) injects through;
+//   io factory   () => InteractiveIo: the same terminal sideband, built over
+//                 the streams the factory opens at the point the run starts
+//                 the channel.
+export type InteractiveOption = boolean | Interactive | (() => InteractiveIo)
+
+// The channel one run's interactive option resolves to, computed by the loop
+// once the fleet is ready (the sideband's own creation moment; the io factory
+// runs here, exactly once). "off" keeps the exact boolean the fleet's options
+// always saw, so false and undefined stay distinguishable to the pool.
+export type InteractiveChannel =
+  | { kind: "terminal" }
+  | { kind: "io"; io: InteractiveIo }
+  | { kind: "injected"; interactive: Interactive }
+  | { kind: "off"; value: false | undefined }
+
+export function interactiveChannel(opt: InteractiveOption | undefined): InteractiveChannel {
+  if (opt === undefined || opt === false) return { kind: "off", value: opt }
+  if (opt === true) return { kind: "terminal" }
+  // A function is the io factory (an Interactive is always an object; the
+  // interface's members are methods, so the two shapes cannot collide).
+  if (typeof opt === "function") return { kind: "io", io: opt() }
+  return { kind: "injected", interactive: opt }
+}
+
 // clients resolves the client of the session the sideband currently feeds
 // (plans/0055 §8.1): under a pool the session's agent picks the host; a
 // single client ignores the agent, as the no-registry path always did.
 export function startInteractive(
   clients: (agent?: string) => Promise<AgentClient>,
   agent?: string,
-  io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
+  io?: InteractiveIo,
   // The registry's internal model names (plans/0055 §9): under a registry a
   // /failback argument is an internal name or a raw provider/model string,
   // and an unknown bare name is refused at input, as malformed arguments

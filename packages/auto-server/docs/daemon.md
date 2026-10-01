@@ -53,7 +53,7 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
-| `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails | active |
+| `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream | active |
 | `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the pending-question queue                                        | schema now, surface with P3c |
@@ -258,6 +258,7 @@ into the target — beside a live run with no refusal path), both under the
 | `GET /projects/<p>/status`        | JSON (poll) | the status read model |
 | `GET /projects/<p>/log`           | SSE (`text/event-stream`) | the newest `.auto/logs/run-*.log`, whole lines |
 | `GET /projects/<p>/events`        | SSE (`text/event-stream`) | `.auto/run-events.jsonl` as structured payloads |
+| `GET /projects/<p>/status-events` | SSE (`text/event-stream`), event ids + cursor | the typed driver events (P2b): `.auto/run-status.jsonl` with event-id resume and bounded subscriber capacity |
 
 ### The status read model (polling)
 
@@ -326,7 +327,44 @@ the current run's — a per-run log, banner included), so a connecting client
 sees the whole run it came to watch; there is no resume cursor in P1 (the
 poll model is the durable view — a reconnect re-reads from the run's start).
 
+### The structured driver-events channel (P2b)
+
+`GET /projects/<p>/status-events` streams the typed driver events the core's
+P2b emitter journals: run brackets (with the exit code), unit transitions,
+task/subtask brackets, the question lifecycle, usage roll-ups, failures and
+exit requests — the frozen `RunStatusEvent` vocabulary (auto-core
+`src/run-status-schema.ts`), never log prose. The daemon tails the emitter's
+own journal exactly as it tails the engine journal — read-only, beside a live
+run, the writes into the driver's state directory staying driver-exclusive.
+
+```
+event: tail          ← the attach frame: {file, from, reason: start|resumed|truncated}
+event: status-event  ← one typed event, verbatim JSON, with id: <n>
+event: dropped       ← the subscriber fell > 256 events behind; reconnect after the last id
+: keep-alive         ← a comment frame every 15 s on an idle stream
+```
+
+- **Event ids and cursor resume**: every event carries an SSE `id:` — its
+  1-based line number in the current run's journal. A reconnect resumes after
+  the last received id through the SSE standard's `Last-Event-ID` header or
+  `?after=<id>`: the stream re-reads the journal and skips exactly that many
+  lines — no event is delivered twice to a cursoring client.
+- **Rotation**: the journal truncates at each run start. A shrink mid-stream
+  re-seeks to 0 and restarts the ids (`reason: truncated`); a cursor beyond
+  the file's current lines predates a rotation and attaches from line 1 the
+  same way — the new run-start's `run` join key tells the story the ids alone
+  cannot.
+- **Bounded subscriber capacity** (256, the monorepo server's own SSE
+  pattern, re-implemented on Bun.serve — never imported, the isolation
+  line): a subscriber that falls more than 256 frames behind is dropped with
+  a `dropped` frame and a closed stream; the daemon never buffers unboundedly
+  for a client that cannot keep up, and the client resumes from its cursor.
+- Unit-change push rides the `unit-transition` events; the polled read model
+  above (over the unit state files) remains the durable fallback — the two
+  agree because both read what the driver wrote.
+
 <!-- AUTO-DECISION: this document (T-088's) is extended in place by T-090 — the P1c/P1d sections already promised "SSE observability arrives with P1e", so the extension is the designed continuation of the package's own living documentation. -->
+<!-- AUTO-DECISION: extended in place again by T-092 (P2b) — the status-events channel is this document's own "SSE observability" family, and the P2 phase it belongs to was promised by the same living documentation. -->
 
 ## Supervision and the daemon's lifetime
 

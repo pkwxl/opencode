@@ -32,6 +32,7 @@ import { taskDoc } from "./docpaths"
 import type { UnitBaseline } from "./git"
 import { checkArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
+import { emitStatus } from "./run-status"
 import type { PlanView, TaskView } from "./prompt"
 import {
   isUnitId,
@@ -506,8 +507,18 @@ export async function reloadTask(plan: Plan, id: string): Promise<Task> {
 
 // —— Driver writes ——
 
+// The unit-transition emission beside a runtime-state write: the change
+// callback runs inside the serialized update and sees the prior entry, so the
+// transition's `from` is the truthful prior status (not a guessed pending).
+// The event itself is emitted after the write landed (P2b, src/run-status.ts
+// — the push of the same fact this file persists).
 export async function begin(dir: string, id: string): Promise<void> {
-  await updateTask(dir, id, (entry) => ({ ...entry, status: "in_progress", attempts: (entry.attempts ?? 0) + 1 }))
+  let from: Status = "pending"
+  await updateTask(dir, id, (entry) => {
+    from = entry.status ?? "pending"
+    return { ...entry, status: "in_progress", attempts: (entry.attempts ?? 0) + 1 }
+  })
+  emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "in_progress" })
 }
 
 // Crash recovery at run start: an interrupted run (kill, crash) leaves tasks
@@ -522,12 +533,18 @@ export async function resetInProgress(dir: string): Promise<string[]> {
       delete entry.status
     }
   })
+  for (const id of stale) emitStatus({ type: "unit-transition", unit: id, level: "task", from: "in_progress", to: "pending" })
   return stale
 }
 
 // A block only records the status; its reason is in the run log.
 export async function block(dir: string, id: string): Promise<void> {
-  await updateTask(dir, id, (entry) => ({ ...entry, status: "blocked" }))
+  let from: Status = "pending"
+  await updateTask(dir, id, (entry) => {
+    from = entry.status ?? "pending"
+    return { ...entry, status: "blocked" }
+  })
+  emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "blocked" })
 }
 
 // Records the task's fork base. Without an agent (no registry) the value is a
@@ -558,7 +575,12 @@ export async function setSplit(dir: string, id: string, split: UnitBaseline | un
 export async function markDone(plan: Pick<Plan, "dir" | "index">, id: string): Promise<void> {
   await renameUnitDone(plan.dir, taskRef(id))
   await tickIndexLine(join(plan.dir, plan.index), id)
-  await updateTask(plan.dir, id, () => undefined)
+  let from: Status = "in_progress"
+  await updateTask(plan.dir, id, (entry) => {
+    from = entry.status ?? "in_progress"
+    return undefined
+  })
+  emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "done" })
 }
 
 // Drop the runtime entries of the given task ids (a closure clearing the

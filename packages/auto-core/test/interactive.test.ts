@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
-import { startInteractive, type Interactive } from "../src/interactive"
+import { interactiveChannel, startInteractive, type Interactive } from "../src/interactive"
 import { log } from "../src/log"
 import { services } from "../src/services"
 
@@ -193,5 +193,33 @@ describe("interactive", () => {
     // question() throws, and log.ts does not use it; the fix converged to
     // symmetric cleanup, and this assertion is the observable difference.)
     expect(ctx.chunks.join("")).not.toContain("💬")
+  })
+})
+
+// interactiveChannel — the RunAllOpts.interactive seam's resolver (P3a): the
+// boolean keeps the sideband shapes (true = the process terminal, false and
+// undefined both off, the exact value preserved so the fleet's options keep
+// seeing the boolean they always saw); an injected Interactive is taken as
+// is; a function is the io factory, run exactly once at the point the run
+// starts the channel.
+describe("interactiveChannel (the io/Interactive seam's resolver)", () => {
+  test("the boolean values: true = terminal, false/undefined = off with the exact value kept", () => {
+    expect(interactiveChannel(true)).toEqual({ kind: "terminal" })
+    expect(interactiveChannel(false)).toEqual({ kind: "off", value: false })
+    expect(interactiveChannel(undefined)).toEqual({ kind: "off", value: undefined })
+  })
+
+  test("an injected Interactive is taken as is; an io factory runs once and its streams become the sideband's io", () => {
+    const impl: Interactive = { attach: () => {}, question: () => Promise.resolve(undefined), close: () => {} }
+    expect(interactiveChannel(impl)).toEqual({ kind: "injected", interactive: impl })
+    const input = new PassThrough()
+    const output = new Writable({ write: (_chunk, _enc, cb) => cb() })
+    let runs = 0
+    const channel = interactiveChannel(() => {
+      runs++
+      return { input, output }
+    })
+    expect(channel).toEqual({ kind: "io", io: { input, output } })
+    expect(runs).toBe(1)
   })
 })

@@ -28,6 +28,7 @@ import { checklistTitle, forkBaseFor, promptViews, readChecklist, reloadTask, se
 import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
+import { emitStatus } from "./run-status"
 import { routingOf, runSession } from "./session"
 import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
 import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
@@ -824,6 +825,12 @@ export async function runSubtask(
   // past the rename — both skip).
   await renameTodoToDone(planDir, task.id, index)
   await tickSubtask(planDir, task.id, index)
+  // The subtask's unit transition (P2b, src/run-status.ts): the rename above
+  // is the fact (files are the progress state); this is the push of the same
+  // fact. The qualified id is the task id plus S<nn>, and a subtask that ran
+  // reads as having been in_progress (the state protocol records no runtime
+  // status per subtask — the file pair is its whole state).
+  emitStatus({ type: "unit-transition", unit: `${task.id}.${subtaskId(index)}`, level: "subtask", from: "in_progress", to: "done" })
   // The subtask commit subject omits the task title (task id + subtask number
   // + subtask title locate it already).
   // Unit close-out: the commit range is verified against the baseline — a

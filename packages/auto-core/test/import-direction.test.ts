@@ -325,6 +325,13 @@ const CLASSIFIED: Record<string, Domain> = {
   // the emitter and the SSE / question-queue consumers read it without
   // binding behavior.
   "run-status-schema": "driver",
+  // The driver-status emitter (the headless direction's P2b): emission of
+  // the P2a vocabulary at the driver's narrative points, through the log.ts
+  // setter-injection family (module-level sinks) and its own `.auto/`
+  // journal — deliberately NOT a services-holder member, so it never joins
+  // SERVICE_ENTRIES (the allowlist may only shrink); reaches the schema
+  // module's types only.
+  "run-status": "driver",
   runner: "driver",
   script: "driver",
   // Selection (plans/0055 §6): the candidate list, the pick and the
@@ -529,6 +536,12 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // log.ts, so the vocabulary's home is the process plane, not a service
   // member); the module imports nothing, so the placement binds no edge.
   "run-status-schema": "runtime",
+  // AUTO-DECISION: run-status (the driver-status emitter) sits in runtime —
+  // it is the log.ts setter-injection family's own shape (a process-level
+  // module beside the log and the stats handles, never a services member),
+  // and every emission point below the entry modules (pipeline, kernel,
+  // policies alike) reaches it through the seeded cross-sub-domain edges.
+  "run-status": "runtime",
 }
 
 // The cross-sub-domain value edges measured at E1's commit (0061 §4.10): the

@@ -1,7 +1,7 @@
 import { ExitRequested } from "./exit"
 import { startRunEvents } from "./engine/events"
 import { hibernatePause } from "./hibernate"
-import { startInteractive, type Interactive } from "./interactive"
+import { interactiveChannel, startInteractive, type Interactive } from "./interactive"
 import { acquireRunLock, lockLines } from "./lock"
 import type { LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
@@ -20,6 +20,8 @@ import { shellProfile } from "./shell"
 import { flushStats, statsClassifyUsage } from "./stats"
 import { freezeSwitches } from "./switches"
 import { loadPlan } from "./tasks"
+import { emitStatus, endRunStatus, startRunStatus } from "./run-status"
+import type { RunExitCode } from "./run-status-schema"
 
 // RunAllOpts is runAll's signature; the preflight segment owns it.
 import { preflight, type RunAllOpts } from "./loop-preflight"
@@ -51,6 +53,34 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
 async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   const pre = await preflight(directory, opts)
   if ("exit" in pre) return pre.exit
+  // The run-status bracket (P2b, src/run-status.ts): the run opens here —
+  // after preflight, exactly where the services install and the engine
+  // journal rotates below (a refused preflight never started a run: no lock
+  // write, no journal) — and every exit of the drive below closes inside it,
+  // the run-end event carrying the code the process exits with. An
+  // unexpected throw closes with 1 beside a failure event (the shell exits 1
+  // on the rejection); ExitRequested never reaches here — the drive's own
+  // catch maps it to 3.
+  startRunStatus(directory)
+  try {
+    const code = await driveRun(directory, opts, pre)
+    // The drive's returns are exactly the exit vocabulary's words (0/1/2/3 —
+    // a force-kill exits the process itself and leaves no bracket), so the
+    // number narrows to the vocabulary by construction.
+    endRunStatus(code as RunExitCode)
+    return code
+  } catch (error) {
+    emitStatus({ type: "failure", message: error instanceof Error ? error.message : String(error) })
+    endRunStatus(1)
+    throw error
+  }
+}
+
+// The run's drive: preflight's success branch verbatim — the services
+// install, the run's whole narrative and the close-out finally.
+type Preinitialized = Exclude<Awaited<ReturnType<typeof preflight>>, { exit: number }>
+
+async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized): Promise<number> {
   const { agentName, watcher, progress, registry, services: run } = pre
   // The run's services take effect here and die with the run (the finally
   // below uninstalls them, restoring whatever was in effect before): the
@@ -105,6 +135,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
+        emitStatus({ type: "failure", message: `phase flow blocked: ${pre.reason}` })
         return 1
       }
       // A phase-index drift (plans/0053 D34): the phases value (config
@@ -138,10 +169,20 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // (plans/0055 §8.1); a layer-less run starts the single agent exactly
     // as before (the implicit registry exists to route, not to re-shape
     // the fleet start).
-    const started = await startPool(directory, { ...opts, registry })
+    const started = await startPool(directory, {
+      ...opts,
+      // The fleet's interactive fact keeps the boolean shape its degradation
+      // note always read (whether humans attend the run): every non-boolean
+      // form of the io/Interactive seam is interactive too.
+      interactive: typeof opts.interactive === "boolean" ? opts.interactive : opts.interactive === undefined ? undefined : true,
+      registry,
+    })
     server = started.pool
     if (started.error !== undefined || server === undefined) {
       log(`⏸ ${started.error}`)
+      // A spawn failure the driver met itself — the failure event's own
+      // vocabulary row (src/run-status-schema.ts: a spawn failure).
+      emitStatus({ type: "failure", message: started.error ?? "the agent fleet failed to start" })
       return 1
     }
     // The switch snapshot freezes here, after the fleet's degradation clamp
@@ -170,8 +211,26 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // flushes; without a classifier list nothing reports into it, so a
     // registry without one registers harmlessly.
     run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
-    if (opts.interactive) {
-      repl = startInteractive((agent) => server!.client(agent), agentName, undefined, new Set(routing.registry.models.keys()))
+    // The interactive channel (the io/Interactive seam, P3a): the boolean
+    // keeps today's terminal sideband exactly (io undefined = process
+    // stdin/stdout, the same banner after the same call); an io factory
+    // builds the same sideband over the caller's streams; an injected
+    // Interactive implementation is taken as is — every human-interaction
+    // route below (askHuman's wait through Opts.interactive, the
+    // between-tasks pause, the step pauses) reads the channel the context
+    // carries, so an injected implementation receives each as a typed call.
+    // The 💬 banner is the sideband's own: an injected transport has no
+    // terminal input line to describe, its owner announces it.
+    const channel = interactiveChannel(opts.interactive)
+    if (channel.kind === "injected") {
+      repl = channel.interactive
+    } else if (channel.kind !== "off") {
+      repl = startInteractive(
+        (agent) => server!.client(agent),
+        agentName,
+        channel.kind === "io" ? channel.io : undefined,
+        new Set(routing.registry.models.keys()),
+      )
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {

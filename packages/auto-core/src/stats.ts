@@ -28,6 +28,7 @@
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { currentRound } from "./phases"
+import { emitStatus } from "./run-status"
 
 // ===== schema (v:1, compact JSON on disk; plans/STATS_PLAN.md :28-43) =====
 // A v:1 backward-compatible extension (plans/0055 §7.1 "Stats"): the buckets
@@ -964,6 +965,12 @@ export async function statsSessionEnd(
   doc.sessions[sessionID] = entry
   evictSessions(doc)
   queueWrite(dir, handle)
+  // The session's usage roll-up (P2b, src/run-status.ts): the stats seam —
+  // every session end (all 8 runner returns book through here) pushes the
+  // session's accumulated figures as one typed event; this file stays the
+  // durable numbers, the event is the same shape as a push. Outside a run
+  // (a bare statsSessionEnd in a test) the emitter is a no-op.
+  emitStatus({ type: "usage-rollup", scope: "session", usage: { ...entry.usage }, session: sessionID, ...(entry.task ? { task: entry.task } : {}) })
   return {
     thisAiMs: active?.aiMs ?? 0,
     session: { ...entry, usage: { ...entry.usage } },

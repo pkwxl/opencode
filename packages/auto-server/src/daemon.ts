@@ -44,7 +44,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
-import { readStatusModel, tailResponse, type TailChannel } from "./observe"
+import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, RequestError, type RunOptions } from "./request"
@@ -490,14 +490,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
       }
     }
-    // The P1e observability surface: /projects/<project>/{status,log,events}
-    // — the polled status read model (plain JSON) and the two SSE tails (the
-    // run log and the engine journal). Read-only by construction (pure disk
-    // reads, no lock, src/observe.ts), so they run beside a live run with no
-    // refusal path. The whitelist and the scope are the rules every project
-    // route shares: the project resolves only against the registry, the token
-    // needs `read`.
-    if (segments[0] === "projects" && segments.length === 3 && method === "GET" && ["status", "log", "events"].includes(segments[2]!)) {
+    // The P1e observability surface plus the P2b structured events channel:
+    // /projects/<project>/{status,log,events,status-events} — the polled
+    // status read model (plain JSON), the two SSE tails (the run log and the
+    // engine journal) and the typed driver-events stream (the run-status
+    // journal with event-id cursoring; src/observe.ts). Read-only by
+    // construction (pure disk reads, no lock, src/observe.ts), so they run
+    // beside a live run with no refusal path. The whitelist and the scope are
+    // the rules every project route shares: the project resolves only against
+    // the registry, the token needs `read`.
+    if (segments[0] === "projects" && segments.length === 3 && method === "GET" && ["status", "log", "events", "status-events"].includes(segments[2]!)) {
       const denied = needScope(request, `the ${segments[2]} feed`, "read")
       if (denied) return denied
       const name = safeDecode(segments[1]!)
@@ -516,6 +518,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return json(500, { error: `the status read model failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
         }
       }
+      if (segments[2] === "status-events") {
+        // The P2b structured events channel: the cursor is the last event id
+        // the client received — the SSE standard's Last-Event-ID header on a
+        // reconnect, or ?after=<id> for an explicit resume.
+        const header = request.headers.get("last-event-id")
+        const after = header !== null && header.trim() !== "" ? Number(header) : Number(url.searchParams.get("after") ?? 0)
+        return statusEventsResponse(project.directory, Number.isFinite(after) ? after : 0)
+      }
       return tailResponse(project.directory, (segments[2] === "log" ? "log" : "events") as TailChannel)
     }
     // The P1d operation surface: /projects/<project>/<op>, one entry per
@@ -528,7 +538,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events)`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events)`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -591,7 +601,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails)` })
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream)` })
   }
 
   const server = Bun.serve({ port: options.port ?? DEFAULT_PORT, hostname: options.hostname ?? DEFAULT_HOSTNAME, fetch: fetchHandler })

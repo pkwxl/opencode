@@ -18,6 +18,7 @@
 // and the system clock's sleepUnlessExit delegates to the same instance. The
 // entry modules read it through the services, and everything below them
 // receives it as data beside the router.
+import { emitStatus } from "./run-status"
 import type { Boundary } from "./control-types"
 
 // The boundary an /exit took effect at: a step-mode boundary, or the
@@ -55,6 +56,11 @@ export function createControl(): Control {
   return {
     requestExit() {
       pending = true
+      // The exit-request event (P2b, src/run-status.ts): the request itself —
+      // no boundary yet (the request usually lands before the run reaches the
+      // boundary it will take effect at; the run-end with code 3 closes the
+      // story). Outside a run (a unit test's control) the emitter is a no-op.
+      emitStatus({ type: "exit-request" })
       for (const wake of [...sleepers]) wake()
     },
     exitRequested() {

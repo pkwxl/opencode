@@ -18,6 +18,7 @@ import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
 import { fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
+import type { InteractiveOption } from "./interactive"
 import { log } from "./log"
 import { checkModelReferences, loadModels } from "./models"
 import type { ModelRegistry } from "./models-schema"
@@ -65,10 +66,18 @@ export type RunAllOpts = {
   // --permission: the handling policy for permission requests (default
   // ask-deny), passed through to runner's session watch.
   permission?: PermissionMode
-  // --interactive: a resident stdin side channel taking human input and
-  // injecting it into the current session (mutually exclusive with --verbose;
-  // terminal detail goes silent, the log file keeps the full record).
-  interactive?: boolean
+  // --interactive (the io/Interactive seam, the headless direction's P3a):
+  // true = a resident stdin side channel taking human input and injecting it
+  // into the current session (mutually exclusive with --verbose; terminal
+  // detail goes silent, the log file keeps the full record), byte-identical
+  // to before; an injected Interactive implementation (attach/question/close,
+  // src/control-types.ts) or an io { input, output } factory replaces the
+  // terminal sideband — the run routes every human interaction it owns
+  // (askHuman's wait, the between-tasks pause, the step pauses) through it as
+  // typed calls, the surface the headless transport (P3b) bridges over,
+  // never a prompt-prose scraping channel (src/interactive.ts resolves the
+  // shapes; the banner stays the sideband's own).
+  interactive?: InteractiveOption
   // the watchdog of the driver-hosted scripts (tests): the no-output judgment
   // window and the absolute duration cap (milliseconds), passed through to
   // runScript (config's idleTime / idleMax are set in minutes).
