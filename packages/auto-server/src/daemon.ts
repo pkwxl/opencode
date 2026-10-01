@@ -1,7 +1,6 @@
-// The daemon of the headless service shell (P1c, auto-core plans/0067):
+// The daemon of the headless service shell (P1c/P1d, auto-core plans/0067):
 // self-contained on Bun.serve (HTTP now, SSE with P1e, WebSocket with P3 —
-// zero added runtime dependencies, the isolation line of T-086). Its three
-// duties:
+// zero added runtime dependencies, the isolation line of T-086). Its duties:
 //   - the whitelist: daemon-owned, in the daemon's own data directory
 //     (src/store.ts); a run request names a registered project and the
 //     daemon resolves the target only against that registry — never against
@@ -10,15 +9,21 @@
 //     prompts, and this tool spends real tokens and writes git);
 //   - token auth with scopes (the assessment's §8 Q6 tiers): read /
 //     control / config / answer / probe. Unauthenticated → 401, a known
-//     token without the route's scope → 403. `config` and `answer` name
-//     surfaces of later units (P1d, P3c); `probe` is opt-in and disabled by
-//     default (no route requires it — its confirmation and rate limit land
-//     with the Web write surface);
+//     token without the route's scope → 403. `config` guards the P1d config
+//     operations, `control` the unit/lifecycle operations that write git
+//     through the core, `read` the models table; `answer` names the P3c
+//     question queue; `probe` is opt-in and disabled by default (no route
+//     requires it — its confirmation and rate limit land with the Web write
+//     surface);
 //   - the run registry and worker supervision: one worker child process per
 //     run (the P1b entry, spawned as a subprocess — never imported: one run
 //     per process is the core's own invariant), with the run's exit-code
 //     vocabulary mapped onto run states and lock conflicts mapped onto
-//     HTTP.
+//     HTTP;
+//   - the lifecycle operations (P1d, src/ops.ts): config ops, units, models
+//     and the P1 plan boundary, run in this process as library calls into
+//     the core (an operation is a synchronous request/response — no session,
+//     no exit vocabulary of its own), never a worker child.
 //
 // v1 boundary (assessment §8 Q4): single machine, multiple directories. The
 // daemon binds 127.0.0.1 by default, the run lock's stale detection is
@@ -26,11 +31,15 @@
 // hand" — documented in this package's docs/daemon.md and stopped there.
 //
 // The daemon never writes into a target directory: every state write is the
-// worker's own (through the core), and the daemon's view of a run is its
-// child's output plus what the run leaves on disk.
+// worker's own or an operation's own, and both go through the core's
+// functions (the operations write the config layer the way the CLI shell
+// does — saveProjectConfig, renderAgentContract, ensurePointer — never
+// `.auto/`, `docs/` unit state or an index tick); the daemon's view of a run
+// is its child's output plus what the run leaves on disk.
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
+import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, RequestError, type RunOptions } from "./request"
 
@@ -144,6 +153,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const spawnCwd = import.meta.dir.includes("$bunfs") ? process.cwd() : import.meta.dir
   const runs = new Map<string, RunRecord>()
   let counter = 0
+  // The P1d operation surface runs in this process (library calls into the
+  // core, never a worker child: an operation is a synchronous
+  // request/response — no session, no exit vocabulary of its own). Two
+  // daemon-side guards keep operations and runs from racing each other in
+  // the one process the lock cannot arbitrate (the run lock is re-entrant
+  // per process, so it arbitrates processes, not requests):
+  //   - the per-directory in-flight slot: one write operation at a time, the
+  //     second answers 409 retryable instead of re-entering the lock;
+  //   - the live registry run: a starting/running worker of this daemon on
+  //     the directory answers 409 (retryable) ahead of the lock, closing the
+  //     spawn window where the lock is not yet observable.
+  const opInFlight = new Set<string>()
+  const liveRunOn = (directory: string): RunRecord | undefined =>
+    [...runs.values()].find((run) => run.directory === directory && (run.state === "starting" || run.state === "running"))
 
   const view = (run: RunRecord): RunView => {
     const { proc: _proc, watcher: _watcher, ...rest } = run
@@ -263,6 +286,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   const findRun = (id: string): RunRecord | undefined => runs.get(id)
 
+  // One URL segment, percent-decoded; undefined when the segment is not a
+  // valid encoding (a name that cannot decode cannot be registered either).
+  const safeDecode = (segment: string): string | undefined => {
+    try {
+      return decodeURIComponent(segment)
+    } catch {
+      return undefined
+    }
+  }
+
   // POST /runs: validate (registered project; options shaped as RunAllOpts
   // fields plus per-run env-switch overrides only — never config keys,
   // the same shared validator the worker enforces), refuse on conflicts,
@@ -318,7 +351,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // on the directory refuses the second spawn whether or not the lock is
     // observable yet (the starting window, or a crash whose exit observation
     // has not landed) — retryable, because the entry reaches a terminal
-    // state on its own.
+    // state on its own. A write operation in flight on the directory is the
+    // same refusal from the other side (the operations hold the directory
+    // while they write through the core).
     // AUTO-DECISION (the "stale-but-locked → 409" mapping): 409 is the
     // registry-vs-lock disagreement — the daemon's one-run-per-directory
     // reservation answering while the on-disk lock is stale or not yet
@@ -328,7 +363,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // which keeps this API as self-healing as the CLI; the daemon never
     // writes the lock itself (refusing a stale lock with no cleanup would
     // wedge the directory behind a 409 no blind retry could clear).
-    const live = [...runs.values()].find((run) => run.directory === project.directory && (run.state === "starting" || run.state === "running"))
+    if (opInFlight.has(project.directory)) {
+      return json(409, {
+        error: `an operation is in flight on ${project.name}; retry once it finishes (config operations and unit operations hold the directory while they write)`,
+        retry: "retry once the operation completes — it is synchronous, so the very next request sees the directory free",
+      })
+    }
+    const live = liveRunOn(project.directory)
     if (live) {
       return json(409, {
         error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
@@ -443,7 +484,80 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>)` })
+    // The P1d operation surface: /projects/<project>/<op>, one entry per
+    // OP_DEFINITIONS (config ops, units, models, the plan boundary). The
+    // whitelist is the same absolute rule as POST /runs — the project
+    // resolves only against the registry, never against the request path
+    // itself.
+    if (segments[0] === "projects" && segments.length === 3) {
+      const name = safeDecode(segments[1]!)
+      const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
+      if (!name || !op) {
+        return json(404, {
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>)`,
+        })
+      }
+      const denied = needScope(request, op.what, op.scope)
+      if (denied) return denied
+      const project = store.resolveProject(name)
+      if (!project) {
+        return json(404, { error: `"${name}" is not a registered project: the whitelist resolves operation targets only against the registry (register with: opencode-auto-server register <dir>)` })
+      }
+      let body: Record<string, unknown> | undefined
+      if (method === "POST") {
+        // An empty POST body is the no-fields request ({}); anything else
+        // must be a JSON object.
+        const text = await request.text()
+        if (text.trim()) {
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(text)
+          } catch (error) {
+            return json(400, { error: `the request body is not valid JSON: ${error instanceof Error ? error.message : String(error)}` })
+          }
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return json(400, { error: "the operation request is a JSON object" })
+          }
+          body = parsed as Record<string, unknown>
+        } else {
+          body = {}
+        }
+      }
+      const dispatch = async (): Promise<Response> => {
+        const envelope = (outcome: OpOutcome): Response => json(outcome.status, { project: project.name, directory: project.directory, ...outcome.body })
+        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams }))
+        if (opInFlight.has(project.directory)) {
+          return json(409, {
+            error: `an operation is already in flight on ${project.name}; retry once it finishes (one write operation holds a directory at a time — the run lock arbitrates processes, not requests of this one)`,
+            retry: "retry once the operation completes — it is synchronous, so the very next request sees the directory free",
+          })
+        }
+        const live = liveRunOn(project.directory)
+        if (live) {
+          return json(409, {
+            error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
+            run: { id: live.id, state: live.state },
+            retry: "retry once the active run reaches a terminal state (GET the run to observe it); read-only operations (models, fix dryrun) run beside it",
+          })
+        }
+        opInFlight.add(project.directory)
+        try {
+          return envelope(await op.run({ project, body, query: url.searchParams }))
+        } finally {
+          opInFlight.delete(project.directory)
+        }
+      }
+      // An operation's own errors are its outcomes (409/423/428/501 carry
+      // their reasons); an unexpected throw is a daemon bug the operator
+      // must see, never a silent 200.
+      try {
+        return await dispatch()
+      } catch (error) {
+        console.error(`the ${op.segment} operation on ${project.directory} failed unexpectedly:`, error)
+        return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
+      }
+    }
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations)` })
   }
 
   const server = Bun.serve({ port: options.port ?? DEFAULT_PORT, hostname: options.hostname ?? DEFAULT_HOSTNAME, fetch: fetchHandler })

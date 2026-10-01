@@ -1,11 +1,12 @@
-# The opencode-auto-server daemon (P1c)
+# The opencode-auto-server daemon (P1c/P1d)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
-entry, `opencode-auto-server worker '<json>'`), and serves the run-control REST
-surface on `Bun.serve` — self-contained, zero added runtime dependencies (the
-isolation line of T-086; the core never knows HTTP). The REST lifecycle surface
-(config ops, units, models) arrives with P1d; SSE observability with P1e.
+entry, `opencode-auto-server worker '<json>'`), serves the run-control REST
+surface (P1c) and the REST lifecycle operations (P1d — config ops, units,
+models, the P1 `plan` boundary) on `Bun.serve` — self-contained, zero added
+runtime dependencies (the isolation line of T-086; the core never knows HTTP).
+SSE observability arrives with P1e.
 
 ## v1 boundary: single machine, multiple directories
 
@@ -51,9 +52,9 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
-| `read`   | run status, list, detail (logs/events feeds with P1e)             | active |
-| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); `close`, `task-add` with P1d | active |
-| `config` | `init` / `amend` / `fix` / `reset`                                | schema now, routes with P1d |
+| `read`   | run status, list, detail (logs/events feeds with P1e); the models operation | active |
+| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations | active |
+| `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the pending-question queue                                        | schema now, surface with P3c |
 | `probe`  | `models --probe` — burns tokens by starting agents                | opt-in, **disabled by default**: no route requires it; its confirmation parameter and per-daemon rate limit land with the Web write surface |
 
@@ -146,6 +147,103 @@ daemon's kill is that double press: two SIGINTs inside the window, producing
 exactly the 130 the vocabulary maps to `killed`. A kill of a still-`starting`
 worker lands before the handler exists and ends as a signal death — `killed`
 with `signal: "SIGINT"`.
+
+## The lifecycle operations (P1d)
+
+The REST surface mirroring the CLI's remaining command surface. Every
+operation runs **in the daemon process as a library call into the core**
+(`src/ops.ts` — an operation is a synchronous request/response: no session, no
+exit vocabulary of its own), and every state change reaches disk through the
+core's functions; the operations write the config layer exactly the way the
+CLI shell does and never touch `.auto/`, `docs/` unit state or an index tick
+(the driver-exclusive writes of the draft's §五).
+
+| route                               | scope    | meaning |
+| ----------------------------------- | -------- | ------- |
+| `POST /projects/<p>/init`           | `config` | the stateless full overwrite (config.json, the brief stub, the contract, the AGENTS.md block, the ignore set) |
+| `POST /projects/<p>/amend`          | `config` | the per-key revision; writes only what renders from the config |
+| `POST /projects/<p>/fix`            | `config` | planFix / applyFix over the rule table; `"dryrun": true` is the read-only drift gate |
+| `POST /projects/<p>/reset`          | `config` | planReset / applyReset (keeps a filled brief, removes a stub one) |
+| `POST /projects/<p>/close`          | `control`| closeUnit over a ref — the explicit ref and reason are the confirmation |
+| `POST /projects/<p>/tasks`          | `control`| task-add: one task by title, no session (the CLI's `plan --new-task` route, over addTask) |
+| `POST /projects/<p>/plan`           | `control`| the P1 plan boundary: planPrelude's no-agent routes only (see below) |
+| `GET  /projects/<p>/models`         | `read`   | the model registry's effective table (describeModels / formatModels) |
+
+`<p>` is a registered project (name or registered absolute path,
+percent-encoded in the URL) — the whitelist is the same absolute rule as
+`POST /runs`: the daemon resolves operation targets only against the registry.
+
+### The two answer fields — confirm and clean-tree
+
+The CLI's `-f/--force` skips **both** the overwrite confirmation and the
+worktree cleanliness gate; the API must not inherit the bundling. Two separate
+request fields, each defaulting to the CLI's safe default:
+
+- `"confirm": true` — the answer to the core's confirmation gate. The gate
+  itself is the core's io-injectable `confirm()`: the request's field is the
+  "y" the `[y/N]` prompt would collect, routed through the same
+  normalization (only y/yes pass; everything else, including an absent field,
+  is the gate's "N"). An unanswered destructive request answers **428** with
+  `gate: "confirm"` and the exact question in the body.
+- `"cleanTree": true` — the opt-out of the worktree cleanliness gate
+  (`checkCleanTree`). A dirty tree answers **409** with `gate: "cleanTree"`
+  and the file list; the check applies without a terminal too (what a
+  non-TTY skips is the confirmation, never this gate).
+
+Each field flips only its own gate: `confirm` alone does not license a dirty
+worktree, `cleanTree` alone does not confirm the write. `amend` takes neither
+(it discards no key); `close` takes neither (the explicit ref and the reason
+are the confirmation). `fix` accepts both beside `"dryrun"` (inert under a
+dryrun, like `-f` beside the CLI's `--dryrun`).
+
+### The plan boundary (P1)
+
+`POST /projects/<p>/plan` serves only `planPrelude`'s **no-agent** outcomes:
+round establishment (the round-start gate), the round-close gate (opening the
+next round), the phase-index drift re-sync, and the refusal stops — with
+their own lines and codes. Any route that would continue into an agent
+planning session (`planPrelude` → `{ type: "loop" }`) is refused with
+**501** naming the reason: such a session runs with `humanQuestions` (the
+human's questions wait with no timeout, `auto-core src/opts.ts:179-185`), and
+a headless worker's closed stdin only degrades it to blocked — the WebSocket
+question queue that carries it arrives with the P3c unit. The planning-input
+fields (`input`/`prompt`/`file`/`append`) are refused the same way;
+`plan --force-close`'s close half is the close operation, and its
+continue-into-planning half waits with the rest.
+
+### Operation status vocabulary
+
+Every operation answers a body carrying `code` (the CLI's own exit code for
+that command) and `lines` (the CLI's own output), so a script reads one
+vocabulary through either shell:
+
+| status | meaning |
+| ------ | ------- |
+| 200 | served (`code: 0`) |
+| 400 | request-shape error (unknown fields, bad values) |
+| 404 | unregistered project / unknown route |
+| 409 | the target's state refuses — the CLI's exit-1/2 refusals (body carries `code` 1 or 2 and the `lines`); the clean-tree gate (`gate: "cleanTree"`); a live registry run or an in-flight operation on the directory (retryable) |
+| 423 | a live run lock holder (the CLI's `lockLines` holder text) |
+| 428 | the confirmation gate unanswered (`gate: "confirm"`, the question included) |
+| 501 | a route this version refuses: agent planning (the P3 interactive transport), the models probe |
+
+`fix` with `"dryrun": true` is the scriptable config-drift gate: findings
+answer 409 with `code: 1` (the CLI's `fix --dryrun` exit 1), a consistent
+layer 200 — and it takes no lock, so it runs beside a live run (as does
+`models`).
+
+### Locks and concurrency for operations
+
+Config operations (`init`, `amend`, `fix`, `reset`) refuse with **423** while
+`liveRunLock` returns a holder, exactly the CLI's refusal (`-f` never
+overrode it, and neither field here does). `close`, `task-add` and `plan`
+acquire the lock themselves around their writes (the CLI's `close`/`plan`
+command names). Beside a live run of this daemon the write operations answer
+**409** (retryable, the run id in the body) — the registry is ahead of the
+lock during a run's starting window — and one write operation holds a
+directory at a time (a second answers 409; the run lock arbitrates processes,
+not requests of this one). `models` and `fix` dryrun take no lock and run
+beside a live run.
 
 ## Supervision and the daemon's lifetime
 

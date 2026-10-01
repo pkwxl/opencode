@@ -6,7 +6,8 @@
 // worker (P1b — one run per child process, exit code the run's own) and the
 // daemon with its CLI-side duties (P1c — serve, plus the whitelist and token
 // management in the daemon's own data directory). The REST lifecycle surface
-// (config ops, units, models) arrives with P1d; SSE observability with P1e.
+// (config ops, units, models, the P1 plan boundary) is served by the daemon
+// (P1d, src/ops.ts); SSE observability arrives with P1e.
 //
 // Dependency line (constitutional): this package imports @opencode-ai/auto-core
 // and Node/Bun builtins only — never @opencode-ai/core, @opencode-ai/protocol,
@@ -38,12 +39,19 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
-  boundary). The REST control plane: GET /health, GET /runs, POST /runs,
+  boundary). The run-control REST surface: GET /health, GET /runs, POST /runs,
   GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
-  force-terminate, mapped to killed/130). Stopping the daemon leaves live
-  workers running to completion; the run lock arbitrates any successor.
+  force-terminate, mapped to killed/130); the lifecycle operations under
+  /projects/<project>/<op>: init, amend, fix, reset (the config scope),
+  close, tasks (task-add), plan (the P1 no-agent boundary; agent-planning
+  routes answer 501 until the P3 interactive transport) and models
+  (read-only, runs beside a live run). Destructive operations take two
+  separate fields — "confirm" (the answer routed through the core's
+  confirmation gate) and "cleanTree" (the worktree check's opt-out) — never
+  one bundled force. Stopping the daemon leaves live workers running to
+  completion; the run lock arbitrates any successor.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
