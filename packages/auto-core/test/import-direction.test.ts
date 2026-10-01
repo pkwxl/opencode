@@ -319,6 +319,12 @@ const CLASSIFIED: Record<string, Domain> = {
   resume: "driver",
   // The round-close gate (M4.2, plans/0049 G8): whole-tree P1 scan, build, close listing.
   "round-close": "driver",
+  // The run-status event table (the headless direction's P2a, plans/0067
+  // and its review): the frozen, additive-only vocabulary the P2 emitter
+  // will publish — types and declaration tables only, importing nothing;
+  // the emitter and the SSE / question-queue consumers read it without
+  // binding behavior.
+  "run-status-schema": "driver",
   runner: "driver",
   script: "driver",
   // Selection (plans/0055 §6): the candidate list, the pick and the
@@ -517,6 +523,12 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "prompt-facts": "runtime",
   "templates.d": "runtime",
   lock: "runtime",
+  // AUTO-DECISION: run-status-schema (the run-status event table) sits in
+  // runtime — its one consumer is the P2 emitter, which follows log.ts's
+  // setter-injection family (the run services holder deliberately excludes
+  // log.ts, so the vocabulary's home is the process plane, not a service
+  // member); the module imports nothing, so the placement binds no edge.
+  "run-status-schema": "runtime",
 }
 
 // The cross-sub-domain value edges measured at E1's commit (0061 §4.10): the

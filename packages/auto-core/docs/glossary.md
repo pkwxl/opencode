@@ -296,6 +296,7 @@ Unit and outcome states:
 | 工程裁量 | engineering decision | `AUTO-DECISION` |
 | 自动编号 | auto numbering | `--auto-number` |
 | 统计 | stats | `.auto/stats.json` |
+| 驱动状态事件 | driver-status event | `RunStatusEvent`, `src/run-status-schema.ts`: the run's narrative vocabulary (run brackets, unit transitions, task/subtask brackets, question lifecycle, usage roll-ups, failures, exit requests), frozen additive-only; disjoint from `RunEvent`/`AgentEvent`, joined by run/session/unit ids — SSE payloads are these typed events only, never log prose |
 | 只读保护 | read-only guard | `src/protect.ts` |
 | 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan` and `close` for the whole run (`runAll` re-enters the shell's lock); `init` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
 | 生命周期命令 | lifecycle command | `plan` and `close` (with `plan --append` / `--force-close`): the commands that move a round's lifecycle (`plans/0052`, `plans/0053`) |
