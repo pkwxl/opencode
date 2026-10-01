@@ -121,6 +121,21 @@
         "@typescript/native-preview": "catalog:",
       },
     },
+    "packages/auto-server": {
+      "name": "@opencode-ai/auto-server",
+      "version": "0.0.0",
+      "bin": {
+        "opencode-auto-server": "./src/index.ts",
+      },
+      "dependencies": {
+        "@opencode-ai/auto-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+      },
+    },
     "packages/cli": {
       "name": "@opencode-ai/cli",
       "version": "1.18.16",
@@ -1984,6 +1999,8 @@
     "@opencode-ai/auto": ["@opencode-ai/auto@workspace:packages/auto"],
 
     "@opencode-ai/auto-core": ["@opencode-ai/auto-core@workspace:packages/auto-core"],
+
+    "@opencode-ai/auto-server": ["@opencode-ai/auto-server@workspace:packages/auto-server"],
 
     "@opencode-ai/cli": ["@opencode-ai/cli@workspace:packages/cli"],
 
