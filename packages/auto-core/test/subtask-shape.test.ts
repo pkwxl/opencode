@@ -120,7 +120,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
     try {
       const { client, calls } = scriptedClient([async () => {}])
       const plan = await reloadUnits(dir)
-      const opts: Opts = { dir, commit: true }
+      const opts: Opts = { dir }
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, opts, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("zero disk writes")
@@ -151,7 +151,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("declared artifact docs/T-001/S01/record.md does not exist")
@@ -173,7 +173,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("missing last-line terminator")
@@ -192,7 +192,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("content too short")
       expect(calls.prompts.length).toBe(2)
@@ -215,7 +215,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
@@ -236,7 +236,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
@@ -261,7 +261,7 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       // D4 existence always holds (no "declared artifact … does not exist"); D6 catches the modified document on non-trivial + last-line terminator
@@ -309,7 +309,7 @@ describe("runSubtask shape-check re-prompt continues on a fork", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       // The re-prompt session = a fork copy of the original session, carrying only the feedback (no subtask body / full prompt).
       expect(calls.forks).toEqual(["ses_new_1"])
@@ -342,7 +342,7 @@ describe("runSubtask shape-check re-prompt continues on a fork", () => {
         session: { ...sdk.session, fork: async () => ({ error: { message: "no fork" } }) },
       } as unknown as OpencodeClient)
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       // The fresh session resends the full prompt (with the subtask body) + the feedback.
@@ -371,7 +371,7 @@ describe("runSubtask whole-unit document terminator scan (D6)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
@@ -400,7 +400,7 @@ describe("runSubtask whole-unit document terminator scan (D6)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
@@ -424,7 +424,7 @@ describe("runSubtask whole-unit document terminator scan (D6)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
@@ -451,7 +451,7 @@ describe("runSubtask whole-unit document terminator scan (D6)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("docs/committed.md")
@@ -508,7 +508,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
@@ -531,7 +531,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true, scanExempt: ["test/fixtures"] }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, scanExempt: ["test/fixtures"] }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
@@ -550,7 +550,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain('README.md:5 references ".auto/units.json"')
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)

@@ -160,7 +160,7 @@ describe("I3 misjudged-complete zero-write (kernel-dm T-068 S01)", () => {
     try {
       const { client, calls } = scriptedClient([async () => {}])
       const plan = await reloadUnits(dir)
-      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("zero disk writes")
       // Initial dispatch + one re-prompt with feedback; the feedback restates
@@ -211,7 +211,7 @@ describe("I4 the test script rewriting sources in place (kernel-spi-nor T-028)",
         plan,
         plan.tasks[0]!,
         "prompt",
-        { dir, commit: true, testByDriver: true, handoverTest: true, contextLimit: 1000 },
+        { dir, testByDriver: true, handoverTest: true, contextLimit: 1000 },
         chain,
         undefined,
         1,
@@ -273,7 +273,7 @@ describe("I5 handover chain close-out (test-handover-early §N F4)", () => {
         plan.tasks[0]!,
         BODY,
         1,
-        { dir, commit: true, testByDriver: true, handoverTest: true, contextLimit: 1000 },
+        { dir, testByDriver: true, handoverTest: true, contextLimit: 1000 },
         makeChain(),
       )
       expect(result).toBeUndefined()
@@ -315,7 +315,7 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3)", () => {
     try {
       const { client } = scenario(dir, "Result: FAIL x is not exported under the expected name")
       const plan = await reloadUnits(dir)
-      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
       expect(outcome).toMatchObject({ type: "blocked" })
       expect((outcome as { question: string }).question).toContain("Result: FAIL (x is not exported under the expected name)")
       const after = await reloadUnits(dir)
@@ -335,7 +335,7 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3)", () => {
     try {
       const { client } = scenario(dir, "Result: PASS")
       const plan = await reloadUnits(dir)
-      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
       expect(outcome).toEqual({ type: "completed" })
       expect((await reloadUnits(dir)).tasks[0]!.status).toBe("done")
     } finally {

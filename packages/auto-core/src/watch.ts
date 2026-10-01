@@ -98,17 +98,16 @@ export async function watch(
   // classifier's cache, the model-step cache-claim checks) and the git
   // service behind the fx's commitFreeze ride the context to the fx.
   const svcs = services()
-  const startTime = svcs.clock.now()
   // The figure comes from the usage source of the adapter's tier
   // (plans/0038): the spine feeds it every event of this session, the usage
   // concern reads its used() at the measurement points and the test
   // protocol's handover decision at idle. The agent's retry policy
   // (plans/0057 §4) is the adapter's record with the registry entry's
   // override. The failure-message classifier (plans/0055 §7.1) exists only
-  // under a registry layer with a classifier list and is carried on the
-  // context; without one (the implicit registry carries no classifier) it is
-  // undefined and nobody asks.
+  // under a registry layer with a classifier list, is carried on the context,
+  // and without one (the implicit registry carries none) is undefined.
   const policy = retryPolicyOf(client.retryPolicy, steerContext?.entry?.retry)
+  const routing = opts.routing ?? routingFacts(undefined, undefined, svcs.clock, svcs.router, undefined, switches)
   const ctx: TurnContext = {
     client,
     sessionID,
@@ -120,15 +119,10 @@ export async function watch(
     steerContext,
     policy,
     classify: (info: ErrorInfo): ErrorClass => classifySessionError(info, client.errorPatterns, policy),
-    classifier: classifierFor(
-      client,
-      opts.routing ?? routingFacts(undefined, undefined, svcs.clock, svcs.router, undefined, switches),
-      steerContext?.label,
-      opts.server ? (agent) => opts.server!.client(agent) : undefined,
-    ),
+    classifier: classifierFor(client, routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined),
     source: usageSource(client.capabilities.usage),
     services: svcs,
-    startTime,
+    startTime: svcs.clock.now(),
   }
 
   // The stepUp concern's live-slice cell: the fx's steer default (the

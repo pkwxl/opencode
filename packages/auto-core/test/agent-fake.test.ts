@@ -2457,7 +2457,7 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     await git(dir, "commit", "-q", "-m", "init")
     const agent = make()
     try {
-      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, router: services().router, ...(subtask ? { subtask } : {}) })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, wrapup: false, router: services().router, ...(subtask ? { subtask } : {}) })
       return { outcome, prompts: agent.prompts.map((prompt) => prompt.text.replaceAll(dir, "<dir>")), creates: names(agent).filter((name) => name === "create").length }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2518,7 +2518,7 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     })
     try {
       mkdirSync(join(dir, "src"), { recursive: true })
-      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "true", router: services().router })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, wrapup: false, subtask: "true", router: services().router })
       expect(outcome).toEqual({ type: "completed" })
       const prompts = agent.prompts.map((prompt) => prompt.text)
       // decompose, the digest base, then the two subtasks, each a fork of the base.
@@ -2589,7 +2589,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     await git(dir, "commit", "-q", "-m", "init")
     const script = turn(dir)
     const agent = make({ ...options.agent, ...(script ? { turn: script } : {}), ...(options.capabilities ? { capabilities: options.capabilities } : {}) })
-    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto", router: services().router, ...options.opts })
+    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, wrapup: false, subtask: "auto", router: services().router, ...options.opts })
     return { dir, agent, outcome, prompts: agent.prompts.map((prompt) => prompt.text) }
   }
   const write = (dir: string, rel: string, text: string) => {

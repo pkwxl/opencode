@@ -1,6 +1,6 @@
 # 0060 — Driver consolidation: sub-domains, an engine with policies, a composition root
 
-Status: **design, proposed — revision 2** (2026-09-27; nothing implemented). Revision 1 asked how auto-core should be refactored so feature improvements stop requiring dependency tracing across most of the codebase. This revision adds three things the operator's review ruled or requested: the **responsibility boundary** as the pruning criterion (§3 — refcheck retirement ruled, the whole quality-assurance family audited against the same line), the **extensibility review** (§5 — the consolidations of revision 1 become open protocols, plus the evolution directions a long-horizon assisted-development tool is missing), and the **test-suite strategy** (§6 — measured, re-tiered, scheduled against the refactor stages, with a feasibility verdict). Open rulings are collected in §10.
+Status: **implemented as ruled in 0061** (2026-10-01). `plans/0061-driver-consolidation-plan.md` rules this document — its §2.1 answers the five rulings requested in §10 below, its §2.3 lists the parts of this design it replaces, and its §10 implementation record carries every landed unit; this document is the historical proposal. It was **design, proposed — revision 2** (2026-09-27). Revision 1 asked how auto-core should be refactored so feature improvements stop requiring dependency tracing across most of the codebase. This revision adds three things the operator's review ruled or requested: the **responsibility boundary** as the pruning criterion (§3 — refcheck retirement ruled, the whole quality-assurance family audited against the same line), the **extensibility review** (§5 — the consolidations of revision 1 become open protocols, plus the evolution directions a long-horizon assisted-development tool is missing), and the **test-suite strategy** (§6 — measured, re-tiered, scheduled against the refactor stages, with a feasibility verdict). Open rulings are collected in §10.
 
 ## 0. The answer in one paragraph
 
@@ -265,6 +265,6 @@ Generalizes 0024 (the module split and chain layering — the rank stays) and M0
 
 ## 11. Implementation record
 
-None yet — this document is the proposal awaiting rulings (§10; D5g is ruled and scheduled as S1's lead item).
+Not kept here — the program was ruled by `plans/0061-driver-consolidation-plan.md`, whose §10 records every landed unit; this document's §10 rulings are answered by 0061 §2.1 (the status line above names the relationship).
 
 <!-- auto: eof -->

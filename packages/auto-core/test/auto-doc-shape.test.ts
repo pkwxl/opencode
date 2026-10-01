@@ -79,7 +79,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
       await Bun.write(join(dir, "docs/T-001/subtasks.md"), "# Decomposition\n\n- [ ] subtask one\n")
       const { client, calls } = scriptedClient([])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(0)
       const reloaded = await reloadUnits(dir)
@@ -95,7 +95,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
       await Bun.write(join(dir, "docs/T-001/context.md"), contextProper)
       const { client, calls } = scriptedClient([async () => writeMergedArtifacts(dir)])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual([
@@ -117,7 +117,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
         async () => writeMergedArtifacts(dir),
       ])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
       // The re-prompt is dispatched on a fork of the just-ended session, carrying only the feedback (revised 2026-09-18).
@@ -150,7 +150,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
         async () => writeMergedArtifacts(dir),
       ])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
@@ -173,7 +173,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
         async () => writeMergedArtifacts(dir),
       ])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain('docs/T-001/S01/todo.md is missing section "## Artifacts"')
@@ -191,7 +191,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
         },
       ])
       const plan = await reloadUnits(dir)
-      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
       expect(result.type).toBe("blocked")
       expect((result as { question: string }).question).toContain("context.md")
       expect(calls.prompts.length).toBe(2)
@@ -204,7 +204,7 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
 })
 
 describe("runWrapup wrap-up report gate (D5, shared by the runner's main close-out and the review repair round)", () => {
-  const wrapOpts = (dir: string): Opts => ({ dir, commit: true })
+  const wrapOpts = (dir: string): Opts => ({ dir })
 
   test("report missing: one retry with feedback, still missing → blocked, nothing committed", async () => {
     const dir = await docRepo()
