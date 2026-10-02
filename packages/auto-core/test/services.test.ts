@@ -108,7 +108,10 @@ describe("the services holder", () => {
     // the session-driving entries, the interactive sideband and the agent
     // pool. This pins the seed; the callers ratchet below holds every real
     // `services()` caller inside this exact shape.
-    expect([...SERVICE_ENTRIES]).toEqual(["loop-preflight", "loop", "session", "attempt", "watch", "interactive", "agent-pool"])
+    // Shrunk once (D13, plans/0069 §2.2): the loop modules left — they build
+    // and install a holder through createServices/installServices, never the
+    // ambient accessor, so their entries sat at zero ambient use.
+    expect([...SERVICE_ENTRIES]).toEqual(["session", "attempt", "watch", "interactive", "agent-pool"])
   })
 
   test("services() returns the installed instance, else a stable process default", () => {

@@ -21,7 +21,7 @@ import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskS
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { headText, removeIfUntracked, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
 import { checklistTitle, forkBaseFor, promptViews, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
@@ -76,10 +76,10 @@ export async function executeWhole(
 ): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
-  // The run's git service: the opts carrier the loop filled, else the
-  // holderless production fallback (a minimal test literal — committing on,
-  // exactly what such a literal did before the seam).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point: the opts carrier the loop filled, else the holderless production
+  // fallback).
+  const git = gitOf(opts)
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
@@ -377,9 +377,9 @@ export async function ensureDecomposed(
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   if (task.checklist?.length) return { type: "ok", task }
   const dir = plan.dir
-  // The run's git service (the opts carrier, else the holderless
-  // production fallback).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point).
+  const git = gitOf(opts)
   const contextFile = join(dir, taskDoc(task.id, "context"))
   const sharedFile = join(dir, taskDoc(task.id, "shared"))
   const subtasksFile = join(dir, taskDoc(task.id, "subtasks"))
@@ -578,9 +578,9 @@ export async function runSubtask(
   // candidate keeps its exact task-scoped meaning.
   resetRoute(chain)
   const dir = opts.dir ?? plan.dir
-  // The run's git service (the opts carrier, else the holderless
-  // production fallback).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point).
+  const git = gitOf(opts)
   // Subtask unit commit boundary: startup clean gate + SHA baseline (close-out
   // verifies the commit range is all driver commits); driver-exclusive
   // state-file leftovers self-heal through the carryover inside beginUnit. The

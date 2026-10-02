@@ -37,6 +37,7 @@ import {
   lanePark,
   landLane,
   LANE_DISPATCH_CAP,
+  orphanRedispatch,
   readyUnits,
   readLaneReport,
   schedulerActive,
@@ -755,26 +756,28 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       continue
     }
     // orphan: the worker exited without a report (crash, kill). The pid is
-    // dead — this run held the exit. D14: re-dispatch in place, resuming
-    // through its own progress record, while the attempts stay under the
-    // cap; the cap (or a drain already stopping) keeps the scene and blocks
-    // naming the park path.
+    // dead — this run held the exit. D14: the shared re-dispatch decision
+    // (lanes.ts orphanRedispatch — the same rule preflight's recovery
+    // re-dispatches under) says "again" while the attempts stay under the
+    // cap and the drain is not already stopping; the re-dispatch resumes
+    // through its own progress record, and a "keep" keeps the scene and
+    // blocks naming the park path.
     const unit = first.lane.task
-    const attempts = await unitAttempts(directory, unit.id)
-    if (stop === undefined && attempts < LANE_DISPATCH_CAP) {
-      log(`↻ ${unit.id} lane worker exited without a report (exit ${exit.code}); re-dispatching the lane in place — it resumes from its own progress record (attempt ${attempts + 1} of ${LANE_DISPATCH_CAP})`)
-      const again = await dispatchLane(ctx.git, directory, unit)
-      if (again.type === "failed") {
-        log(`⏸ ${again.error}`)
-        emitStatus({ type: "task-end", task: unit.id, outcome: "blocked", detail: again.error })
+    const again = orphanRedispatch(await unitAttempts(directory, unit.id), stop === undefined)
+    if (again.type === "again") {
+      log(`↻ ${unit.id} lane worker exited without a report (exit ${exit.code}); re-dispatching the lane in place — it resumes from its own progress record (attempt ${again.attempt} of ${LANE_DISPATCH_CAP})`)
+      const dispatched = await dispatchLane(ctx.git, directory, unit)
+      if (dispatched.type === "failed") {
+        log(`⏸ ${dispatched.error}`)
+        emitStatus({ type: "task-end", task: unit.id, outcome: "blocked", detail: dispatched.error })
         scheduling = false
         stop = 2
       } else {
-        inFlight.set(unit.id, { task: unit, worker: again.worker, worktree: again.worktree, output: again.output })
+        inFlight.set(unit.id, { task: unit, worker: dispatched.worker, worktree: dispatched.worktree, output: dispatched.output })
       }
       continue
     }
-    const why = stop !== undefined ? "scheduling already stopped; the next run's preflight recovers it" : `the dispatch attempts cap (${LANE_DISPATCH_CAP}) is hit`
+    const why = again.why
     log(`⏸ ${unit.id} lane worker exited without a report (exit ${exit.code}) and ${why}; the scene is kept at ${lanePark(unit.id)}`)
     emitStatus({ type: "lane-block", lane: unit.id, reason: `lane worker exited without a report (exit ${exit.code}) and ${why}; the scene is kept at ${lanePark(unit.id)}` })
     emitStatus({ type: "task-end", task: unit.id, outcome: "blocked", detail: `lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(unit.id)}` })

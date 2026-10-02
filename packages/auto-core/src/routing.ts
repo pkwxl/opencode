@@ -22,7 +22,7 @@ import { implicitRegistry, layerLabel } from "./models"
 import type { ModelRegistry, RegistryAgentProfile } from "./models-schema"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { Router } from "./router"
-import { candidateKey, select, selectionPolicy, type Candidate, type SelectContext } from "./select"
+import { candidateKey, entryPassesAgentFilter, select, selectionPolicy, type Candidate, type SelectContext } from "./select"
 import type { Clock } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
@@ -121,6 +121,31 @@ export function nowOf(facts: RoutingFacts): number {
   return facts.clock.now()
 }
 
+// The routing facts of an options literal — the one home of the
+// implicit-registry fallback literal (D9, plans/0069 §2.2, which
+// triplicated it across attempt, watch and session): the opts' own for a
+// run, else the implicit registry over the given switch snapshot on the
+// timeline and routing state the caller hands in (a bare literal that
+// never knew routing — every run has a registry, so this always answers
+// complete facts). The fallback's clock and router arrive as parameters
+// because this module may not read the installed services (the
+// SERVICE_ENTRIES allowlist owns that reach, and it may only shrink): the
+// session-driving entries below the loop pass their own services reads —
+// attempt and watch directly, the pipeline callers (runner, execute,
+// artifact, exec-session) through session's injecting wrapper of the same
+// name, which keeps the accessor inside the allowlisted module.
+export function routingOf(
+  opts: { routing?: RoutingFacts },
+  switches: Switches,
+  // The fallback timeline and routing state: the caller's reads of the
+  // installed services (its clock and router), used only when the opts
+  // carry no routing of their own.
+  clock: Clock,
+  router: Router,
+): RoutingFacts {
+  return opts.routing ?? routingFacts(undefined, undefined, clock, router, undefined, switches)
+}
+
 // The selection context of one dispatch: the run facts plus the volatile run
 // state (the policy of OPENCODE_AUTO_MODEL, the /failback override, the down
 // marks, the key rings' usable-key predicate) and the live context windows
@@ -168,11 +193,13 @@ export function dispatchCoverageProblems(
   agentFilter: string | undefined,
   needs: readonly DispatchNeed[],
 ): string[] {
+  // §6.2 rule 1 over names (D12: select.ts's entryPassesAgentFilter is the
+  // one rule): undefined filter = every name passes; a name with no entry
+  // passes only without a filter (nothing is known to exclude it).
   const passes = (name: string): boolean => {
     if (agentFilter === undefined) return true
     const entry = registry.models.get(name)
-    const adapter = entry !== undefined ? registry.agents.get(entry.agent)?.adapter : undefined
-    return adapter === agentFilter
+    return entry !== undefined && entryPassesAgentFilter(registry, agentFilter, entry)
   }
   const problems: string[] = []
   const reported = new Set<string>()
@@ -229,7 +256,9 @@ export function dispatchAgentProfiles(
   const add = (name: string): void => {
     const entry = registry.models.get(name)
     if (entry === undefined) return
-    if (agentFilter !== undefined && registry.agents.get(entry.agent)?.adapter !== agentFilter) return
+    // §6.2 rule 1, the one shared rule (D12: select.ts's
+    // entryPassesAgentFilter, applied over the resolved entry).
+    if (!entryPassesAgentFilter(registry, agentFilter, entry)) return
     const names = byProfile.get(entry.agent) ?? []
     if (!names.includes(name)) names.push(name)
     byProfile.set(entry.agent, names)

@@ -82,6 +82,24 @@ export function conflictRepair(level: ParallelLevel | undefined): boolean {
 // across re-runs, never only inside one pass.
 export const LANE_DISPATCH_CAP = 3
 
+// D14's orphan re-dispatch decision, the one rule both parents share
+// (plans/0069 §2.2 D14, which found the logic twice): a lane that exited
+// without a report is re-dispatched in place — `attempt` is the booking
+// number the re-dispatch will take — while its unit's attempts stay under
+// the cap and its parent still takes the work; otherwise the scene is kept
+// and `why` names the reason for the block line beside the park path. The
+// scheduler's loop (src/loop-task.ts) requeues on "again" and blocks on
+// "keep"; the preflight recovery (src/loop-preflight.ts) awaits its
+// re-dispatches through the same decision — the policy is shared, the loop
+// shapes stay the parents' own.
+export type OrphanRedispatch = { type: "again"; attempt: number } | { type: "keep"; why: string }
+
+export function orphanRedispatch(attempts: number, scheduling = true): OrphanRedispatch {
+  if (!scheduling) return { type: "keep", why: "scheduling already stopped; the next run's preflight recovers it" }
+  if (attempts >= LANE_DISPATCH_CAP) return { type: "keep", why: `the dispatch attempts cap (${LANE_DISPATCH_CAP}) is hit` }
+  return { type: "again", attempt: attempts + 1 }
+}
+
 // —— The readiness predicate (D5) ——
 
 // The runtime registry view of one unit (.auto/units.json's scheduling

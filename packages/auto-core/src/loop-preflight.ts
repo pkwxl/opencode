@@ -29,6 +29,7 @@ import {
   lanePark,
   landLane,
   LANE_DISPATCH_CAP,
+  orphanRedispatch,
   pidAlive,
   readLaneReport,
   schedulerActive,
@@ -607,9 +608,12 @@ export async function recoverOrphanLanes(gitOps: GitOps, dir: string): Promise<n
       if (report === undefined) log(`⚠ the awaited worker of ${record.unit} exited without a report; treating its scene as a crashed lane and re-dispatching it in place`)
     }
     // A dead worker (or an awaited one that crashed on its way out): the
-    // re-dispatch loop, resumed through the worktree's own progress record.
+    // re-dispatch loop, resumed through the worktree's own progress record,
+    // gated by lanes.ts's orphanRedispatch decision (D14's shared rule —
+    // the scheduler's loop re-dispatches under the same cap; recovery here
+    // always schedules, so a "keep" is always the cap).
     while (report === undefined) {
-      if ((await unitAttempts(dir, record.unit)) >= LANE_DISPATCH_CAP) {
+      if (orphanRedispatch(await unitAttempts(dir, record.unit)).type === "keep") {
         log(`⏸ ${record.unit} hit its dispatch attempts cap (${LANE_DISPATCH_CAP}) without completing; the scene is kept at ${lanePark(record.unit)} — inspect it manually (the lane branch ${laneBranch(record.unit)} holds the last attempt's commits) and re-run after fixing it`)
         return 2
       }

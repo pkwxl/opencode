@@ -131,6 +131,20 @@ export function createGitOps(): GitOps {
   }
 }
 
+// The one resolution point of the opts-carried git seam (D8, plans/0069
+// §2.2): the member the loop filled for a run, else the holderless
+// production fallback — a minimal test literal resolves onto committing-on,
+// exactly what such a literal did before the seam existed. Every entry
+// point below the loop (execute, exec-session, artifact, unit-commit,
+// wrapup, knowledge) reads the seam through this helper instead of
+// re-spelling the fallback; the services holder builds its own default
+// member directly (createServices' `over.git ?? createGitOps()`), the
+// composition root's sanctioned resolution. Structural slice: the home
+// stays opts-free (see the header).
+export function gitOf(opts: { git?: GitOps }): GitOps {
+  return opts.git ?? createGitOps()
+}
+
 // The no-commit double: every method answers what the `commit: false`
 // early returns inside the free functions answered before their removal,
 // so a converted call site behaves identically — beginUnit ok with no

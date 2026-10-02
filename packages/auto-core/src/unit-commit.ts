@@ -12,7 +12,7 @@
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
 import { rollbackUnit, type UnitBaseline } from "./git"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { forgetHandover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
@@ -81,14 +81,15 @@ export async function wrapupResolves(dir: string | undefined, taskID: string): P
 // —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md, OPENCODE_AUTO_STRICT_RESUME) ——
 
 // Whether strict resume is active: the switch on, the run's git service
-// recording (the production instance; the no-commit double answers false,
+// recording (git-ops.ts gitOf resolves the opts carrier, else the
+// holderless production instance; the no-commit double answers false,
 // keeping the record fields unwritten — the commit gate's former off
 // path), and not dryrun. With records off, records carry no baseline/model
 // fields and the check and rollback both idle entirely (byte-for-byte
 // equal to the status quo). switches defaults to the parsed
 // OPENCODE_AUTO_* value; injected for unit tests.
 export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches()): boolean {
-  return switches.strictResume && (opts.git ?? createGitOps()).records && !opts.dryrun
+  return switches.strictResume && gitOf(opts).records && !opts.dryrun
 }
 
 // The routing facts of a session-options literal: the opts' own for a run,

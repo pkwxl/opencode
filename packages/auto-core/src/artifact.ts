@@ -10,7 +10,7 @@
 import type { SessionChain } from "./chain"
 import { bindAgent, resumeSession, setRoute } from "./chain-transitions"
 import { baselineIntact, type UnitBaseline } from "./git"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Task } from "./tasks"
@@ -97,10 +97,10 @@ export async function requireArtifact<T>(
   switches: Switches = autoSwitches(),
 ): Promise<T | UnitStop> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, unit: spec.step.unit } : undefined
-  // The run's git service: the opts carrier the loop filled, else the
-  // holderless production fallback (a minimal test literal — committing on,
-  // exactly what such a literal did before the seam).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point: the opts carrier the loop filled, else the holderless production
+  // fallback).
+  const git = gitOf(opts)
   // Phase-step resume: the last run was interrupted in this step (driver did not
   // close it) and the original session is still reusable → the first prompt goes
   // into the original session (keeping the artifact state); otherwise treat it as

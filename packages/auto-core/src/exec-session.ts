@@ -12,7 +12,7 @@ import type { SessionChain, SessionResult } from "./chain"
 import { consumeNote, seedFork } from "./chain-transitions"
 import { archivedTestHandoff, latestHandoffSeq, testHandoffFile } from "./docpaths"
 import { fileCommitted, suffixedTitle } from "./git"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
@@ -67,10 +67,10 @@ export async function runExecSession(
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? plan.dir
-  // The run's git service: the opts carrier the loop filled, else the
-  // holderless production fallback (a minimal test literal — committing on,
-  // exactly what such a literal did before the seam).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point: the opts carrier the loop filled, else the holderless production
+  // fallback).
+  const git = gitOf(opts)
   const tmp = scriptTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
   // Scene restoration (interruption recovery F3): handover documents already

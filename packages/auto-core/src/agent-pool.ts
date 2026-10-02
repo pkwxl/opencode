@@ -429,9 +429,16 @@ function defaultBin(adapter: string): string | undefined {
 // The models command's probe (§9)
 // ---------------------------------------------------------------------------
 
-// The recovery probe prompt of the wait-and-probe loop (src/session.ts),
-// restated: a minimal payload that needs one real provider round trip.
-const PROBE_PROMPT = "[DRIVER] Service availability probe: reply with just ok and do nothing else."
+// The service-availability probe prompt — the single home of the literal
+// (D11, plans/0069 §2.2, which found it verbatim here and in session.ts's
+// wait-and-probe loop): a minimal payload that only needs one real provider
+// round trip to tell whether service is back. Never probe with the
+// interrupted session (a probe turn in a real session pollutes its context,
+// and a forked probe burns the full prefix on every wait round, which only
+// makes a quota squeeze worse), so both senders dispatch it in a throwaway
+// one-shot turn — session's awaitRecovery through attempt, the models
+// command's probe through its own pool below.
+export const PROBE_PROMPT = "[DRIVER] Service availability probe: reply with just ok and do nothing else."
 
 // A probe waits for one short turn; 60 s covers a slow first model load
 // while still failing a wedged provider within the operator's patience.

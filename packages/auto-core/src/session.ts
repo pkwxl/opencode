@@ -27,7 +27,7 @@ import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { forkAgent, jitterOf, landedAgent, probeChain, windowWake } from "./router"
-import { routingFacts, type RoutingFacts } from "./routing"
+import { routingOf as routingOfPure, type RoutingFacts } from "./routing"
 import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
@@ -36,7 +36,7 @@ import { accountAnswered, accountOf, learnedReset, learnFailure } from "./quota-
 import { saveProgress } from "./resume"
 import { firstLine } from "./resume-gate"
 import { clientOf, contextLimitsOf, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed, worktreeNote } from "./session-api"
-import { AgentStartError } from "./agent-pool"
+import { AgentStartError, PROBE_PROMPT } from "./agent-pool"
 import { autoSwitches, type Switches } from "./switches"
 import { statsQuotaWait, statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
@@ -161,12 +161,11 @@ export async function ensureForkBase(
   return undefined
 }
 
-// Probe prompt of the wait-and-probe loop: a minimal payload that only needs one
-// real provider round trip to tell whether service is back. Never probe with the
-// interrupted session (a probe turn in a real session pollutes its context, and a
-// forked probe burns the full prefix on every wait round, which only makes a
-// quota squeeze worse).
-const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with just ok and do nothing else."
+// The wait-and-probe loop's probe prompt is agent-pool.ts's PROBE_PROMPT —
+// the single home of the literal (D11, plans/0069 §2.2; the models command's
+// probe there and awaitRecovery below send the same payload), whose comment
+// carries the probe's contract (one real provider round trip, never inside
+// the interrupted session).
 
 // One-off note when the same prompt is re-sent after a retry or recovery
 // (carried to the AI with the next prompt via chain.note, cleared once used). Two
@@ -183,15 +182,16 @@ const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with j
 //    the cross-run resumeNote: check the disk state, do not redo).
 const retryNote = worktreeNote
 
-// The routing facts of a session-options literal: the opts' own for a run,
-// else the implicit registry over the given switch snapshot on the installed
-// services' clock and router (a bare literal that never knew routing —
-// every run has a registry, so this always answers complete facts). The
+// The routing facts of a session-options literal, injected with this
+// module's services reads: the pure fallback (the implicit-registry literal,
+// D9 of plans/0069 §2.2) lives in routing.ts and takes the timeline and the
+// routing state as parameters — this wrapper is the services entry the
 // session-driving callers below the loop (runner, execute, artifact,
-// exec-session) resolve their reads through this one helper; the switches
-// argument is the snapshot the caller drives everything else with.
+// exec-session) resolve through, so they never read the ambient holder
+// themselves; the switches argument is the snapshot the caller drives
+// everything else with.
 export function routingOf(opts: Pick<Opts, "routing" | "router">, switches: Switches): RoutingFacts {
-  return opts.routing ?? routingFacts(undefined, undefined, services().clock, opts.router ?? services().router, undefined, switches)
+  return routingOfPure(opts, switches, services().clock, opts.router ?? services().router)
 }
 
 // Runs one prompt on the session chain (a fresh session per prompt, except a
@@ -675,7 +675,7 @@ export async function runSession(
         // selection picks the just-cleared probe candidate, so the pool
         // starts and uses that candidate's host — the model being probed,
         // whatever agent runs it.
-        ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
+        ping = await attempt(client, task, PROBE_PROMPT, opts, probe, undefined, undefined, switches)
       } catch (error) {
         if (error instanceof AgentStartError) throw error
         if (probed !== undefined) router.markModelDown(probed)

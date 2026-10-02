@@ -15,7 +15,7 @@ import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opt
 import { phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
-import { begin, checklistTitle, markDone, reloadTask, type Plan, type Task } from "./tasks"
+import { begin, checklistTitle, markDone, reloadTask, type ChecklistItem, type Plan, type Task } from "./tasks"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
@@ -484,8 +484,9 @@ export async function runTask(
 
     // S5 (plans/0068 §6.8, D19): the single-stream lane path — the subtask
     // loop's body extracted for exactly one checklist item. The state scan
-    // and the dependency check are the loop's own (word for word), the
-    // selection is the caller's opts.stream (the lane unit T-NNN.S<nn>), and
+    // and the dependency check are the loop's own (the one subtaskPrecheck
+    // helper below, D7), the selection is the caller's opts.stream (the
+    // lane unit T-NNN.S<nn>), and
     // the subtask runs cold-started: no fork base at all (the lead's agent
     // server belonged to the lead's process), runSubtask's laneStream flag
     // carrying the enriched fanout delta and the per-stream handoff document.
@@ -494,30 +495,8 @@ export async function runTask(
     const runStreamLaneItem = async (): Promise<UnitStop | undefined> => {
       const index = opts.stream!
       const items = task.checklist ?? []
-      const scan = await scanSubtaskStates(dir, task.id, items.length)
-      if (scan.illegal.length) {
-        return {
-          type: "blocked",
-          question:
-            `${task.id} subtask state files are illegal (${scan.illegal
-              .map((v) => {
-                // State-file names come from the spec data (M1.4): the
-                // message follows the protocol declaration, not literals.
-                const spec = subtaskStateSpec(task.id, v.index)
-                const pending = basename(spec.pending.path)
-                const complete = basename(spec.complete.path)
-                return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
-              })
-              .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
-        }
-      }
-      const graph = checklistProblems(items)
-      if (graph.length) {
-        return {
-          type: "blocked",
-          question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
-        }
-      }
+      const stop = await subtaskPrecheck(dir, task, items)
+      if (stop) return stop
       if (index < 1 || index > items.length) {
         return {
           type: "blocked",
@@ -606,38 +585,17 @@ export async function runTask(
         // hand-written in subtasks.md.
         for (;;) {
           const items = task.checklist ?? []
-          // Subtask-directory state protocol (M1.0, plans/0030): when the
-          // protocol is active (any todo/done file exists), done.md's existence
-          // overrides the tick as the progress fact (a `done` in items is the
-          // value that counts); an illegal state (both present / both missing)
-          // blocks for a human as soon as detected.
-          const scan = await scanSubtaskStates(dir, task.id, items.length)
-          if (scan.illegal.length) {
-            return {
-              type: "blocked",
-              question:
-                `${task.id} subtask state files are illegal (${scan.illegal
-                  .map((v) => {
-                    // State-file names come from the spec data (M1.4): the
-                    // message follows the protocol declaration, not literals.
-                    const spec = subtaskStateSpec(task.id, v.index)
-                    const pending = basename(spec.pending.path)
-                    const complete = basename(spec.complete.path)
-                    return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
-                  })
-                  .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
-            }
-          }
+          // Entry prechecks (D7, plans/0069 §2.2: the one subtaskPrecheck
+          // helper below, shared with the stream lane path): the
+          // subtask-directory state protocol scan (M1.0, plans/0030 — an
+          // illegal state, both present / both missing, blocks for a human
+          // as soon as detected) and the dependency-graph check (M3.5,
+          // plans/0047 G5 — a bad graph blocks for a human fix).
+          const stop = await subtaskPrecheck(dir, task, items)
+          if (stop) return stop
           // Dependency order (M3.5, plans/0047 G5): the next ready subtask by the
           // `Depends:` fields of the S<nn>/todo.md files (none = the first
-          // unticked item); a bad graph blocks for a human fix.
-          const graph = checklistProblems(items)
-          if (graph.length) {
-            return {
-              type: "blocked",
-              question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
-            }
-          }
+          // unticked item).
           const index = nextChecklistIndex(items)
           if (index === -1) break
           // The progress record tags the owning subtask (1-based index):
@@ -782,6 +740,43 @@ export async function runTask(
     await markDone(plan, task.id)
     return { type: "completed" }
   }
+}
+
+// The subtask loop's entry prechecks, parameterized into one helper for both
+// callers (D7, plans/0069 §2.2): the stream lane's single item
+// (runStreamLaneItem) and the loop's own head ran the same two blocks word
+// for word before this extraction. The subtask-directory state protocol scan
+// (M1.0, plans/0030: an illegal state — both todo.md and done.md present, or
+// both missing — blocks for a human as soon as detected) and the
+// dependency-graph check (M3.5, plans/0047 G5: a bad `Depends:` graph blocks
+// for a human fix). Returns the blocked stop when either check fails,
+// undefined when the checklist may run.
+async function subtaskPrecheck(dir: string, task: Task, items: readonly ChecklistItem[]): Promise<UnitStop | undefined> {
+  const scan = await scanSubtaskStates(dir, task.id, items.length)
+  if (scan.illegal.length) {
+    return {
+      type: "blocked",
+      question:
+        `${task.id} subtask state files are illegal (${scan.illegal
+          .map((v) => {
+            // State-file names come from the spec data (M1.4): the
+            // message follows the protocol declaration, not literals.
+            const spec = subtaskStateSpec(task.id, v.index)
+            const pending = basename(spec.pending.path)
+            const complete = basename(spec.complete.path)
+            return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
+          })
+          .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
+    }
+  }
+  const graph = checklistProblems(items)
+  if (graph.length) {
+    return {
+      type: "blocked",
+      question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
+    }
+  }
+  return undefined
 }
 
 // --dryrun's single standalone session: belongs to no task, enters no chain,

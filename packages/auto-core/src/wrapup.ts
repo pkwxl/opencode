@@ -17,7 +17,7 @@ import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc, taskDocPaths } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import { promptViews, type Plan, type Task } from "./tasks"
@@ -52,10 +52,10 @@ export async function runWrapup(
   input: { solo: boolean; label: string },
 ): Promise<UnitStop | undefined> {
   const dir = opts.dir ?? plan.dir
-  // The run's git service: the opts carrier the loop filled, else the
-  // holderless production fallback (a minimal test literal — committing on,
-  // exactly what such a literal did before the seam).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point: the opts carrier the loop filled, else the holderless production
+  // fallback).
+  const git = gitOf(opts)
   autobanner(`${task.id} ${task.title}: wrap-up`)
   const subject = `${task.id} wrapup ${task.title}`
   nameSubject(chain, subject)

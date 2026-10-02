@@ -43,8 +43,7 @@ import { currentRound } from "./phases"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { routingFacts } from "./routing"
-import { selectContext } from "./routing"
+import { routingOf, selectContext } from "./routing"
 import { services } from "./services"
 import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
@@ -117,9 +116,11 @@ export async function attempt(
     router.clearDownMarks("session", switches.modelFailbackScope)
   }
   // The run's routing facts, always defined: the loop's own for a run, else
-  // the implicit registry over the env switches on the installed services'
-  // clock and router (a bare options literal that never knew routing).
-  const routing = opts.routing ?? routingFacts(undefined, undefined, clock, router, undefined, switches)
+  // the implicit registry over the env switches on this dispatch's reads of
+  // the installed services' clock and router (a bare options literal that
+  // never knew routing) — routing.ts's routingOf, the fallback's one home
+  // (D9, plans/0069 §2.2).
+  const routing = routingOf(opts, switches, clock, router)
   // Registry selection runs before anything is created (plans/0055 §8.3): a
   // session never crosses agents, so the pick decides whose host serves the
   // dispatch — the client the session is created on, the host syncContext

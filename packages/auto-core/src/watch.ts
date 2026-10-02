@@ -34,7 +34,7 @@ import { makeTurnSources } from "./engine/sources"
 import { runTurn, type ConcernRoster } from "./engine/spine"
 import type { SteerContext } from "./model-step"
 import type { Opts } from "./opts"
-import { routingFacts } from "./routing"
+import { routingOf } from "./routing"
 import { services } from "./services"
 import type { StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
@@ -107,7 +107,10 @@ export async function watch(
   // under a registry layer with a classifier list, is carried on the context,
   // and without one (the implicit registry carries none) is undefined.
   const policy = retryPolicyOf(client.retryPolicy, steerContext?.entry?.retry)
-  const routing = opts.routing ?? routingFacts(undefined, undefined, svcs.clock, svcs.router, undefined, switches)
+  // routing.ts's routingOf, the implicit-registry fallback's one home (D9,
+  // plans/0069 §2.2): the opts' own for a run, else the implicit registry on
+  // this turn's reads of the installed services' clock and router.
+  const routing = routingOf(opts, switches, svcs.clock, svcs.router)
   const ctx: TurnContext = {
     client,
     sessionID,

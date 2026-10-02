@@ -108,9 +108,10 @@ export function createServices(over: { clock?: Clock; router?: Router; git?: Git
 // caller in src/ stays within the list (this file itself exempt — the
 // accessor's home); a caller outside it is a conscious edit to the list,
 // never a silent one.
+// Shrunk once (D13, plans/0069 §2.2): the loop modules left the list — they
+// build and install a holder through createServices/installServices, never
+// the ambient accessor, so their entries sat at zero ambient use.
 export const SERVICE_ENTRIES = [
-  "loop-preflight",
-  "loop",
   "session",
   "attempt",
   "watch",

@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
-import { createGitOps } from "./git-ops"
+import { gitOf } from "./git-ops"
 import { formatTokens, log } from "./log"
 import { currentRound, phaseHandoverDoc, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
@@ -66,11 +66,11 @@ export async function extractKnowledge(
 > {
   const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
-  // The run's git service: the opts carrier the loop filled, else the
-  // holderless production fallback (a minimal test literal — committing on,
-  // exactly what such a literal did before the seam; a test wanting
-  // committing off installs the no-commit double on the carrier).
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point: the opts carrier the loop filled, else the holderless production
+  // fallback; a test wanting committing off installs the no-commit double
+  // on the carrier).
+  const git = gitOf(opts)
   const existing = await existingKnowledge(dir, phase)
   if (existing) {
     // ③ Backfill commit: the document is on disk but still on the uncommitted
@@ -215,9 +215,9 @@ export async function extractPriorKnowledge(
   const round = await currentRound(dir)
   const task = { id: "PLAN", title: "prior-knowledge extraction (retrospective of existing migration results)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb prior-knowledge extraction" }
-  // The run's git service (the opts carrier, else the holderless
-  // production fallback), as in extractKnowledge above.
-  const git = opts.git ?? createGitOps()
+  // The run's git service (git-ops.ts gitOf, the seam's one resolution
+  // point), as in extractKnowledge above.
+  const git = gitOf(opts)
   const existing = await existingPriorKnowledge(dir, round)
   if (existing) {
     // ③ Backfill commit: the document is on disk but still on the uncommitted

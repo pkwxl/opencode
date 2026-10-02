@@ -267,13 +267,22 @@ export function recoveryAt(ctx: SelectContext, call: SelectCall): { at: number; 
   return soonest
 }
 
+// §6.2 rule 1 as the one shared rule (D12, plans/0069 §2.2, which found
+// routing.ts re-implementing it over names): whether a model entry lives on
+// the filter's adapter — an undefined filter passes every entry. Selection's
+// candidate filter below applies it beside the raw-value branch (a raw value
+// runs on the default agent, §9 R6); routing's coverage refusal and fleet
+// scan apply it over names they resolve through the registry first.
+export function entryPassesAgentFilter(registry: ModelRegistry, agentFilter: string | undefined, entry: ModelEntry): boolean {
+  return agentFilter === undefined || registry.agents.get(entry.agent)?.adapter === agentFilter
+}
+
 // §6.2 rule 1: the agent filter keeps only the models on its adapter; a raw
 // value runs on the default agent (§9 R6), so the filter reads that agent's
 // name for it.
 function passesFilter(ctx: SelectContext, candidate: Candidate): boolean {
   if (ctx.agentFilter === undefined) return true
-  const adapter = candidate.kind === "entry" ? ctx.registry.agents.get(candidate.entry.agent)?.adapter : ctx.defaultAgent
-  return adapter === ctx.agentFilter
+  return candidate.kind === "entry" ? entryPassesAgentFilter(ctx.registry, ctx.agentFilter, candidate.entry) : ctx.defaultAgent === ctx.agentFilter
 }
 
 // Does the candidate hold the chain's current model? An entry is held by its
