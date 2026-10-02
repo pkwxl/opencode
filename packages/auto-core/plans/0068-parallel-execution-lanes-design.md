@@ -402,9 +402,9 @@ concurrency exists.
   block, park prune); ☑ nested-repo serial degrade; ☑ interactive /
   wait-answer refusal (D11); ☑ tests at `maxSessions = 2` with an in-process
   fake launcher (two fake-agent lanes, one landing conflict under both level postures — `low` blocks, `medium` repairs once — plus one crash, one FAIL).
-- **S4 — observability and human surface.** ☐ Prefix relay; ☐ status tree
-  in-flight lanes section; ☐ stats booking from lane reports + conclusion
-  roll-up; ☐ `/exit`/step/wait-between drain semantics at boundaries; ☐
+- **S4 — observability and human surface.** ☑ Prefix relay; ☑ status tree
+  in-flight lanes section; ☑ stats booking from lane reports + conclusion
+  roll-up; ☑ `/exit`/step/wait-between drain semantics at boundaries; ☑
   parent-level lane event lines shaped for the 0067 bus (§6.7).
 - **S5 — stream lanes (task-internal width).** ☐ Runner exposes the
   single-subtask execution path (`T-NNN.S<nn>` lane units); ☐ lead lane
@@ -441,6 +441,13 @@ option, the parent's current main branch a repair merge names) and
 `Auto-Stage: merge-repair` (the repair merge commit's stage, one of the
 lane's own trailer-bearing commits). Both are new English protocol strings
 in this list's own grammar, never dual-read; nothing existing moved.
+AUTO-DECISION (S4 appended one literal to this registration list): the
+stats roll-up needed the lane report to carry its usage detail — the field
+name `detail` (the report's optional section beside `usage`: the lane's own
+task-bucket usage breakdown and its per-model/per-tier records, so the
+parent books them without reading the worktree's discarded stats document).
+A new English protocol string in this list's own grammar, never dual-read;
+nothing existing moved.
 
 ## 9. Documentation updates (with S6, pointers earlier)
 
@@ -737,4 +744,105 @@ the tests, any decision taken.
   230 s the manifest's own way (three-plus runs, a representative mid-spread
   figure) — this stage's repo-lane tests grew the suite past the old budget
   on the same host; the unit lane's own 5 s budget is untouched.
+**S4 — observability and the human surface, 2026-10-02.**
+- Landed: D13's prefix relay — `relayLaneOutput` (`src/lanes.ts`) attaches
+  inside `dispatchLane` at the spawn: every non-empty line of the worker's
+  stdout/stderr is re-emitted through the parent's own `log()` with a
+  `[<task-id>]` prefix as it arrives (the terminal and the audit log both —
+  the lane's own log dies with its worktree, §11's recommendation standing),
+  and the same incremental read is the drain that keeps a full pipe from
+  deadlocking the worker (the pre-S4 `laneOutput` whole-text read stays for
+  a worker no dispatch attached a relay to; `laneExit` takes the dispatch's
+  output promise so no stream is read twice). The status tree
+  (`src/status.ts`) opens with the in-flight lanes section — one line per
+  registry entry (unit, park worktree, worker pid), present exactly while
+  `.auto/units.json` holds lane records: the one read-model section D13
+  adds. Stats and conclusion (`src/stats.ts`, `src/conclusion.ts`): the lane
+  report gains the optional `detail` section (the lane's own task-bucket
+  usage breakdown and per-model/per-tier records, filled by
+  `src/loop.ts`'s report writer), `statsLaneUsage` books it — the per-unit
+  `lanes` entries (now marked `booked` when the detail rode along) plus a
+  fold of usage/sessions/model/tier records into the phase and round
+  buckets — and `statsLaneRollup` reads the section back; the round-complete
+  block gains the lanes roll-up line after the tokens line (count, sessions,
+  tokens with the booking claim, summed lane wall, the parent-wall note).
+  The 0067 bus shapes (`src/run-status-schema.ts`, the table's first growth
+  since P2a): four parent-level lane event types — `lane-dispatch`
+  (worktree, pid, the repair's `merge` branch), `lane-exit` (code, whether a
+  report was found, its verdict), `lane-landing` (D7's outcome with the
+  landed usage figures), `lane-block` (the one-line reason) — every one
+  carrying the `lane` identity, emitted from `dispatchLane`/`landLane` and
+  the two lane loops; nothing parses lane terminal text. The boundary drain
+  semantics were already S3's wiring (its AUTO-DECISIONs record
+  `--wait-between` landing there and this stage's boundary item being the
+  observability around them); this stage verified them — a pause or `/exit`
+  at a landing blocks the single-threaded loop (no new dispatch while
+  paused), the in-flight lanes run to their exits (the relay keeps their
+  pipes draining), and each later landing takes its own boundary.
+- Tests: `test/lanes-scheduler.test.ts` — the relay over hand-built streams
+  (chunk-split lines reassembled, blank lines dropped, a CR stripped, the
+  partial tail flushed, every relayed line prefixed, the raw text preserved
+  for the failure matrix's tail; a stream-less stub relays nothing), a
+  two-lane run whose stub workers carry output streams (both lanes' lines
+  relayed prefixed through the loop, the four event kinds in dispatch order
+  with their lane identity, both reports' usage booked — the lanes entries
+  marked booked, the round bucket's usage/sessions/model/tier records
+  folded, the task bucket untouched), and a FAIL run's exit/landing/block
+  events; `test/stats.test.ts` — the booking matrix (detail vs no detail,
+  phase+round never task, wall never folded, re-dispatch accumulation, the
+  mixed roll-up's honesty, the persisted round trip) and the reader's
+  undefined floor; `test/loop-conclusion.test.ts` — the roll-up line in all
+  three shapes (booked, unbooked, laneless); `test/tasks.test.ts` — the
+  status section (registry order, pid degradation, the laneless floor);
+  `test/run-status-schema.test.ts` — SHIPPED extended in the same change,
+  the samples, and the lane events' compile-time joins (the landing outcomes
+  table, the verdict reusing the report's `Result` words). The shell e2e:
+  a conflict-free two-lane round over the fake claude's new
+  `FAKE_CLAUDE_FORK_MODULES` knob (the rejected-split fork writes one
+  per-task module, so two lanes touch disjoint files), parked mid-run at
+  the fake's gate — `status` reads both lanes in flight, the relay prefixes
+  every lane line (the workers' own start lines re-emitted with their id,
+  no unprefixed copy), both reports' usage books (the lanes entries and the
+  round bucket), the conclusion prints the lanes roll-up with its
+  parent-wall note, and the section is gone after the round.
+- AUTO-DECISION (`src/lanes.ts`): the relay drops empty lines rather than
+  emitting a bare `[<id>] ` — the child's banners carry blank lines for a
+  terminal's benefit, several lanes interleaving them is pure noise, and a
+  prefixed empty line carries no fact; every line the relay does emit is
+  prefixed (the acceptance's own wording).
+- AUTO-DECISION (`src/stats.ts`, the roll-up's booking targets): the detail
+  folds into the phase and round buckets, never the task bucket — at
+  landing time the parent's task bucket holds whichever unit the last
+  dispatch switched it to (not necessarily the landed unit), and the task
+  bucket is the parent's own session segment's caliber (`taskEndLines`
+  guards on it); a landed lane's figures belong to the run's roll-up, and
+  the lane's own task-granular story stays in the worktree's discarded
+  document (D6). Wall time never folds: lanes overlap, the buckets' wall/AI
+  are the parent process's clock, and lane wall stays a per-lane segment —
+  §10's rule, now the conclusion's note.
+- AUTO-DECISION (`src/stats.ts`/`src/conclusion.ts`, the honesty marker):
+  the lanes entries carry `booked` (the report carried the detail) and the
+  roll-up line claims "(booked into the totals above)" only when every
+  landed report did — a report an older shape wrote leaves lane-local
+  figures the totals do not include, and the line must not claim otherwise.
+- AUTO-DECISION (`src/conclusion.ts`): the lanes roll-up line lives in the
+  round-complete block only — the lanes section of the stats document is
+  run-scoped and carries no phase attribution, so a phase-close lanes line
+  would need a new per-phase record; the round conclusion is the roll-up
+  D13 names, and the phase block's times are the same parent-wall caliber
+  by construction.
+- AUTO-DECISION (the lane events' emission points): `lane-dispatch` and
+  `lane-landing` emit inside `dispatchLane`/`landLane` (every caller — the
+  two loops, the repair re-dispatch, the orphan recovery — shares them),
+  while `lane-exit` and `lane-block` emit in the loops where the exit code
+  and the blocking reason are known; the orphan recovery's emissions land
+  before `startRunStatus` opens the bracket and are therefore no-ops by the
+  emitter's own rule (a refused preflight never started a run) — its story
+  stays in the log, recorded here so the gap reads as the design's seam,
+  not an oversight.
+- AUTO-DECISION (`src/lanes.ts`, the report's `detail` shape): the section
+  reuses the stats module's `Usage`/`ModelStat`/`TierStat` shapes restated
+  on the report (the run-status-schema precedent) rather than inventing a
+  parallel grammar — the parent books it field-for-field, and one new
+  protocol literal (`detail`, §8) covers the whole roll-up.
 <!-- auto: eof -->

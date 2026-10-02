@@ -69,6 +69,10 @@ export const RUN_STATUS_EVENT_TYPES = [
   "usage-rollup",
   "failure",
   "exit-request",
+  "lane-dispatch",
+  "lane-exit",
+  "lane-landing",
+  "lane-block",
 ] as const
 
 export type RunStatusEventType = (typeof RUN_STATUS_EVENT_TYPES)[number]
@@ -136,6 +140,20 @@ export type QuestionSettlement = (typeof QUESTION_SETTLEMENTS)[number]
 export const EXIT_BOUNDARIES = ["phase", "task", "subtask", "wait"] as const
 
 export type ExitBoundary = (typeof EXIT_BOUNDARIES)[number]
+
+// The outcomes of a lane's landing (plans/0068 D7): the merge landed (with
+// the landing-sync tick commit), conflicted (the merge aborted, the main tree
+// clean again, the lane's scene kept), or the landing itself blocked
+// (verification or the merge failed; the scene kept).
+export const LANE_LANDING_OUTCOMES = ["landed", "conflict", "blocked"] as const
+
+export type LaneLandingOutcome = (typeof LANE_LANDING_OUTCOMES)[number]
+
+// The verdict a lane report's `result` field carries (plans/0068 D8): the
+// `Result: PASS|FAIL` semantics verbatim — no new verdict vocabulary.
+export const LANE_RESULTS = ["PASS", "FAIL"] as const
+
+export type LaneResult = (typeof LANE_RESULTS)[number]
 
 // The usage figures a roll-up carries: the stats Usage shape (src/stats.ts)
 // restated structurally — same field names, so a stats Usage value is
@@ -216,3 +234,31 @@ export type RunStatusEvent =
   // before the run reaches it, and the run-end with code 3 closes the
   // story).
   | { type: "exit-request"; run: number; at: number; boundary?: ExitBoundary }
+  // The lane lifecycle of a parallel run (plans/0068 §6.7, D13, stage S4):
+  // parent-level facts of the isolation machinery — the task-start/task-end
+  // brackets above carry the unit narrative; these carry the lane identity,
+  // so the future 0067 bus can carry a lane the way it carries a run.
+  // `lane` is the unit id (the branch `auto-lane/<id>` and the park
+  // `.auto/worktrees/<id>/` derive from it). Nothing here parses lane
+  // terminal text (F13's rule): the events carry typed facts only, and the
+  // human story rides the prefix relay's log lines.
+  //   - lane-dispatch: the parent spawned the lane's worker (`worktree` the
+  //     park path relative to the target directory, `pid` the worker's when
+  //     it has one, `merge` naming the parent branch a conflict repair's
+  //     re-dispatch carries — absent on every ordinary dispatch);
+  //   - lane-exit: one worker's process exit — `code` the exit code, and
+  //     `report` whether the lane report was found and parsed (false is the
+  //     orphan signal, D8/D14); `result` the report's verdict when it has
+  //     one;
+  //   - lane-landing: the landing protocol's outcome for one lane (D7) —
+  //     a landed lane carries the report's usage figures (the numbers the
+  //     parent books into its run stats), a conflict or a blocked landing
+  //     carries `detail`;
+  //   - lane-block: a lane blocked the run (the failure matrix's exit-2
+  //     rows: a FAIL/blocked report, a landing conflict that spent its
+  //     repair budget, the dispatch attempts cap) — `reason` the one-line
+  //     fact, data rather than log prose.
+  | { type: "lane-dispatch"; run: number; at: number; lane: string; worktree: string; pid?: number; merge?: string }
+  | { type: "lane-exit"; run: number; at: number; lane: string; code: number; report: boolean; result?: LaneResult }
+  | { type: "lane-landing"; run: number; at: number; lane: string; outcome: LaneLandingOutcome; detail?: string; tokens?: number; wallMs?: number; sessions?: number }
+  | { type: "lane-block"; run: number; at: number; lane: string; reason: string }

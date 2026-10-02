@@ -3,11 +3,15 @@
 // carries (0051 D3's `worktree` field, built at last). At stage S1 the module
 // was pure and inert; S2 added the dispatch and landing choreography (§6.5)
 // and S3 the activation rule (D10), the conflict-repair policy (D21) and the
-// orphan-recovery inputs (D14: the liveness probe, the dispatch cap). The
-// loops that drive it live above, in src/loop-task.ts — the serial isolation
-// loop of the rollout switch and, since S3, the readiness scheduler's
-// concurrent lane loop; nothing here imports a loop or a session-driving
-// module (the import-direction rule).
+// orphan-recovery inputs (D14: the liveness probe, the dispatch cap). S4
+// added the observability surfaces of D13: the prefix relay every dispatch
+// attaches (the parent re-emits each lane worker's output through its own
+// log with a `[<task-id>]` prefix), the usage detail the lane report carries
+// for the stats roll-up, and the parent-level lane events shaped for the
+// 0067 bus (§6.7). The loops that drive it live above, in src/loop-task.ts —
+// the serial isolation loop of the rollout switch and, since S3, the
+// readiness scheduler's concurrent lane loop; nothing here imports a loop or
+// a session-driving module (the import-direction rule).
 //
 // select.ts is the style precedent: a pure core over injected facts. The
 // readiness half is a function of its arguments — the loaded plan, the merged
@@ -32,7 +36,8 @@ import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./doc
 import { deleteBranch, mergeBaseSha, repoRoots, unitViolations, type GitOps } from "./git"
 import type { ParallelLevel } from "./intent/types"
 import { log } from "./log"
-import { statsLaneUsage } from "./stats"
+import { emitStatus } from "./run-status"
+import { statsLaneUsage, type LaneUsageDetail } from "./stats"
 import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
 import { begin, clearLane, laneRecords, setLane, taskIndexPath, type Plan, type PlanPhase, type Task } from "./tasks"
 
@@ -233,12 +238,86 @@ export type LaneReport = {
   agent: string
   models: string[]
   split?: Record<string, unknown>
+  // The usage detail of the S4 roll-up (D13): the lane's own task bucket's
+  // usage breakdown and per-model/per-tier sections, so the parent's stats
+  // keep their per-model and per-tier lines working under the scheduler
+  // without reading the worktree's discarded document. A new protocol field
+  // beside D8's registered names (the §8 registration list's own grammar,
+  // appended there with this stage); absent on a report an older shape wrote.
+  detail?: LaneUsageDetail
 }
 
 const plainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
 const finiteCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
 const integerCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0
 const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string")
+
+// One usage figure of the detail, leniently (the registry parsers' rule: a
+// field that is not a finite number reads as 0, never a throw).
+const usageFigure = (raw: Record<string, unknown>, key: string): number => (typeof raw[key] === "number" && Number.isFinite(raw[key]) ? (raw[key] as number) : 0)
+
+const parseUsageDetail = (raw: unknown): LaneUsageDetail | undefined => {
+  if (!plainObject(raw)) return undefined
+  const usage = plainObject(raw.usage) ? raw.usage : undefined
+  if (usage === undefined) return undefined
+  const detail: LaneUsageDetail = {
+    usage: {
+      input: usageFigure(usage, "input"),
+      output: usageFigure(usage, "output"),
+      reasoning: usageFigure(usage, "reasoning"),
+      cacheRead: usageFigure(usage, "cacheRead"),
+      cacheWrite: usageFigure(usage, "cacheWrite"),
+      cost: usageFigure(usage, "cost"),
+      steps: usageFigure(usage, "steps"),
+    },
+  }
+  // Per-model and per-tier records, the stats module's own shapes restated:
+  // a bad entry is skipped, an empty result stays absent.
+  if (plainObject(raw.models)) {
+    const models: NonNullable<LaneUsageDetail["models"]> = {}
+    for (const [name, value] of Object.entries(raw.models)) {
+      if (!plainObject(value) || !plainObject(value.usage)) continue
+      const u = value.usage
+      models[name] = {
+        usage: {
+          input: usageFigure(u, "input"),
+          output: usageFigure(u, "output"),
+          reasoning: usageFigure(u, "reasoning"),
+          cacheRead: usageFigure(u, "cacheRead"),
+          cacheWrite: usageFigure(u, "cacheWrite"),
+          cost: usageFigure(u, "cost"),
+          steps: usageFigure(u, "steps"),
+        },
+        sessions: usageFigure(value, "sessions"),
+        fails: usageFigure(value, "fails"),
+        stuckHints: usageFigure(value, "stuckHints"),
+        reprompts: usageFigure(value, "reprompts"),
+      }
+    }
+    if (Object.keys(models).length) detail.models = models
+  }
+  if (plainObject(raw.tiers)) {
+    const tiers: NonNullable<LaneUsageDetail["tiers"]> = {}
+    for (const [name, value] of Object.entries(raw.tiers)) {
+      if (!plainObject(value) || !plainObject(value.usage)) continue
+      const u = value.usage
+      tiers[name] = {
+        usage: {
+          input: usageFigure(u, "input"),
+          output: usageFigure(u, "output"),
+          reasoning: usageFigure(u, "reasoning"),
+          cacheRead: usageFigure(u, "cacheRead"),
+          cacheWrite: usageFigure(u, "cacheWrite"),
+          cost: usageFigure(u, "cost"),
+          steps: usageFigure(u, "steps"),
+        },
+        sessions: usageFigure(value, "sessions"),
+      }
+    }
+    if (Object.keys(tiers).length) detail.tiers = tiers
+  }
+  return detail
+}
 
 // Parse and sanitize a lane report's JSON text; undefined when it is not a
 // report — unparseable, not an object, or missing/mistyping any field of the
@@ -263,6 +342,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
   if (raw.result !== undefined && raw.result !== "PASS" && raw.result !== "FAIL") return undefined
   if (raw.blocked !== undefined && typeof raw.blocked !== "string") return undefined
   if (raw.split !== undefined && !plainObject(raw.split)) return undefined
+  const detail = parseUsageDetail(raw.detail)
   return {
     unit: raw.unit,
     phase: raw.phase,
@@ -275,6 +355,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
     ...(raw.result !== undefined ? { result: raw.result } : {}),
     ...(raw.blocked !== undefined ? { blocked: raw.blocked } : {}),
     ...(raw.split !== undefined ? { split: raw.split } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   }
 }
 
@@ -348,8 +429,11 @@ export async function readLaneReport(dir: string): Promise<LaneReport | undefine
 // failure that stopped scheduling (the caller blocks naming the error).
 // `fresh` distinguishes a created worktree from a re-dispatch's reuse of the
 // recorded one (the kill-resume property: same worktree, own progress).
+// `output` is the prefix relay's full-text promise (below): the drain — and
+// the live relay — started at dispatch, before the spawn call even returned
+// to the loop.
 export type LaneDispatch =
-  | { type: "spawned"; worktree: string; worker: LaneWorker; fresh: boolean }
+  | { type: "spawned"; worktree: string; worker: LaneWorker; fresh: boolean; output: Promise<string> }
   | { type: "failed"; error: string }
 
 // The scaffolding a fresh git worktree lacks (F7): the untracked, gitignored
@@ -428,7 +512,21 @@ export async function dispatchLane(
   }
   const worktree = fresh ? park : join(dir, record!.worktree)
   await setLane(dir, task.id, { worktree: relative(dir, worktree), ...(worker.pid !== undefined ? { pid: worker.pid } : {}) })
-  return { type: "spawned", worktree, worker, fresh }
+  // D13's prefix relay attaches here, at the spawn: every line the worker
+  // prints reaches the parent's terminal and audit log as it arrives
+  // (prefixed below), and the same drain keeps the pipe from filling.
+  const output = relayLaneOutput(task.id, worker)
+  // The 0067 bus's lane identity (§6.7): the dispatch is a parent-level
+  // structured event — worktree and pid beside the lane's unit, the repair's
+  // merge branch when this is a re-dispatch carrying one.
+  emitStatus({
+    type: "lane-dispatch",
+    lane: task.id,
+    worktree: relative(dir, worktree).replaceAll("\\", "/"),
+    ...(worker.pid !== undefined ? { pid: worker.pid } : {}),
+    ...(instruction !== undefined ? { merge: instruction.merge } : {}),
+  })
+  return { type: "spawned", worktree, worker, fresh, output }
 }
 
 // Copy the scaffolding into a fresh lane worktree (§6.5 ③). The F7 set is
@@ -461,24 +559,74 @@ async function copyScaffolding(dir: string, worktree: string): Promise<string | 
   return undefined
 }
 
-// The lane worker's exit: drain the piped output (a full pipe would deadlock
-// the child long before it finishes) and read its code. A signal kill
-// resolves Bun's exit promise to null; every such code is the crash
-// vocabulary's, and laneOutcome decides by the report's absence anyway.
-export async function laneExit(worker: LaneWorker): Promise<{ code: number; output: string }> {
-  const [output, code] = await Promise.all([laneOutput(worker), worker.exited])
-  return { code: typeof code === "number" ? code : 137, output }
+// The lane worker's exit: await the (already running) drain of its piped
+// output and read its code. `output` is the relay's full-text promise the
+// dispatch returned — passing it keeps one drain per stream (a second reader
+// on an already-locked stream would hang); without one (a worker the caller
+// spawned outside dispatchLane, a test double) a plain drain starts here. A
+// signal kill resolves Bun's exit promise to null; every such code is the
+// crash vocabulary's, and laneOutcome decides by the report's absence anyway.
+export async function laneExit(worker: LaneWorker, output?: Promise<string>): Promise<{ code: number; output: string }> {
+  const [text, code] = await Promise.all([output ?? laneOutput(worker), worker.exited])
+  return { code: typeof code === "number" ? code : 137, output: text }
 }
 
-// Start draining one lane worker's piped output the moment it is dispatched
-// and hand back the promise of its full text. The scheduler's loop (S3) holds
-// several lanes at once and awaits their exits in a race — the one whose
-// streams nobody reads until its exit could block on a full pipe long before
-// finishing, so the drain starts at dispatch and the exit handler only awaits
-// the already-running read.
+// A plain drain of a worker's piped output, no relay (the pre-S4 shape, kept
+// for callers that hold a worker dispatchLane never spawned): the full text
+// of stdout then stderr.
 export function laneOutput(worker: LaneWorker): Promise<string> {
   const read = (stream: ReadableStream<Uint8Array> | null | undefined) => (stream ? new Response(stream).text().catch(() => "") : "")
   return Promise.all([read(worker.stdout), read(worker.stderr)]).then(([out, err]) => `${out}${err}`)
+}
+
+// D13's prefix relay: drain one lane worker's piped output line by line and
+// re-emit every non-empty line through the parent's own log() with a
+// `[<task-id>]` prefix — the human watching the parent sees the lanes' story
+// as it happens, and the parent's audit log keeps the run story whole (the
+// lane's own log dies with its worktree, discarded by contract; the §11
+// recommendation stands). The returned promise resolves to the full raw text
+// once both streams end, so the failure matrix's environment-error tail reads
+// the same source the terminal saw.
+// The relay is the observability half of the drain, not an alternative to
+// it: reading incrementally is exactly what keeps a full pipe from
+// deadlocking the worker, so every dispatch attaches this and nobody drains
+// the same stream twice.
+// AUTO-DECISION (empty lines are dropped, not relayed as a bare prefix): the
+// child's banner output carries blank lines for a terminal's benefit; a
+// relayed `[<id>] ` line carries no fact, and interleaving several lanes'
+// blank lines into the parent's own narrative adds pure noise. Every line
+// the relay does emit carries the prefix.
+export function relayLaneOutput(unit: string, worker: LaneWorker): Promise<string> {
+  const relay = (stream: ReadableStream<Uint8Array> | null | undefined): Promise<string> => {
+    if (!stream) return Promise.resolve("")
+    return (async () => {
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      let text = ""
+      let buffer = ""
+      const flush = (line: string) => {
+        const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line
+        if (trimmed.length) log(`[${unit}] ${trimmed}`)
+      }
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        text += chunk
+        buffer += chunk
+        let newline = buffer.indexOf("\n")
+        while (newline >= 0) {
+          flush(buffer.slice(0, newline))
+          buffer = buffer.slice(newline + 1)
+          newline = buffer.indexOf("\n")
+        }
+      }
+      buffer += decoder.decode()
+      flush(buffer)
+      return text
+    })().catch(() => "")
+  }
+  return Promise.all([relay(worker.stdout), relay(worker.stderr)]).then(([out, err]) => `${out}${err}`)
 }
 
 // D14's liveness probe: whether a recorded lane pid still names a process.
@@ -526,11 +674,36 @@ export async function landLane(
 ): Promise<Landing> {
   const worktree = join(dir, lanePark(task.id))
   const branch = laneBranch(task.id)
+  // D7's step ④ booking (the report's figures into the parent's run stats,
+  // the detail folding into the phase/round buckets — the S4 roll-up) plus
+  // the 0067 bus's landing event: one helper, the three call sites below
+  // (the settled path, the landing-sync failure, the normal close) share it.
+  const book = () =>
+    statsLaneUsage(dir, task.id, {
+      tokens: report.usage.tokens,
+      wallMs: report.usage.wallMs,
+      sessions: report.sessions,
+      ...(report.detail !== undefined ? { detail: report.detail } : {}),
+    })
+  const landedEvent = (outcome: "landed" | "conflict" | "blocked", extra: { detail?: string; usage?: boolean }) =>
+    emitStatus({
+      type: "lane-landing",
+      lane: task.id,
+      outcome,
+      ...(extra.detail !== undefined ? { detail: extra.detail } : {}),
+      ...(extra.usage
+        ? { tokens: report.usage.tokens, wallMs: report.usage.wallMs, sessions: report.sessions }
+        : {}),
+    })
   // ① verify the lane branch.
   const base = await mergeBaseSha(dir, "HEAD", branch)
-  if (base === undefined) return { type: "blocked", error: `deriving the lane baseline of ${task.id} failed (merge-base of HEAD and ${branch}); the lane scene is kept at ${lanePark(task.id)}` }
+  if (base === undefined) {
+    landedEvent("blocked", { detail: "deriving the lane baseline failed" })
+    return { type: "blocked", error: `deriving the lane baseline of ${task.id} failed (merge-base of HEAD and ${branch}); the lane scene is kept at ${lanePark(task.id)}` }
+  }
   const violations = await unitViolations(worktree, [{ root: worktree, sha: base }])
   if (violations.length) {
+    landedEvent("blocked", { detail: violations.join("; ") })
     return { type: "blocked", error: `the lane branch of ${task.id} failed the close-out check (${violations.join("; ")}); the lane scene is kept at ${lanePark(task.id)} for inspection` }
   }
   // ② the landing merge. `own` names the parent-exclusive phase index (D6):
@@ -539,8 +712,14 @@ export async function landLane(
   // side and step ③ re-derives the true ticks; any other conflict stays the
   // conflict protocol's.
   const landed = await gitOps.landBranch(dir, branch, task, [taskIndexPath(phase)])
-  if (landed.type === "conflict") return { type: "conflict", detail: landed.detail }
-  if (landed.type === "failed") return { type: "blocked", error: `landing ${branch} failed: ${landed.error}` }
+  if (landed.type === "conflict") {
+    landedEvent("conflict", { detail: landed.detail })
+    return { type: "conflict", detail: landed.detail }
+  }
+  if (landed.type === "failed") {
+    landedEvent("blocked", { detail: landed.error })
+    return { type: "blocked", error: `landing ${branch} failed: ${landed.error}` }
+  }
   // ③ the tick re-derivation, committed as landing-sync.
   await syncIndexTicks(dir, phase)
   const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${task.title}` })
@@ -549,15 +728,17 @@ export async function landLane(
     // cosmetic (D7 step ③'s own note). Finish the landing (④⑤ below keep the
     // park clean) and hand the uncommitted sync to the human.
     await clearLane(dir, task.id)
-    await statsLaneUsage(dir, task.id, { tokens: report.usage.tokens, wallMs: report.usage.wallMs, sessions: report.sessions })
+    await book()
     await teardownLane(gitOps, dir, task.id)
+    landedEvent("blocked", { detail: "the landing-sync commit failed" })
     return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
   }
   // ④ the runtime fields and the report's usage.
   await clearLane(dir, task.id)
-  await statsLaneUsage(dir, task.id, { tokens: report.usage.tokens, wallMs: report.usage.wallMs, sessions: report.sessions })
+  await book()
   // ⑤ teardown.
   const teardown = await teardownLane(gitOps, dir, task.id)
+  landedEvent("landed", { usage: true })
   return { type: "landed", teardown }
 }
 

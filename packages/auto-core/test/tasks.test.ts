@@ -25,6 +25,7 @@ import {
   resetInProgress,
   resetPlanning,
   setForkBase,
+  setLane,
   subtasks,
   takenTaskIds,
   taskBody,
@@ -261,6 +262,30 @@ describe("renderStatus closed marks (plans/0053 D16)", () => {
       "      [✓] T-002 b",
       "      [ ] T-003 c",
     ])
+  })
+})
+
+describe("renderStatus in-flight lanes section (plans/0068 D13, S4)", () => {
+  test("lane registry entries open the tree with one section line per lane, worktree and pid beside the unit", async () => {
+    await seedUnits(dir, "## T-001: a [pending]\nA.\n\n## T-002: b [pending]\nB.\n")
+    await setLane(dir, "T-001", { worktree: join(".auto", "worktrees", "T-001"), pid: 4242 })
+    await setLane(dir, "T-002", { worktree: join(".auto", "worktrees", "T-002") })
+    expect(await renderStatus(dir)).toEqual([
+      "lanes in flight (2):",
+      `  [▶] T-001 (worktree .auto/worktrees/T-001, pid 4242)`,
+      `  [▶] T-002 (worktree .auto/worktrees/T-002)`,
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement",
+      "      [ ] T-001 a",
+      "      [ ] T-002 b",
+    ])
+  })
+
+  test("no lane records: the tree is unchanged (the read model gains exactly the one section)", async () => {
+    await seedUnits(dir, "## T-001: a [pending]\nA.\n")
+    const lines = await renderStatus(dir)
+    expect(lines[0]).toBe("R-01 (0/1 phases done)")
+    expect(lines.join("\n")).not.toContain("lanes in flight")
   })
 })
 

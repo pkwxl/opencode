@@ -7,7 +7,7 @@
 import { formatDuration, formatTokens, formatUsageLine } from "./log"
 import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
-import { statsBoot, statsHistory, statsId, statsTotals, type DigestStat, type DigestStats, type ModelStat, type TierStat, type StatsResume } from "./stats"
+import { statsBoot, statsHistory, statsId, statsLaneRollup, statsTotals, type DigestStat, type DigestStats, type LaneRollup, type ModelStat, type TierStat, type StatsResume } from "./stats"
 
 // Startup resume banner (plans/STATS_PLAN.md §4.6): the snapshot is taken after
 // depreciation posting and before round rollover; round/phase/task are the
@@ -198,6 +198,31 @@ function digestLine(digests: DigestStats | undefined): string[] {
   return [`  digests: ${parts.join(", ")}`]
 }
 
+// The lanes roll-up line of the round-complete block (plans/0068 D13, S4,
+// §10): how many lanes landed, their summed sessions and tokens, and the
+// summed lane wall — with the wall-clock honesty the design asks for, noted
+// here: lanes overlap, so their walls sum to effort, never to duration, and
+// the time lines of this block mean parent-wall (the parent process's own
+// clock, which the landing booking never inflates). The usage claim names
+// where the lane figures sit: with every report carrying the usage detail
+// they are booked into the totals above (the per-model lines included when
+// the report carried model data), and without it (a report an older shape
+// wrote) they stay lane-local figures.
+// AUTO-DECISION (the roll-up line lives in the round block only): the lanes
+// section of the stats document is run-scoped — it carries no phase
+// attribution, so a phase-close lanes line cannot be derived without a new
+// per-phase record; the round conclusion is the roll-up the design names,
+// and the phase block's times are the same parent-wall caliber by
+// construction.
+function laneRollupLines(rollup: LaneRollup | undefined): string[] {
+  if (!rollup) return []
+  const booked = rollup.booked ? " (booked into the totals above)" : ""
+  return [
+    `  lanes: ${rollup.lanes} landed / ${rollup.sessions} session${rollup.sessions === 1 ? "" : "s"} / ${formatTokens(rollup.tokens)} tokens${booked}; ` +
+      `lane wall ${formatDuration(rollup.wallMs)} summed — lanes overlap, the time lines mean parent-wall`,
+  ]
+}
+
 // Round-complete line (§4.4): this round [`■ round N complete: total W (AI
 // A[, human wait Z]), [P phases / ] T tasks / S sessions`, tokens line];
 // phaseCount is only provided on the phased path (the phase index done count =
@@ -235,6 +260,10 @@ export async function roundCompleteLines(
       `${phasesPart}${totals.tasks} tasks / ${totals.sessions} sessions`,
     formatUsageLine(totals.usage),
   ]
+  // The lanes roll-up follows the tokens line (plans/0068 D13, S4): it
+  // qualifies the numbers above it — where the lane usage sits and what the
+  // time lines mean — so it reads before the per-model detail.
+  lines.push(...laneRollupLines(await statsLaneRollup(directory)))
   lines.push(...modelBlockLines(totals.models, totals.tiers))
   lines.push(...quotaWaitLine(totals.quotaWaits))
   lines.push(...digestLine(totals.digests))

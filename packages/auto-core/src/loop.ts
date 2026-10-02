@@ -370,7 +370,11 @@ export async function runLaneWorker(directory: string, opts: RunAllOpts & { lane
 // The report of one lane run (D8's fields): the unit's own task bucket of the
 // worktree's stats carries usage, sessions and the per-model keys; the agent
 // rides the progress record (the session-bearing field §8.2 wrote) with the
-// options' choice as the floor.
+// options' choice as the floor. Since S4 the report also carries the usage
+// detail (D13's roll-up): the bucket's usage breakdown and its per-model /
+// per-tier sections, so the parent's stats keep their per-model and per-tier
+// lines working without reading this worktree's document — it is discarded
+// at teardown, the report is what survives.
 async function laneReportOf(
   directory: string,
   opts: RunAllOpts,
@@ -398,5 +402,14 @@ async function laneReportOf(
     commits: await commitsSince(directory, base),
     agent: progress?.agent ?? opts.agent ?? "opencode",
     models: bucket?.models ? Object.keys(bucket.models) : [],
+    ...(bucket !== undefined
+      ? {
+          detail: {
+            usage: bucket.usage,
+            ...(bucket.models !== undefined ? { models: bucket.models } : {}),
+            ...(bucket.tiers !== undefined ? { tiers: bucket.tiers } : {}),
+          },
+        }
+      : {}),
   }
 }

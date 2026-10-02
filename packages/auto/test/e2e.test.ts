@@ -3865,11 +3865,16 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
   })
 })
 
-// The lane scheduler live (auto-core plans/0068 S3, D10): --max-sessions 2
-// under a parallel level routes the task loop through the readiness scheduler
-// — the lanes spawn through the shell's own `_lane` entry (the default
-// launcher re-invoking this CLI), land through the merge protocol, and the
-// failure matrix and D21's conflict posture drive the run's exit.
+// The lane scheduler live (auto-core plans/0068 S3, D10; the S4
+// observability cases ride the same entry): --max-sessions 2 under a
+// parallel level routes the task loop through the readiness scheduler — the
+// lanes spawn through the shell's own `_lane` entry (the default launcher
+// re-invoking this CLI), land through the merge protocol, and the failure
+// matrix and D21's conflict posture drive the run's exit. S4 adds the
+// human-surface cases over a conflict-free two-lane round: the prefix relay
+// (every lane line re-emitted with `[<task-id>]`), the status tree's
+// in-flight lanes section read mid-run, both reports' usage booked into the
+// run stats, and the conclusion's lanes roll-up with its parent-wall note.
 describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
   const doc = (id: string, title: string, touches: string) =>
     [`# ${id}: ${title}`, "Phase: R-01.P01", "Depends: none", `Touches: ${touches}`, "", "## Goal", "", `Deliver ${title}.`, "", "## Scope", "", "src only.", "", "## Acceptance", "", "The modules read back.", "", "<!-- auto: eof -->", ""].join("\n")
@@ -3948,4 +3953,85 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   }, 180_000)
+
+  // S4's acceptance round (plans/0068 §7): two lanes over disjoint files
+  // (the fake's fork-module knob writes one per-task module, so the declared
+  // Touches tell the truth), parked mid-run at the fake's gate so `status`
+  // reads the in-flight lanes section while both lanes are live.
+  test("a two-lane round lands both: the relay prefixes every lane line, status shows both lanes mid-run, both reports' usage books, the conclusion rolls up", async () => {
+    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-lane-s4-gate-"))
+    const gate = join(gateDir, "go")
+    const agent = await fakeClaude({ FAKE_CLAUDE_GATE: gate, FAKE_CLAUDE_FORK_MODULES: "1" })
+    const { dir, git } = await setup("auto-cli-lane-s4-", "low", [
+      ["T-001", "the alpha module", "src/T-001.ts"],
+      ["T-002", "the beta module", "src/T-002.ts"],
+    ])
+    const units = async () =>
+      JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as {
+        tasks: Record<string, { pid?: number }>
+      }
+    try {
+      const running = agent.run(["run", dir, "--max-sessions", "2"])
+      // Wait until both lanes are live: the registry names both workers'
+      // pids (their sessions parked at the fake's gate).
+      let both = false
+      for (let i = 0; i < 1200 && !both; i++) {
+        await Bun.sleep(50)
+        const tasks = (await units()).tasks
+        both = tasks["T-001"]?.pid !== undefined && tasks["T-002"]?.pid !== undefined
+      }
+      expect(both).toBe(true)
+      // The status tree mid-run: the in-flight lanes section, one line per
+      // lane with its park worktree and worker pid — the read-model section
+      // D13 adds, shell-visible beside a live run.
+      const mid = await runCli(["status", dir])
+      expect(mid.code).toBe(0)
+      expect(mid.out).toContain("lanes in flight (2):")
+      expect(mid.out).toContain("[▶] T-001 (worktree .auto/worktrees/T-001, pid ")
+      expect(mid.out).toContain("[▶] T-002 (worktree .auto/worktrees/T-002, pid ")
+      await Bun.write(gate, "released\n")
+      const run = await running
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      // Both lanes landed their own module; the tree is clean, the park torn
+      // down.
+      expect(await Bun.file(join(dir, "src", "T-001.ts")).text()).toContain("T-001")
+      expect(await Bun.file(join(dir, "src", "T-002.ts")).text()).toContain("T-002")
+      expect(run.out).toContain("T-001 done (lane landed:")
+      expect(run.out).toContain("T-002 done (lane landed:")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
+      // The prefix relay: the workers' own start lines arrived re-emitted
+      // through the parent with their lane's id — and no unprefixed copy.
+      expect(run.out).toContain("[T-001] ▶ T-001 lane worker: running the unit")
+      expect(run.out).toContain("[T-002] ▶ T-002 lane worker: running the unit")
+      expect(run.out).not.toContain("\n▶ T-001 lane worker: running the unit")
+      // Both reports' usage booked: the per-unit lanes entries (marked
+      // booked — the reports carried the detail) and the fold into the round
+      // bucket's usage and sessions.
+      const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as {
+        lanes?: Record<string, { tokens: number; sessions: number; booked?: boolean }>
+        roundB: { sessions: number; usage: { input: number } }
+      }
+      for (const unit of ["T-001", "T-002"]) {
+        expect(stats.lanes?.[unit]?.tokens ?? 0).toBeGreaterThan(0)
+        expect(stats.lanes?.[unit]?.booked).toBe(true)
+      }
+      expect(stats.roundB.sessions).toBeGreaterThanOrEqual(4)
+      expect(stats.roundB.usage.input).toBeGreaterThan(0)
+      // The conclusion's roll-up: the lanes line after the round's tokens
+      // line, claiming the booking and noting parent-wall.
+      expect(run.out).toContain("■ round 1 complete:")
+      expect(run.out).toContain("  lanes: 2 landed / ")
+      expect(run.out).toContain("(booked into the totals above)")
+      expect(run.out).toContain("the time lines mean parent-wall")
+      // After the round no lane is in flight: the section is gone.
+      const after = await runCli(["status", dir])
+      expect(after.out).not.toContain("lanes in flight")
+    } finally {
+      await Bun.write(gate, "released\n").catch(() => {})
+      await agent.done()
+      await rm(gateDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 240_000)
 })

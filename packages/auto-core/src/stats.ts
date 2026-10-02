@@ -162,15 +162,31 @@ export type StatsDoc = {
   // Per-lane usage of the units this run landed through lanes (plans/0068
   // D7 step ④, D13): keyed by the unit id, accumulated across a unit's
   // re-dispatches. Additive and absent until the first landing, so a run
-  // without lanes keeps the exact persisted shape. The S4 roll-up decides
-  // how these figures join the conclusion's per-model lines.
+  // without lanes keeps the exact persisted shape. Since S4 the roll-up is
+  // wired: `booked` marks a unit whose report carried the usage detail (the
+  // figures below also folded into the phase/round buckets), and the
+  // conclusion's lanes line reads the section through statsLaneRollup.
   lanes?: Record<string, LaneStat>
 }
 
 // One landed lane's booked figures: the report's usage (a single token
 // figure — the sum of the lane's own task bucket's usage fields) and its
-// session count.
-export type LaneStat = { tokens: number; wallMs: number; sessions: number }
+// session count. `booked` (S4): the report carried the usage detail, so the
+// figures also folded into the parent's phase/round buckets — the
+// conclusion's "inside the totals" claim reads it.
+export type LaneStat = { tokens: number; wallMs: number; sessions: number; booked?: boolean }
+
+// The usage detail a lane report carries beside its headline figures since
+// S4 (plans/0068 D13): the lane's own task bucket's usage breakdown and its
+// per-model / per-tier sections — the shapes this module already keeps,
+// restated on the report so the parent can book them without reading the
+// worktree's discarded stats document. Absent on a report an older shape
+// wrote; the booking then stays at the per-unit lanes entry.
+export type LaneUsageDetail = {
+  usage: Usage
+  models?: Record<string, ModelStat>
+  tiers?: Record<string, TierStat>
+}
 
 // Resume information for loadStats (returned when an old document exists,
 // printed by the startup banner; plans/STATS_PLAN.md §4.6). The snapshot is
@@ -401,14 +417,15 @@ function parseStatsDoc(raw: string): StatsDoc | undefined {
 }
 
 // Lane records, leniently (the parseSessions mirror): a bad entry reads as
-// missing fields, an absent or empty section stays absent.
+// missing fields, an absent or empty section stays absent. `booked` survives
+// a round trip only when true (the S4 marker of a detail-bearing report).
 function parseLaneStats(raw: unknown): Record<string, LaneStat> | undefined {
   if (typeof raw !== "object" || !raw) return undefined
   const lanes: Record<string, LaneStat> = {}
   for (const [unit, value] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof value !== "object" || !value) continue
     const entry = value as Record<string, unknown>
-    lanes[unit] = { tokens: num(entry.tokens), wallMs: num(entry.wallMs), sessions: num(entry.sessions) }
+    lanes[unit] = { tokens: num(entry.tokens), wallMs: num(entry.wallMs), sessions: num(entry.sessions), ...(entry.booked === true ? { booked: true } : {}) }
   }
   return Object.keys(lanes).length ? lanes : undefined
 }
@@ -1038,17 +1055,31 @@ export async function statsModelEvent(
   queueWrite(dir, handle)
 }
 
-// The lane report's usage booking (plans/0068 D7 landing step ④, D13): the
-// parent books each landed lane's figures into its run stats under the unit
-// id — the durable record the S4 roll-up reads. A re-dispatched unit's later
-// report accumulates into the same entry. Lazy-loaded like the other APIs;
-// not into the three buckets' usage/sessions (the lane's sessions are the
-// child process's own, booked there; folding them here would double-count
-// the moment S4 wires per-model lines).
+// The lane report's usage booking (plans/0068 D7 landing step ④, D13, S4):
+// the parent books each landed lane's figures into its run stats under the
+// unit id — the durable per-lane record (a re-dispatched unit's later report
+// accumulates into the same entry) — and, when the report carries the usage
+// detail, folds that detail into the phase and round buckets so the
+// conclusion's tokens line and the per-model/per-tier lines keep working
+// under the scheduler: the run's real cost is the lanes' (the parent drives
+// no task session while lanes are in flight, D4), and a roll-up that left
+// them out would report a parallel round as its planning sessions alone.
+// AUTO-DECISION (the detail folds into phaseB and roundB, never taskB): at
+// landing time the parent's task bucket holds whichever unit the last
+// dispatch switched it to — with lanes in flight that is not necessarily the
+// landed unit — and the parent's task segment is its own sessions' caliber
+// (taskEndLines guards on it); a landed lane's figures belong to the run's
+// roll-up, and the lane's own task-granular story stays in the worktree's
+// discarded document by contract (D6).
+// AUTO-DECISION (wall time never folds): the buckets' wallMs/aiMs are the
+// parent process's own clock, and lanes overlap — summing lane walls into
+// them would inflate the run's duration (§10's hazard). Lane time stays a
+// per-lane segment (wallMs per unit below), and the conclusion's time lines
+// mean parent-wall, noted there.
 export async function statsLaneUsage(
   dir: string | undefined,
   unit: string,
-  usage: { tokens: number; wallMs: number; sessions: number },
+  usage: { tokens: number; wallMs: number; sessions: number; detail?: LaneUsageDetail },
 ): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
@@ -1056,7 +1087,51 @@ export async function statsLaneUsage(
   entry.tokens += num(usage.tokens)
   entry.wallMs += num(usage.wallMs)
   entry.sessions += num(usage.sessions)
+  if (usage.detail !== undefined) entry.booked = true
+  const detail = usage.detail
+  if (detail !== undefined) {
+    for (const bucket of [handle.doc.phaseB, handle.doc.roundB]) {
+      addUsage(bucket.usage, detail.usage)
+      bucket.sessions += num(usage.sessions)
+      for (const [name, stat] of Object.entries(detail.models ?? {})) {
+        const target = ((bucket.models ??= {})[name] ??= emptyModelStat())
+        addUsage(target.usage, stat.usage)
+        target.sessions += num(stat.sessions)
+        target.fails += num(stat.fails)
+        target.stuckHints += num(stat.stuckHints)
+        target.reprompts += num(stat.reprompts)
+      }
+      for (const [name, stat] of Object.entries(detail.tiers ?? {})) {
+        const target = ((bucket.tiers ??= {})[name] ??= emptyTierStat())
+        addUsage(target.usage, stat.usage)
+        target.sessions += num(stat.sessions)
+      }
+    }
+  }
   queueWrite(dir, handle)
+}
+
+// The lanes section's roll-up for the conclusion (plans/0068 D13, S4): how
+// many lanes landed, their summed sessions and tokens, the summed lane wall
+// (an overlap sum, never a duration), and whether every landed report
+// carried the usage detail — the claim "the totals above include the lanes"
+// holds exactly then. Undefined without a lanes section: a run without
+// lanes keeps the conclusion's exact prior shape.
+export type LaneRollup = { lanes: number; sessions: number; tokens: number; wallMs: number; booked: boolean }
+
+export async function statsLaneRollup(dir: string | undefined): Promise<LaneRollup | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  const entries = Object.values(handle.doc.lanes ?? {})
+  if (!entries.length) return undefined
+  const sum = (pick: (entry: LaneStat) => number): number => entries.reduce((total, entry) => total + pick(entry), 0)
+  return {
+    lanes: entries.length,
+    sessions: sum((entry) => entry.sessions),
+    tokens: sum((entry) => entry.tokens),
+    wallMs: sum((entry) => entry.wallMs),
+    booked: entries.every((entry) => entry.booked === true),
+  }
 }
 
 // The failure-message classifier's token booking (plans/0055 §7.1 "Stats"):

@@ -156,6 +156,14 @@ function execute(text: string): boolean {
   // (auto-core plans/0068 S3's scheduler e2e).
   if (text.startsWith("[DRIVER] The split was not taken")) {
     const task = pendingTask()
+    // FAKE_CLAUDE_FORK_MODULES (plans/0068 S4's scheduler e2e): the fork
+    // writes exactly one module named after its task — two lanes of one
+    // round then touch disjoint files, the shape a conflict-free landing
+    // needs; the default both-modules shape stays for the conflict cases.
+    if (process.env.FAKE_CLAUDE_FORK_MODULES) {
+      write(`src/${task}.ts`, `export const module = ${JSON.stringify(task)}\n`)
+      return true
+    }
     write("src/alpha.ts", `export const alpha = ${JSON.stringify(task)}\n`)
     write("src/beta.ts", `export const beta = ${JSON.stringify(task)}\n`)
     return true

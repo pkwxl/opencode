@@ -618,7 +618,11 @@ export async function recoverOrphanLanes(gitOps: GitOps, dir: string): Promise<n
         log(`⏸ ${dispatched.error}`)
         return 2
       }
-      const exit = await laneExit(dispatched.worker)
+      // The dispatch attached D13's prefix relay: the recovery worker's
+      // output reaches this run's terminal and log as it arrives (the events
+      // beside it stay unwritten — the run-status bracket opens only after
+      // preflight, so a recovered lane's story is the log's).
+      const exit = await laneExit(dispatched.worker, dispatched.output)
       report = await readLaneReport(dispatched.worktree)
       if (report === undefined) log(`⚠ the re-dispatched worker of ${record.unit} exited without a report (exit ${exit.code}); trying again while the attempts cap allows`)
     }

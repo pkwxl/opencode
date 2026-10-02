@@ -18,9 +18,13 @@ import { qualifiedId, type UnitRef } from "../src/document/unit"
 import type { Outcome } from "../src/opts"
 import type { Usage } from "../src/stats"
 import { STATUSES } from "../src/tasks"
+import { join } from "node:path"
 import {
+  LANE_LANDING_OUTCOMES,
   RUN_STATUS_EVENT_TYPES,
   type ExitBoundary,
+  type LaneLandingOutcome,
+  type LaneResult,
   type RunStatusEvent,
   type RunStatusEventType,
   type RunExitCode,
@@ -49,6 +53,10 @@ const SHIPPED: readonly RunStatusEventType[] = [
   "usage-rollup",
   "failure",
   "exit-request",
+  "lane-dispatch",
+  "lane-exit",
+  "lane-landing",
+  "lane-block",
 ]
 
 // What breaks when the module's table stops matching the shipped set. Both
@@ -124,6 +132,10 @@ describe("the run-status event table's additive-only ratchet", () => {
       { type: "usage-rollup", run: 1, at: 10, scope: "task", task: "T-014", usage: { input: 1, output: 2, reasoning: 3, cacheRead: 4, cacheWrite: 5, cost: 0.5, steps: 6 } },
       { type: "failure", run: 1, at: 11, message: "spawn failed", class: "unknown", session: "ses_1", task: "T-014" },
       { type: "exit-request", run: 1, at: 12, boundary: "task" },
+      { type: "lane-dispatch", run: 1, at: 13, lane: "T-014", worktree: join(".auto", "worktrees", "T-014"), pid: 4242 },
+      { type: "lane-exit", run: 1, at: 14, lane: "T-014", code: 0, report: true, result: "PASS" },
+      { type: "lane-landing", run: 1, at: 15, lane: "T-014", outcome: "landed", tokens: 1200, wallMs: 34_000, sessions: 3 },
+      { type: "lane-block", run: 1, at: 16, lane: "T-015", reason: "the dispatch attempts cap (3) is hit" },
     ]
     expect(samples.map((event) => event.type).sort()).toEqual([...RUN_STATUS_EVENT_TYPES].sort())
   })
@@ -208,6 +220,23 @@ describe("the compile-time keying of the vocabulary", () => {
     expect(exactBoundaries).toBe(true)
     const request: RunStatusEvent = { type: "exit-request", run: 1, at: 1, boundary }
     expect(request.type).toBe("exit-request")
+  })
+
+  test("lane events join the lane machinery's own vocabulary (S4, plans/0068 §6.7)", () => {
+    // The landing outcomes are D7's three answers, and the exit event's
+    // verdict reuses the lane report's `result` words (D8: Result:
+    // PASS|FAIL verbatim) — the compile-time joins pin both.
+    type LaneReportResult = "PASS" | "FAIL"
+    const exactResults: Exact<LaneReportResult, LaneResult> = true
+    expect(exactResults).toBe(true)
+    expect(LANE_LANDING_OUTCOMES).toEqual(["landed", "conflict", "blocked"])
+    const outcomes: readonly LaneLandingOutcome[] = LANE_LANDING_OUTCOMES
+    // Compile-time: every outcome constructs a lane-landing event, and a
+    // report-less exit (the orphan signal) carries no verdict.
+    const landings: RunStatusEvent[] = outcomes.map((outcome) => ({ type: "lane-landing", run: 1, at: 1, lane: "T-014", outcome }))
+    expect(landings).toHaveLength(3)
+    const crashed: Extract<RunStatusEvent, { type: "lane-exit" }> = { type: "lane-exit", run: 1, at: 2, lane: "T-014", code: 137, report: false }
+    expect(crashed.result).toBeUndefined()
   })
 
   test("the three vocabularies' event-type names are pairwise disjoint", () => {

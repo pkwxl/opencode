@@ -33,7 +33,6 @@ import {
   laneEligible,
   laneExit,
   laneOutcome,
-  laneOutput,
   lanePark,
   landLane,
   LANE_DISPATCH_CAP,
@@ -375,18 +374,24 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: dispatched.error })
       return 2
     }
-    const exit = await laneExit(dispatched.worker)
+    const exit = await laneExit(dispatched.worker, dispatched.output)
     const report = await readLaneReport(dispatched.worktree)
+    // The 0067 bus's lane identity (§6.7): the exit is a parent-level
+    // structured event — the code beside whether a report was found (false
+    // is the orphan signal) and its verdict.
+    emitStatus({ type: "lane-exit", lane: task.id, code: exit.code, report: report !== undefined, ...(report?.result !== undefined ? { result: report.result } : {}) })
     const outcome = laneOutcome(exit.code, report)
     if (outcome.kind === "land") {
       const landed = await landLane(ctx.git, directory, phase, task, outcome.report)
       if (landed.type === "conflict") {
         log(`⏸ ${task.id} landing conflict (the merge was aborted, the main tree is clean): ${landed.detail}. The lane scene is kept at ${lanePark(task.id)}; resolve the conflict manually or re-run to retry the lane in place`)
+        emitStatus({ type: "lane-block", lane: task.id, reason: `landing conflict: ${landed.detail}` })
         emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `landing conflict: ${landed.detail}` })
         return 2
       }
       if (landed.type === "blocked") {
         log(`⏸ ${landed.error}`)
+        emitStatus({ type: "lane-block", lane: task.id, reason: landed.error })
         emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: landed.error })
         return 2
       }
@@ -419,13 +424,15 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       const reason = outcome.report.blocked ?? `the task report concluded Result: ${outcome.report.result ?? "FAIL"}`
       log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${reason}`)
       for (const line of await taskResolveLines(directory, task.id)) log(line)
+      emitStatus({ type: "lane-block", lane: task.id, reason })
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: reason })
       return 2
     }
     if (outcome.kind === "environment") {
       // Environment errors are global: stop scheduling, exit 1 with the
-      // relayed lines (D13's relay arrives with S4; the tail of the worker's
-      // own output carries the reason meanwhile).
+      // relayed lines — every line the worker printed was relayed as it
+      // arrived (D13); the tail repeats the last of them at the failure
+      // point.
       log(`⏸ ${task.id} lane worker failed with an environment error (exit ${exit.code}); scheduling stops:`)
       for (const line of exit.output.trimEnd().split("\n").slice(-15).filter(Boolean)) log(`  ${line}`)
       emitStatus({ type: "failure", message: `${task.id} lane worker environment error (exit ${exit.code})` })
@@ -434,6 +441,7 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     }
     // orphan: no report — the worker did not control its exit.
     log(`⏸ ${task.id} lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(task.id)}. Re-run to re-dispatch the lane in the same worktree — it resumes from its own progress record`)
+    emitStatus({ type: "lane-block", lane: task.id, reason: `lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(task.id)}` })
     emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(task.id)}` })
     return 2
   }
@@ -442,9 +450,11 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
 // —— The readiness scheduler (plans/0068 §6.2, stage S3) —— //
 
 // One lane the scheduler holds in flight: the unit's task, the spawned
-// worker, the worktree it runs in, and the drain of its piped output (started
-// at dispatch — several lanes share the loop's attention, and a stream nobody
-// reads until the exit would deadlock the worker on a full pipe).
+// worker, the worktree it runs in, and the prefix relay's full-text promise
+// (D13) — attached at dispatch, several lanes share the loop's attention,
+// and a stream nobody reads until the exit would deadlock the worker on a
+// full pipe; the relay's incremental read is the drain, and every line it
+// reads reaches the parent's log prefixed as it arrives.
 type LiveLane = { task: Task; worker: LaneWorker; output: Promise<string>; worktree: string }
 
 // The task loop behind D10's activation rule (maxSessions ≥ 2 and a parallel
@@ -518,7 +528,7 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: dispatched.error })
       return false
     }
-    inFlight.set(task.id, { task, worker: dispatched.worker, worktree: dispatched.worktree, output: laneOutput(dispatched.worker) })
+    inFlight.set(task.id, { task, worker: dispatched.worker, worktree: dispatched.worktree, output: dispatched.output })
     return true
   }
 
@@ -549,18 +559,20 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: again.error })
           return false
         }
-        inFlight.set(task.id, { task, worker: again.worker, worktree: again.worktree, output: laneOutput(again.worker) })
+        inFlight.set(task.id, { task, worker: again.worker, worktree: again.worktree, output: again.output })
         return true
       }
       // `low`, the budget spent, or already stopping: block with the park
       // path named (D21 — zero further repairs).
       const budget = conflictRepair(opts.parallel) ? `the one repair is spent` : `the parallel level ${opts.parallel ?? "none"} spends no tokens on merge repair`
       log(`⏸ ${task.id} landing conflict (the merge was aborted, the main tree is clean): ${landed.detail}; ${budget}. The lane scene is kept at ${lanePark(task.id)}; resolve it manually in the park worktree or re-run to retry the lane in place`)
+      emitStatus({ type: "lane-block", lane: task.id, reason: `landing conflict: ${landed.detail} (${budget})` })
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `landing conflict: ${landed.detail}` })
       return false
     }
     if (landed.type === "blocked") {
       log(`⏸ ${landed.error}`)
+      emitStatus({ type: "lane-block", lane: task.id, reason: landed.error })
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: landed.error })
       return false
     }
@@ -641,11 +653,15 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       if (code !== 0) return code
       continue
     }
-    // Await any lane's exit (raced; the drained output is already running).
+    // Await any lane's exit (raced; the relay's drain is already running).
     const first = await Promise.race([...inFlight.values()].map((lane) => lane.worker.exited.then((code) => ({ lane, code }))))
     inFlight.delete(first.lane.task.id)
     const exit = { code: typeof first.code === "number" ? first.code : 137, output: await first.lane.output }
     const report = await readLaneReport(first.lane.worktree)
+    // The 0067 bus's lane identity (§6.7): the exit is a parent-level
+    // structured event — the code beside whether a report was found (false
+    // is the orphan signal) and its verdict.
+    emitStatus({ type: "lane-exit", lane: first.lane.task.id, code: exit.code, report: report !== undefined, ...(report?.result !== undefined ? { result: report.result } : {}) })
     const outcome = laneOutcome(exit.code, report)
     if (outcome.kind === "land") {
       if (!(await land(first.lane, outcome.report))) {
@@ -669,6 +685,7 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       const reason = outcome.report.blocked ?? `the task report concluded Result: ${outcome.report.result ?? "FAIL"}`
       log(`⏸ ${first.lane.task.id} is blocked (the reason is recorded only in this log):\n${reason}`)
       for (const line of await taskResolveLines(directory, first.lane.task.id)) log(line)
+      emitStatus({ type: "lane-block", lane: first.lane.task.id, reason })
       emitStatus({ type: "task-end", task: first.lane.task.id, outcome: "blocked", detail: reason })
       scheduling = false
       if (stop === undefined) stop = 2
@@ -676,8 +693,9 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     }
     if (outcome.kind === "environment") {
       // Environment errors are global: stop scheduling, exit 1 with the
-      // relayed lines (the tail of the worker's own output carries the
-      // reason; the prefix relay arrives with S4).
+      // relayed lines — every line the worker printed was relayed as it
+      // arrived (D13); the tail repeats the last of them at the failure
+      // point.
       log(`⏸ ${first.lane.task.id} lane worker failed with an environment error (exit ${exit.code}); scheduling stops:`)
       for (const line of exit.output.trimEnd().split("\n").slice(-15).filter(Boolean)) log(`  ${line}`)
       emitStatus({ type: "failure", message: `${first.lane.task.id} lane worker environment error (exit ${exit.code})` })
@@ -702,12 +720,13 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         scheduling = false
         stop = 2
       } else {
-        inFlight.set(unit.id, { task: unit, worker: again.worker, worktree: again.worktree, output: laneOutput(again.worker) })
+        inFlight.set(unit.id, { task: unit, worker: again.worker, worktree: again.worktree, output: again.output })
       }
       continue
     }
     const why = stop !== undefined ? "scheduling already stopped; the next run's preflight recovers it" : `the dispatch attempts cap (${LANE_DISPATCH_CAP}) is hit`
     log(`⏸ ${unit.id} lane worker exited without a report (exit ${exit.code}) and ${why}; the scene is kept at ${lanePark(unit.id)}`)
+    emitStatus({ type: "lane-block", lane: unit.id, reason: `lane worker exited without a report (exit ${exit.code}) and ${why}; the scene is kept at ${lanePark(unit.id)}` })
     emitStatus({ type: "task-end", task: unit.id, outcome: "blocked", detail: `lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(unit.id)}` })
     scheduling = false
     if (stop === undefined) stop = 2

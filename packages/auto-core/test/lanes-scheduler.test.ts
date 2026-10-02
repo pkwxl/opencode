@@ -31,12 +31,15 @@ import {
   LANE_DISPATCH_CAP,
   parseLaneReport,
   readyUnits,
+  relayLaneOutput,
   syncIndexTicks,
   writeLaneReport,
   type InFlightLane,
   type LaneReport,
   type LaneRuntime,
 } from "../src/lanes"
+import { addStatusSink, startRunStatus, stopRunStatus } from "../src/run-status"
+import type { RunStatusEvent } from "../src/run-status-schema"
 import { changedFiles, commitTree } from "../src/git"
 import { createGitOps } from "../src/git-ops"
 import { setShellProfile, type LaneWorker } from "../src/shell"
@@ -951,6 +954,170 @@ ${run.lines.join("\n")}
     expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
     expect(await parkEntries()).toEqual([])
     expect(await changedFiles(dir)).toEqual([])
+  })
+})
+
+// —— The observability surfaces (D13/§6.7, stage S4) —— //
+
+// A worker stub whose stdout is a hand-built stream of chunks (the relay's
+// input): the chunks cross line boundaries on purpose — the relay must
+// reassemble, not relay fragments.
+const streamOf = (chunks: string[]): ReadableStream<Uint8Array> =>
+  new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk))
+      controller.close()
+    },
+  })
+
+describe("relayLaneOutput (D13's prefix relay)", () => {
+  test("every relayed line carries the [<unit>] prefix; empty lines drop; a final partial line still relays; the promise keeps the raw text", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const worker: LaneWorker = {
+        pid: 4242,
+        exited: Promise.resolve(0),
+        stdout: streamOf(["first line\nsecond", " line\n\n", "tail without a newline"]),
+        stderr: streamOf(["err line\r\n"]),
+      }
+      const output = await relayLaneOutput("T-001", worker)
+      // The relayed story: both whole lines, the split line reassembled, the
+      // blank line dropped, the CR stripped, the partial tail flushed. The
+      // two streams interleave (live arrival order, not a fixed
+      // stdout-then-stderr sequence) — the stderr line is asserted by
+      // membership, the stdout story by its own order.
+      expect(lines.filter((line) => !line.includes("err line"))).toEqual(["[T-001] first line", "[T-001] second line", "[T-001] tail without a newline"])
+      expect(lines).toContain("[T-001] err line")
+      expect(lines.every((line) => line.startsWith("[T-001] "))).toBe(true)
+      // The raw text (the failure matrix's tail source) is the un-prefixed
+      // stream content, stdout then stderr.
+      expect(output).toBe("first line\nsecond line\n\ntail without a newlineerr line\r\n")
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("a worker without streams relays nothing and resolves empty (the stub launcher's shape)", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      expect(await relayLaneOutput("T-001", stubWorker())).toBe("")
+      expect(lines).toEqual([])
+    } finally {
+      printed.mockRestore()
+    }
+  })
+})
+
+describe("the lane loop's observability (D13/§6.7, S4)", () => {
+  // Two units whose reports carry the usage detail: the booking folds into
+  // the phase/round buckets and the conclusion's roll-up can claim it.
+  const DETAIL = {
+    usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 },
+    models: { fake: { usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }, sessions: 2, fails: 0, stuckHints: 0, reprompts: 0 } },
+    tiers: { simple: { usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }, sessions: 2 } },
+  }
+
+  test("a two-lane run: every relayed line is prefixed, the lane events carry the identity, both reports' usage books", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/alpha/alpha.ts" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/beta/beta.ts" },
+    ])
+    const units: Record<string, SchedUnit> = {
+      "T-001": { id: "T-001", title: "the alpha module", file: "src/alpha/alpha.ts" },
+      "T-002": { id: "T-002", title: "the beta module", file: "src/beta/beta.ts" },
+    }
+    const events: RunStatusEvent[] = []
+    const off = addStatusSink((event) => events.push(event))
+    startRunStatus(dir)
+    try {
+      setShellProfile({
+        laneLauncher: (worktree, unit) => ({
+          ...workingStub(completeUnit(worktree, units[unit]!).then(() => writeLaneReport(worktree, reportOf(unit, { detail: DETAIL })))),
+          stdout: streamOf([`worker of ${unit}: line one\n`, `worker of ${unit}: line two\n`]),
+          stderr: null,
+        }),
+      })
+      const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+      expect(run.code).toBe(0)
+      // The prefix relay: every worker line reached the parent prefixed with
+      // its lane's id (four lines — two per lane).
+      const relayed = run.lines.filter((line) => line.includes("worker of T-00"))
+      expect(relayed).toHaveLength(4)
+      expect(relayed.every((line) => /^\[T-00\d\] worker of T-00\d: line (one|two)$/.test(line))).toBe(true)
+    } finally {
+      off()
+      stopRunStatus()
+      setShellProfile({ laneLauncher: undefined })
+    }
+    // The 0067 bus's lane identity: dispatch → exit → landing per lane, in
+    // dispatch order, typed facts only (no terminal text parsed).
+    expect(events.filter((event) => event.type === "lane-dispatch").map((event) => (event as { lane: string }).lane)).toEqual(["T-001", "T-002"])
+    for (const dispatch of events.filter((event) => event.type === "lane-dispatch")) {
+      expect(dispatch).toMatchObject({ worktree: expect.stringContaining(join(".auto", "worktrees")), pid: 4242 })
+      expect(dispatch).not.toHaveProperty("merge")
+    }
+    const exits = events.filter((event) => event.type === "lane-exit")
+    expect(exits).toHaveLength(2)
+    for (const exit of exits) expect(exit).toMatchObject({ code: 0, report: true, result: "PASS" })
+    const landings = events.filter((event) => event.type === "lane-landing")
+    expect(landings.map((landing) => (landing as { lane: string }).lane).sort()).toEqual(["T-001", "T-002"])
+    for (const landing of landings) expect(landing).toMatchObject({ outcome: "landed", tokens: 100, wallMs: 1000, sessions: 2 })
+    // Both reports' usage booked: the per-unit lanes entries marked booked,
+    // the fold visible in the round bucket (sessions, usage, the model and
+    // tier records) — never in the task bucket.
+    const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text())
+    expect(stats.lanes).toEqual({
+      "T-001": { tokens: 100, wallMs: 1000, sessions: 2, booked: true },
+      "T-002": { tokens: 100, wallMs: 1000, sessions: 2, booked: true },
+    })
+    expect(stats.roundB.sessions).toBe(4)
+    // Two bookings of DETAIL: the flat usage doubled, the model and tier
+    // records with it.
+    expect(stats.roundB.usage).toEqual({ input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 })
+    expect(stats.roundB.models.fake).toEqual({ usage: { input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 }, sessions: 4, fails: 0, stuckHints: 0, reprompts: 0 })
+    expect(stats.roundB.tiers.simple).toEqual({ usage: { input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 }, sessions: 4 })
+    expect(stats.taskB.usage.input).toBe(0)
+    expect(stats.taskB.models).toBeUndefined()
+  })
+
+  test("a FAIL run: the exit, the landing of the committed work and the block all carry the lane identity", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/broken.ts" }])
+    const events: RunStatusEvent[] = []
+    const off = addStatusSink((event) => events.push(event))
+    startRunStatus(dir)
+    try {
+      setShellProfile({
+        laneLauncher: (worktree, unit) =>
+          workingStub(
+            (async () => {
+              await mkdir(dirname(join(worktree, "src/broken.ts")), { recursive: true })
+              await Bun.write(join(worktree, "src/broken.ts"), "export const broken = true\n")
+              const settled = await commitTree(worktree, { id: unit, title: "the widget" }, { stage: "session", subject: `${unit} the work so far` })
+              if (!settled.ok) throw new Error("commit failed")
+              await writeLaneReport(worktree, reportOf(unit, { ok: false, result: "FAIL", blocked: "the task report concluded Result: FAIL" }))
+            })(),
+            2,
+          ),
+      })
+      const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+      expect(run.code).toBe(2)
+    } finally {
+      off()
+      stopRunStatus()
+      setShellProfile({ laneLauncher: undefined })
+    }
+    expect(events.filter((event) => event.type === "lane-exit")).toHaveLength(1)
+    expect(events.find((event) => event.type === "lane-exit")).toMatchObject({ lane: "T-001", code: 2, report: true, result: "FAIL" })
+    // Failure keeps its commit: the blocked lane's committed work lands, and
+    // the block that stops the run names the lane and its reason.
+    expect(events.find((event) => event.type === "lane-landing")).toMatchObject({ lane: "T-001", outcome: "landed" })
+    expect(events.find((event) => event.type === "lane-block")).toMatchObject({ lane: "T-001", reason: expect.stringContaining("Result: FAIL") })
   })
 })
 

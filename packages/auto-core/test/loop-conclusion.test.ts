@@ -18,6 +18,7 @@ import {
   loadStats,
   statsClassifyUsage,
   statsHistory,
+  statsLaneUsage,
   statsModelEvent,
   statsPhase,
   statsQuotaWait,
@@ -464,5 +465,82 @@ describe("proxy-answer highlight blocks taskResolveLines / phaseResolveLines / r
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
     expect(await phaseResolveLines(dir, unit("m"))).toEqual([])
     expect(await roundResolveLines(dir)).toEqual([])
+  })
+})
+
+// The lanes roll-up line of the round-complete block (plans/0068 D13, S4,
+// §10): a round that landed lanes gains one line after the tokens line — the
+// lane count, their summed sessions and tokens with the claim that names
+// where they sit (inside the totals when every report carried the usage
+// detail), the summed lane wall, and the parent-wall note the design asks
+// for. Without lanes the block keeps its exact prior shape.
+describe("roundCompleteLines lanes roll-up (plans/0068 D13, S4)", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-round-lanes-"))
+    now = 1_000_000
+    installServices(createServices({ clock: fixedClock(() => now) }))
+    await loadStats(dir)
+  })
+
+  afterEach(async () => {
+    uninstallServices()
+    await flushStats(dir).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("a landed lane with detail: the roll-up line follows the tokens line, claims the totals include it, and notes parent-wall", async () => {
+    await statsPhase(dir, "m")
+    await statsTask(dir, "T-001")
+    // The parent's own session: 5 minutes, on glm.
+    await statsSessionBegin(dir, "T-001")
+    now += 5 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 1000, output: 200, cost: 0.05 }), "glm", "simple")
+    // The landed lane's report: 3 minutes of lane wall, 2 sessions on opus,
+    // booked with its usage detail (the dispatch's statsTask switched the
+    // task bucket to the lane's unit — the landing books the phase/round
+    // roll-up, and the lane wall is a segment, never bucket time).
+    await statsTask(dir, "T-002")
+    await statsLaneUsage(dir, "T-002", {
+      tokens: 900,
+      wallMs: 3 * 60_000,
+      sessions: 2,
+      detail: {
+        usage: usage({ input: 700, output: 200, cost: 0.03 }),
+        models: { opus: { usage: usage({ input: 700, output: 200, cost: 0.03 }), sessions: 2, fails: 0, stuckHints: 0, reprompts: 0 } },
+        tiers: { simple: { usage: usage({ input: 700, output: 200, cost: 0.03 }), sessions: 2 } },
+      },
+    })
+    const lines = await roundCompleteLines(dir)
+    expect(lines).toEqual([
+      // The lane's 2 sessions ride the round total; its 3 minutes do not —
+      // the time lines mean parent-wall.
+      "■ round 1 complete: total 5m 0s (AI 5m 0s), 2 tasks / 3 sessions",
+      "tokens in 1700 / out 400 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08",
+      "  lanes: 1 landed / 2 sessions / 900 tokens (booked into the totals above); lane wall 3m 0s summed — lanes overlap, the time lines mean parent-wall",
+      "  model glm: 1 sessions, tokens in 1000 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.05",
+      "  model opus: 2 sessions, tokens in 700 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.03",
+      "  tiers: simple 3 sessions, tokens in 1700 / out 400 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08",
+    ])
+  })
+
+  test("a landed lane without detail (an older-shaped report): the line makes no totals claim; one lane session reads singular", async () => {
+    await statsTask(dir, "T-001")
+    await statsLaneUsage(dir, "T-001", { tokens: 1200, wallMs: 90_000, sessions: 1 })
+    const lines = await roundCompleteLines(dir)
+    expect(lines?.[2]).toBe("  lanes: 1 landed / 1 session / 1200 tokens; lane wall 1m 30s summed — lanes overlap, the time lines mean parent-wall")
+    expect(lines).toHaveLength(3)
+  })
+
+  test("no lanes: the block keeps its exact prior shape", async () => {
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 30_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }))
+    const lines = await roundCompleteLines(dir)
+    expect(lines).toHaveLength(2)
+    expect(lines?.[1]).not.toContain("lanes:")
   })
 })

@@ -15,6 +15,8 @@ import {
   statsHistory,
   statsId,
   statsKnowledgePhase,
+  statsLaneRollup,
+  statsLaneUsage,
   statsModelEvent,
   statsPhase,
   statsQuotaWait,
@@ -24,6 +26,7 @@ import {
   statsTotals,
   statsWaitBegin,
   statsWaitEnd,
+  type LaneStat,
   type StatsDoc,
   type Usage,
 } from "../src/stats"
@@ -1075,5 +1078,107 @@ describe("stats digest counters", () => {
     await statsDigest(join(dir, "empty"), { prevRound: 41_000 })
     const one = await roundCompleteLines(join(dir, "empty"))
     expect(one?.[2]).toBe("  digests: previous round 1 session / 41.0k tokens")
+  })
+})
+
+// The lane report's usage booking and the roll-up reader (plans/0068 D13,
+// stage S4): a landed lane's figures book into the per-unit lanes section —
+// the durable per-lane segments — and, when the report carried the usage
+// detail, fold into the phase and round buckets so the conclusion's tokens
+// line and per-model/per-tier lines keep working under the scheduler. Wall
+// time never folds (lanes overlap; the buckets' clock is the parent's own),
+// and the task bucket is never touched (the parent's task segment is its
+// own sessions' caliber, and the landed unit is not necessarily the bucket's
+// current id).
+describe("stats lane usage booking (plans/0068 D13, S4)", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-lane-"))
+    now = 100_000
+    installServices(createServices({ clock: fixedClock(() => now) }))
+    await loadStats(dir)
+  })
+
+  afterEach(async () => {
+    uninstallServices()
+    await flushStats(dir).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  // The document as it persists: the write queue drains through flushStats
+  // (the clock is fixed and never advances here, so the flush's segment fold
+  // books zero wall time — the wall assertions below stay exact).
+  async function readDoc(): Promise<StatsDoc> {
+    await flushStats(dir)
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  test("without detail: the per-unit lanes entry only, the buckets untouched, the roll-up unbooked", async () => {
+    await statsTask(dir, "T-001")
+    await statsLaneUsage(dir, "T-001", { tokens: 1200, wallMs: 34_000, sessions: 3 })
+    const doc = await readDoc()
+    expect(doc.lanes).toEqual<Record<string, LaneStat>>({ "T-001": { tokens: 1200, wallMs: 34_000, sessions: 3 } })
+    expect(doc.taskB.usage.input).toBe(0)
+    expect(doc.phaseB.usage.input).toBe(0)
+    expect(doc.phaseB.sessions).toBe(0)
+    expect(doc.roundB.usage.input).toBe(0)
+    expect(await statsLaneRollup(dir)).toEqual({ lanes: 1, sessions: 3, tokens: 1200, wallMs: 34_000, booked: false })
+  })
+
+  test("with detail: the usage, sessions and per-model/per-tier sections fold into phase and round — never the task bucket, never wall time", async () => {
+    await statsTask(dir, "T-001")
+    await statsLaneUsage(dir, "T-001", {
+      tokens: 1500,
+      wallMs: 34_000,
+      sessions: 2,
+      detail: {
+        usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }),
+        models: { glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2 } },
+        tiers: { simple: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2 } },
+      },
+    })
+    const doc = await readDoc()
+    // The lanes entry carries the detail marker.
+    expect(doc.lanes).toEqual<Record<string, LaneStat>>({ "T-001": { tokens: 1500, wallMs: 34_000, sessions: 2, booked: true } })
+    // The task bucket is the parent's own segment: untouched.
+    expect(doc.taskB.usage.input).toBe(0)
+    expect(doc.taskB.sessions).toBe(0)
+    expect(doc.taskB.models).toBeUndefined()
+    // Phase and round gained the flat figures, the model record with its
+    // drift counters, and the tier record — in parallel, as ever.
+    for (const bucket of [doc.phaseB, doc.roundB]) {
+      expect(bucket.usage).toEqual(usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }))
+      expect(bucket.sessions).toBe(2)
+      expect(bucket.models).toEqual({ glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2 } })
+      expect(bucket.tiers).toEqual({ simple: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2 } })
+      // Wall time never folds: the lane's 34s is a segment of the lanes
+      // entry, not a duration of the parent's clock.
+      expect(bucket.wallMs).toBe(0)
+      expect(bucket.aiMs).toBe(0)
+    }
+    expect(await statsLaneRollup(dir)).toEqual({ lanes: 1, sessions: 2, tokens: 1500, wallMs: 34_000, booked: true })
+  })
+
+  test("a re-dispatched unit accumulates into the same entry; two lanes sum in the roll-up; the persisted shape survives a round trip", async () => {
+    await statsLaneUsage(dir, "T-001", { tokens: 100, wallMs: 1000, sessions: 1 })
+    await statsLaneUsage(dir, "T-001", { tokens: 50, wallMs: 500, sessions: 1 })
+    await statsLaneUsage(dir, "T-002", { tokens: 70, wallMs: 700, sessions: 2, detail: { usage: usage({ input: 70 }) } })
+    expect((await readDoc()).lanes).toEqual<Record<string, LaneStat>>({
+      "T-001": { tokens: 150, wallMs: 1500, sessions: 2 },
+      "T-002": { tokens: 70, wallMs: 700, sessions: 2, booked: true },
+    })
+    // A mixed roll-up (one report without detail) makes no "inside the
+    // totals" claim — only every entry booked does.
+    expect(await statsLaneRollup(dir)).toEqual({ lanes: 2, sessions: 4, tokens: 220, wallMs: 2200, booked: false })
+    await flushStats(dir)
+    await loadStats(dir)
+    expect((await readDoc()).lanes?.["T-002"]).toEqual<LaneStat>({ tokens: 70, wallMs: 700, sessions: 2, booked: true })
+  })
+
+  test("no lanes section: the roll-up reader answers undefined (the conclusion keeps its shape)", async () => {
+    expect(await statsLaneRollup(dir)).toBeUndefined()
+    expect((await readDoc()).lanes).toBeUndefined()
   })
 })
