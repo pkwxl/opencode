@@ -1135,7 +1135,7 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("init --parallel freezes the planning level; none drops the key; run --max-sessions is reserved (MP.1)", async () => {
+  test("init --parallel freezes the planning level; none drops the key; run --max-sessions above 1 needs one (plans/0068 D10)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       // default: no key written, no summary mention
@@ -1163,10 +1163,11 @@ describe("CLI: init freezes the project config", () => {
       const initSessions = await runCli(["init", dir, "--max-sessions", "1"])
       expect(initSessions.code).toBe(1)
       expect(initSessions.err).toContain("--max-sessions is a run option")
-      // run: above 1 is not supported yet; a non-integer is a usage error
+      // run: above 1 without a level is a usage error (plans/0068 D10); a
+      // non-integer always was
       const two = await runCli(["run", dir, "--max-sessions", "2"])
       expect(two.code).toBe(1)
-      expect(two.err).toContain("concurrent execution is not supported yet")
+      expect(two.err).toContain("concurrent execution needs a parallel level")
       const zero = await runCli(["run", dir, "--max-sessions", "0"])
       expect(zero.code).toBe(1)
       expect(zero.err).toContain("--max-sessions takes a positive integer")
@@ -3369,8 +3370,8 @@ describe("CLI: run under --subtask auto over the claude adapter (auto-core plans
       expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).exists()).toBe(false)
       expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "todo"))).exists()).toBe(false)
       expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(false)
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe('export const alpha = "lead"\n')
-      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe('export const beta = "lead"\n')
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe('export const alpha = "T-001"\n')
+      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe('export const beta = "T-001"\n')
       expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
@@ -3739,7 +3740,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       expect(code).toBe(0)
       // The unit completed through the bootstrap-driven lane and landed.
       const done = await outcomes(dir, git)
-      expect(done.alpha).toBe('export const alpha = "lead"\n')
+      expect(done.alpha).toBe('export const alpha = "T-001"\n')
       expect(done.done).toBe(true)
       expect(done.index).toContain(`- [x] ${TASK} the widget`)
       expect(done.clean).toBe(true)
@@ -3839,14 +3840,112 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     }
   }, 180_000)
 
-  test("--max-sessions still refuses above 1 (the concurrency scheduler is not live)", async () => {
+  test("--max-sessions above 1 without a parallel level is a usage error (plans/0068 D10); under a level the run reaches preflight's concurrency gates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-max-"))
     try {
-      const run = await runCli(["run", dir, "--max-sessions", "2"], { OPENCODE_AUTO_LANE_ISOLATION: "on" })
-      expect(run.code).toBe(1)
-      expect(run.err).toContain("concurrent execution is not supported yet")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      // No level: the request is refused rather than silently run serially
+      // ("plan for parallelism first").
+      const two = await runCli(["run", dir, "--max-sessions", "2"])
+      expect(two.code).toBe(1)
+      expect(two.err).toContain("concurrent execution needs a parallel level")
+      expect(two.err).toContain("init --parallel")
+      // Under a level the max-sessions gate is gone: the run now reaches
+      // preflight, where D11's interactive refusal fires (an accepted run
+      // would start an agent; the usage error is the cheap deterministic
+      // witness that the width was accepted).
+      expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      const steered = await runCli(["run", dir, "--max-sessions", "2", "--interactive"])
+      expect(steered.code).toBe(1)
+      // preflight's refusal rides the run log's stdout (the run log is open).
+      expect(steered.out).toContain("one human cannot steer 2 concurrent sessions")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
+})
+
+// The lane scheduler live (auto-core plans/0068 S3, D10): --max-sessions 2
+// under a parallel level routes the task loop through the readiness scheduler
+// — the lanes spawn through the shell's own `_lane` entry (the default
+// launcher re-invoking this CLI), land through the merge protocol, and the
+// failure matrix and D21's conflict posture drive the run's exit.
+describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
+  const doc = (id: string, title: string, touches: string) =>
+    [`# ${id}: ${title}`, "Phase: R-01.P01", "Depends: none", `Touches: ${touches}`, "", "## Goal", "", `Deliver ${title}.`, "", "## Scope", "", "src only.", "", "## Acceptance", "", "The modules read back.", "", "<!-- auto: eof -->", ""].join("\n")
+
+  // A committed project with one or two pending tasks under a parallel level;
+  // the fake claude answers the lead (a small context figure rejects the
+  // split, a fork of the lead finishes by writing src/alpha.ts and
+  // src/beta.ts), the wrap-up and nothing else.
+  const setup = async (prefix: string, parallel: "low" | "medium", tasks: [string, string, string][]) => {
+    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    await git("init")
+    expect((await runCli(["init", dir, "--parallel", parallel])).code).toBe(0)
+    expect((await runCli(["plan", dir])).code).toBe(0)
+    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)
+    for (const [id, title, touches] of tasks) await Bun.write(join(dir, taskStatePaths(id).pending), doc(id, title, touches))
+    await git("add", "-A")
+    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+    return { dir, agent, git }
+  }
+
+  test("a one-lane round at maxSessions 2 runs through the real _lane entry and lands", async () => {
+    const { dir, agent, git } = await setup("auto-cli-lane-s3-one-", "low", [["T-001", "the widget", "src/"]])
+    try {
+      const run = await agent.run(["run", dir, "--max-sessions", "2"])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      expect(run.out).toContain("T-001 dispatching a lane")
+      expect(run.out).toContain("T-001 done (lane landed:")
+      expect(run.out).toContain("✓ all tasks complete")
+      // Landed: the unit done, the index ticked, the landing trailers in the
+      // history, the park torn down, the branch gone, the tree clean.
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toContain("alpha")
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
+      expect((await git("branch", "--list", "auto-lane/T-001")).trim()).toBe("")
+      expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 180_000)
+
+  test("two lanes whose Touches lie conflict at landing; medium's one repair cannot resolve it and the run blocks naming the park", async () => {
+    const { dir, agent, git } = await setup("auto-cli-lane-s3-two-", "medium", [
+      ["T-001", "the alpha module", "src/alpha.ts"],
+      ["T-002", "the beta module", "src/beta.ts"],
+    ])
+    try {
+      const run = await agent.run(["run", dir, "--max-sessions", "2"])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(2)
+      // The first lane landed; the second's landing hit the real conflict
+      // (both lanes wrote both modules — the declared Touches lied).
+      expect(run.out).toContain("T-001 done (lane landed:")
+      expect(run.out).toContain("T-002 landing conflict")
+      // D21 at medium: exactly one repair re-dispatch through the merge
+      // instruction. The real conflict is semantic (both lanes rewrote the
+      // same files differently), the repair worker's driver-side merge
+      // cannot resolve it and blocks with its report — the run stops naming
+      // the unit, the report and the park path (a second landing conflict
+      // blocks the same way: the one repair is spent either way).
+      expect(run.out).toContain("re-dispatching the lane with the merge instruction")
+      expect(run.out).toContain("merge main into auto-lane/T-002")
+      expect(run.out).toContain("T-002 is blocked")
+      expect(run.out).toContain("blocked and its landing hit a conflict")
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskStatePaths("T-002").complete)).exists()).toBe(false)
+      // The blocked lane's scene is kept; the main tree is clean.
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual(["T-002"])
+      expect((await git("branch", "--list", "auto-lane/T-002")).trim()).toContain("auto-lane/T-002")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 180_000)
 })

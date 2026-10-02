@@ -148,13 +148,16 @@ export const UNIT_BUDGET_MS = 5_000
 // baseline is this package's full-suite wall time (the `gate` lane runs both
 // lanes in one `bun test` pass) on the host that runs the unit gates. The
 // figure below was first recorded when the lanes landed (28 s on the
-// shared-container host that executed stage A) and re-measured at the
+// shared-container host that executed stage A), re-measured at the
 // program's final consolidation pass (210 s over three runs of 207–211 s on
 // the macOS host that executed stages D–F — a representative figure, not a
-// fastest one); any changed gate host re-records it the same way. The
+// fastest one), and re-measured again when plans/0068 S3's scheduler tests
+// grew the repo lane (five runs of 212–263 s on the same macOS host; the
+// recorded 230 s sits mid-spread, covering the load variance the host
+// showed); any changed gate host re-records it the same way. The
 // absolute 30 s figure stays the original gate-machine reference only, not
 // the rule.
-export const GATE_BASELINE_MS = 210_000
+export const GATE_BASELINE_MS = 230_000
 
 // The `gate` lane's fail line: baseline × 1.25.
 export const gateBudgetMs = (): number => Math.round(GATE_BASELINE_MS * 1.25)

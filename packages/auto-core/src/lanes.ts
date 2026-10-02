@@ -1,13 +1,16 @@
-// The lane scheduler (plans/0068 §6.2, stage S1): the pure, inert readiness
-// layer of the lanes design — the scheduler functions with no caller outside
-// tests, reading the registry fields src/tasks.ts now carries (0051 D3's
-// `worktree` field, built at last). Delivered alone it changes no behavior:
-// the task loop still selects through next(), --max-sessions still refuses
-// every value above 1 at preflight, and the lane loop that will drive this
-// module is S3's.
+// The lane scheduler (plans/0068 §6.2): the readiness layer of the lanes
+// design — the scheduler functions over the registry fields src/tasks.ts
+// carries (0051 D3's `worktree` field, built at last). At stage S1 the module
+// was pure and inert; S2 added the dispatch and landing choreography (§6.5)
+// and S3 the activation rule (D10), the conflict-repair policy (D21) and the
+// orphan-recovery inputs (D14: the liveness probe, the dispatch cap). The
+// loops that drive it live above, in src/loop-task.ts — the serial isolation
+// loop of the rollout switch and, since S3, the readiness scheduler's
+// concurrent lane loop; nothing here imports a loop or a session-driving
+// module (the import-direction rule).
 //
-// select.ts is the style precedent: a pure core over injected facts. Every
-// function here is a function of its arguments — the loaded plan, the merged
+// select.ts is the style precedent: a pure core over injected facts. The
+// readiness half is a function of its arguments — the loaded plan, the merged
 // unit states, the runtime registry view, the parent's in-flight lanes —
 // never of module state, services or the clock:
 //   - readyUnits (D5): the readiness predicate — nextReady plus two clauses,
@@ -22,24 +25,48 @@
 // The admission rule is deliberately level-independent (D5): `Touches` stays
 // advisory — a wrong declaration surfaces as a landing conflict (D7), never
 // as corruption — and the `parallel` level's merge-relevant meaning lives in
-// the landing-conflict response (D21), never here.
-//
-// Stage S2 adds the effectful halves this module's callers drive (§6.5): the
-// protocol paths (branch, park, report), the dispatch choreography (attempts
-// bookkeeping, worktree creation or reuse, the scaffolding copy, the spawn
-// through the profile's launcher) and the landing choreography (D7's five
-// steps over the git seam). Pure and effectful sit beside each other on
-// purpose — one domain, one file; the loop that sequences them (the serial
-// isolation loop of src/loop-task.ts) stays above, and nothing here imports a
-// loop or a session-driving module (the import-direction rule).
+// the landing-conflict response (D21), never in the admission.
 import { cp, mkdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
 import { deleteBranch, mergeBaseSha, repoRoots, unitViolations, type GitOps } from "./git"
+import type { ParallelLevel } from "./intent/types"
 import { log } from "./log"
 import { statsLaneUsage } from "./stats"
-import { defaultLaneLauncher, shellProfile, type LaneWorker } from "./shell"
+import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
 import { begin, clearLane, laneRecords, setLane, taskIndexPath, type Plan, type PlanPhase, type Task } from "./tasks"
+
+// —— Activation and policy (D10, D21) ——
+
+// D10's activation rule: the readiness scheduler runs the routed phase's units
+// concurrently iff --max-sessions is at least 2 and the project configured a
+// parallel level (config `parallel`; absent and `none` both mean none). At
+// maxSessions = 1 (the default) the scheduler is off for any project whatever
+// the level — the byte-identical floor: same loops, same prompts, same
+// goldens. A maxSessions above 1 with no level never reaches this function as
+// "active": preflight refuses it as a usage error first ("plan for
+// parallelism first").
+export function schedulerActive(maxSessions: number | undefined, parallel: ParallelLevel | undefined): boolean {
+  return (maxSessions ?? 1) >= 2 && parallel !== undefined
+}
+
+// D21's level-derived landing-conflict response: `low` blocks immediately
+// (zero session repairs — a conflict at low is a plan defect, and low's
+// posture spends no tokens on merge repair); `medium`/`high` allow one
+// repair re-dispatch (D7's merge instruction) before blocking. No level
+// (none) never conflicts-with-repair: without it the scheduler is off and
+// the serial path has no landings — the answer reads false all the same.
+export function conflictRepair(level: ParallelLevel | undefined): boolean {
+  return level === "medium" || level === "high"
+}
+
+// The dispatch attempts cap of D14's orphan recovery: a crashed lane is
+// re-dispatched automatically only while its unit's attempts stay below this
+// (begin books every dispatch); at the cap the scene blocks naming the park
+// path — the deterministic automatic escalation this house style permits
+// (D21's own words). Attempts survive runs, so the cap also bounds recovery
+// across re-runs, never only inside one pass.
+export const LANE_DISPATCH_CAP = 3
 
 // —— The readiness predicate (D5) ——
 
@@ -340,13 +367,21 @@ const SCAFFOLD_FILES = [".gitignore", ".opencode", "opencode.json", "AGENTS.md"]
 // created at the parent's current HEAD on the lane branch, or reused when the
 // registry records one for the unit (a crashed lane's scene: the re-dispatch
 // resumes in the same worktree, D14) — the scaffolding copy into a fresh
-// worktree, and the spawn through the profile's launcher.
+// worktree, and the spawn through the profile's launcher. The optional
+// instruction is D7's merge instruction, carried only by a conflict repair's
+// re-dispatch (which is always a re-use dispatch: the repair happens on a lane
+// whose scene the conflict kept).
 // AUTO-DECISION (spawn before the runtime-field write): §6.5 orders ④ the
 // fields before ⑤ the spawn, but the pid half of the record exists only once
 // the worker process does; writing worktree and pid together after the spawn
 // keeps the registry entry atomic (a record naming a pid that was never
 // spawned would read as a dead orphan).
-export async function dispatchLane(gitOps: GitOps, dir: string, task: Pick<Task, "id" | "title">): Promise<LaneDispatch> {
+export async function dispatchLane(
+  gitOps: GitOps,
+  dir: string,
+  task: Pick<Task, "id" | "title">,
+  instruction?: LaneMergeInstruction,
+): Promise<LaneDispatch> {
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
   const branch = laneBranch(task.id)
@@ -364,7 +399,11 @@ export async function dispatchLane(gitOps: GitOps, dir: string, task: Pick<Task,
     if (!(await stat(reuse).then(() => true, () => false))) {
       return { type: "failed", error: `the lane record of ${task.id} names ${record.worktree}, which no longer exists; remove the record (.auto/units.json) or restore the worktree and re-run` }
     }
-    log(`↻ ${task.id} re-dispatching its lane in the existing worktree ${record.worktree} (the lane resumes from its own progress record)`)
+    log(
+      instruction !== undefined
+        ? `↻ ${task.id} re-dispatching its lane in the existing worktree ${record.worktree} with the merge instruction (merge ${instruction.merge} into ${branch}, resolve, exit normally)`
+        : `↻ ${task.id} re-dispatching its lane in the existing worktree ${record.worktree} (the lane resumes from its own progress record)`,
+    )
   }
   if (fresh) {
     const copied = await copyScaffolding(dir, park)
@@ -379,7 +418,7 @@ export async function dispatchLane(gitOps: GitOps, dir: string, task: Pick<Task,
   const launch = shellProfile().laneLauncher ?? defaultLaneLauncher
   let worker: LaneWorker
   try {
-    worker = launch(fresh ? park : join(dir, record!.worktree), task.id)
+    worker = launch(fresh ? park : join(dir, record!.worktree), task.id, instruction)
   } catch (error) {
     if (fresh) {
       await gitOps.removeWorktree(dir, park)
@@ -427,9 +466,34 @@ async function copyScaffolding(dir: string, worktree: string): Promise<string | 
 // resolves Bun's exit promise to null; every such code is the crash
 // vocabulary's, and laneOutcome decides by the report's absence anyway.
 export async function laneExit(worker: LaneWorker): Promise<{ code: number; output: string }> {
+  const [output, code] = await Promise.all([laneOutput(worker), worker.exited])
+  return { code: typeof code === "number" ? code : 137, output }
+}
+
+// Start draining one lane worker's piped output the moment it is dispatched
+// and hand back the promise of its full text. The scheduler's loop (S3) holds
+// several lanes at once and awaits their exits in a race — the one whose
+// streams nobody reads until its exit could block on a full pipe long before
+// finishing, so the drain starts at dispatch and the exit handler only awaits
+// the already-running read.
+export function laneOutput(worker: LaneWorker): Promise<string> {
   const read = (stream: ReadableStream<Uint8Array> | null | undefined) => (stream ? new Response(stream).text().catch(() => "") : "")
-  const [out, err, code] = await Promise.all([read(worker.stdout), read(worker.stderr), worker.exited])
-  return { code: typeof code === "number" ? code : 137, output: `${out}${err}` }
+  return Promise.all([read(worker.stdout), read(worker.stderr)]).then(([out, err]) => `${out}${err}`)
+}
+
+// D14's liveness probe: whether a recorded lane pid still names a process.
+// Signal 0 probes without delivering anything — ESRCH is the dead answer;
+// EPERM (a live process this user may not signal) is alive all the same. A
+// recorded pid this host never had (a reboot between runs, another machine's
+// lock holder) reads dead exactly like an exited worker, which is the
+// honest answer the re-dispatch path needs.
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM"
+  }
 }
 
 // —— Landing (D7, parent side) ——
@@ -442,16 +506,17 @@ export async function laneExit(worker: LaneWorker): Promise<{ code: number; outp
 // landing-sync commit; the caller stops scheduling and exits 2).
 export type Landing = { type: "landed"; teardown: boolean } | { type: "conflict"; detail: string } | { type: "blocked"; error: string }
 
-// D7's five steps, serialized in this one caller (the serial loop's await is
-// the mutex): ① verify the lane branch — unitViolations over the merge-base
-// baseline (only Auto-Stage commits inside the lane, the worktree clean);
-// ② the `--no-ff` merge carrying `Auto-Stage: landing`; ③ re-derive the phase
-// index ticks from the merged unit states, committed as `Auto-Stage:
-// landing-sync`; ④ clear the lane runtime fields and book the report's
-// usage; ⑤ tear down the worktree and delete the branch.
+// D7's five steps, serialized in this one caller (the single-threaded await
+// of the loop above is the mutex): ① verify the lane branch — unitViolations
+// over the merge-base baseline (only Auto-Stage commits inside the lane, the
+// worktree clean); ② the `--no-ff` merge carrying `Auto-Stage: landing`; ③
+// re-derive the phase index ticks from the merged unit states, committed as
+// `Auto-Stage: landing-sync`; ④ clear the lane runtime fields and book the
+// report's usage; ⑤ tear down the worktree and delete the branch.
 // The conflict path aborts the merge and keeps the lane's scene (worktree,
-// branch and registry record) for D21's level-derived response — S2 blocks
-// immediately (the `low` posture); the repair budget is S3's.
+// branch and registry record) for D21's level-derived response — the caller
+// decides: `low` blocks immediately, `medium`/`high` re-dispatch once with
+// D7's merge instruction and block on the second conflict.
 export async function landLane(
   gitOps: GitOps,
   dir: string,
@@ -468,8 +533,12 @@ export async function landLane(
   if (violations.length) {
     return { type: "blocked", error: `the lane branch of ${task.id} failed the close-out check (${violations.join("; ")}); the lane scene is kept at ${lanePark(task.id)} for inspection` }
   }
-  // ② the landing merge.
-  const landed = await gitOps.landBranch(dir, branch, task)
+  // ② the landing merge. `own` names the parent-exclusive phase index (D6):
+  // concurrent lanes tick adjacent index lines — no textual merge survives
+  // that — so a conflict over exactly the index resolves onto the main tree's
+  // side and step ③ re-derives the true ticks; any other conflict stays the
+  // conflict protocol's.
+  const landed = await gitOps.landBranch(dir, branch, task, [taskIndexPath(phase)])
   if (landed.type === "conflict") return { type: "conflict", detail: landed.detail }
   if (landed.type === "failed") return { type: "blocked", error: `landing ${branch} failed: ${landed.error}` }
   // ③ the tick re-derivation, committed as landing-sync.

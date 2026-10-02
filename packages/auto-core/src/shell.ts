@@ -23,13 +23,25 @@ export type LaneWorker = {
   stderr?: ReadableStream<Uint8Array> | null
 }
 
+// The merge instruction a conflict repair's re-dispatch carries (plans/0068
+// D7's conflict path, S3): `merge` names the parent's current main branch the
+// lane worker merges into its lane branch before running the unit. The
+// instruction exists only on a repair re-dispatch — absent on every ordinary
+// one — so a worker that sees it knows exactly why it was re-dispatched.
+export type LaneMergeInstruction = { merge: string }
+
 // The default lane launcher: re-invoke this shell's CLI with the hidden
 // `_lane` subcommand (§6.4 — "re-invoke this shell's CLI with the hidden lane
 // subcommand"). process.argv[1] is the CLI entry this process started from,
 // so a shell's run spawning lanes reproduces its own invocation; a host
 // without one (a test, a 0067 daemon worker) overrides the profile field.
-export function defaultLaneLauncher(worktree: string, unit: string): LaneWorker {
-  return Bun.spawn([process.execPath, process.argv[1]!, "_lane", worktree, "--unit", unit], { stdout: "pipe", stderr: "pipe" })
+// A repair re-dispatch's merge instruction rides along as `--merge <branch>`
+// (the hidden subcommand's own option).
+export function defaultLaneLauncher(worktree: string, unit: string, instruction?: LaneMergeInstruction): LaneWorker {
+  return Bun.spawn(
+    [process.execPath, process.argv[1]!, "_lane", worktree, "--unit", unit, ...(instruction ? ["--merge", instruction.merge] : [])],
+    { stdout: "pipe", stderr: "pipe" },
+  )
 }
 
 export type ShellProfile = {
@@ -65,8 +77,11 @@ export type ShellProfile = {
   // defaultLaneLauncher above); the shell contract's §E item makes that
   // entry a shell obligation. A host that owns its workers differently (a
   // 0067 daemon's "register a worker", a test's bootstrap script) injects
-  // its own here; the core never names a shell.
-  laneLauncher?: (worktree: string, unit: string) => LaneWorker
+  // its own here; the core never names a shell. The third argument is the
+  // merge instruction of a conflict repair's re-dispatch (S3, D7): present
+  // only there, so a launcher that spawns the ordinary entry forwards it as
+  // the repair dispatch's one extra fact.
+  laneLauncher?: (worktree: string, unit: string, instruction?: LaneMergeInstruction) => LaneWorker
 }
 
 export type AgentProfile = {

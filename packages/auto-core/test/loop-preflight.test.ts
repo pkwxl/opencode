@@ -502,3 +502,91 @@ describe("the run-start composition order (the services stage)", () => {
     expect(services()).toBe(before)
   })
 })
+
+// The scheduler's usage gates at preflight (plans/0068 D10/D11, S3):
+// --max-sessions above 1 without a parallel level is a usage error (the
+// 0046 D9 reservation lifted behind the level — "plan for parallelism
+// first"), interactive input refuses under concurrency (one human cannot
+// steer N sessions), and at maxSessions = 1 nothing changes whatever the
+// level (the byte-identical floor: the serial path, byte for byte).
+describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
+  // An initialized, committed project whose preflight has nothing to write
+  // (the registry describe's `project`, local to this describe).
+  async function project(): Promise<string> {
+    const dir = await freshRepo()
+    dirs.push(dir)
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  // The registry describe's `run`: preflight with the log lines captured, the
+  // ambient switch and proxy layer scrubbed, and a passing preflight's
+  // handles closed.
+  async function run(dir: string, opts: RunAllOpts = {}) {
+    const ambient = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_|^(https?|all|no)_proxy$/i.test(key))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, opts)
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      return { result, lines }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+  }
+
+  test("maxSessions above 1 without a parallel level exits 1 pointing at init --parallel", async () => {
+    const dir = await project()
+    for (const maxSessions of [2, 4]) {
+      const { result, lines } = await run(dir, { maxSessions })
+      expect(result).toEqual({ exit: 1 })
+      expect(lines).toEqual([
+        `max sessions ${maxSessions}: concurrent execution needs a parallel level — set one with init --parallel low|medium|high (planning then arranges the tasks for it) and re-run`,
+      ])
+    }
+  })
+
+  test("maxSessions above 1 under a level passes preflight (the scheduler is the loop's branch)", async () => {
+    const dir = await project()
+    const { result } = await run(dir, { maxSessions: 2, parallel: "medium" })
+    expect("exit" in result).toBe(false)
+  })
+
+  test("--interactive and --wait-answer refuse under concurrency (D11); the parent-side surfaces remain", async () => {
+    const dir = await project()
+    const interactive = await run(dir, { maxSessions: 2, parallel: "low", interactive: true })
+    expect(interactive.result).toEqual({ exit: 1 })
+    expect(interactive.lines).toEqual(["--interactive with max sessions 2: one human cannot steer 2 concurrent sessions; drop --interactive or run with --max-sessions 1"])
+    const waitAnswer = await run(dir, { maxSessions: 2, parallel: "low", waitAnswer: 5 })
+    expect(waitAnswer.result).toEqual({ exit: 1 })
+    expect(waitAnswer.lines).toEqual(["--wait-answer 5 with max sessions 2: one human cannot answer 2 concurrent sessions; drop --wait-answer or run with --max-sessions 1"])
+    // A zero wait-answer is no wait at all: unchanged.
+    expect("exit" in (await run(dir, { maxSessions: 2, parallel: "low", waitAnswer: 0 })).result).toBe(false)
+  })
+
+  test("the floor: at maxSessions = 1 preflight is unchanged whatever the level and the interactive flags", async () => {
+    const dir = await project()
+    for (const parallel of [undefined, "low", "medium", "high"] as const) {
+      for (const over of [{}, { interactive: true as const }, { waitAnswer: 5 }]) {
+        const { result, lines } = await run(dir, { maxSessions: 1, ...(parallel ? { parallel } : {}), ...over })
+        expect("exit" in result).toBe(false)
+        // Later preflights on the same directory print the stats resume
+        // banner; the floor's own claim is that no gate line appears.
+        expect(lines.filter((line) => line.includes("max sessions") || line.includes("concurrent sessions"))).toEqual([])
+      }
+    }
+  })
+})

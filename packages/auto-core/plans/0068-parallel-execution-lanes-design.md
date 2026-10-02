@@ -395,12 +395,12 @@ concurrency exists.
   resumes; ☑ goldens untouched. Value delivered alone: per-task crash
   isolation and the whole landing protocol, validated with zero
   concurrency.
-- **S3 — the scheduler (concurrency live).** ☐ Lift the `--max-sessions`
-  refusal (preflight + shell) behind `parallel ≠ none`; ☐ `runLaneLoop`
-  wired as the task-loop branch; ☐ failure matrix + conflict protocol
-  wired (the level-derived repair budget of D21); ☐ orphan recovery in preflight (await alive / re-dispatch dead /
-  block, park prune); ☐ nested-repo serial degrade; ☐ interactive /
-  wait-answer refusal (D11); ☐ tests at `maxSessions = 2` with an in-process
+- **S3 — the scheduler (concurrency live).** ☑ Lift the `--max-sessions`
+  refusal (preflight + shell) behind `parallel ≠ none`; ☑ `runLaneLoop`
+  wired as the task-loop branch; ☑ failure matrix + conflict protocol
+  wired (the level-derived repair budget of D21); ☑ orphan recovery in preflight (await alive / re-dispatch dead /
+  block, park prune); ☑ nested-repo serial degrade; ☑ interactive /
+  wait-answer refusal (D11); ☑ tests at `maxSessions = 2` with an in-process
   fake launcher (two fake-agent lanes, one landing conflict under both level postures — `low` blocks, `medium` repairs once — plus one crash, one FAIL).
 - **S4 — observability and human surface.** ☐ Prefix relay; ☐ status tree
   in-flight lanes section; ☐ stats booking from lane reports + conclusion
@@ -434,6 +434,13 @@ the existing trailer) · `OPENCODE_AUTO_LANE_ISOLATION` (experiment switch).
 The lane report's `result` reuses `Result: PASS|FAIL` semantics verbatim —
 no new verdict vocabulary. No existing literal moves; tier-1 marker tables
 unchanged.
+AUTO-DECISION (S3 appended two literals to this registration list): the
+conflict repair's dispatch instruction needed a machine-surface option and
+its own commit stage — `--merge <branch>` (the hidden `_lane` entry's second
+option, the parent's current main branch a repair merge names) and
+`Auto-Stage: merge-repair` (the repair merge commit's stage, one of the
+lane's own trailer-bearing commits). Both are new English protocol strings
+in this list's own grammar, never dual-read; nothing existing moved.
 
 ## 9. Documentation updates (with S6, pointers earlier)
 
@@ -634,4 +641,100 @@ the tests, any decision taken.
 - AUTO-DECISION (`src/switches.ts`): the switch takes on|off like every
   registered switch, not D10's informal `=1` — the registry's uniform
   grammar wins over the design note's shorthand.
+**S3 — the scheduler (concurrency live), 2026-10-02.**
+- Landed: the `--max-sessions` refusal lifted behind `parallel ≠ none` —
+  the shell (`packages/auto`'s run, after the config load) and preflight
+  (`src/loop-preflight.ts`) both exit 1 above 1 without a level ("plan for
+  parallelism first"); at `maxSessions = 1` nothing changes for any project
+  whatever the level (the byte-identical floor — the serial task loop is
+  the extracted-but-verbatim `runSerialUnit`, the goldens untouched). D11's
+  interactive refusal at preflight (`--interactive`/`--wait-answer` under
+  `maxSessions ≥ 2`). `runLaneLoop` (`src/loop-task.ts`, the task loop's
+  first branch under D10's `schedulerActive`): ready set over the reloaded
+  plan → dispatch up to `maxSessions` → await any exit (each lane's piped
+  output drains from dispatch, `laneOutput`) → the §6.2 failure matrix at
+  each exit (land / blocked with the committed work landed and exit 2 /
+  environment exit 1 with the relayed tail / orphan re-dispatched in place
+  up to `LANE_DISPATCH_CAP = 3` attempts) → the boundary hooks at each
+  landing (stepPause, `/exit` stops scheduling and drains — `maybeExit`
+  throws only after the last lane lands —, hibernate, router clears,
+  `--wait-between` between landings). D15's serial degrade: the first ready
+  unit whose declared `Touches` reach a nested-repo root runs through
+  `runSerialUnit` in the main tree, alone, once all lanes have drained. The
+  conflict protocol (D7/D21): `conflictRepair` reads the configured level —
+  `low` blocks immediately naming the park path; `medium`/`high` re-dispatch
+  once through the launcher with the merge instruction
+  (`LaneMergeInstruction`, `--merge <branch>` on the hidden `_lane` entry,
+  `dispatchLane`'s fourth parameter), a second conflict blocks. The lane
+  entry (`runLaneUnit`) performs the repair's driver-side merge
+  (`mergeLaneUpstream`, `Auto-Stage: merge-repair`) ahead of the unit; a
+  conflicted repair merge aborts clean and blocks with the report. The
+  landing merge resolves parent-owned conflicts itself: `landBranch`'s
+  `own` parameter — a conflict over exactly the phase index (concurrent
+  lanes tick adjacent index lines, which no textual merge survives; D6
+  makes the ticks parent-exclusive) resolves onto the main side and step ③
+  re-derives the true ticks; any other conflicted path stays the conflict
+  protocol's. Orphan recovery (`recoverOrphanLanes` in
+  `src/loop-preflight.ts`, gated on the scheduler being active): a live pid
+  is awaited then landed; a dead pid with a worktree is re-dispatched in
+  place, resuming through its own progress record, up to the attempts cap;
+  the cap, a missing worktree or an unresolvable phase blocks naming the
+  park path; park stragglers with no registry entry are pruned (liveness
+  read off a straggler's own run lock; directory removal, `git worktree
+  prune`, branch deletion in that order).
+- Tests: `test/lanes-scheduler.test.ts` — the loop at `maxSessions = 2`
+  over real git with the launcher stubbed through the profile (two lanes
+  side by side — the ready batch dispatches together, both land; a landing
+  conflict at `low` blocks with the scene kept; at `medium` the repair
+  re-dispatch carries the instruction naming the main branch, the repair's
+  trailer-bearing merge lands, and a second conflict blocks with the budget
+  spent; a crash re-dispatched in place, the cap blocking after three
+  dispatches; a FAIL landing its committed work and blocking) and D15's
+  degrade over the scripted fake agent (a nested-repo unit never gets a
+  lane, runs in the main tree); `recoverOrphanLanes`' five cases (dead pid
+  re-dispatched and landed, live pid awaited then landed, the cap blocks
+  naming the park, a record naming a missing worktree blocks, stragglers
+  pruned while a lock-holding one is left alone). `test/loop-preflight.test.ts`
+  — the D10/D11 gates (above 1 without a level exits 1 pointing at
+  `init --parallel`; under a level preflight passes; `--interactive` and
+  `--wait-answer` refuse under concurrency; the floor at one session).
+  `packages/auto/test/e2e.test.ts` — the refusal matrix (no level → exit 1;
+  under a level the run reaches D11's gate), a one-lane round at
+  `--max-sessions 2` through the real `_lane` default launcher, and a
+  two-lane round whose lying `Touches` conflicts at landing under `medium`
+  (one repair spawn through `--merge`, then exit 2 naming unit, report and
+  park path); the fake claude's rejected-split fork now writes
+  task-identified modules (read off the worktree's own progress record) so
+  two lanes produce distinguishable work.
+- AUTO-DECISION (`src/loop-task.ts`, the branch order): the isolation
+  switch outranks the scheduler — a switch that pins "one lane at a time"
+  is the more specific intent than the run's `--max-sessions` width.
+- AUTO-DECISION (`src/loop-preflight.ts`): the orphan recovery runs only
+  when the scheduler is active (D10's rule); at `maxSessions = 1` nothing
+  of it runs — the floor — and the isolation switch keeps S2's
+  exit-2-and-re-run story, which its e2e asserts.
+- AUTO-DECISION (`src/git.ts`, the landing's `own` resolution): a conflict
+  over exactly the parent-exclusive phase index resolves onto the main
+  tree's side inside the landing merge instead of surfacing as a lane
+  conflict — D6 makes the ticks parent-exclusive and step ③ re-derives
+  them, so the conflict is between two redundant views of a file the
+  parent owns; nothing semantic is auto-decided (any other conflicted path
+  still blocks). Without this, every pair of adjacent index lines would
+  conflict at the second landing and concurrent lanes could never land.
+- AUTO-DECISION (`src/loop-task.ts`'s `runLaneUnit`): the repair merge is
+  driver-side — a conflicted repair merge aborts clean and the lane blocks
+  with its report naming the conflict; the re-prompt D7 words ("the lane is
+  re-prompted inside that lane") needs per-dispatch prompt wiring the
+  template layer does not carry, and inventing an automatic semantic
+  resolution is exactly what D21 rejects. The session-side resolution is
+  recorded as the S5/follow-up wiring; the protocol around it (one repair,
+  second conflict blocks, the park scene kept) is complete.
+- AUTO-DECISION (`src/loop-task.ts`): `--wait-between` pauses between
+  landings now (D11 lists it among the surfaces that remain; leaving it
+  silently dead under concurrency would contradict the ruling) — S4's
+  boundary item stays about the relay/observability around the boundaries.
+- AUTO-DECISION (`test/lanes.ts`): the gate baseline re-recorded 210 s →
+  230 s the manifest's own way (three-plus runs, a representative mid-spread
+  figure) — this stage's repo-lane tests grew the suite past the old budget
+  on the same host; the unit lane's own 5 s budget is untouched.
 <!-- auto: eof -->

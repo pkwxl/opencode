@@ -624,6 +624,14 @@ export async function laneRecords(dir: string): Promise<LaneRecord[]> {
   return out
 }
 
+// The recorded dispatch attempts of one unit — the count begin increments at
+// every dispatch, which D14's orphan recovery caps (a crashed lane is
+// re-dispatched only below the cap; plans/0068 lanes.ts LANE_DISPATCH_CAP).
+export async function unitAttempts(dir: string, id: string): Promise<number> {
+  const units = await readUnits(dir)
+  return units.tasks[id]?.attempts ?? 0
+}
+
 // Task completion: rename todo.md → done.md and tick the index line (the task
 // commit that follows lands both), then drop the runtime entry. Idempotent.
 export async function markDone(plan: Pick<Plan, "dir" | "index">, id: string): Promise<void> {

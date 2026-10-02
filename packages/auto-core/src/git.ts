@@ -644,22 +644,73 @@ export async function deleteBranch(dir: string, branch: string): Promise<Worktre
 // so the parent's own close-outs see a trailer-bearing range. Conflict
 // detection leaves the main tree clean again (`git merge --abort`): the caller
 // keeps the lane's worktree and branch for the conflict protocol.
+// `own` names the parent-exclusive files (D6: the phase index) the caller
+// re-derives at landing (syncIndexTicks): a conflict over exactly those is
+// not a lane conflict — concurrent lanes tick adjacent index lines, which no
+// textual merge survives — so the merge resolves them onto the main tree's
+// side and concludes; the re-derivation right after sets the true ticks. Any
+// other conflicted path is a real conflict and aborts.
 export type LandResult = { type: "ok" } | { type: "conflict"; detail: string } | { type: "failed"; error: string }
 
-export async function landBranch(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult> {
+export async function landBranch(dir: string, branch: string, task: { id: string; title: string }, own: readonly string[] = []): Promise<LandResult> {
+  const subject = message(commitTitle(`${task.id} landing ${task.title}`), task, "landing")
   // The identity fallback applies to the merge commit like any other.
-  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} landing ${task.title}`), task, "landing"), branch])
+  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", subject, branch])
   if (merged.code === 0) return { type: "ok" }
   // A conflicted merge leaves MERGE_HEAD and conflicted entries; aborting
   // restores the pre-merge state (a merge refused before starting — dirty
   // tree, unknown revision — has no MERGE_HEAD and needs no abort).
+  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
+  if (!conflict) return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
+  // The parent-owned files: resolve onto the main tree's side and conclude
+  // the merge — but only when the conflict set is exactly them (a conflict
+  // that also touches anything else stays a real conflict).
+  const conflicted = (await git(dir, ["diff", "--relative", "--name-only", "--diff-filter=U"])).out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (conflicted.length && conflicted.every((path) => own.includes(path))) {
+    for (const path of own) await git(dir, ["checkout", "--ours", "--", path])
+    await git(dir, ["add", "--", ...own])
+    const concluded = await git(dir, [...(await identityArgs(dir)), "commit", "-m", subject])
+    if (concluded.code === 0) return { type: "ok" }
+    const aborted = await git(dir, ["merge", "--abort"])
+    return { type: "failed", error: `concluding the landing merge over ${own.join(", ")} failed: ${firstLine(concluded.err || concluded.out)} (git merge --abort exit code ${aborted.code}); the main tree must be handled manually` }
+  }
+  const aborted = await git(dir, ["merge", "--abort"])
+  if (aborted.code === 0 && !(await changedFiles(dir)).length) {
+    return { type: "conflict", detail: firstLine(merged.err || merged.out) }
+  }
+  return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the main tree must be handled manually` }
+}
+
+// The branch name HEAD of dir is on (plans/0068 D7's conflict path: the
+// "parent's current main branch" a repair merge names). undefined when HEAD is
+// detached or unreadable — the caller blocks rather than guessing a branch.
+export async function currentBranch(dir: string): Promise<string | undefined> {
+  const named = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined)
+  const branch = named?.code === 0 ? named.out.trim() : ""
+  return branch && branch !== "HEAD" ? branch : undefined
+}
+
+// The repair merge of D7's conflict path (plans/0068 S3): merge the parent's
+// current main branch into the lane branch, inside the lane's worktree, as one
+// of the lane's own commits — the merge commit carries the `Auto-Stage:
+// merge-repair` trailer so the landing verification (unitViolations over the
+// merge-base baseline) still sees a driver-only range; the base the merge
+// brings in is the sibling landings' own trailer-bearing history. A conflict
+// aborts the merge and leaves the worktree clean (the caller reports it — the
+// semantic resolution a session would do is not this merge's to invent).
+export async function mergeLaneUpstream(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult> {
+  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} merge repair ${task.title}`), task, "merge-repair"), branch])
+  if (merged.code === 0) return { type: "ok" }
   const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
   if (conflict) {
     const aborted = await git(dir, ["merge", "--abort"])
     if (aborted.code === 0 && !(await changedFiles(dir)).length) {
       return { type: "conflict", detail: firstLine(merged.err || merged.out) }
     }
-    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the main tree must be handled manually` }
+    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the worktree must be handled manually` }
   }
   return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
 }
@@ -725,7 +776,7 @@ export type GitOps = {
   addWorktree(dir: string, path: string, branch: string): Promise<WorktreeResult>
   removeWorktree(dir: string, path: string): Promise<WorktreeResult>
   pruneWorktrees(dir: string): Promise<WorktreeResult>
-  landBranch(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult>
+  landBranch(dir: string, branch: string, task: { id: string; title: string }, own?: readonly string[]): Promise<LandResult>
 }
 
 // The repository containing the target directory plus every nested repository

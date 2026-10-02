@@ -119,6 +119,18 @@ const write = (rel: string, text: string) => {
   writeFileSync(rel, text)
 }
 
+// The task this lane runs — read off the worktree's own progress record
+// (the one in-flight unit; both tasks of a round are pending in every lane's
+// snapshot, so "the pending one" would not distinguish them) — for content
+// that must differ per task; "task" when no record says.
+const pendingTask = (): string => {
+  try {
+    const progress = JSON.parse(readFileSync(".auto/progress.json", "utf8"))
+    if (typeof progress?.task === "string") return progress.task
+  } catch {}
+  return "task"
+}
+
 // The execution flow's turns under `run`; false = not one of them.
 function execute(text: string): boolean {
   // The lead: the foundation, then the split, in one turn.
@@ -137,10 +149,15 @@ function execute(text: string): boolean {
     for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(stream)}\n`)
     return true
   }
-  // The rejected lead's fork: the whole remaining work in this session.
+  // The rejected lead's fork: the whole remaining work in this session. The
+  // modules carry the task's own id (the one pending T-NNN of this tree), so
+  // two lanes of one round write distinguishable work — a real landing
+  // conflict needs sides that differ, and identical adds merge cleanly
+  // (auto-core plans/0068 S3's scheduler e2e).
   if (text.startsWith("[DRIVER] The split was not taken")) {
-    write("src/alpha.ts", 'export const alpha = "lead"\n')
-    write("src/beta.ts", 'export const beta = "lead"\n')
+    const task = pendingTask()
+    write("src/alpha.ts", `export const alpha = ${JSON.stringify(task)}\n`)
+    write("src/beta.ts", `export const beta = ${JSON.stringify(task)}\n`)
     return true
   }
   // The wrap-up: the task report with its result line.

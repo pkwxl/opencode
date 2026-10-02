@@ -102,8 +102,11 @@ const VALUE_FLAGS = new Set([
   "scan-exempt",
   "max-sessions",
   "new-task",
-  // `_lane`'s alone (hidden, below): the unit the lane worker runs.
+  // `_lane`'s alone (hidden, below): the unit the lane worker runs, and the
+  // parent branch a conflict repair's re-dispatch merges into the lane
+  // branch (plans/0068 D7).
   "unit",
+  "merge",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
 for (let i = 1; i < args.length; i++) {
@@ -440,19 +443,21 @@ if (command === "run") {
     console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
     process.exit(1)
   }
-  // --max-sessions (auto-core plans/0046 D9): concurrent AI sessions, reserved
-  // until the MP.3 scheduler exists — only 1 is accepted. Unrelated to --agent.
+  // --max-sessions (auto-core plans/0046 D9; live since plans/0068 S3/D10):
+  // concurrent AI sessions of the task loop. Above 1 the project needs a
+  // parallel level (config parallel, init --parallel) — the check sits after
+  // the config load below. Unrelated to --agent.
   const maxSessions = parseMaxSessions(flags.get("max-sessions"))
   if (maxSessions === null) {
     console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
     process.exit(1)
   }
-  if (maxSessions > 1) {
-    console.error(`--max-sessions ${maxSessions}: concurrent execution is not supported yet; only 1 is accepted (init --parallel plans for parallelism, tasks still run one at a time)`)
-    process.exit(1)
-  }
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
+  if (maxSessions > 1 && !config.parallel) {
+    console.error(`--max-sessions ${maxSessions}: concurrent execution needs a parallel level — set one with init --parallel low|medium|high (planning then arranges the tasks for it) and re-run`)
+    process.exit(1)
+  }
   await logRunBanner(directory, config)
   const code = await runAll(directory, {
     ...runOptions(config, mode, session),
@@ -463,26 +468,29 @@ if (command === "run") {
   process.exit(code)
 }
 
-// `_lane <dir> --unit <id>` (hidden, auto-core plans/0068 §6.4/D2): the lane
-// worker entry the parent run's default lane launcher re-invokes this CLI
-// with — a machine surface, never a person's (absent from the usage text; the
-// shell contract's §E obligation makes providing it part of being a shell).
-// It loads the project config like run (the worktree received it by the
-// scaffolding copy), then runs the one unit through runLaneWorker, which
-// writes the lane report the parent reads after this process exits. Session
-// flags take their defaults; everything the lane needs beyond them rides the
-// copied scaffolding and the inherited environment.
+// `_lane <dir> --unit <id> [--merge <branch>]` (hidden, auto-core plans/0068
+// §6.4/D2): the lane worker entry the parent run's default lane launcher
+// re-invokes this CLI with — a machine surface, never a person's (absent from
+// the usage text; the shell contract's §E obligation makes providing it part
+// of being a shell). It loads the project config like run (the worktree
+// received it by the scaffolding copy), then runs the one unit through
+// runLaneWorker, which writes the lane report the parent reads after this
+// process exits. Session flags take their defaults; everything the lane needs
+// beyond them rides the copied scaffolding and the inherited environment.
+// --merge (D7's conflict path) rides only a conflict repair's re-dispatch:
+// the parent's current main branch the lane merges into its branch first.
 if (command === "_lane") {
   const unit = flags.get("unit")
   if (!unit) {
     console.error("_lane requires --unit <task id> (the unit this lane worker runs); it is the entry the parent run's lane launcher invokes")
     process.exit(1)
   }
+  const merge = flags.get("merge")
   const session = parseSessionFlags()
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
   await logRunBanner(directory, config)
-  process.exit(await runLaneWorker(directory, { ...runOptions(config, mode, session), lane: { unit } }))
+  process.exit(await runLaneWorker(directory, { ...runOptions(config, mode, session), lane: { unit, ...(merge !== undefined ? { merge } : {}) } }))
 }
 
 // plan (auto-core plans/0053 D14, D23, D28; --new-task plans/0058): plan the
@@ -1611,7 +1619,7 @@ if (command === "models") {
 
 console.error(`usage:
   opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [-f|--force]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
@@ -1639,9 +1647,9 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
        --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
-       --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
+       --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. With --max-sessions above 1 it also switches the run to concurrent lanes (each task isolated in its own git worktree, merged back serially) and sets the landing-conflict posture (low blocks on the first conflict; medium/high allow one repair merge before blocking); the level is required for concurrency
        --scan-exempt none|<globs> comma-separated path globs, relative to the target directory, of deliverable files the driver's content scans skip (default none): the process-document reference scan (unit close-out and round close) and the document terminator scan. For deliverables where such strings are content, e.g. a tool's own test fixtures or prompt templates; a glob naming a directory covers the files under it; only deliverable paths are exempted (process documents and the agent-contract surfaces are never scanned for references anyway); the list replaces the stored one, none removes it
-        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
+        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 requires a parallel level (init --parallel) and runs the phase's tasks as concurrent lanes (isolated worktrees, serial landings); --interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)
         --commit is retired: committing cannot be turned off — after any session ends the driver recursively commits all changes (git history is the audit trail of AI changes; --commit false and the old alias none were retired on 2026-09-15, and with the config key gone the flag went entirely). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value fails loading (opencode-auto fix <dir> drops the key)
         --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error

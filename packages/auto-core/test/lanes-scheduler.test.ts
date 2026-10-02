@@ -9,12 +9,17 @@
 // (§6.5) over real git repositories — the worktree, the scaffolding copy, the
 // landing merge — with the lane launcher stubbed through the shell profile
 // (no process spawn: the launcher is the seam, and the stub answers an
-// already-exited worker). That half is why the file lives in the repo lane
-// of the test manifest despite its pure S1 half.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+// already-exited worker). Stage S3 adds the loop's own cases the same way —
+// the readiness scheduler at maxSessions = 2 (two lanes side by side, the
+// landing-conflict protocol under both level postures, a crash re-dispatched,
+// a FAIL keeping its commit) and D14's orphan recovery — plus D15's serial
+// degrade over the fake agent. All of that is why the file lives in the repo
+// lane of the test manifest despite its pure S1 half.
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { readdirSync } from "node:fs"
+import { mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { hostname, tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import {
   dispatchLane,
   laneBranch,
@@ -23,6 +28,7 @@ import {
   laneOutcome,
   lanePark,
   landLane,
+  LANE_DISPATCH_CAP,
   parseLaneReport,
   readyUnits,
   syncIndexTicks,
@@ -35,8 +41,18 @@ import { changedFiles, commitTree } from "../src/git"
 import { createGitOps } from "../src/git-ops"
 import { setShellProfile, type LaneWorker } from "../src/shell"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
-import { begin, clearLane, laneRecords, markDone, next, setLane, UNITS_FILE, type Plan, type Task } from "../src/tasks"
+import { begin, clearLane, laneRecords, markDone, next, renderTaskIndex, setLane, UNITS_FILE, unitAttempts, type Plan, type Task } from "../src/tasks"
 import { seedUnits, unitsText } from "./fixtures/units"
+import { ExitRequested } from "../src/exit"
+import { runTaskLoop, type LoopCtx } from "../src/loop-task"
+import { recoverOrphanLanes, type RunAllOpts } from "../src/loop-preflight"
+import { RUN_LOCK_FILE } from "../src/lock"
+import { services } from "../src/services"
+import { setSwitchModelRegistry } from "../src/switches"
+import { singleHost } from "../src/agent-pool"
+import type { AgentHost } from "../src/agent/types"
+import { fakeClient } from "./fixtures/runner"
+import { EOF_MARK } from "../src/doccheck"
 
 // —— Hand-built plans ——
 
@@ -312,6 +328,17 @@ const dirExists = (path: string) => stat(path).then(() => true, () => false)
 // An already-exited worker the stub launcher answers with (no process).
 const stubWorker = (code = 0): LaneWorker => ({ pid: 4242, exited: Promise.resolve(code) })
 
+// A stub worker whose exit lands only after its work does: the launcher is
+// synchronous, so the unit's work in the worktree rides a promise the exit
+// resolution waits on — the loop awaits the exit, and the report must exist
+// by then. A failed work promise still exits (with the given code).
+const workingStub = (work: Promise<unknown>, code = 0): LaneWorker => {
+  let settle!: (code: number) => void
+  const exited = new Promise<number>((resolve) => (settle = resolve))
+  void work.then(() => settle(code), () => settle(code))
+  return { pid: 4242, exited }
+}
+
 // A hand-built report of the D8 shape.
 const reportOf = (unit: string, over: Partial<LaneReport> = {}): LaneReport => ({
   unit,
@@ -479,5 +506,586 @@ describe("landLane (D7's five steps)", () => {
     if (landed.type === "blocked") expect(landed.error).toContain("non-driver commit")
     expect(await changedFiles(dir)).toEqual([])
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
+  })
+})
+
+// —— The readiness scheduler's lane loop (§6.2, stage S3) ——
+
+// One unit of a scheduler project: its id and title, the `Touches` its
+// document declares (absent = touches everything) and `Depends: none` when it
+// should be co-ready with its sibling, and the source file the fake worker
+// writes for it. `lie` makes two units write the same file while declaring
+// disjoint paths — D5's advisory `Touches`, surfacing as D7's landing
+// conflict instead of corruption.
+type SchedUnit = { id: string; title: string; touches?: string[]; root?: boolean; file: string; content?: string }
+
+// The scaffolding every lane worktree needs (F7) — the write half of
+// laneProject above, shared with the scheduler projects.
+async function writeScaffolding(root: string): Promise<void> {
+  await Bun.write(join(root, ".gitignore"), [".auto/", "tmp/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", ""].join("\n"))
+  await mkdir(join(root, ".opencode", "agent"), { recursive: true })
+  await Bun.write(join(root, ".opencode", "agent", "auto.md"), "the agent contract\n")
+  await mkdir(join(root, ".opencode", "auto"), { recursive: true })
+  await Bun.write(join(root, ".opencode", "auto", "config.json"), "{}\n")
+  await Bun.write(join(root, "opencode.json"), "{}\n")
+  await Bun.write(join(root, "AGENTS.md"), "the agents block\n")
+}
+
+// A committed scheduler project: one unit per entry, its document carrying
+// the `Depends: none` / `Touches:` declarations the readiness predicate
+// reads, the scaffolding local-only, everything committed at HEAD.
+async function schedulerProject(units: SchedUnit[]): Promise<void> {
+  await git(dir, "init", "-q")
+  await Bun.write(
+    join(dir, phase.dir, "tasks.md"),
+    renderTaskIndex("R-01.P01", units.map((unit) => ({ id: unit.id, title: unit.title }))),
+  )
+  for (const unit of units) {
+    await mkdir(join(dir, "docs", unit.id), { recursive: true })
+    await Bun.write(
+      join(dir, "docs", unit.id, "todo.md"),
+      [
+        `# ${unit.id}: ${unit.title}`,
+        "Phase: R-01.P01",
+        ...(unit.root ? [] : ["Depends: none"]),
+        ...(unit.touches ? [`Touches: ${unit.touches.join(", ")}`] : []),
+        "",
+        "## Goal",
+        "",
+        `Write ${unit.file}.`,
+        "",
+        "## Scope",
+        "",
+        "src only.",
+        "",
+        "## Acceptance",
+        "",
+        "The module reads back.",
+        "",
+        EOF_MARK,
+        "",
+      ].join("\n"),
+    )
+  }
+  await writeScaffolding(dir)
+  await git(dir, "add", "-A")
+  await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+}
+
+// The fake lane worker's completion of one unit in its worktree, the real
+// way: the unit's source file, the done rename + tick, the done commit.
+async function completeUnit(worktree: string, unit: SchedUnit): Promise<void> {
+  await mkdir(dirname(join(worktree, unit.file)), { recursive: true })
+  await Bun.write(join(worktree, unit.file), unit.content ?? `export const done = "${unit.id}"\n`)
+  await markDone({ dir: worktree, index: join(phase.dir, "tasks.md") }, unit.id)
+  const settled = await commitTree(worktree, { id: unit.id, title: unit.title }, { stage: "done", subject: `${unit.id} done ${unit.title}` })
+  if (!settled.ok) throw new Error(`completing ${unit.id} in the lane failed: ${settled.failures.map((failure) => failure.error).join("; ")}`)
+}
+
+// The scheduler's loop context (the loop fixture's shape): the installed
+// services' router/control (the preload installs a fresh holder per test),
+// the production git ops, and a fake agent's single host — the loop itself
+// drives no session (D4); the host serves D15's serial degrade.
+const agentHost = (): AgentHost => {
+  const client = fakeClient({})
+  return { client: client.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+}
+
+function schedulerCtx(server: AgentHost, opts: Partial<RunAllOpts>): LoopCtx {
+  const holder = services()
+  return {
+    directory: dir,
+    opts: { maxSessions: 2, subtask: "off", ...opts },
+    server: { ...singleHost(server), startedAgents: () => ["fake"] },
+    agentName: "auto",
+    phases: "m",
+    manual: true,
+    ran: 0,
+    router: holder.router,
+    control: holder.control,
+    git: createGitOps(),
+  }
+}
+
+// Drives the task loop the way a run would: the ambient OPENCODE_AUTO_* layer
+// scrubbed (the boundary hooks read the switches) and the switch memo reset
+// so this pass parses the scrubbed environment; console.log captured so a
+// case can assert the loop's own lines.
+async function runScheduler(ctx: LoopCtx): Promise<{ code: number; lines: string[] }> {
+  const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+  for (const [key] of ambient) delete process.env[key]
+  setSwitchModelRegistry(undefined)
+  const lines: string[] = []
+  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "))
+  })
+  try {
+    return { code: await runTaskLoop(ctx, phase), lines }
+  } finally {
+    printed.mockRestore()
+    for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+    setSwitchModelRegistry(undefined)
+  }
+}
+
+// The park entries that still exist (the teardown's counterpart).
+const parkEntries = async (): Promise<string[]> => readdir(join(dir, ".auto", "worktrees")).catch(() => [])
+
+describe("runLaneLoop (§6.2, D10 active at maxSessions = 2)", () => {
+  test("two fake-agent lanes side by side: the ready batch dispatches together, both land, the phase completes", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/alpha/alpha.ts" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/beta/beta.ts" },
+    ])
+    // The launcher records the park's state at each launch: the second lane
+    // launches while the first is still in flight (both worktrees present,
+    // nothing landed yet) — the side-by-side property.
+    const parks: string[][] = []
+    setShellProfile({
+      laneLauncher: (worktree, id) => {
+        parks.push(readdirSync(join(dir, ".auto", "worktrees")).sort())
+        const unit = id === "T-001" ? { id: "T-001", title: "the alpha module", file: "src/alpha/alpha.ts" } : { id: "T-002", title: "the beta module", file: "src/beta/beta.ts" }
+        return workingStub(completeUnit(worktree, unit).then(() => writeLaneReport(worktree, reportOf(unit.id))))
+      },
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    if (run.code !== 0) process.stderr.write(`DEBUG
+${run.lines.join("\n")}
+`)
+    expect(run.code).toBe(0)
+    expect(run.lines).toContain("✓ all tasks complete")
+    // The second launch saw the first lane's worktree still parked.
+    expect(parks).toEqual([["T-001"], ["T-001", "T-002"]])
+    // Both units' work arrived in the main tree, done and ticked, with two
+    // landing merges; the park and the branches are gone.
+    expect(await Bun.file(join(dir, "src/alpha/alpha.ts")).text()).toContain("T-001")
+    expect(await Bun.file(join(dir, "src/beta/beta.ts")).text()).toContain("T-002")
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "docs/T-002/done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the alpha module")
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-002 the beta module")
+    const log = await git(dir, "log", "--format=%B")
+    expect(log.match(/Auto-Stage: landing\n/g)?.length).toBe(2)
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBeUndefined()
+  })
+
+  test("a landing conflict at low blocks immediately: exit 2, the park path named, the scene kept", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/shared.ts", content: "export const who = \"T-001\"\n" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/shared.ts", content: "export const who = \"T-002\"\n" },
+    ])
+    const units: Record<string, SchedUnit> = {
+      "T-001": { id: "T-001", title: "the alpha module", file: "src/shared.ts", content: "export const who = \"T-001\"\n" },
+      "T-002": { id: "T-002", title: "the beta module", file: "src/shared.ts", content: "export const who = \"T-002\"\n" },
+    }
+    setShellProfile({
+      laneLauncher: (worktree, unit) => workingStub(completeUnit(worktree, units[unit]!).then(() => writeLaneReport(worktree, reportOf(unit)))),
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    expect(run.code).toBe(2)
+    // T-001 landed (index order decides the race deterministically); T-002's
+    // landing hit the conflict and blocked with the park path named.
+    expect(run.lines.some((line) => line.startsWith("✓ T-001 done (lane landed:"))).toBe(true)
+    const conflict = run.lines.find((line) => line.includes("T-002 landing conflict"))
+    expect(conflict).toBeDefined()
+    expect(conflict).toContain(lanePark("T-002"))
+    expect(conflict).toContain("spends no tokens on merge repair")
+    expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe("export const who = \"T-001\"\n")
+    expect(await changedFiles(dir)).toEqual([])
+    // The blocked lane's scene is kept: worktree, branch, registry record.
+    expect(await parkEntries()).toEqual(["T-002"])
+    expect((await git(dir, "branch", "--list", laneBranch("T-002"))).trim()).toContain(laneBranch("T-002"))
+    expect(JSON.parse(await unitsText(dir)).tasks["T-002"].worktree).toBe(lanePark("T-002"))
+  })
+
+  test("a landing conflict at medium repairs once through the merge instruction and lands; a second conflict blocks", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/shared.ts", content: "export const who = \"T-001\"\n" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/shared.ts", content: "export const who = \"T-002\"\n" },
+    ])
+    const units: Record<string, SchedUnit> = {
+      "T-001": { id: "T-001", title: "the alpha module", file: "src/shared.ts", content: "export const who = \"T-001\"\n" },
+      "T-002": { id: "T-002", title: "the beta module", file: "src/shared.ts", content: "export const who = \"T-002\"\n" },
+    }
+    // The repair the fake worker performs: the merge the instruction names,
+    // the one conflicted file resolved by hand (the session's stand-in), and
+    // the merge committed with the merge-repair trailer so the landing
+    // verification still sees a driver-only range.
+    const repair = async (worktree: string, branch: string, unit: SchedUnit) => {
+      await git(worktree, "merge", branch).catch(() => {})
+      await Bun.write(join(worktree, unit.file), `export const who = "merged"\n`)
+      // The merge also conflicts the phase index (adjacent ticks); the
+      // resolution takes the main side — the parent re-derives the ticks at
+      // landing anyway (D6), and markers must never enter the branch.
+      await git(worktree, "checkout", "--ours", "--", join(phase.dir, "tasks.md"))
+      await git(worktree, "add", "-A")
+      await git(worktree, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", `${unit.id} merge repair ${unit.title}\n\nAuto-Task: ${unit.id}\nAuto-Stage: merge-repair\n`)
+    }
+    const instructions: Array<{ unit: string; merge: string } | undefined> = []
+    setShellProfile({
+      laneLauncher: (worktree, unit, instruction) => {
+        instructions.push(instruction && { unit, merge: instruction.merge })
+        return workingStub(
+          (async () => {
+            if (instruction !== undefined) await repair(worktree, instruction.merge, units[unit]!)
+            else await completeUnit(worktree, units[unit]!)
+            await writeLaneReport(worktree, reportOf(unit))
+          })(),
+        )
+      },
+    })
+    const main = (await git(dir, "rev-parse", "--abbrev-ref", "HEAD")).trim()
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "medium" }))
+    expect(run.code).toBe(0)
+    // The repair re-dispatch carried the merge instruction naming the main
+    // branch; the repair's merge commit landed inside the lane's history.
+    expect(instructions).toEqual([undefined, undefined, { unit: "T-002", merge: main }])
+    expect(run.lines.some((line) => line.includes("re-dispatching the lane with the merge instruction"))).toBe(true)
+    const log = await git(dir, "log", "--format=%B")
+    expect(log).toContain("Auto-Stage: merge-repair")
+    expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe('export const who = "merged"\n')
+    expect(await Bun.file(join(dir, "docs/T-002/done.md")).exists()).toBe(true)
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
+
+    // The second conflict blocks: the same lie with a launcher that ignores
+    // the instruction (the repair did not resolve anything) blocks on the
+    // retry.
+    const second = await mkdtemp(join(tmpdir(), "auto-lanes-s3-"))
+    const previous = dir
+    dir = second
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/shared.ts", content: "export const who = \"T-001\"\n" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/shared.ts", content: "export const who = \"T-002\"\n" },
+    ])
+    setShellProfile({
+      laneLauncher: (worktree, unit) => workingStub(completeUnit(worktree, units[unit]!).then(() => writeLaneReport(worktree, reportOf(unit)))),
+    })
+    const blocked = await runScheduler(schedulerCtx(agentHost(), { parallel: "medium" }))
+    expect(blocked.code).toBe(2)
+    expect(blocked.lines.some((line) => line.includes("T-002 landing conflict") && line.includes("the one repair is spent"))).toBe(true)
+    expect(await parkEntries()).toEqual(["T-002"])
+    await rm(second, { recursive: true, force: true })
+    dir = previous
+  })
+
+  test("a crash (no report) is re-dispatched in place up to the cap; the recovery lands", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    const unit: SchedUnit = { id: "T-001", title: "the widget", file: "src/widget.ts" }
+    let launches = 0
+    setShellProfile({
+      laneLauncher: (worktree, id) => {
+        launches++
+        // The first launch is the crash: no work, no report, exit 137.
+        if (launches === 1) return stubWorker(137)
+        return workingStub(completeUnit(worktree, unit).then(() => writeLaneReport(worktree, reportOf(id))))
+      },
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    expect(run.code).toBe(0)
+    expect(run.lines.some((line) => line.includes("exited without a report (exit 137)") && line.includes("re-dispatching the lane in place"))).toBe(true)
+    expect(launches).toBe(2)
+    expect(await unitAttempts(dir, "T-001")).toBe(2)
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+    expect(await parkEntries()).toEqual([])
+
+    // The cap: a lane that crashes every dispatch blocks naming the park
+    // path once begin's attempts reach the cap.
+    const capDir = await mkdtemp(join(tmpdir(), "auto-lanes-s3-"))
+    const previous = dir
+    dir = capDir
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    let crashes = 0
+    setShellProfile({
+      laneLauncher: () => {
+        crashes++
+        return stubWorker(137)
+      },
+    })
+    const capped = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    expect(capped.code).toBe(2)
+    // A fresh project: the loop dispatched three times (the cap), every
+    // dispatch crashed, the third hit the cap and blocked.
+    expect(crashes).toBe(3)
+    expect(await unitAttempts(dir, "T-001")).toBe(LANE_DISPATCH_CAP)
+    expect(capped.lines.some((line) => line.includes("the dispatch attempts cap") && line.includes(lanePark("T-001")))).toBe(true)
+    expect(await parkEntries()).toEqual(["T-001"])
+    await rm(capDir, { recursive: true, force: true })
+    dir = previous
+  })
+
+  test("a FAIL report blocks with its committed work landed (failure keeps its commit)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/broken.ts" }])
+    setShellProfile({
+      laneLauncher: (worktree, unit) => {
+        return workingStub(
+          (async () => {
+            // The session's work is committed; the wrap-up's verdict is FAIL:
+            // the unit is not done, the work stays.
+            await mkdir(dirname(join(worktree, "src/broken.ts")), { recursive: true })
+            await Bun.write(join(worktree, "src/broken.ts"), "export const broken = true\n")
+            const settled = await commitTree(worktree, { id: unit, title: "the widget" }, { stage: "session", subject: `${unit} the work so far` })
+            if (!settled.ok) throw new Error("commit failed")
+            await writeLaneReport(worktree, reportOf(unit, { ok: false, result: "FAIL", blocked: "the task report concluded Result: FAIL" }))
+          })(),
+          2,
+        )
+      },
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    expect(run.code).toBe(2)
+    expect(run.lines.some((line) => line.includes("T-001 blocked: its committed work landed"))).toBe(true)
+    expect(run.lines.some((line) => line.includes("T-001 is blocked") && line.includes("Result: FAIL"))).toBe(true)
+    // The committed work is in the main tree; the unit is blocked, not done;
+    // the landed scene is torn down.
+    expect(await Bun.file(join(dir, "src/broken.ts")).text()).toBe("export const broken = true\n")
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(false)
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"].status).toBe("blocked")
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
+  })
+
+  test("an environment error (exit 1) stops scheduling and exits 1 with the relayed lines", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    setShellProfile({
+      laneLauncher: (worktree, unit) =>
+        workingStub(
+          (async () => {
+            await writeLaneReport(worktree, reportOf(unit))
+          })(),
+          1,
+        ),
+    })
+    // The worker's piped output is the relay source: a stub without streams
+    // relays nothing, so the case checks the exit and the stop, not the tail.
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    expect(run.code).toBe(1)
+    expect(run.lines.some((line) => line.includes("lane worker failed with an environment error (exit 1)"))).toBe(true)
+    // Nothing lands on the environment path — the scene stays for the next
+    // run's preflight recovery (the report on disk tells it to land).
+    expect(await parkEntries()).toEqual(["T-001"])
+    expect(await changedFiles(dir)).toEqual([])
+  })
+
+  test("a /exit seen at a landing stops scheduling, drains the other lane, then takes effect (exit 3)", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/alpha/alpha.ts" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/beta/beta.ts" },
+    ])
+    const units: Record<string, SchedUnit> = {
+      "T-001": { id: "T-001", title: "the alpha module", file: "src/alpha/alpha.ts" },
+      "T-002": { id: "T-002", title: "the beta module", file: "src/beta/beta.ts" },
+    }
+    let launches = 0
+    let control: LoopCtx["control"] | undefined
+    setShellProfile({
+      laneLauncher: (worktree, unit) => {
+        launches++
+        return workingStub(
+          (async () => {
+            // T-001's landing boundary sees the /exit request; T-002 is
+            // still in flight and must land before it takes effect.
+            if (unit === "T-001") control?.requestExit()
+            await completeUnit(worktree, units[unit]!)
+            await writeLaneReport(worktree, reportOf(unit))
+          })(),
+        )
+      },
+    })
+    const ctx = schedulerCtx(agentHost(), { parallel: "low" })
+    control = ctx.control
+    let thrown: unknown
+    try {
+      await runScheduler(ctx)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(ExitRequested)
+    // The drain landed T-002 before the throw, and nothing else dispatched.
+    expect(launches).toBe(2)
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "docs/T-002/done.md")).exists()).toBe(true)
+    expect(await parkEntries()).toEqual([])
+  })
+
+  test("D15's serial degrade: a unit touching a nested repository runs in the main tree, never as a lane", async () => {
+    await schedulerProject([{ id: "T-001", title: "the vendored piece", touches: ["vendor/lib/"], file: "src/widget.ts" }])
+    // The nested repository that makes the unit not lane-eligible.
+    await mkdir(join(dir, "vendor", "lib"), { recursive: true })
+    await git(join(dir, "vendor", "lib"), "init", "-q")
+    await Bun.write(join(dir, "vendor", "lib", "README.md"), "vendored\n")
+    await git(join(dir, "vendor", "lib"), "add", "-A")
+    await git(join(dir, "vendor", "lib"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "vendored")
+    await git(dir, "add", "-A")
+    await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "nested vendor")
+    // The serial degrade's sessions over the scripted fake agent: the
+    // whole-task turn writes the source, the wrap-up turn the passing report.
+    let round = 0
+    const client = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          const script = [
+            async () => {
+              await Bun.write(join(dir, "src", "widget.ts"), "export const widget = 1\n")
+            },
+            async () => {
+              await Bun.write(join(dir, "docs", "T-001", "report.md"), `# T-001 report\n\n${"Delivered. ".repeat(20)}\n\nResult: PASS\n\n${EOF_MARK}\n`)
+            },
+          ][Math.min(round++, 1)]!
+          await script()
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const host: AgentHost = { client: client.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    setShellProfile({
+      laneLauncher: () => {
+        throw new Error("no lane may be dispatched for a nested-repo unit")
+      },
+    })
+    const run = await runScheduler(schedulerCtx(host, { parallel: "low" }))
+    expect(run.code).toBe(0)
+    expect(run.lines.some((line) => line.includes("cannot be isolated") && line.includes("running it serially in the main tree"))).toBe(true)
+    expect(await Bun.file(join(dir, "src", "widget.ts")).text()).toBe("export const widget = 1\n")
+    expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
+  })
+})
+
+// —— Orphan recovery (D14, at the next parent run's preflight) —— //
+
+// A crashed lane's scene: the worktree on the lane branch holding the unit's
+// committed done work, the registry entry naming a pid, and no lane report
+// (the worker died before any controlled exit). Returns the scene's pid (the
+// dead worker the record names).
+async function crashScene(unit: SchedUnit, pid: number, report?: LaneReport): Promise<void> {
+  const park = join(dir, lanePark(unit.id))
+  const added = await createGitOps().addWorktree(dir, park, laneBranch(unit.id))
+  if (!added.ok) throw new Error(added.error)
+  // The scaffolding a real dispatch copies in (the report written later under
+  // .auto/ must be ignored dirt, not a landing violation).
+  await writeScaffolding(park)
+  await completeUnit(park, unit)
+  if (report) await writeLaneReport(park, report)
+  await begin(dir, unit.id)
+  await setLane(dir, unit.id, { worktree: lanePark(unit.id), pid })
+}
+
+// A pid that is certainly dead: a process spawned and reaped for the purpose.
+async function deadPid(): Promise<number> {
+  const proc = Bun.spawn(["true"])
+  await proc.exited
+  return proc.pid!
+}
+
+describe("recoverOrphanLanes (D14)", () => {
+  test("a dead pid with a worktree present is re-dispatched in place and lands; the run continues", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, await deadPid())
+    // The re-dispatched worker sees a complete unit: it answers with the
+    // report of the finished work (the real entry's short-circuit).
+    setShellProfile({
+      laneLauncher: (worktree, unit) => workingStub(writeLaneReport(worktree, reportOf(unit))),
+    })
+    const code = await recoverOrphanLanes(createGitOps(), dir)
+    expect(code).toBeUndefined()
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "src/widget.ts")).text()).toContain("T-001")
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+    expect(await parkEntries()).toEqual([])
+    expect(await unitAttempts(dir, "T-001")).toBe(2)
+    expect(await changedFiles(dir)).toEqual([])
+    setShellProfile({ laneLauncher: undefined })
+  })
+
+  test("a live pid is awaited then landed (the cattle property)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // A live worker that already wrote its report and exits on its own: the
+    // recovery awaits the pid, then lands the report.
+    const worker = Bun.spawn(["sleep", "1"])
+    await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, worker.pid!, reportOf("T-001"))
+    const started = Date.now()
+    const code = await recoverOrphanLanes(createGitOps(), dir)
+    expect(code).toBeUndefined()
+    // The await really waited for the worker's exit.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+    expect(await parkEntries()).toEqual([])
+    await worker.exited
+  })
+
+  test("the attempts cap blocks naming the park path", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, await deadPid())
+    // The unit's attempts already sit at the cap (three dispatches booked).
+    while ((await unitAttempts(dir, "T-001")) < LANE_DISPATCH_CAP) await begin(dir, "T-001")
+    setShellProfile({
+      laneLauncher: () => stubWorker(137),
+    })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let code: number | undefined
+    try {
+      code = await recoverOrphanLanes(createGitOps(), dir)
+    } finally {
+      printed.mockRestore()
+    }
+    expect(code).toBe(2)
+    expect(lines.some((line) => line.includes("dispatch attempts cap") && line.includes(lanePark("T-001")))).toBe(true)
+    expect(await parkEntries()).toEqual(["T-001"])
+    setShellProfile({ laneLauncher: undefined })
+  })
+
+  test("a record naming a missing worktree blocks", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    await begin(dir, "T-001")
+    await setLane(dir, "T-001", { worktree: lanePark("T-001"), pid: await deadPid() })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let code: number | undefined
+    try {
+      code = await recoverOrphanLanes(createGitOps(), dir)
+    } finally {
+      printed.mockRestore()
+    }
+    expect(code).toBe(2)
+    expect(lines.some((line) => line.includes("no longer exists"))).toBe(true)
+  })
+
+  test("park stragglers with no registry entry are pruned; one holding a live run lock is left alone", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // A straggler git knows about (the dispatch died between the worktree's
+    // creation and the registry write)…
+    const stray = join(dir, lanePark("T-009"))
+    const added = await createGitOps().addWorktree(dir, stray, laneBranch("T-009"))
+    expect(added.ok).toBe(true)
+    // …and one that only exists as a directory holding a live run lock.
+    const locked = join(dir, lanePark("T-010"))
+    await mkdir(join(locked, ".auto"), { recursive: true })
+    const worker = Bun.spawn(["sleep", "2"])
+    await writeFile(join(locked, RUN_LOCK_FILE), `${JSON.stringify({ pid: worker.pid, host: hostname(), command: "run", started: new Date().toISOString() })}\n`)
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let code: number | undefined
+    try {
+      code = await recoverOrphanLanes(createGitOps(), dir)
+    } finally {
+      printed.mockRestore()
+    }
+    expect(code).toBeUndefined()
+    expect(await dirExists(stray)).toBe(false)
+    expect((await git(dir, "branch", "--list", laneBranch("T-009"))).trim()).toBe("")
+    expect(lines.some((line) => line.includes("removed: the park straggler"))).toBe(true)
+    expect(await dirExists(locked)).toBe(true)
+    expect(lines.some((line) => line.includes("leaving it alone"))).toBe(true)
+    await worker.exited
   })
 })
