@@ -48,10 +48,10 @@ observability surface.
 the constitutional `parallel` key (`low|medium|high`, absent = none) with the
 `## parallelism` intent subsections injected into the three planning
 templates, and `--max-sessions` reserved (0046 D9: every value but 1 exits 1
-at preflight, `src/loop-preflight.ts:251-255`). 0059 made auto's split
+at preflight, `src/loop-preflight.ts:262-265`). 0059 made auto's split
 streams structurally parallel-ready (disjoint `Artifacts:`, `Depends:`
 ordering, `split`/`leadUsed` in `.auto/units.json`) while running them
-strictly one at a time (`src/runner.ts:473-591`). Nothing executional exists:
+strictly one at a time (`src/runner.ts:474-618`). Nothing executional exists:
 no scheduler, no worktree use anywhere in the codebase, one live session per
 driver process by construction.
 
@@ -74,15 +74,15 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
   already words it: `Touches:` is "read by the dependency checks and, later,
   by a parallel scheduler".
 - **F2** The subtask/stream loop is the same shape: `nextChecklistIndex`
-  over the checklist (`src/runner.ts:473-591`, selection at `:507`), one
-  `runSubtask` awaited at a time (`:542`). The streams of a taken split are
+  over the checklist (`src/runner.ts:474-618`, selection at `:508`), one
+  `runSubtask` awaited at a time (`:550`). The streams of a taken split are
   re-entered through this loop, each forking the lead session
-  (`leadForkBase`, `src/execute.ts:492-509`). `src/execute.ts:589` records
+  (`leadForkBase`, `src/execute.ts:493-509`). `src/execute.ts:590` records
   the known serial assumption: all streams of a task share one
   `handoff.md`, and "a per-stream document would need a new document role
   and recovery path, worth it only once streams run side by side".
 - **F3** One `SessionChain` per task, created in `runTask`
-  (`src/runner.ts:108`), threaded by reference through every stage; all
+  (`src/runner.ts:109`), threaded by reference through every stage; all
   field writes live in `src/chain-transitions.ts` behind a write-ratchet
   test. The chain is inherently single-dispatcher (`pending`/`id`/`note`
   semantics assume one session in flight). Chains never cross tasks, and no
@@ -110,7 +110,8 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
   merge/rebase either; the only revert is a printed hint,
   `src/close.ts:290`). `repoRoots`' walk adds any directory containing an
   entry named `.git` — **file or directory** — as a nested repo
-  (`src/git.ts:646-652`), so a linked worktree parked inside the target
+  (`src/git.ts:638-652`, the entry test at `:647`), so a linked worktree
+  parked inside the target
   tree would be misclassified and separately committed. The walk skips only
   `.git` and `node_modules`.
 - **F7** The files a lane worktree needs but git does not carry are all
@@ -119,7 +120,7 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
   `.opencode/auto/models.json`, prompt/mode/intent overlays under
   `.opencode/auto/` (`src/gitignore.ts:28`). A fresh `git worktree add`
   contains none of them, and preflight hard-requires the agent contract
-  (`src/loop-preflight.ts:267-279`). `protect()`/`unprotect()` chmod this
+  (`src/loop-preflight.ts:272-288`). `protect()`/`unprotect()` chmod this
   set per directory (`src/protect.ts:25-41`) — per-process module flag,
   correct again once each lane is its own process.
 
@@ -137,8 +138,8 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
   (`src/tasks.ts:276-277`); writes are queued through a module-level
   promise chain with atomic rename (`src/tasks.ts:338-351`) — safe for
   interleaved per-id updates from one process; `resetInProgress` at
-  preflight clears all `in_progress` entries (`src/loop-preflight.ts:368-371`,
-  `src/tasks.ts:517-526`). No `worktree` field exists (0051 D3 ruled one;
+  preflight clears all `in_progress` entries (`src/loop-preflight.ts:377-380`,
+  `src/tasks.ts:527-538`). No `worktree` field exists (0051 D3 ruled one;
   unbuilt).
 - **F10** Other singletons, all keyed per directory: `.auto/handover.json`
   (one in-flight test handover per dir, `src/handover.ts:25-97`),
@@ -157,7 +158,7 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
   allowlist at `:111-119`); the router's mutable run state (down marks,
   failback order, key rings, step claims, classifier budget) and the
   control service's `/exit` request are run-wide singletons
-  (`src/router.ts:319-376`, `src/exit.ts:49-97`). Process-per-lane makes
+  (`src/router.ts:319-376`, `src/exit.ts:50-103`). Process-per-lane makes
   each of these per-lane again with **zero** core surgery.
 
 ### Rulings this design must uphold
@@ -210,7 +211,7 @@ All paths relative to `packages/auto-core/`; verified 2026-10-01.
 | **D8** | **Lane report contract.** The lane entry writes `.auto/lane.json` into the worktree at every exit it controls: `{unit, phase, ok, result?: "PASS"\|"FAIL", blocked?: string, usage: {tokens, wallMs}, sessions: n, commits: [sha], agent, models: [internal], split?: {…for S5}}`. The parent reads it after process exit; absence (crash, kill) is the orphan signal (D14). Field names are protocol strings (§8). |
 | **D9** | **Rollback stays lane-local.** A failed unit rolls back inside its worktree with today's primitives (the lane branch is private; `reset --soft` there touches nothing else); teardown then discards the scene. **Undo after landing is out of scope**: once a lane has landed, other units may build on it — the existing human paths (`close`, rework tasks) handle it. `rollbackUnit` is never pointed at the main tree while a merge has landed (F5's upstream guard already refuses; documented as intended). |
 | **D10** | **Activation rule and the byte-identical floor.** The scheduler is active iff `maxSessions ≥ 2` **and** config `parallel` is not `none`/absent (`--max-sessions` above 1 with no level is a usage error, exit 1 — "plan for parallelism first"). At `maxSessions = 1` (the default) nothing changes for any project regardless of `parallel`: same loops, same prompts, same goldens — the 0036 D17 guarantee carried forward. The rollout/testing trap of 0036 D13 ("plan for parallelism, execute serially") is served by a new experiment switch `OPENCODE_AUTO_LANE_ISOLATION=1`: force lane-per-task **at one session** — full isolation machinery, zero concurrency, per-run, never persisted (the env layer's invariant). |
-| **D11** | **Interactive input refuses under concurrency (v1).** `--interactive` / `--wait-answer` with `maxSessions ≥ 2` is a usage error at preflight: one human cannot steer N sessions and the sideband holds exactly one attached session (`src/interactive.ts:47-50`). Parent-side human surfaces that remain: the plan-phase question wait (`humanQuestions` — planning never overlaps lanes, D4), `--step` (pauses at lane boundaries in the parent), `--wait-between` (pauses between landings). Relay-based steering (`/lane T-NNN …`) is future polish (§7 S6), not v1. |
+| **D11** | **Interactive input refuses under concurrency (v1).** `--interactive` / `--wait-answer` with `maxSessions ≥ 2` is a usage error at preflight: one human cannot steer N sessions and the sideband holds exactly one attached session (`src/interactive.ts:49-55`). Parent-side human surfaces that remain: the plan-phase question wait (`humanQuestions` — planning never overlaps lanes, D4), `--step` (pauses at lane boundaries in the parent), `--wait-between` (pauses between landings). Relay-based steering (`/lane T-NNN …`) is future polish (§7 S6), not v1. |
 | **D12** | **Failback, quota and control are per lane process — documented as such.** Each lane's router holds its own down marks and failover ladder (no cross-lane contamination — 0036 F26's hazard inverted into a property), its own control (`/exit` inside a lane ends that lane), its own learned-window copy: dispatch copies the parent's `.auto/windows.json` into the worktree (best-effort) so quota waits start informed; lane-learned windows are discarded at teardown (accepted v1 loss, noted in the lane log). The parent's router governs only parent sessions and scheduling-level waits (it never waits on models — only on lanes). |
 | **D13** | **Observability: relay, don't scrape.** The parent captures each lane child's stdout/stderr and re-emits it through its own `log()` with a `[<task-id>]` prefix; the lane's own audit log stays in its worktree (archived nowhere — it is `.auto/`, disposable by contract). `renderStatus` gains an in-flight lanes section (from `units.json` runtime fields). Stats: the parent books each landed lane report's usage/time into its run stats (per-model and per-tier lines keep working; the lane field rides the existing records). 0067 composition: lane report/exit/landing become parent-level structured events the future bus can carry with a `lane` identity; no lane terminal text is ever parsed (F13's rule). |
 | **D14** | **Orphan recovery.** Dispatch writes `Runtime.worktree` + lane pid (0051 D3's registry, built at last). The next parent run's preflight scans the registry: an entry whose pid is alive is **awaited then landed** (a killed parent leaves live workers — they finish; this is the cattle property, F13); a dead pid with a worktree present is **re-dispatched** (the lane worker re-runs the same unit in the same worktree and resumes precisely through its own progress record — crash recovery is lane-local resume, no new machinery); a dead pid whose lane hit its attempts cap, or whose scene the lane cannot own (dirty non-driver state), **blocks** naming the park path. Park stragglers with no registry entry are pruned (`git worktree prune` + directory removal) after the same liveness check. |
@@ -311,7 +312,7 @@ option, set only by the lane launcher. With it set, `runAll`:
    checks (the worktree's `docs/` is a fixed snapshot of the phase),
    housekeeping gitignore writes (already correct by copy), orphan scan.
 3. `loadPlan(worktreeDir)` → the named unit → `runTask(client, plan, task,
-   opts)` — the existing exported pipeline, unchanged (`src/runner.ts:90`).
+   opts)` — the existing exported pipeline, unchanged (`src/runner.ts:91`).
    For S5 stream units the id is `T-NNN.S<nn>` and the runner exposes the
    single-subtask path (a small extraction from the subtask loop body).
 4. Writes `.auto/lane.json`, exits with the mapped code. Resume of a
@@ -412,7 +413,7 @@ concurrency exists.
   (D19) with an enriched fanout delta computed from merged state (siblings
   by title + done flags; files-since-split for dependent streams from the
   landing history; last-stream full verification); ☐ per-stream handoff
-  document role (the deferral at `src/execute.ts:589` retired); ☐
+  document role (the deferral at `src/execute.ts:590` retired); ☐
   decompose-side parallelism guidance, level-gated (D18) + golden batch; ☐
   wrap-up runs in the last lane / a closing lane after streams drain.
   *Template-heavy; a short amendment to this document precedes
@@ -438,12 +439,14 @@ unchanged.
 
 `docs/structure.md` (lanes module; git worktree primitives),
 `docs/shell-contract.md` §C (absorption note: `_lane` obligation,
-`laneLauncher`, `--max-sessions` lift) and §E (checklist item),
+`laneLauncher`, and the reservation wording — §C's "`RunAllOpts.maxSessions`
+is reserved" line — flipping to live) and §E (checklist item),
 `docs/glossary.md` (§3's rows), `AGENTS.md` navigation line + the
 invariants touched (driver-exclusive writes gain "the parent re-derives
 index ticks at landing"; the unified-commit paragraph gains the landing
-stages; the max-sessions reservation wording flips to live), and this file
-retires per convention.
+stages — AGENTS.md itself carries no max-sessions reservation wording to
+flip; the reservation lives in shell-contract §C and the shell README),
+and this file retires per convention.
 
 ## 10. Risks and honest limits
 
@@ -497,7 +500,10 @@ Written 2026-10-01. Nothing implemented. **D21 was ruled by the user in
 discussion the same day** — the landing-conflict response is level-derived,
 and both alternatives (level-dependent `Touches` admission relying on git
 auto-merge; per-conflict shape classification) are rejected with the
-reasoning recorded in the decision row. §11's six answers are the only
+reasoning recorded in the decision row. §2's line anchors were refreshed
+2026-10-02 against the tree as it stands after the 0067-service commits
+(T-087–T-098) and T-093's `RunAllOpts` seam — the facts are unchanged, only
+the positions moved. §11's six answers are the only
 inputs S1 needs; stages S1–S2 are safe to start under the defaults
 recommended above (they change no behavior for any existing project — the
 isolation switch is opt-in per run). 0036's remaining open questions that
@@ -507,3 +513,4 @@ lowerable per run by passing a smaller `--max-sessions`, which is already
 the flag's semantics). 0036's D16 per-unit state list is dissolved by D6,
 its D18 test-queue item by per-worktree `tmp/` (the slot is per lane
 automatically); its observability half lands as D13.
+<!-- auto: eof -->
