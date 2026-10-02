@@ -1,5 +1,15 @@
 # 0051 — MP.2 per-unit state (design, draft)
 
+Status (2026-10-02): **fully absorbed — retired into
+`0068-parallel-execution-lanes-design.md`.** D1's process model (one child
+`run` process per lane, each in its own worktree) and D3's registry
+(`Runtime.worktree` with the lane pid in `.auto/units.json`, §5 P1) are built
+there (S1 the registry fields, S2–S3 the dispatch and recovery over them);
+P2's recovery planner became 0068 D14's orphan scan, and the per-directory
+state isolation D1 (a) rests on is what made every serial-era singleton
+per-lane again with zero core surgery (0068 F11). Nothing here is maintained
+further.
+
 Status: **ruled** (2026-09-23; drafted 2026-09-22). Outcome: **MP.2 is
 retired as a milestone and folds into MP.3** — see §5. Root plan item: MP.2
 (`plans/AUTO_NEXT_REFACTOR_PLAN.md` §4, MP track). Source proposal: 0036 D16

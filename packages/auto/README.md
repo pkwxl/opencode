@@ -115,6 +115,7 @@ describes how this run executes and how a person watches it → run.**
 | `handoverTest` | `true` / `false` | `false` | On test failure with the context at its limit, write a handover document and continue in a new session; requires `testByDriver: true`, otherwise config validation fails (exit code 1) |
 | `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat in the target directory; the next available number is persisted in `.auto/next-task`, consumed by the phase planning session and recovered first when the record is missing — see the end of [Phased flow](#phased-flow---phases) |
 | `phases` | A subsequence of `admtvk` containing `m`, or a list of phase type ids containing `implement` (comma-separated string or JSON array) | `"m"` | Phased flow (a analysis → d design → m implementation → t test → v acceptance → k knowledge distillation; the list form may reference custom types under `.opencode/auto/phases/`); `"m"` = no phases declared, i.e. the implicit single phase `docs/R-01/P01-implement`, no handover sessions, tasks listed by a person or planned from a planning input (see [Planning tasks with AI](#planning-tasks-with-ai)). See [Phased flow](#phased-flow---phases) |
+| `parallel` | `none` / `low` / `medium` / `high` | `none` (key not written) | The parallel planning level (auto-core plans/0046; concurrent execution live since plans/0068): selects the `## parallelism` guidance injected into the planning prompts — and, on concurrent runs, into the decomposition prompts — so tasks are arranged for parallel execution, their `Depends:`/`Touches:` declarations keeping concurrent units disjoint. Execution width stays per run: `run --max-sessions 2` under a level executes the phase's units as lanes (see [Parallel execution](#parallel-execution-parallel---max-sessions)); `none`/absent means serial, and `--max-sessions` above 1 without a level is a usage error pointing at `init --parallel`. The level also sets the landing-conflict posture: `low` blocks on the first conflict, `medium`/`high` allow one repair re-dispatch before blocking |
 | `scanExempt` | An array of path globs relative to the target directory (`*`, `**`, `{a,b}`; no absolute path, no `..`) | none (key not written) | Deliverable files the driver's two content scans skip (auto-core plans/0059 X2): the process-document reference scan (the lines a unit added, at subtask close-out, and the whole tree at round close) and the document terminator scan at subtask close-out. For a deliverable where such strings are content — a tool's own test fixtures, prompt templates, sample documents. A glob naming a directory covers the files under it (`test/fixtures` = `test/fixtures/**`). Only deliverable paths are exempted: the task and round records stay held to their rules whatever the list says. Set with `init`/`amend --scan-exempt a,b` (the list replaces the stored one; `none` removes the key); shared with the repository like every key |
 | `source` / `destDir` | **Retired** | — | The migration source and target are intent, not config (2026-09-23, auto-core plans/0052 D2/D3): they go into `.opencode/auto/brief.md`, read by the planning sessions. An existing config carrying either key (any value) fails loading with exit 1; the message names the original value and the fix (copy it into brief.md, then delete the key — `fix` migrates it into the `## Source` / `## Target` sections and deletes the key); a no-argument `init` full overwrite drops them and prints each original value. Both key names are tombstoned for good, never reused |
 
@@ -202,6 +203,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subta
 | `-m` / `--mode <name>` | Scenario mode, written to the config's `mode` key (precedence: explicit value > existing config value > default `migrate`; an unregistered name is a usage error with exit code 1, the message listing the currently supported modes); see [Mode layer](#mode-layer--m--mode) |
 | `--agent opencode\|claude` | The coding agent driving the sessions, written to the config's `agent` key (default `opencode`, key not written; `--amend --agent opencode` deletes the key); any other value is a usage error; see [agent selection](#opencode-server-and-agent-selection) |
 | `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); when completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
+| `--parallel <none\|low\|medium\|high>` | The parallel planning level, written to the config's `parallel` key (default/`none` writes no key): the planning prompts arrange tasks for parallel execution at that level; pair it with `run --max-sessions` for concurrent execution — see [Parallel execution](#parallel-execution-parallel---max-sessions) |
 | `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams, each run in a fork of the lead, when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
@@ -357,6 +359,7 @@ After `reset`, a fresh `init` produces byte-identical output to the first one. W
 | `--permission [mode]` | Handling policy for permission requests (permission.asked), default `ask-deny`: `auto-allow` auto-grants immediately (always allowed, no waiting); `ask-allow` / `ask-deny` / `ask-fail` first wait for a human (the window is `--wait-answer` minutes; unset means no wait, i.e. immediate timeout; answering `allow`/`yes`/`y` etc. grants, any other explicit answer denies that permission but the session continues); on timeout they fall back respectively to: auto-grant / auto-deny with the session continuing (the AI gets no grant to go around) / deny and exit the run (blocked halt, exit code 2) |
 | `--dryrun [true]` | Permission preflight: a single AI call lists the directories/operations the tasks may need beyond the opencode.json grants, each confirmed by a read-only probe; the report is written to `.auto/dryrun.md` and printed to the terminal; no tasks are executed |
 | `--new-session` | Force a new session on interruption recovery: skips session reuse (the escape hatch when the old session's context has gone stale); phase-level precise re-entry still follows the progress record; effective for this run only, never written to the config. See [Interruption recovery](#interruption-recovery) |
+| `--max-sessions [1-N]` | Concurrent execution width (default 1, never written to the config). At 1 nothing changes for any project — the serial task loop, byte for byte. At 2 or more the run requires the config's `parallel` level and executes the routed phase's units as lanes, up to N at a time (see [Parallel execution](#parallel-execution-parallel---max-sessions)); without a level it is a usage error (exit code 1) pointing at `init --parallel`. `--interactive`/`--wait-answer` are refused under concurrency; `--wait-between` pauses between landings |
 
 Every `run` (and every `plan` that enters the loop) creates a new log file `.auto/logs/run-<timestamp>.log`
 in the target directory; all terminal output is written to it synchronously (written line by line, so an
@@ -406,6 +409,56 @@ subtask split marker before opening the decompose session (a dotted rule, a blan
 ............................................................
 T-009 Implement the migration: subtask decomposition
 ```
+
+### Parallel execution (`parallel` + `--max-sessions`)
+
+With a `parallel` level frozen by `init` (see the config table above) and `run --max-sessions 2` (or higher), the
+driver executes the routed phase's ready units **concurrently as lanes** (auto-core plans/0068): each schedulable
+unit runs in its own git worktree — parked under the target's `.auto/worktrees/` (gitignored, removed again when
+the lane lands) on its own branch `auto-lane/<task-id>` — driven by its own worker child process (a unit-scoped
+`run` invoked through this CLI's hidden `_lane` entry). The parent (the `run` process in the target directory)
+keeps scheduling, state ownership and landings to itself; the main tree is always clean between landings.
+
+```sh
+opencode-auto init <dir> --parallel medium   # 1. freeze the level; planning arranges tasks for it
+opencode-auto run <dir> --max-sessions 2     # 2. up to two units execute side by side
+```
+
+- **What runs in parallel**: the readiness set is computed from declared facts only — a unit is ready when its
+  `Depends:` are done and its declared `Touches:` paths are disjoint from every in-flight lane's; index order is
+  the tie-break. A unit without a `Touches:` declaration touches everything and always runs alone; a unit whose
+  `Touches:` reach a nested git repository is never given a lane (it runs serially in the main tree after the
+  lanes drain — its commits could not land through the main-repo merge). A taken split's streams run as lanes of
+  their own (`T-NNN.S<nn>`), cold-started, with the last one or a closing lane wrapping the task up.
+- **Landing**: serialized in the parent — the lane branch is verified (only driver commits inside), merged with
+  `merge --no-ff` (trailers `Auto-Task` / `Auto-Stage: landing`), the phase index ticks are re-derived and
+  committed (`Auto-Stage: landing-sync`), the lane's usage is booked into the run stats, and the worktree and
+  branch are torn down (best-effort with retries against Windows AV/file-lock races; a failed teardown warns and
+  names the park path — the next run's preflight prunes park stragglers). On Windows the dispatch also refuses a
+  park path whose files would pass the 260-character `MAX_PATH` limit, naming the path.
+- **Landing conflicts** (the designed failure when a `Touches:` declaration was wrong): at `parallel low` the run
+  blocks immediately — the lane's worktree and branch are kept under `.auto/worktrees/`, the exit names the unit,
+  the conflict and the park path; at `medium`/`high` the lane is re-dispatched once with a merge instruction
+  (merge the parent's current main branch into the lane branch and resolve), and a second conflict blocks. A
+  semantic conflict that merges cleanly is, as ever, only for the report result line to catch — the level never
+  relaxes the disjointness admission.
+- **Failures and recovery**: a lane's FAIL lands its committed work and stops the run for a person (exit 2,
+  naming the unit and its `.auto/lane.json` report); a crashed or killed worker leaves its scene (worktree,
+  branch, registry record) and the next `run` recovers it — a still-live worker is awaited and landed, a dead
+  one is re-dispatched in the same worktree (resuming from its own progress record) up to three attempts, then
+  the run blocks naming the park path. The attempts cap survives runs.
+- **Human surface**: one person cannot steer N sessions — `--interactive` and `--wait-answer` are usage errors
+  under `--max-sessions ≥ 2`. What remains: `--wait-between` pauses between landings, `/exit` and step mode stop
+  *scheduling* and drain the in-flight lanes, the phase-plan question wait is unaffected (planning never overlaps
+  lanes). Every lane worker output line is re-emitted through the parent's terminal and audit log with a
+  `[<task-id>]` prefix — a lane's own `.auto/logs/` is discarded with its worktree at teardown (`.auto/` is
+  disposable by contract; the parent's relayed audit log keeps the run story). `status` lists in-flight lanes
+  first while any are recorded, and the round conclusion carries a lanes roll-up line (sessions, tokens, summed
+  lane wall beside the parent's wall clock).
+- **Trying the machinery without concurrency**: `OPENCODE_AUTO_LANE_ISOLATION=on opencode-auto run <dir>` runs
+  the whole lane machinery — worktree, worker process, landing — one lane at a time over the same serial
+  selection; per run, never persisted. At `--max-sessions 1` (the default) none of this machinery exists for any
+  project whatever the level: same loops, same prompts, byte for byte.
 
 ### Planning and the round lifecycle (plan)
 

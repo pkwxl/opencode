@@ -27,6 +27,7 @@ import {
   laneExit,
   laneOutcome,
   lanePark,
+  laneParkProblem,
   landLane,
   LANE_DISPATCH_CAP,
   parseLaneReport,
@@ -35,6 +36,8 @@ import {
   streamUnitOf,
   streamUnits,
   syncIndexTicks,
+  WINDOWS_MAX_PATH,
+  PARK_PATH_MARGIN,
   writeLaneReport,
   type InFlightLane,
   type LaneReport,
@@ -383,6 +386,30 @@ async function laneProject(text = "## T-001: the widget [pending]\nBuild the wid
   await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
   return plan.tasks[0]!
 }
+
+// —— The park path-length guard (§10's S6 hardening) —— //
+
+describe("laneParkProblem (§10, Windows MAX_PATH)", () => {
+  test("no check off Windows: undefined on darwin and linux whatever the depth", () => {
+    const deep = "/".padEnd(300, "x")
+    expect(laneParkProblem(deep, "T-001", "darwin")).toBeUndefined()
+    expect(laneParkProblem(deep, "T-001", "linux")).toBeUndefined()
+  })
+
+  test("on Windows a park path whose files would pass MAX_PATH blocks naming the park path; one at the margin passes", () => {
+    // The guard reserves PARK_PATH_MARGIN for the worktree's own state and a
+    // repo-relative tail: a park path at exactly the margin's edge passes.
+    const tail = join(".auto", "worktrees", "T-001").length
+    const shallow = "C:\\".padEnd(Math.max(3, WINDOWS_MAX_PATH - PARK_PATH_MARGIN - tail - 1), "d")
+    expect(join(shallow, ".auto", "worktrees", "T-001").length + PARK_PATH_MARGIN).toBe(WINDOWS_MAX_PATH)
+    expect(laneParkProblem(shallow, "T-001", "win32")).toBeUndefined()
+    const deep = `C:\\${"d".repeat(300)}`
+    const problem = laneParkProblem(deep, "T-001", "win32")
+    expect(problem).toContain("260")
+    expect(problem).toContain(join(deep, ".auto", "worktrees", "T-001")) // block-with-path
+    expect(problem).toContain("--max-sessions 1")
+  })
+})
 
 describe("dispatchLane (§6.5 ①–⑤)", () => {
   test("a fresh dispatch: the worktree on the lane branch at HEAD, the scaffolding copied, the runtime fields written; laneExit drains the worker", async () => {

@@ -1,5 +1,19 @@
 # 0036 Parallelism, task identity and the phase acceptance gate
 
+> **Status (2026-10-02): the executional half is superseded by
+> `0068-parallel-execution-lanes-design.md`.** N4/tier 3 — intra-run parallel
+> execution, §6.4 — is designed and implemented there (S1–S6, 2026-10-02):
+> one git worktree and one child worker process per lane, the readiness
+> scheduler, the landing protocol and orphan recovery, built on this
+> document's declaration half (`plans/0046`) and upholding its D15 (per-agent
+> worktrees, id allocation central) and D17 (byte-identical at one session).
+> The rulings 0068 kept of this document are recorded in its §12 (Q5(a) → its
+> D3, Q10 → 0046 D9, Q12 → its D10; D16's per-unit state list dissolved by
+> its D6, D18's test-queue item by per-worktree `tmp/`, the observability
+> half lands as its D13). N3 landed earlier in 0045/0049; N1/D3 (the id
+> namespace) stays retired per 0068 §1 until topic merges become real. Not
+> maintained further.
+
 > **Status: proposal. Nothing here is implemented. Exactly one point is
 > confirmed so far — D13's reading of `high/medium/low` as planning guidance
 > rather than agent counts (user, 2026-09-21, question 11); every other
@@ -823,3 +837,5 @@ but is **still open** — it is the only question gating already-scheduled work
 (the M2.1 batch), so it should be adjudicated before M2.1 starts. If the user
 confirms a further subset, §11's answers get recorded in §5 before any
 implementation step is scheduled.
+
+<!-- auto: eof -->

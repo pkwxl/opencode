@@ -76,6 +76,16 @@ Unit and outcome states:
 | 回退 pending | revert to pending | Unit status goes back to `pending` for a person; exit 2 |
 | 二态不变量 | two-state invariant | Exactly one of `todo.md` / `done.md` exists |
 
+Lanes (parallel execution, `plans/0068`):
+
+| 中文 | English | Code / notes |
+|---|---|---|
+| 泳道 | lane | One schedulable unit executing in isolation: a worker child process + its worktree + its branch (`src/lanes.ts`). *Taken* while in flight, *landed* when merged back |
+| 工作树停放区 | park | `.auto/worktrees/` — where lane worktrees live (gitignored, skipped by the repo walk) |
+| 合入 | landing | The parent's serialized merge of a lane's branch into the main tree's branch (`Auto-Stage: landing` + `landing-sync`); **not** *merge back* (合回), which is this repository's branch flow into `auto-core` and never a target-repo operation |
+| 泳道报告 | lane report | `.auto/lane.json` in the worktree: the structured outcome the parent reads at lane exit |
+| 主进程 / 父进程 | parent | The `run` process in the target directory: preflight, phase loop, planning sessions, scheduler, landings, phase/round close |
+
 ## Phase types
 
 | Letter | `type` | Name | 中文 |
@@ -318,11 +328,11 @@ Unit and outcome states:
 | 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: the loop stops after a successful planning step, or where an execute route would start; `plan` passes it (`src/loop-phase.ts`, `plans/0053` D6) |
 | 规划输入 | planning input | A phase's `plan-input.md` (role `planningInput`): the latest input verbatim, committed on its own before the planning unit and rendered into the planning prompt; a changed text restarts an open planning step in a new session; `plan -p` / `--file` supply it (`src/plan-input.ts`, `plans/0053` D9–D11) |
 | 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (`appendPlan`, `src/loop-plan.ts`, `plans/0053` D23–D27) |
-| 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
-| 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`) |
-| 调度器 | scheduler | |
-| 发号 | id allocation | |
-| 真并发 | true concurrency | |
+| 并行编排 | parallel orchestration | Landed (`plans/0068`): lanes — one worker process + worktree per unit, landed by the parent; the declaration half is `plans/0046`, the superseded executional design `plans/0036` |
+| 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`; live since `plans/0068`) |
+| 调度器 | scheduler | `readyUnits` over declared facts (`src/lanes.ts`, 0068 D5) |
+| 发号 | id allocation | Parent-exclusive under lanes (0068 D6) |
+| 真并发 | true concurrency | `--max-sessions ≥ 2` under a `parallel` level (0068 D10) |
 
 ## Design-document vocabulary
 

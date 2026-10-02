@@ -1,5 +1,13 @@
 # 0068 Parallel execution — lanes, per-unit worktrees and the MP.3 scheduler
 
+> **Status (2026-10-02): retired — all six stages landed, §13 holds the
+> implementation record.** The durable documentation of what shipped lives in
+> the core's `AGENTS.md` navigation, `docs/structure.md`,
+> `docs/shell-contract.md` §C/§E and `docs/glossary.md`, and in
+> `packages/auto/README.md` (§9); this document is preserved as the design's
+> historical record and is not maintained against later code (the plans/
+> convention). The original status note follows.
+
 > **Status: implementation plan.** Written 2026-10-01 on the `auto-core`
 > branch as the detailed design 0036 §6.4 called for, updated against the
 > architecture as it stands after 0047 (unit layout), 0053 (lifecycle), 0055
@@ -505,10 +513,10 @@ concurrency exists.
   *Template-heavy; a short amendment to this document precedes
   implementation (the fanout delta's exact fields and the stream report) —
   §6.8.*
-- **S6 — polish, docs, retirement.** ☐ Documentation set (§9); ☐ status
-  notes on 0036 (executional half superseded) and 0051 (fully absorbed); ☐
-  `packages/auto` e2e + README; ☐ risk hardening (Windows teardown retries,
-  park path-length, lane log retention choice); ☐ this plan retires.
+- **S6 — polish, docs, retirement.** ☑ Documentation set (§9); ☑ status
+  notes on 0036 (executional half superseded) and 0051 (fully absorbed); ☑
+  `packages/auto` e2e + README; ☑ risk hardening (Windows teardown retries,
+  park path-length, lane log retention choice); ☑ this plan retires.
 
 ## 8. Protocol strings (0035 §3 registrations, all new English, no dual-read)
 
@@ -627,6 +635,16 @@ lowerable per run by passing a smaller `--max-sessions`, which is already
 the flag's semantics). 0036's D16 per-unit state list is dissolved by D6,
 its D18 test-queue item by per-worktree `tmp/` (the slot is per lane
 automatically); its observability half lands as D13.
+
+Retired 2026-10-02 with S6: the documentation set (§9) landed, the
+supersession notes on 0036 (executional half) and 0051 (fully absorbed)
+written, `packages/auto`'s README documenting parallel usage and its e2e
+covering the concurrent path, and §10's hardening landed (below, §13 S6).
+§11's item 6 — the lane log retention — stands as the recommendation taken:
+the worktree's `.auto/logs/` is discarded at teardown (`.auto/` is
+disposable by contract; the parent's relayed audit log keeps the run story),
+the choice recorded in `docs/structure.md`'s lanes row beside the relay that
+implements it.
 
 ## 13. Implementation record
 
@@ -1048,4 +1066,68 @@ the tests, any decision taken.
   closing clause ("each a fork of the lead") is conditional — under the
   scheduler the streams run "each as a lane of its own"; the serial world
   keeps the exact former bytes (its e2e asserts them).
+**S6 — polish, documentation and retirement, 2026-10-02.**
+- Landed: §9's documentation set — the package `AGENTS.md` gains the lanes
+  navigation line, the driver-exclusive-writes invariant gains "the parent
+  re-derives index ticks at landing" and the unified-commit paragraph names
+  the landing stages (`landing`, `landing-sync`, `merge-repair`);
+  `docs/structure.md` gains the lanes module row (pipeline) and the git
+  worktree primitives beside the unified commit (kernel); `docs/shell-contract.md`
+  §C's MP.1 reservation wording flipped to live and a dated absorption block
+  added (maxSessions live under a level, the `_lane` obligation with
+  `--merge`, `laneLauncher`, the observability surfaces), §E item 8 updated
+  to the live scheduler; `docs/glossary.md` gains §3's five rows (lane,
+  park, landing, lane report, parent) in a lanes sub-table of Run structure,
+  and the parallel-orchestration rows stop saying "deferred". The
+  supersession notes: 0036's executional half superseded (status note), 0051
+  fully absorbed with D1 and D3 named as built (status note; this plan's
+  header had already declared 0051 retired into it — the note records the
+  absorption as landed fact). `packages/auto/README.md`
+  documents parallel usage — the `parallel` config row, the `--parallel`
+  init row, the `--max-sessions` run row and a "Parallel execution" section
+  (the lane model, the park, readiness over declared facts, landing and
+  conflicts, recovery, the human surface, the isolation switch, the lane
+  log retention, the Windows notes). Risk hardening (§10): `removeWorktree`
+  (`src/git.ts`) retries the Windows AV/file-lock schedule — plain first,
+  `--force` per further attempt, a short wait between, the terminal error
+  naming the kept worktree's path and its manual remedy (block-with-path,
+  never silent loss; park prune at preflight was already S3's orphan scan);
+  `laneParkProblem` (`src/lanes.ts`, called first in `dispatchLane`) blocks
+  a dispatch whose park path plus the worktree's own files would pass
+  Windows' 260-character MAX_PATH, naming the path and the serial remedy;
+  the lane log retention choice recorded (§11 item 6 taken: discarded at
+  teardown — the comment contract in `src/lanes.ts`, `docs/structure.md`'s
+  lanes row and §12 above).
+- Tests: `test/git.test.ts` — the teardown retry schedule over real git
+  (one wait per failed attempt, `--force` from the second attempt on, the
+  terminal error naming the kept path and the manual `git worktree remove
+  --force` remedy; the lock-race recovery shape — plain fails, one wait,
+  force succeeds; the default schedule's shape). `test/lanes-scheduler.test.ts`
+  — `laneParkProblem` (undefined off Windows; on win32 the margin-edge park
+  passes and a deep one blocks naming the park path and `--max-sessions 1`).
+  The shell e2e's concurrent path (S3–S5's rounds: the one-lane and
+  two-lane rounds at `--max-sessions 2` over the real `_lane` entry, the
+  conflict round under `medium`, the S4 observability round, the S5 split
+  round) is the stage's regression backstop; this stage added no new e2e
+  surface — the README section documents what those rounds already assert.
+- AUTO-DECISION (`src/git.ts`, the retry's shape): the plain attempt runs
+  once and every retry is `--force` — a removal that fails plain on a clean
+  worktree is environmental (AV, a lock), not a dirty-tree fact, and the
+  old single `--force` fallback already covered the dirty case; the waits
+  sit between attempts, never before the first (the common case pays
+  nothing).
+- AUTO-DECISION (`src/lanes.ts`, the path guard is platform-gated and
+  join-built): the bound is a Windows fact, so the guard reads
+  `process.platform` (injectable for tests) rather than one arbitrary limit
+  everywhere, and the path is joined rather than resolved — every shell
+  resolves the run directory before `runAll`, and a resolve() would fold
+  this host's cwd into a Windows-shaped path the guard is only measuring.
+  The margin (40) reserves the worktree's own state files and a typical
+  repo-relative tail; the exact split between margin and limit is an
+  engineering call, recorded here.
+- AUTO-DECISION (0036's and 0051's notes as status blockquotes): the
+  plans/ convention stacks dated status notes at the head (0046's pattern)
+  rather than rewriting the original status text — the originals stay
+  preserved, each note naming what superseded what and where the kept
+  rulings are recorded.
 <!-- auto: eof -->

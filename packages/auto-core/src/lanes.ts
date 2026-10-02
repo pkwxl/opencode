@@ -8,10 +8,16 @@
 // attaches (the parent re-emits each lane worker's output through its own
 // log with a `[<task-id>]` prefix), the usage detail the lane report carries
 // for the stats roll-up, and the parent-level lane events shaped for the
-// 0067 bus (§6.7). The loops that drive it live above, in src/loop-task.ts —
-// the serial isolation loop of the rollout switch and, since S3, the
-// readiness scheduler's concurrent lane loop; nothing here imports a loop or
-// a session-driving module (the import-direction rule).
+// 0067 bus (§6.7). S6 added §10's risk hardening on the dispatch side: the
+// park path-length guard (Windows' MAX_PATH) that blocks a dispatch before
+// anything is created; the teardown retry half lives in src/git.ts's
+// removeWorktree, and the lane-log retention choice — the worktree's own
+// `.auto/logs/` is discarded at teardown, the parent's relayed audit log
+// keeps the run story (§11 item 6, the recommendation taken) — is the
+// contract the relay implements. The loops that drive it live above, in
+// src/loop-task.ts — the serial isolation loop of the rollout switch and,
+// since S3, the readiness scheduler's concurrent lane loop; nothing here
+// imports a loop or a session-driving module (the import-direction rule).
 //
 // select.ts is the style precedent: a pure core over injected facts. The
 // readiness half is a function of its arguments — the loaded plan, the merged
@@ -483,6 +489,35 @@ export const laneBranch = (unit: string): string => `auto-lane/${unit}`
 // `.auto/` and skipped by repoRoots' walk (F6).
 export const lanePark = (unit: string): string => join(".auto", "worktrees", unit)
 
+// §10's park path-length guard (the S6 hardening row): Windows caps paths at
+// 260 characters (MAX_PATH) unless the system opts into longer ones, and a
+// lane worktree prefixes every file it holds — the checkout's repo-relative
+// tails plus its own untracked state (`.auto/lane.json`, `.auto/logs/…`,
+// `tmp/…`) — with `<target>/.auto/worktrees/<unit>`, so a deep target
+// directory turns worktree operations into cryptic git failures ("Filename
+// too long", a half-created checkout). The guard blocks the dispatch before
+// anything is created, naming the park path and its length — block-with-path,
+// never a silent loss. The margin reserves room for the worktree's own state
+// files and a typical repo-relative tail; other platforms carry no comparable
+// bound, so no check runs there.
+// AUTO-DECISION (platform-gated): the bound is a Windows fact, so the guard
+// reads `process.platform` (injectable only for tests) rather than applying
+// one arbitrary limit everywhere — a 220-character park path is unremarkable
+// on a system whose limit is 1024+.
+// AUTO-DECISION (join, not resolve): the run directory is absolute in
+// practice (every shell resolves it before runAll), and a resolve() here
+// would fold this host's cwd into a Windows-shaped path the guard is only
+// ever measuring — join keeps the check a pure function of its arguments.
+export const WINDOWS_MAX_PATH = 260
+export const PARK_PATH_MARGIN = 40
+
+export function laneParkProblem(dir: string, unit: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== "win32") return undefined
+  const park = join(dir, lanePark(unit))
+  if (park.length + PARK_PATH_MARGIN <= WINDOWS_MAX_PATH) return undefined
+  return `the lane worktree path ${park} is ${park.length} characters; the worktree's files under it would pass Windows' ${WINDOWS_MAX_PATH}-character path limit. Move the project to a shallower directory, or run serially (--max-sessions 1 / without a parallel level)`
+}
+
 // The lane report file inside a lane's worktree (D8): written by the lane
 // entry at every exit it controls, read by the parent after process exit.
 export const laneReportFile = (): string => join(".auto", "lane.json")
@@ -553,6 +588,10 @@ export async function dispatchLane(
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
   const branch = laneBranch(task.id)
+  // §10's park path-length guard runs first, before any write: a worktree
+  // this host cannot address would fail mid-creation (block-with-path).
+  const tooLong = laneParkProblem(dir, task.id)
+  if (tooLong !== undefined) return { type: "failed", error: tooLong }
   await begin(dir, task.id)
   let fresh = false
   if (record === undefined) {

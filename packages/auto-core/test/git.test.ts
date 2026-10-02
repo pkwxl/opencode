@@ -28,6 +28,7 @@ import {
   trackedSourceChanges,
   unitBaseline,
   unitViolations,
+  WORKTREE_TEARDOWN,
 } from "../src/git"
 import { noCommitGit } from "../src/git-ops"
 
@@ -756,6 +757,48 @@ describe("addWorktree / removeWorktree / pruneWorktrees / mergeBaseSha (the lane
     try {
       await writeFile(join(park, "uncommitted.txt"), "dirt\n")
       expect((await removeWorktree(dir, park)).ok).toBe(true)
+      expect(await Bun.file(park).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // §10's Windows hardening (S6): the teardown retries a transient failure
+  // (AV / file-lock races) — plain first, then --force per further attempt,
+  // a wait between attempts — and its terminal failure names the kept
+  // worktree's path (block-with-path, never a silent loss).
+  test("removeWorktree retries the schedule: one wait per failed attempt, --force from the second on, the terminal error names the kept path", async () => {
+    const { dir } = await laneScene()
+    try {
+      // A path git holds no worktree record of fails every attempt, plain
+      // and forced alike — the always-failing scene.
+      const stray = join(dir, ".auto", "worktrees", "T-999")
+      const waits: number[] = []
+      const removed = await removeWorktree(dir, stray, { attempts: 3, delayMs: 5, sleep: async (ms) => { waits.push(ms) } })
+      expect(removed.ok).toBe(false)
+      expect(waits).toEqual([5, 5]) // between the three attempts, never before the first
+      expect(removed.error).toContain(stray) // block-with-path
+      expect(removed.error).toContain("3 attempts")
+      expect(removed.error).toContain("git worktree remove --force")
+      // The default schedule is the Windows-shape one: more than one attempt,
+      // a short sub-second wait.
+      expect(WORKTREE_TEARDOWN.attempts).toBeGreaterThanOrEqual(2)
+      expect(WORKTREE_TEARDOWN.delayMs).toBeLessThanOrEqual(500)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("removeWorktree succeeds on the second attempt when the first races a lock: the wait runs once and the worktree is gone", async () => {
+    const { dir, park } = await laneScene()
+    try {
+      // A dirty worktree fails the plain pass; the force pass (after one
+      // wait) succeeds — the schedule's recovery shape.
+      await writeFile(join(park, "uncommitted.txt"), "dirt\n")
+      const waits: number[] = []
+      const removed = await removeWorktree(dir, park, { attempts: 3, delayMs: 1, sleep: async (ms) => { waits.push(ms) } })
+      expect(removed.ok).toBe(true)
+      expect(waits).toEqual([1])
       expect(await Bun.file(park).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })

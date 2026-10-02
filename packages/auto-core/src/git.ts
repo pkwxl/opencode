@@ -588,16 +588,32 @@ export async function addWorktree(dir: string, path: string, branch: string): Pr
   return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
 }
 
-// Remove a lane worktree (D7's landing step ⑤): a plain `git worktree remove`
-// first — the worktree is clean by then, the landing verification passed — and
-// one `--force` retry for leftover ignored state before giving up (the caller
-// keeps the scene and names the path; never a silent loss).
-export async function removeWorktree(dir: string, path: string): Promise<WorktreeResult> {
-  const removed = await git(dir, ["worktree", "remove", path])
-  if (removed.code === 0) return { ok: true }
-  const forced = await git(dir, ["worktree", "remove", "--force", path])
-  if (forced.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(forced.err || forced.out) || `git worktree remove exit code ${forced.code}` }
+// The teardown retry schedule (plans/0068 §10's Windows hardening): attempt 1
+// plain, attempts 2..N with `--force`, a short wait between attempts — a
+// removal that races an antivirus scanner or a transient file lock usually
+// succeeds a moment later, and the force pass covers leftover ignored state.
+export type WorktreeTeardown = { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void> }
+
+export const WORKTREE_TEARDOWN: WorktreeTeardown = { attempts: 3, delayMs: 250 }
+
+const teardownSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Remove a lane worktree (D7's landing step ⑤): the retry schedule above,
+// best-effort — the worktree is clean by then, the landing verification
+// passed, so a failure is environmental (AV, a lock), not a fact about the
+// work. The terminal failure keeps the scene and names the path in the error
+// (the caller blocks or warns with it; never a silent loss).
+export async function removeWorktree(dir: string, path: string, retry: WorktreeTeardown = WORKTREE_TEARDOWN): Promise<WorktreeResult> {
+  let last: { code: number; out: string; err: string } | undefined
+  const attempts = Math.max(1, Math.floor(retry.attempts))
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) await (retry.sleep ?? teardownSleep)(retry.delayMs)
+    const removed = await git(dir, attempt === 1 ? ["worktree", "remove", path] : ["worktree", "remove", "--force", path])
+    if (removed.code === 0) return { ok: true }
+    last = removed
+  }
+  const reason = firstLine(last!.err || last!.out) || `git worktree remove exit code ${last!.code}`
+  return { ok: false, error: `${reason} (after ${attempts} attempt${attempts === 1 ? "" : "s"}; the worktree is kept at ${path} — remove it manually with \`git worktree remove --force ${path}\` and re-run)` }
 }
 
 // `git worktree prune`: drop the administrative entries of worktrees whose
