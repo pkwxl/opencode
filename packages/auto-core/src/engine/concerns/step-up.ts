@@ -48,6 +48,15 @@ async function stepUp(fx: TurnFx, own: TurnState["stepUp"], ctx: TurnContext, us
   own.model = nextId
   own.reached = { step: own.step, model: nextId }
   fx.log(`⇡ ${steerContext.label} context ${formatTokens(usedNow)} reached the step-up point of ${steerContext.name} (${fromId}); continuing the same session on ${nextId}`)
+  // The step-up compensation counter (plans/0069 §2.4): recorded with the
+  // step itself, before the steer — a failed dispatch still takes the step
+  // (the record stands above), so the counter follows the record.
+  // AUTO-DECISION: the late step-up below counts the same way (both are the
+  // session moving onto the next step's id — the mechanism the quarterly
+  // audit judges — and splitting them into two counters would leave the
+  // prune question "how often did stepping up pay" answerable only by a sum
+  // the document never kept).
+  await fx.statsModelEvent("stepup")
   if (ctx.client.capabilities.steer) {
     const ok = await fx.steer(renderStepUp(promptFacts(ctx.opts), { from: fromId, next: nextId }))
     if (ok) ctx.services.router.awaitCacheClaim(steerContext.name, usedNow)
@@ -74,6 +83,9 @@ async function stepLate(fx: TurnFx, own: TurnState["stepUp"], ctx: TurnContext):
   own.step += 1
   own.model = nextId
   own.reached = { step: own.step, model: nextId }
+  // The compensation counter of the measurement-point step-up above — a late
+  // step-up is the same step taken (plans/0069 §2.4).
+  await fx.statsModelEvent("stepup")
 }
 
 // What one step-up turn needs beside its context. `live` is the fx's

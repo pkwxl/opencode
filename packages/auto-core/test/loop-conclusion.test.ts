@@ -509,7 +509,7 @@ describe("roundCompleteLines lanes roll-up (plans/0068 D13, S4)", () => {
       sessions: 2,
       detail: {
         usage: usage({ input: 700, output: 200, cost: 0.03 }),
-        models: { opus: { usage: usage({ input: 700, output: 200, cost: 0.03 }), sessions: 2, fails: 0, stuckHints: 0, reprompts: 0 } },
+        models: { opus: { usage: usage({ input: 700, output: 200, cost: 0.03 }), sessions: 2, fails: 0, stuckHints: 0, reprompts: 0, probeFails: 0, lengthContinuations: 0, stepUps: 0 } },
         tiers: { simple: { usage: usage({ input: 700, output: 200, cost: 0.03 }), sessions: 2 } },
       },
     })

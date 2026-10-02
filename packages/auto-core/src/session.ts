@@ -38,7 +38,7 @@ import { firstLine } from "./resume-gate"
 import { clientOf, contextLimitsOf, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed, worktreeNote } from "./session-api"
 import { AgentStartError, PROBE_PROMPT } from "./agent-pool"
 import { autoSwitches, type Switches } from "./switches"
-import { statsQuotaWait, statsWaitBegin, statsWaitEnd } from "./stats"
+import { statsModelEvent, statsQuotaWait, statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
 import { strictResumeActive } from "./unit-commit"
 
@@ -680,6 +680,10 @@ export async function runSession(
         if (error instanceof AgentStartError) throw error
         if (probed !== undefined) router.markModelDown(probed)
         if (probedProvider !== undefined) router.markCurrentKeyDown(probedProvider)
+        // The probe-failure compensation counter (plans/0069 §2.4): one per
+        // failed probe round, on the model it probed; an absent probed is a
+        // no-op.
+        await statsModelEvent(opts.dir, probed, "probe")
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
         // It says nothing of the limit: the account's learned windows (§8)
         // decide the next sleep, else the poll.
@@ -697,6 +701,9 @@ export async function runSession(
         if (probed !== undefined) router.markModelDown(probed, ping.resetAt, ping.classified)
         if (probedProvider !== undefined) router.markCurrentKeyDown(probedProvider, ping.resetAt)
         if (probed !== undefined) lateReset(ping.pendingReset, { model: probed })
+        // The probe-failure compensation counter (plans/0069 §2.4), the same
+        // one line as an errored probe round above.
+        await statsModelEvent(opts.dir, probed, "probe")
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
       }

@@ -22,7 +22,7 @@ import type { TestRunInfo } from "../prompt"
 import type { ResolveEvent } from "../resolve"
 import type { ClassifierAnswer } from "../router"
 import type { RunServices } from "../services"
-import type { Usage } from "../stats"
+import type { ModelEventKind, Usage } from "../stats"
 import type { StuckTracker } from "../stuck"
 import type { Switches } from "../switches"
 import type { Steer, TestRun } from "../testrun"
@@ -166,7 +166,10 @@ export type TurnFx = {
   runTest(): Promise<TestRunInfo> // kernel
   resolveTest(): Promise<PendingTest | undefined> // kernel
   saveHandover(record: Handover): Promise<void>
-  statsModelEvent(kind: "stuck"): Promise<void>
+  // The per-model stats counter (the stuck hint, the length-cut continuation,
+  // the context step-up — the drift and compensation kinds of stats.ts, keyed
+  // by the turn's steer context's entry name; a no-op without one).
+  statsModelEvent(kind: ModelEventKind): Promise<void>
   onModel(model: string): void
   onLimit(event: LimitEvent): void
   log(line: string): void

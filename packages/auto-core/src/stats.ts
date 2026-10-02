@@ -107,13 +107,19 @@ export type DigestStats = {
 // Per-model record: the usage booked for the model, how many sessions ran on
 // it, and the counters that read its protocol drift (plans/0055 §10 item 3) —
 // report `Result: FAIL` verdicts it wrote, stuck hints it needed, and
-// shape-check re-prompts its sessions caused.
+// shape-check re-prompts its sessions caused — plus the compensation
+// counters of plans/0069 §2.4: recovery probes of the wait-and-probe loop
+// that failed on it, length-cut continuation dispatches its truncated
+// replies caused, and context step-ups its sessions took.
 export type ModelStat = {
   usage: Usage
   sessions: number
   fails: number
   stuckHints: number
   reprompts: number
+  probeFails: number
+  lengthContinuations: number
+  stepUps: number
 }
 
 // Per-tier record: the usage and session count of every session routed as
@@ -353,6 +359,9 @@ function parseModelStats(raw: unknown): Record<string, ModelStat> | undefined {
       fails: num(m.fails),
       stuckHints: num(m.stuckHints),
       reprompts: num(m.reprompts),
+      probeFails: num(m.probeFails),
+      lengthContinuations: num(m.lengthContinuations),
+      stepUps: num(m.stepUps),
     }
   }
   return Object.keys(models).length ? models : undefined
@@ -509,7 +518,7 @@ function rollHistory(doc: StatsDoc) {
 // ===== per-model / per-tier booking (plans/0055 §7.1 "Stats", §10 items 3/12) =====
 
 function emptyModelStat(): ModelStat {
-  return { usage: emptyUsage(), sessions: 0, fails: 0, stuckHints: 0, reprompts: 0 }
+  return { usage: emptyUsage(), sessions: 0, fails: 0, stuckHints: 0, reprompts: 0, probeFails: 0, lengthContinuations: 0, stepUps: 0 }
 }
 
 function emptyTierStat(): TierStat {
@@ -528,6 +537,9 @@ function mergeModelStats(into: Totals, from: Totals) {
     target.fails += stat.fails
     target.stuckHints += stat.stuckHints
     target.reprompts += stat.reprompts
+    target.probeFails += stat.probeFails
+    target.lengthContinuations += stat.lengthContinuations
+    target.stepUps += stat.stepUps
   }
   for (const [name, stat] of Object.entries(from.tiers ?? {})) {
     const target = ((into.tiers ??= {})[name] ??= emptyTierStat())
@@ -1037,7 +1049,22 @@ export async function statsSessionEnd(
 // including non-task time is not folded either), a single-layer criterion
 // would leave "how often this model drifted in this task" unreadable; the
 // three copies are bounded and self-consistent.
-export type ModelEventKind = "fail" | "stuck" | "reprompt"
+//
+// The compensation counters of plans/0069 §2.4 (0064 T1's quarterly cost
+// audit judged blind without them): a recovery probe of the wait-and-probe
+// loop that failed on the model (probe), a length-cut continuation dispatch
+// its truncated reply caused (continuation), and a context step-up one of
+// its sessions took (stepup) — the same shape, the same criterion, recorded
+// at each mechanism's production site beside the decision that already
+// fired. Counting is all this does: the prune-order judgment (truncation
+// continuation → step-up → liveness) belongs to the future quarterly audit.
+// AUTO-DECISION: the kind literals name the mechanism class, the ModelStat
+// fields the counted event (probe → probeFails, continuation →
+// lengthContinuations, stepup → stepUps), both in the existing one-word
+// caliber of fail/stuck/reprompt (the kind is a call-site word, the field a
+// stats-document key; two-word kinds would read as a new vocabulary where
+// three more members of the existing one fit).
+export type ModelEventKind = "fail" | "stuck" | "reprompt" | "probe" | "continuation" | "stepup"
 
 export async function statsModelEvent(
   dir: string | undefined,
@@ -1050,7 +1077,10 @@ export async function statsModelEvent(
     const stat = ((bucket.models ??= {})[model] ??= emptyModelStat())
     if (kind === "fail") stat.fails += 1
     else if (kind === "stuck") stat.stuckHints += 1
-    else stat.reprompts += 1
+    else if (kind === "reprompt") stat.reprompts += 1
+    else if (kind === "probe") stat.probeFails += 1
+    else if (kind === "continuation") stat.lengthContinuations += 1
+    else stat.stepUps += 1
   }
   queueWrite(dir, handle)
 }
@@ -1100,6 +1130,9 @@ export async function statsLaneUsage(
         target.fails += num(stat.fails)
         target.stuckHints += num(stat.stuckHints)
         target.reprompts += num(stat.reprompts)
+        target.probeFails += num(stat.probeFails)
+        target.lengthContinuations += num(stat.lengthContinuations)
+        target.stepUps += num(stat.stepUps)
       }
       for (const [name, stat] of Object.entries(detail.tiers ?? {})) {
         const target = ((bucket.tiers ??= {})[name] ??= emptyTierStat())

@@ -338,6 +338,9 @@ const parseUsageDetail = (raw: unknown): LaneUsageDetail | undefined => {
         fails: usageFigure(value, "fails"),
         stuckHints: usageFigure(value, "stuckHints"),
         reprompts: usageFigure(value, "reprompts"),
+        probeFails: usageFigure(value, "probeFails"),
+        lengthContinuations: usageFigure(value, "lengthContinuations"),
+        stepUps: usageFigure(value, "stepUps"),
       }
     }
     if (Object.keys(models).length) detail.models = models

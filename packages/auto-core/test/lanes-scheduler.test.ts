@@ -1056,7 +1056,7 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
   // the phase/round buckets and the conclusion's roll-up can claim it.
   const DETAIL = {
     usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 },
-    models: { fake: { usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }, sessions: 2, fails: 0, stuckHints: 0, reprompts: 0 } },
+    models: { fake: { usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }, sessions: 2, fails: 0, stuckHints: 0, reprompts: 0, probeFails: 0, lengthContinuations: 0, stepUps: 0 } },
     tiers: { simple: { usage: { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }, sessions: 2 } },
   }
 
@@ -1117,7 +1117,7 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
     // Two bookings of DETAIL: the flat usage doubled, the model and tier
     // records with it.
     expect(stats.roundB.usage).toEqual({ input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 })
-    expect(stats.roundB.models.fake).toEqual({ usage: { input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 }, sessions: 4, fails: 0, stuckHints: 0, reprompts: 0 })
+    expect(stats.roundB.models.fake).toEqual({ usage: { input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 }, sessions: 4, fails: 0, stuckHints: 0, reprompts: 0, probeFails: 0, lengthContinuations: 0, stepUps: 0 })
     expect(stats.roundB.tiers.simple).toEqual({ usage: { input: 180, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 4 }, sessions: 4 })
     expect(stats.taskB.usage.input).toBe(0)
     expect(stats.taskB.models).toBeUndefined()

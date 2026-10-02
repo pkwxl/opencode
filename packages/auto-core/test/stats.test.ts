@@ -773,6 +773,27 @@ describe("stats per-model / per-tier / classify buckets", () => {
     }
   })
 
+  test("compensation counters: probe / continuation / stepup land on the model record in all three buckets (plans/0069 §2.4)", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsModelEvent(dir, "glm", "probe")
+    await statsModelEvent(dir, "glm", "probe")
+    await statsModelEvent(dir, "glm", "continuation")
+    await statsModelEvent(dir, "opus", "stepup")
+    const totals = await statsTotals(dir, "task")
+    expect(totals?.models?.glm).toMatchObject({ probeFails: 2, lengthContinuations: 1, stepUps: 0, fails: 0, stuckHints: 0, reprompts: 0, sessions: 0 })
+    expect(totals?.models?.opus).toMatchObject({ stepUps: 1, probeFails: 0, lengthContinuations: 0 })
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.models?.glm?.probeFails).toBe(2)
+      expect(bucket.models?.glm?.lengthContinuations).toBe(1)
+      expect(bucket.models?.glm?.stepUps).toBe(0)
+      expect(bucket.models?.opus?.stepUps).toBe(1)
+      expect(bucket.models?.opus?.probeFails).toBe(0)
+    }
+  })
+
   test("an older stats file loads; the new sections default empty and booking then works", async () => {
     // A pre-registry v:1 document: no models/tiers anywhere, a hand-written
     // task bucket and history aggregate.
@@ -1135,7 +1156,7 @@ describe("stats lane usage booking (plans/0068 D13, S4)", () => {
       sessions: 2,
       detail: {
         usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }),
-        models: { glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2 } },
+        models: { glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2, probeFails: 1, lengthContinuations: 0, stepUps: 3 } },
         tiers: { simple: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2 } },
       },
     })
@@ -1151,7 +1172,7 @@ describe("stats lane usage booking (plans/0068 D13, S4)", () => {
     for (const bucket of [doc.phaseB, doc.roundB]) {
       expect(bucket.usage).toEqual(usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }))
       expect(bucket.sessions).toBe(2)
-      expect(bucket.models).toEqual({ glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2 } })
+      expect(bucket.models).toEqual({ glm: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2, fails: 1, stuckHints: 0, reprompts: 2, probeFails: 1, lengthContinuations: 0, stepUps: 3 } })
       expect(bucket.tiers).toEqual({ simple: { usage: usage({ input: 1000, output: 500, cacheRead: 200, cost: 0.02 }), sessions: 2 } })
       // Wall time never folds: the lane's 34s is a segment of the lanes
       // entry, not a duration of the parent's clock.

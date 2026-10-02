@@ -194,7 +194,7 @@ describe("the liveness concern (idle: the truncated-output continuation)", () =>
     // The criterion is cleared with the steer: an idle without a new
     // step-finish cannot repeat the continuation against a stale reason.
     expect(own.lastFinish).toBeUndefined()
-    expect(fx.calls).toEqual(["log", "steer"])
+    expect(fx.calls).toEqual(["log", "statsModelEvent", "steer"])
     expect(fx.lines).toEqual(["⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (1/3)"])
     expect(fx.steers).toEqual([
       "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +

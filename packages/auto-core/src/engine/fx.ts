@@ -126,7 +126,7 @@ export function makeTurnFx(args: {
     runTest: journaled("runTest", () => executeTest(testRun(), ctx.opts)),
     resolveTest: journaled("resolveTest", () => resolveTestScript(testRun())),
     saveHandover: journaled("saveHandover", (record: Parameters<typeof writeHandover>[1]) => writeHandover(testRun().dir, record)),
-    statsModelEvent: journaled("statsModelEvent", (kind: "stuck") => recordModelEvent(ctx.opts.dir, ctx.steerContext?.name, kind)),
+    statsModelEvent: journaled("statsModelEvent", (kind) => recordModelEvent(ctx.opts.dir, ctx.steerContext?.name, kind)),
     onModel: journaled("onModel", (model: string) => args.onModel?.(model)),
     onLimit: journaled("onLimit", (event: LimitEvent) => args.onLimit?.(event)),
     log: journaled("log", (line: string) => log(line)),

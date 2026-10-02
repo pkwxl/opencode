@@ -149,6 +149,12 @@ export const makeLivenessConcern = (deps: LivenessDeps): Concern<"liveness"> => 
       // criterion (the cap bounds it, at most MAX idle spins).
       own.lastFinish = undefined
       fx.log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${own.lengthContinued}/${LENGTH_CONTINUE_MAX})`)
+      // The length-continuation compensation counter (plans/0069 §2.4): one
+      // per continuation dispatch, recorded before the steer goes out — the
+      // stuck hint's own order, and a failed dispatch (counted, logged by the
+      // fx's steer) is still the mechanism firing. Without a steer context
+      // (the implicit registry) statsModelEvent is a no-op.
+      await fx.statsModelEvent("continuation")
       const ok = await fx.steer(
         "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +
           "(do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again).",
