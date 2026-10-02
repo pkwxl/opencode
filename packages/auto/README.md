@@ -1631,8 +1631,9 @@ an unknown type key is a usage error at run start.
 > planning session; from P4 the k (knowledge distillation) phase wholly adopts the former
 > `--extract-knowledge` design (the knowledge-extraction session produces `kb.md` in the knowledge phase
 > directory, failures not polluting the
-> exit code). `--track-fixme` still evolves independently
-> (`packages/auto-core/plans/0002-fixme-knowledge-design.md`), unimplemented.
+> exit code). `--track-fixme` never landed — no CLI flag ever shipped — and is retired,
+> permanently blocked by the completion-side retirement of the review flow it fed (0044 D1);
+> the design record is `packages/auto-core/plans/0002-fixme-knowledge-design.md`.
 
 ## The AGENTS.md marker block
 
