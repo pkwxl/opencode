@@ -724,6 +724,13 @@ daemon → core function** (`closeUnit`, `addTask`, the config writers,
      table's probe route are the surfaces this extension describes; the
      model-probe subsection and the write-surface subsection above are its
      own designed end. -->
+<!-- AUTO-DECISION (T-098, close-out): the config ops' agent handling was
+     fixed in place — an init/amend request with config.agent "claude" was
+     validated and then silently dropped (the parse kept the value only for
+     the "opencode" dropper branch, so the frozen config said "agent
+     opencode" while the caller asked for claude); the positive value now
+     rides the merge like any explicit key. Found by this unit's cross-stack
+     e2e, which drives init over the API with agent: "claude". -->
 
 ## Supervision and the daemon's lifetime
 

@@ -541,7 +541,14 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
   if (!modes[modeName]) {
     return refused(1, [`config.mode must be a registered mode (currently supported: ${Object.keys(modes).join(", ")}); defaults to migrate`])
   }
-  const config = mergeProjectConfig(base, { ...keys.explicit, mode: modeName })
+  // The positive agent value rides the merge like any explicit key; only the
+  // dropper spelling ("opencode", the default) is kept separate and deletes
+  // below. AUTO-DECISION (T-098's e2e found the gap): an init/amend request
+  // with agent: "claude" used to be validated and then silently dropped —
+  // the parse kept it only for the dropper branch, so the frozen config
+  // said "agent opencode" while the caller asked for claude. The close-out
+  // e2e drives init over the API with agent: "claude"; the value now lands.
+  const config = mergeProjectConfig(base, { ...keys.explicit, mode: modeName, ...(keys.agent === "claude" ? { agent: keys.agent } : {}) })
   // The key droppers: an amend would otherwise keep the old value.
   if (keys.agent === "opencode") delete config.agent
   if (keys.parallel === "none") delete config.parallel

@@ -25,6 +25,12 @@ const PACKAGE_ROOT = resolve(import.meta.dir, "..")
 // The one runtime dependency this package may declare: the workspace core.
 const ALLOWED_DEPENDENCIES = ["@opencode-ai/auto-core"]
 
+// The forbidden names the close-out guard names explicitly (T-098): the
+// monorepo's server-side packages and Effect infrastructure — none may appear
+// anywhere in the package's manifest, dev dependencies included (a dev
+// dependency is one `import` away from shipping).
+const FORBIDDEN_DEPENDENCIES = ["@opencode-ai/core", "@opencode-ai/protocol", "@opencode-ai/sdk", "@opencode-ai/server", "@opencode-ai/opencode", "effect", "@effect/langchain", "@effect/ai"]
+
 // Whether an external import specifier is legal: the core (the package root,
 // any submodule or template path) or a Node/Bun builtin ("node:…", "bun:…",
 // or a bare Node builtin name such as "url").
@@ -70,6 +76,11 @@ describe("server dependency isolation (constitutional)", () => {
     const pkg = await Bun.file(join(PACKAGE_ROOT, "package.json")).json()
     expect(Object.keys(pkg.dependencies ?? {})).toEqual(ALLOWED_DEPENDENCIES)
     expect(pkg.dependencies?.["@opencode-ai/auto-core"]).toBe("workspace:*")
+    // Close-out hardening (T-098): the forbidden server-side names stay out
+    // of the whole manifest — dependencies and devDependencies alike.
+    const declared = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]
+    const present = declared.filter((name) => FORBIDDEN_DEPENDENCIES.includes(name))
+    expect(present.join(", ")).toBe("")
   })
 
   test("shipped source imports only the core and Node/Bun builtins", () => {

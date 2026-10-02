@@ -21,6 +21,9 @@
 //                         edges between sub-domains stay inside SUBDOMAIN_EDGES,
 //                         a seed that may only shrink, with contract a leaf over
 //                         types and no engine → pipeline edge
+//   9. no HTTP          — the core imports no HTTP module and calls no HTTP
+//                         server API (0067 §三.1: the core never imports HTTP;
+//                         serving belongs to a shell)
 // Any violation lists the offending edges; a legitimate new dependency means a
 // conscious, reviewed edit to the tables below — never a silent one.
 // Type-only edges count for every direction rule. For cycles they are checked
@@ -855,6 +858,19 @@ const RUNNER_IMPORTERS = new Set(["loop", "loop-task"])
 // and never import this package by name instead of relatively.
 const DENIED_PACKAGES = ["@opencode-ai/auto", "@opencode-ai/auto-migrate", "@opencode-ai/auto-core"]
 
+// The core never imports HTTP (plans/0067 §三.1, the headless-service
+// constitution): no HTTP module import and no HTTP server API anywhere in
+// src/. Serving is a shell's duty — the service shell (packages/auto-server)
+// owns Bun.serve, and the core it drives stays transport-free. The one network
+// adjacency the core keeps is the opencode adapter's SDK client over the
+// agent's own loopback server (agent/opencode/server.ts, the SDK's fetch
+// injection point): a client, never a listener, and it imports no HTTP module
+// of its own. Held verbally through the P2/P3 core changes (the emitter, the
+// io/Interactive seam — both transport-blind by design), this suite makes the
+// line an assertion: a planted `node:http` import or Bun.serve call fails it.
+const HTTP_MODULES = ["http", "https", "http2", "node:http", "node:https", "node:http2"]
+const HTTP_SERVER_APIS = [/Bun\.serve/, /Bun\.listen/, /Bun\.websocket/]
+
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -1077,6 +1093,27 @@ function checkHygiene(): string[] {
   return problems
 }
 
+// The no-HTTP constitution (plans/0067 §三.1): no HTTP module import (the
+// externalImports scan already collected every bare and node:-prefixed
+// specifier) and no Bun HTTP-server API in any module's text.
+function checkNoHttp(): string[] {
+  const problems: string[] = []
+  for (const [key, pkgs] of externalImports) {
+    for (const pkg of pkgs) {
+      if (HTTP_MODULES.includes(pkg)) {
+        problems.push(`HTTP import: src/${key}.ts imports "${pkg}" — the core never imports HTTP (plans/0067 §三.1); serving belongs to a shell`)
+      }
+    }
+  }
+  for (const key of modules) {
+    const text = readFileSync(join(SRC, key + ".ts"), "utf8")
+    for (const pattern of HTTP_SERVER_APIS) {
+      if (pattern.test(text)) problems.push(`HTTP server API: src/${key}.ts calls ${pattern.source} — the core never serves; the service shell does`)
+    }
+  }
+  return problems
+}
+
 function checkSubdomains(): string[] {
   const problems: string[] = []
   const known = new Set(modules)
@@ -1157,6 +1194,10 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("no shell imports (core does not know shells)", () => {
     expect(checkHygiene().join("\n")).toBe("")
+  })
+
+  test("no HTTP imports or server APIs (0067: the core never imports HTTP)", () => {
+    expect(checkNoHttp().join("\n")).toBe("")
   })
 
   test("every driver module carries a sub-domain (R10)", () => {
