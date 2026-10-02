@@ -182,6 +182,39 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
     }
   })
 
+  test("a checklist item declaring a directory artifact (trailing slash, plans/0065 F2): rejected with a problem line naming it, injected once declared as concrete files", async () => {
+    const dir = await docRepo()
+    try {
+      const subtasksDir = `# Decomposition\n\n- [ ] subtask one Artifacts: docs/T-001/S01/golden/\n\n${filler}\n\n${EOF_MARK}\n`
+      const { client, calls } = scriptedClient([
+        async () => {
+          await writeMergedArtifacts(dir)
+          // Even a present, non-empty golden directory does not satisfy the
+          // declaration — the artifact existence check is a file check, so the
+          // declaration is unsatisfiable as written. It must be rejected here,
+          // in the planning session, not at a subtask's close-out (the T-066
+          // S01 hidden blockage).
+          await Bun.write(join(dir, "docs/T-001/S01/golden/trace.txt"), "golden trace\n")
+          await Bun.write(join(dir, "docs/T-001/subtasks.md"), subtasksDir)
+        },
+        async () => writeMergedArtifacts(dir),
+      ])
+      const plan = await reloadUnits(dir)
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
+      expect(result.type).toBe("ok")
+      expect(calls.prompts.length).toBe(2)
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain("docs/T-001/S01/golden/")
+      expect(feedback).toContain("declare the concrete files")
+      const reloaded = await reloadUnits(dir)
+      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual([
+        "subtask one Artifacts: docs/T-001/S01/index.md",
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("still not fixed → blocked naming the failed item, nothing committed", async () => {
     const dir = await docRepo()
     try {

@@ -13,7 +13,7 @@
 // is the recovery story's first line).
 import { currentPhase, currentRound, phaseIndexPath, phaseLabel, readPhases } from "./phases"
 import { shellProfile } from "./shell"
-import { laneRecords, loadPlan, type Task } from "./tasks"
+import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
 
 const TASK_MARK: Record<Task["status"], string> = { pending: " ", in_progress: "▶", blocked: "⏸", done: "✓" }
 
@@ -70,7 +70,10 @@ export async function renderStatus(dir: string): Promise<string[]> {
       lines.push(`      [${taskMark(task)}] ${task.id} ${task.title}${depends(task)}${count}${attempts}`)
       if (task.status === "done") continue
       checklist.forEach((item, i) => {
-        lines.push(`          [${item.done ? "✓" : " "}] S${String(i + 1).padStart(2, "0")} ${item.text}`)
+        // The 60-char-capped display title (plans/0065 F3): item line-wrapping
+        // is a social contract between decompose sessions, the cap is not —
+        // raw item text can be a multi-kilobyte single line.
+        lines.push(`          [${item.done ? "✓" : " "}] S${String(i + 1).padStart(2, "0")} ${checklistTitle(item.text)}`)
       })
     }
   }

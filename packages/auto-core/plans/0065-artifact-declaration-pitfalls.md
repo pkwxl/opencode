@@ -1,6 +1,10 @@
 # 0065 — Artifact-declaration pitfalls: the stale snapshot, the directory shape, and the unchecked item line
 
-Status: **findings, 2026-09-29.** Three defects surfaced by task T-066 (the turn-trace oracle, 0061 stage D0), each of which cost a spurious blocked cycle with the work on disk and green the whole time. Recorded so a later task can resolve them; no code changes are made here (T-066's scope forbids `src/` changes, and these deserve their own unit).
+Status: **fixes landed, 2026-10-02 (T-113).** F1–F4 below are the spec of record the fix unit landed;
+the body is the original findings record, kept verbatim.
+AUTO-DECISION (T-113 edited this banner instead of only appending): the header said "no code changes
+are made here" — true when the document was a findings record awaiting its fix unit, actively false
+after it; rewritten per the fix-status pattern (0069 §4.1), the T-015/T-079 precedent.
 
 ## 1. The incidents
 
@@ -37,3 +41,5 @@ A golden case declaring a trailing-slash directory in the decompose-collect or s
 
 - S01's and S02's declarations were edited mid-run to name the concrete golden files (AUTO-DECISION, recorded in `docs/T-066/S01/index.md`); S01–S02 were then marked done by hand (state-file rename + tick — files are the progress fact, `src/document/state.ts:108-119`).
 - T-066's `subtasks.md` items were re-wrapped to the T-062/T-065 style (~100-column first lines, 2-space continuation indent). Side effect, accepted consciously: the `Artifacts:` declarations moved to continuation lines, which the close-out parser never reads (`subtasks()` takes only `- [ ]` lines, `src/tasks.ts:137-142`), so the declared-artifact existence check is inert for T-066's remaining subtasks — the same regime T-062/T-065 ran under. The zero-write and eof scans still run. F1's alternative (declarations in todo.md) is the principled repair of this silent coupling between line-wrapping and check semantics.
+
+<!-- auto: eof -->

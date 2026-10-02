@@ -17,7 +17,7 @@ import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
-import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
+import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec } from "./document/spec"
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { headText, removeIfUntracked, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
@@ -479,6 +479,16 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
   const items = subtasks(raw)
   const { problems } = await checkArtifactSpecs(decomposeArtifactSpecs(taskId, items.length), { dir, policy: "mandatory" })
   if (raw && !items.length) problems.push(`${taskDoc(taskId, "subtasks")} has no checklist items`)
+  // Unsatisfiable declarations (plans/0065 F2): a declared path ending in `/`
+  // names a directory, and the artifact existence check is a file check — the
+  // declaration can never pass, and a subtask running under it would block
+  // hidden at its close-out. Rejected here instead: the planning session
+  // hears the problem line and retries within the session.
+  for (const [i, item] of items.entries()) {
+    for (const spec of directoryArtifactSpecs(item.text)) {
+      problems.push(`${taskDoc(taskId, "subtasks")} item ${i + 1} declares the directory ${spec.path} as an artifact; declare the concrete files inside it instead (a directory can never pass the artifact existence check)`)
+    }
+  }
   // Subtask dependency graph (M3.5, plans/0047 G6): the `Depends:` / `Touches:`
   // fields at the top of the S<nn>/todo.md files, S<nn> = checklist item n.
   if (items.length) {
@@ -829,7 +839,16 @@ export async function runSubtask(
       // dryrun / commit gate off / non-git; a session ending in a test
       // handover is exempt (its completion criterion is in testhandoff.md).
       if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
-        const problems = await subtaskArtifactProblems(dir, text, baseline, opts.scanExempt)
+        // The item text re-read fresh from the checklist right before the
+        // shape check (plans/0065 F1): a declaration the subtask session fixed
+        // mid-run is judged by the fixed text, not the dispatch-time snapshot
+        // (the task is otherwise reloaded only after a successful close-out,
+        // so a blocked run kept seeing the stale item — the T-066 S01/S02
+        // incidents). The shape check reads only; the tick/idempotency
+        // invariant is unaffected. A checklist no longer holding this item
+        // falls back to the dispatch-time snapshot.
+        const item = (await readChecklist(planDir, task.id))[index - 1]
+        const problems = await subtaskArtifactProblems(dir, item?.text ?? text, baseline, opts.scanExempt)
         if (problems.length) {
           if (shapeRetried) {
             return {

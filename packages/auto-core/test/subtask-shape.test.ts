@@ -161,6 +161,40 @@ describe("runSubtask artifact shape check (D2/D4)", () => {
     }
   })
 
+  test("a declaration fixed mid-session is judged by the reloaded item text, not the dispatch-time snapshot (plans/0065 F1)", async () => {
+    const dir = await shapeRepo()
+    try {
+      // The session writes a differently named record and fixes the item's
+      // declaration in subtasks.md to match (the mid-session fix shape of the
+      // T-066 S01/S02 incidents: one spurious block per subtask under the
+      // stale-snapshot code). The rewritten checklist is itself subject to
+      // the whole-unit terminator scan, so it carries the filler and the
+      // terminator like any changed .md.
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/notes.md"), properDoc)
+          await Bun.write(
+            join(dir, "docs/T-001/subtasks.md"),
+            `# Decomposition\n\n- [ ] investigate and write the record Artifacts: docs/T-001/S01/notes.md\n\n${filler}\n\n${EOF_MARK}\n`,
+          )
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      // BODY (the dispatch-time snapshot) still declares record.md, which was
+      // never written; the fresh text declares the file that exists.
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
+      expect(result).toBeUndefined()
+      // Judged by the fresh text: one session, no re-prompt about the stale declaration
+      expect(calls.prompts.length).toBe(1)
+      const reloaded = (await reloadUnits(dir)).tasks[0]!
+      expect((reloaded.checklist ?? [])[0]!.done).toBe(true)
+      // The tick landed on the fixed line
+      expect((reloaded.checklist ?? [])[0]!.text).toContain("notes.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("fresh document missing the last-line terminator (content non-trivial): fixed after the re-prompt → ticked", async () => {
     const dir = await shapeRepo()
     try {

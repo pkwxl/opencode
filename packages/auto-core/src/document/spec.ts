@@ -103,6 +103,18 @@ function addSections(item: ArtifactSpec | undefined, text: string) {
   }
 }
 
+// Unsatisfiable declarations (plans/0065 F2): declared paths ending in `/`.
+// The checker's existence test is a file test (checkArtifactSpecs), so a
+// directory declaration can never pass — whichever files land inside it. The
+// reject happens where the declaration is first collected (the decompose
+// collect, execute.ts), so the planning session retries in-session instead of
+// a subtask close-out blocking hidden. Teaching checkArtifactSpecs to accept
+// directories was considered and rejected (0065): a directory declaration is
+// a vacuous completion gate; concrete files are the honest declaration.
+export function directoryArtifactSpecs(text: string): ArtifactSpec[] {
+  return declaredArtifacts(text).filter((spec) => spec.path.endsWith("/"))
+}
+
 // —— 2. Merged decompose session artifact table (plans/0030 D3, M1.4) ——
 
 // The four artifact groups of the merged understand+decompose session as spec

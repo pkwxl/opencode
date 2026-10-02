@@ -9,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { EOF_MARK } from "../src/doccheck"
-import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, SUBTASK_TODO_SECTIONS, subtaskStateSpec } from "../src/document/spec"
+import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, SUBTASK_TODO_SECTIONS, subtaskStateSpec } from "../src/document/spec"
 import type { ArtifactSpec } from "../src/document/types"
 
 describe("declaredArtifacts (the Artifacts: field parser, session-boundary-hardening §4.3 D4)", () => {
@@ -52,6 +52,21 @@ describe("declaredArtifacts (the Artifacts: field parser, session-boundary-harde
   test("markdown backticks are shelled; a path with an extension but no slash is a valid declaration", () => {
     expect(declaredArtifacts("Artifacts: `docs/a.md`")).toEqual([{ path: "docs/a.md", role: "artifact" }])
     expect(declaredArtifacts("Artifacts: README.md")).toEqual([{ path: "README.md", role: "artifact" }])
+  })
+
+  test("a trailing-slash directory declaration parses as a path and is picked out as unsatisfiable (plans/0065 F2)", () => {
+    const item = "record the turn traces Artifacts: docs/T-001/S01/golden/, docs/T-001/S01/notes.md"
+    // The parser is honest about what the session wrote: the directory form is
+    // a path declaration (it contains `/`), so it must be rejected where the
+    // declaration is collected, not silently dropped here.
+    expect(declaredArtifacts(item)).toEqual([
+      { path: "docs/T-001/S01/golden/", role: "artifact" },
+      { path: "docs/T-001/S01/notes.md", role: "artifact" },
+    ])
+    expect(directoryArtifactSpecs(item).map((spec) => spec.path)).toEqual(["docs/T-001/S01/golden/"])
+    // File declarations (with or without fields) pick out nothing.
+    expect(directoryArtifactSpecs("Artifacts: docs/a.md, src/b.ts")).toEqual([])
+    expect(directoryArtifactSpecs("record findings Artifacts: research notes")).toEqual([])
   })
 })
 
@@ -141,6 +156,16 @@ describe('checkArtifactSpecs(policy "declared", subtask-loop declared artifacts)
       'declared artifact docs/a.md is missing section "background"',
       'declared artifact docs/a.md is missing section "conclusions"',
     ])
+  })
+
+  test("a trailing-slash path is unsatisfiable: an existing non-empty directory still reads as missing (plans/0065 F2 — the file test stays, the accept-directories alternative is rejected)", async () => {
+    // The exact T-066 S01 shape: the golden directory exists with the recorded
+    // golden inside, and the declaration still cannot pass — the existence
+    // check is a file check. This is the case that would have caught F2's
+    // hole since M1.4.
+    await put("docs/T-001/S01/golden/trace.txt", "golden trace\n")
+    const result = await checkArtifactSpecs([{ path: "docs/T-001/S01/golden/", role: "artifact" }], { dir, policy: "declared" })
+    expect(result.problems).toEqual(["declared artifact docs/T-001/S01/golden/ does not exist"])
   })
 
   test("non-artifact roles do not enter this checker (reserved by the M2.3 role policies)", async () => {

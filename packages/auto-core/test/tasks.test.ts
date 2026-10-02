@@ -289,6 +289,23 @@ describe("renderStatus in-flight lanes section (plans/0068 D13, S4)", () => {
   })
 })
 
+describe("renderStatus item titles (plans/0065 F3)", () => {
+  test("checklist items print the 60-char-capped display title: a long item is cut with an ellipsis, a description colon and an Artifacts tail are stripped", async () => {
+    // A single physical item line carrying scope prose and the declaration —
+    // the T-066 decompose shape that dumped whole paragraphs into the tree.
+    const long = "survey the artifact declaration pitfalls found across every subsystem"
+    const tailed = "short: the wrapped scope text that continues on the next line Artifacts: docs/T-001/S01/record.md, docs/T-001/S02/record.md"
+    await seedUnits(dir, `## T-001: a [in_progress]\nA.\n\n- [ ] ${long}\n- [ ] ${tailed}\n`)
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement",
+      "      [▶] T-001 a [subtasks 0/2]",
+      "          [ ] S01 survey the artifact declaration pitfalls found across every…",
+      "          [ ] S02 short",
+    ])
+  })
+})
+
 describe("runtime state (.auto/units.json)", () => {
   test("begin sets in_progress and counts attempts; resetInProgress clears only the status", async () => {
     await seedUnits(dir, SAMPLE)
