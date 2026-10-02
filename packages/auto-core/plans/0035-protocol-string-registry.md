@@ -6,7 +6,10 @@
 > face) and **M3.4** (ledger face) — and retires as history once the last
 > registered string has flipped and the dual-read compatibility layer is
 > retired (retirement condition confirmed at M4 close-out, field canary at
-> M6.3). Translation-batch consumption list: `plans/0028-m06-golden-bilingual-review.md`.
+> M6.3). The translation-batch consumption list this registry was drafted
+> against — the M0.6 golden bilingual mapping review — is deleted at MA/M4
+> closure per its own schedule, every batch it assigned having landed; the
+> body's citations of its mapping table are historical.
 
 ## 1. Scope
 
