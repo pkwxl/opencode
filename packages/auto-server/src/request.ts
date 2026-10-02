@@ -34,7 +34,11 @@ export type RunRequestOptions = {
 
 // The options after validation, defaults resolved (the CLI's parse* helpers'
 // absent-value semantics: waitAnswer/waitBetween 0 = no wait, permission
-// ask-deny, maxSessions 1 — the only value the core accepts today).
+// ask-deny, maxSessions 1 — this shell's own current cap, not the core's:
+// since 0068 the core runs maxSessions ≥ 2 as concurrent lanes under a
+// parallel level, and the worker maps the value straight into the core's
+// run options; parseOptions below is what holds this service at one session
+// per run).
 export type RunOptions = {
   verbose: boolean
   waitAnswer: number
@@ -160,6 +164,13 @@ export function parseOptions(raw: unknown): RunOptions {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
       fail("options.maxSessions takes a positive integer (concurrent AI sessions); defaults to 1")
     }
+    // The limit this refusal enforces is this shell's own current boundary,
+    // not the core's — the core has run concurrency since 0068 (maxSessions
+    // ≥ 2 under a parallel level becomes lanes), and the worker maps the
+    // value straight into the core's run options, so nothing in the core
+    // requires 1 here. The message's wording stays as written: it is the
+    // shell owner's reserved call (plans/0069 §6 item 5), pinned by
+    // worker.test.ts and daemon.test.ts.
     if (value > 1) {
       fail(`options.maxSessions ${value}: concurrent execution is not supported yet; only 1 is accepted (plan for parallelism at init --parallel; tasks still run one at a time)`)
     }
