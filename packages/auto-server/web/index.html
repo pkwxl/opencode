@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opencode-auto server</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1b1f26; --panel-2: #22272f; --line: #2e343d;
+    --text: #d7dde6; --dim: #8b95a3; --accent: #6fb3e0; --ok: #7ec699; --bad: #e0837e;
+    --warn: #d9b36c; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--mono); }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; color: var(--accent); font-weight: 600; }
+  #conn { font-size: 12px; color: var(--dim); }
+  #conn.ok { color: var(--ok); } #conn.down { color: var(--bad); }
+  #auth { display: flex; gap: 8px; margin-left: auto; }
+  #auth input { width: 260px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 5px 8px; font: inherit; border-radius: 4px; }
+  button { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 5px 10px; font: inherit; border-radius: 4px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #24425a; border-color: #35617f; }
+  button.danger { background: #5a2430; border-color: #7f354a; }
+  button:disabled { opacity: .45; cursor: default; }
+  .scopes { display: flex; gap: 4px; }
+  .scope { font-size: 11px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 10px; color: var(--dim); }
+  .scope.on { color: var(--ok); border-color: var(--ok); }
+  main { display: grid; grid-template-columns: 230px minmax(430px, 1.2fr) minmax(430px, 1fr); gap: 12px; padding: 12px 16px; align-items: start; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section, aside { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 4px 0 8px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #projects li { padding: 6px 8px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  #projects li:hover { background: var(--panel-2); }
+  #projects li.sel { background: #24425a; }
+  #projects .dir { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+  pre.box { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; max-height: 340px; overflow: auto; }
+  pre.log { max-height: 300px; }
+  .banner { font-size: 12px; padding: 4px 8px; border-radius: 4px; margin: 6px 0; background: var(--panel-2); color: var(--dim); }
+  .banner.warn { color: var(--warn); }
+  .banner.lock { color: var(--warn); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  td, th { text-align: left; padding: 3px 6px; vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; border-bottom: 1px solid var(--line); }
+  tr.sel td { background: #24425a; }
+  .state { padding: 1px 7px; border-radius: 10px; font-size: 11.5px; white-space: nowrap; }
+  .state.starting, .state.running { color: var(--accent); border: 1px solid var(--accent); }
+  .state.completed { color: var(--ok); border: 1px solid var(--ok); }
+  .state.failed, .state.killed { color: var(--bad); border: 1px solid var(--bad); }
+  .state.blocked { color: var(--warn); border: 1px solid var(--warn); }
+  .state.paused { color: #b39ae0; border: 1px solid #b39ae0; }
+  .state.restored { color: var(--dim); border: 1px solid var(--dim); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 6px; }
+  .dim { color: var(--dim); }
+  .mark { display: inline-block; width: 1.2em; }
+  .closed-note { color: var(--warn); font-size: 12px; }
+  .question { border: 1px solid var(--line); border-radius: 4px; padding: 8px; margin: 6px 0; background: var(--panel-2); }
+  .question textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text); font: inherit; padding: 5px 8px; border-radius: 4px; min-height: 56px; }
+  .event { display: flex; gap: 8px; }
+  .event .id { color: var(--dim); min-width: 3.5em; text-align: right; }
+  #streams { display: grid; gap: 8px; }
+  #notice { margin: 0; }
+  .hidden { display: none !important; }
+  details { margin: 6px 0; }
+  details summary { cursor: pointer; color: var(--dim); }
+  input[type="text"], input[type="password"], input[type="number"], select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit; padding: 4px 6px; border-radius: 4px; }
+  .field { display: grid; grid-template-columns: 170px 1fr; gap: 6px 8px; align-items: center; }
+  .field .hint { grid-column: 2; color: var(--dim); font-size: 11.5px; }
+  .switchrow { display: grid; grid-template-columns: 1fr 1fr 28px; gap: 6px; }
+  .err { color: var(--bad); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>opencode-auto · server</h1>
+  <span id="conn" class="down">not connected</span>
+  <span id="scopes" class="scopes"></span>
+  <form id="auth">
+    <input id="token" type="password" placeholder="bearer token" autocomplete="off" spellcheck="false">
+    <button class="primary" type="submit">connect</button>
+  </form>
+</header>
+<main>
+  <aside id="projects-pane">
+    <h2>Projects</h2>
+    <p id="projects-note" class="dim">connect to list the whitelist</p>
+    <ul id="projects"></ul>
+  </aside>
+
+  <section id="project-pane">
+    <h2>Project</h2>
+    <p id="project-empty" class="dim">select a project</p>
+    <div id="project-body" class="hidden">
+      <div class="row" id="project-head"></div>
+      <div id="lock-line"></div>
+      <h2>Status tree <span class="dim">(the core's renderer, verbatim)</span></h2>
+      <pre id="status-tree" class="box"></pre>
+      <h2>Commit verdicts</h2>
+      <div id="verdict-banner" class="banner"></div>
+      <table id="verdicts"></table>
+      <h2>Git <span class="dim">(per worktree)</span></h2>
+      <div id="git"></div>
+      <div id="start-wrap" class="hidden">
+        <h2>Start a run</h2>
+        <div class="field" id="start-options"></div>
+        <div class="row"><span class="dim">switches (OPENCODE_AUTO_*):</span></div>
+        <div id="switch-rows"></div>
+        <div class="row"><button id="add-switch" type="button">+ switch</button></div>
+        <div class="row"><button id="start-run" class="primary" type="button">start run</button>
+          <span class="dim">options are the run's own; config keys are frozen by init — the form offers none</span></div>
+        <div id="start-error" class="err"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="runs-pane">
+    <h2>Runs</h2>
+    <p id="runs-note" class="dim">no runs yet</p>
+    <table id="runs"></table>
+    <div id="run-detail" class="hidden">
+      <h2>Run</h2>
+      <div class="row" id="run-head"></div>
+      <div class="row" id="run-controls"></div>
+      <div id="streams">
+        <h2>Pending questions</h2>
+        <div id="questions-note" class="dim"></div>
+        <div id="questions"></div>
+        <h2>Driver events <span class="dim">(typed, with ids)</span></h2>
+        <pre id="status-events" class="box" style="max-height:220px"></pre>
+        <h2>Run log <span class="dim">(prose, verbatim — never parsed)</span></h2>
+        <pre id="log" class="box log"></pre>
+        <details><summary>engine journal (raw events)</summary><pre id="engine-events" class="box" style="max-height:200px"></pre></details>
+        <h2>Output tail</h2>
+        <pre id="tail" class="box"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

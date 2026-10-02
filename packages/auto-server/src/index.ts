@@ -40,17 +40,25 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d/P1e/P3). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d/P1e/P3/P4a). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
-  boundary). The run-control REST surface: GET /health, GET /runs, POST /runs,
-  GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
-  force-terminate, mapped to killed/130); the lifecycle operations under
-  /projects/<project>/<op>: init, amend, fix, reset (the config scope),
-  close, tasks (task-add), plan (P3c-unlocked: the no-agent routes served
-  in-process, the agent-planning routes spawned as runs under
-  stopBefore: execute with their questions over the interactive transport —
-  the request takes "input" and "append"; plan --force-close composes as
-  the close operation followed by the plan operation) and models
+  boundary). The Web client is served at the root: open the daemon's URL in
+  a browser, paste a token, and the read surface (the project whitelist, the
+  run list in the exit-code vocabulary, the status tree with its commit
+  verdicts, the SSE log/event streams, the pending questions) and the run
+  controls (start with per-run options, the graceful pause, kill) render
+  scope-aware from the API — controls hidden without the control scope, the
+  question UI without the answer scope; the page itself carries no data and
+  needs no token. The run-control REST surface: GET /health, GET /runs,
+  POST /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
+  force-terminate, mapped to killed/130); GET /projects (the whitelist) and
+  GET /session (the token's scopes) are the client's two read endpoints; the
+  lifecycle operations under /projects/<project>/<op>: init, amend, fix,
+  reset (the config scope), close, tasks (task-add), plan (P3c-unlocked: the
+  no-agent routes served in-process, the agent-planning routes spawned as
+  runs under stopBefore: execute with their questions over the interactive
+  transport — the request takes "input" and "append"; plan --force-close
+  composes as the close operation followed by the plan operation) and models
   (read-only, runs beside a live run); the observability surface (P1e, the
   read scope): GET /projects/<project>/status (the polled read model over
   .auto/*.json, git dirty/clean per worktree, the core's rendered status tree
@@ -72,7 +80,10 @@ serve — the daemon (P1c/P1d/P1e/P3). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT}
   routed through the core's confirmation gate) and "cleanTree" (the worktree
   check's opt-out) — never one bundled force. Stopping the daemon leaves live
   workers running to completion; the run lock arbitrates any successor, and
-  a restart restores every run that still holds an open question.
+  a restart restores every run that still holds an open question. The
+  client's own sources live under web/ (plain TypeScript, no framework, no
+  dependency); bun run build:web bundles them into the assets the daemon
+  serves.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
@@ -303,6 +314,7 @@ if (command === "serve") {
   // cross hosts; a loopback default keeps the token-guarded control plane
   // off the network until an operator explicitly widens it with --host.
   console.log(`opencode-auto-server ${VERSION} serving on ${daemon.url} (data dir: ${dataDir})`)
+  console.log(`web client: open ${daemon.url}/ in a browser — paste a token, and the read surface and run controls render scope-aware from the API`)
   console.log(`whitelist: ${projects.length} project${projects.length === 1 ? "" : "s"} registered${projects.length ? ` (${projects.map((project) => project.name).join(", ")})` : ""} — runs target registered projects only`)
   console.log(`auth: ${tokens.length} token${tokens.length === 1 ? "" : "s"} (scopes: ${SCOPES.join(", ")}); requests carry 'Authorization: Bearer <token>'`)
   console.log(`v1 boundary: single machine, multiple directories; the daemon binds ${daemon.hostname} — a lock held on another host cannot be probed from here (recovery: delete that .auto/run.lock by hand)`)

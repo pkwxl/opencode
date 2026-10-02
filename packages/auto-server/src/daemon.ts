@@ -1,4 +1,4 @@
-// The daemon of the headless service shell (P1c/P1d/P1e/P3, auto-core
+// The daemon of the headless service shell (P1c/P1d/P1e/P3/P4a, auto-core
 // plans/0067): self-contained on Bun.serve (HTTP, SSE and the WebSocket
 // interactive transport — zero added runtime dependencies, the isolation
 // line of T-086). Its duties:
@@ -44,6 +44,13 @@
 //     operation's agent-planning routes spawning planning runs under
 //     stopBefore: "execute" (humanQuestions armed) through the same
 //     spawn the run surface uses.
+//   - the Web client's static shell (P4a): the page and its script served
+//     from the package's embedded assets (src/web/client.ts, built from
+//     web/ by script/build-web.ts — a string constant, so the source layout,
+//     the test harness and the compiled binary serve the same bytes), plus
+//     the two read endpoints the client's surface needs: GET /projects (the
+//     whitelist) and GET /session (the token's scopes — the typed source of
+//     the client's scope-aware UI; refusal prose is never parsed).
 //
 // v1 boundary (assessment §8 Q4): single machine, multiple directories. The
 // daemon binds 127.0.0.1 by default, the run lock's stale detection is
@@ -66,6 +73,7 @@ import { createHub, freshRunSecret, interactiveHandlers, settleOpenQuestions, ty
 import { appendJournal, compactJournal, foldJournal, journalRunFloor, readJournal } from "./question-journal"
 import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
+import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransportPayload } from "./request"
 import { PROTOCOL_VERSION } from "./ws-protocol"
@@ -625,6 +633,40 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // not tell a wrong token apart from a daemon that is down.
       return json(200, { ok: true, service: "opencode-auto-server" })
     }
+    // The Web client (P4a): the static shell, served from the package's own
+    // embedded assets (script/build-web.ts bundles web/ into src/web/client.ts
+    // — string constants, so source layout, test harness and compiled binary
+    // all serve the same bytes). The shell is unauthenticated by the same
+    // reasoning as /health above: it carries NO data (no project names, no
+    // run state — the page is the login form itself, and it cannot prompt for
+    // a token before it has loaded). Every route the shell calls after that
+    // requires the token; the client's scope-aware UI reads GET /session.
+    if (segments.length === 0 && method === "GET") {
+      return new Response(CLIENT_INDEX_HTML, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } })
+    }
+    if (segments[0] === "app.js" && segments.length === 1 && method === "GET") {
+      return new Response(CLIENT_APP_JS, { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } })
+    }
+    // The client's scope source (P4a): any known token, no specific scope —
+    // the typed answer to "what can this token do". The client's UI gating
+    // (controls without `control`, the question UI without `answer`) reads
+    // this and nothing else: deriving scopes by parsing 403 refusal prose
+    // would be scraping, the exact discipline the client exists to keep.
+    if (segments[0] === "session" && segments.length === 1 && method === "GET") {
+      const auth = scopesOf(request)
+      if (auth.scopes === undefined) return json(auth.status, auth.body)
+      return json(200, { service: "opencode-auto-server", scopes: auth.scopes })
+    }
+    // The whitelist as a read surface (P4a): the project list the client
+    // renders — the same registry `opencode-auto-server projects` prints and
+    // every project-scoped route resolves against (P1e served per-project
+    // reads only; the client's project list needs the enumeration, under the
+    // read scope like the rest of the observability surface).
+    if (segments[0] === "projects" && segments.length === 1 && method === "GET") {
+      const denied = needScope(request, "listing projects", "read")
+      if (denied) return denied
+      return json(200, { projects: store.listProjects() })
+    }
     if (segments[0] === "runs") {
       if (segments.length === 1 && method === "GET") {
         const denied = needScope(request, "listing runs", "read")
@@ -739,7 +781,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge))`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); the P4a client surface is GET / (the Web client), GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -834,7 +876,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge))` })
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); P4a serves GET / — the Web client — with GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))` })
   }
 
   const server = Bun.serve<SocketData>({

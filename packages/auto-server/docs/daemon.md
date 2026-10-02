@@ -1,4 +1,4 @@
-# The opencode-auto-server daemon (P1c/P1d/P1e/P3)
+# The opencode-auto-server daemon (P1c/P1d/P1e/P3/P4a)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
@@ -9,8 +9,10 @@ read model and the SSE log/journal tails), the WebSocket interactive
 transport (P3b — questions and run control bridged between a run's worker and
 its clients) and the persistent pending-question queue with its journal (P3c —
 reconnect-safe, restart-safe question delivery, and the unlocked plan
-sessions) on `Bun.serve` — self-contained, zero added runtime dependencies
-(the isolation line of T-086; the core never knows HTTP).
+sessions), and serves the Web client (P4a — the browser shell over all of the
+above: the read surface and run control) on `Bun.serve` — self-contained,
+zero added runtime dependencies (the isolation line of T-086; the core never
+knows HTTP).
 
 ## v1 boundary: single machine, multiple directories
 
@@ -50,17 +52,23 @@ opencode-auto-server projects              # list
 
 ## Token auth and scopes
 
-Every route except `GET /health` requires `Authorization: Bearer <token>`;
+Every route except `GET /health` and the Web client's own two static assets
+(`GET /`, `GET /app.js` — the login shell carries no data; see the Web client
+section below) requires `Authorization: Bearer <token>`;
 unauthenticated or unknown tokens get **401**, a known token without the route's
 scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
-| `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream | active |
+| `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream; the project list (`GET /projects`) | active |
 | `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` — the persistent pending-question queue (P3c) | active |
 | `probe`  | `models --probe` — burns tokens by starting agents                | opt-in, **disabled by default**: no route requires it; its confirmation parameter and per-daemon rate limit land with the Web write surface |
+
+`GET /session` (any known token, no specific scope) answers the presented
+token's own scopes — the typed source the Web client's scope-aware UI reads
+(deriving scopes by parsing refusal prose would be scraping).
 
 Tokens are managed beside the whitelist (`tokens.json` in the data directory,
 mode 0600): the store keeps only each token's SHA-256 digest, the plaintext is
@@ -546,6 +554,88 @@ pending in the daemon's view (answers get the honest "bridge not connected"
 refusal; the P2b stream carries the true lifecycle). Run **history** still
 does not survive a restart (P1's own decision, unchanged) — only the pending
 set does.
+
+## The Web client (P4a)
+
+A browser shell over the daemon's own surfaces — a thin layer, by the
+direction draft's §三.4: it consumes the REST/SSE/WS endpoints P1–P3 exposed
+and adds no state of its own. The sources live under `web/` (plain
+TypeScript, no framework, no dependency — DOM, fetch and WebSocket are the
+whole platform); `bun run build:web` (script/build-web.ts) bundles
+`web/main.ts` and embeds `web/index.html` into `src/web/client.ts`, the two
+string constants the daemon serves — so the source layout, the test harness
+and the compiled binary all serve the same bytes (a string constant compiles
+into the binary; a sibling file would not).
+
+| route          | auth                          | meaning |
+| -------------- | ----------------------------- | ------- |
+| `GET /`        | — (the shell carries no data) | the page |
+| `GET /app.js`  | — (same)                      | the bundled client |
+| `GET /session` | any known token               | the token's scopes — the scope-aware UI's typed source |
+| `GET /projects`| `read`                        | the whitelist (the project list) |
+
+**What it renders, and from where:**
+
+- the **project list** — the whitelist itself (`GET /projects`), and per
+  project the **run list** (`GET /runs`) in the exit-code vocabulary:
+  completed / failed / blocked-needs-human / paused-resumable / killed
+  (the mapping P1c defined, exit 3 included);
+- the **status tree** — the read model's `status` lines, the core's own
+  renderer verbatim in a pre (never re-derived, never parsed back), with
+  closed units marked the way the core marks them (⊘ — closed is done for
+  scheduling, not delivered; the verdict table spells both facts);
+- **commit-is-completion in the UI** — every "done" the page shows renders
+  from the read model's structured `verdicts` (a unit is done exactly when
+  its done.md exists inside the driver's closing commit), never from agent
+  self-report, never scraped from log prose — the log is rendered verbatim
+  and nothing parses it (draft §五, the client's core honesty rule). A dirty
+  worktree unsettles the verdict banner — git is the record;
+- the **SSE streams** — `log` (prose, verbatim), `events` (the engine
+  journal's typed lines) and `status-events` (the P2b typed driver events
+  with cursor ids; a reconnect resumes after the last received id, a
+  `dropped` frame re-opens from the cursor). The client reads SSE over
+  `fetch` because the token rides the `Authorization` header — a browser
+  EventSource cannot set one, and widening the SSE routes to query-string
+  tokens would enlarge the credential's footprint for no gain;
+- the **pending questions** — the P3c queue over the interactive transport
+  (the WS `question`/`settled` frames, joined by id, replayed on
+  reconnect), with the answer input when the token carries `answer`;
+- **run control** — start (`POST /runs`), pause (the graceful `/exit`
+  control frame → exit 3, the paused-resumable state) and kill
+  (`DELETE /runs/<id>`, the 130 path). Resume is the vocabulary's own: a
+  plain re-run of the same project with the paused run's request.
+
+**The frozen-flag boundary is UI-enforced**: the start form offers the
+per-run `RunAllOpts` fields (verbose, waitAnswer, waitBetween, permission,
+newSession, dryrun, maxSessions, server) and the `OPENCODE_AUTO_*` switch
+layer only — no constitutional config key has a field to ride in, so runtime
+config mutation cannot be spelled in the UI (the daemon's `parseOptions`
+refusal is the second gate). Mid-run control (pause, failback) is control,
+never config mutation, and stays within the `control` scope.
+
+**Scope-awareness**: the client asks `GET /session` once per token and gates
+its own surface — controls hidden without `control`, the question UI without
+`answer`, the config UI (arriving with P4b) without `config`. The two static
+assets themselves are unauthenticated by the `/health` reasoning: the shell
+is the login form — it carries no project names, no run state, and cannot
+prompt for a token before it has loaded.
+
+<!-- AUTO-DECISION: the page shell is served unauthenticated (GET / and
+     /app.js): a browser navigation cannot attach a Bearer header, and the
+     shell contains no data — everything it renders arrives over
+     token-guarded calls. -->
+<!-- AUTO-DECISION (two small read endpoints arrived with the client):
+     GET /projects (the whitelist, read scope) because the client's project
+     list needs an enumeration P1e never served (only per-project routes
+     existed), and GET /session (any known token) because scope-aware UI
+     gating needs a typed source — parsing 403 refusal prose for scopes
+     would violate the no-scraping discipline this client exists to keep. -->
+
+<!-- AUTO-DECISION: this document is extended in place again by T-096 (P4a) —
+     the header and the P1c/P1e sections already promised the client surface
+     ("the Web write surface" named by the probe row; the draft's §三.4), and
+     the extension is the designed continuation of the package's living
+     documentation. -->
 
 ## Supervision and the daemon's lifetime
 

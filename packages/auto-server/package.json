@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun ./script/build.ts",
+    "build:web": "bun ./script/build-web.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
   },
