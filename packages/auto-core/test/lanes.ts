@@ -43,6 +43,10 @@ export const REPO_LANE: readonly string[] = [
   "test/interactive-seam.test.ts",
   "test/knowledge.test.ts",
   "test/lock.test.ts",
+  // The isolation loop's suite (0069 §3.3's gap): drives runIsolationLoop
+  // over real git repositories — worktrees, landing merges — so the repo
+  // lane by the manifest's runtime classification.
+  "test/loop-isolation.test.ts",
   "test/loop-preflight.test.ts",
   "test/models-describe.test.ts",
   "test/plan-input.test.ts",
