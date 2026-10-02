@@ -35,6 +35,11 @@ export const REPO_LANE: readonly string[] = [
   "test/git.test.ts",
   "test/gitignore.test.ts",
   "test/incident-regression.test.ts",
+  // AUTO-DECISION (S2, plans/0068): lanes-scheduler.test.ts moved here from
+  // the unit lane — its stage-S2 half drives the dispatch/landing
+  // choreography over real git repositories (worktrees, merges); the
+  // manifest classifies a file by what it actually does at runtime.
+  "test/lanes-scheduler.test.ts",
   "test/interactive-seam.test.ts",
   "test/knowledge.test.ts",
   "test/lock.test.ts",
@@ -86,7 +91,6 @@ export const UNIT_LANE: readonly string[] = [
   "test/interactive.test.ts",
   "test/keyring.test.ts",
   "test/ladder.test.ts",
-  "test/lanes-scheduler.test.ts",
   "test/lanes.test.ts",
   "test/log.test.ts",
   "test/loop-conclusion.test.ts",

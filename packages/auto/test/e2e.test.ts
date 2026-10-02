@@ -15,7 +15,9 @@ import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
 import { askClassifier, classifierFor } from "@opencode-ai/auto-core/classify"
-import type { AgentClient, AgentEvent } from "@opencode-ai/auto-core/agent/types"
+import type { AgentClient, AgentEvent, AgentHost } from "@opencode-ai/auto-core/agent/types"
+import { setShellProfile } from "@opencode-ai/auto-core/shell"
+import { setSwitchModelRegistry } from "@opencode-ai/auto-core/switches"
 import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -3602,6 +3604,247 @@ describe("CLI: the worktree cleanliness gate", () => {
       const force = await runCli(["run", dir, "-f"])
       expect(force.code).toBe(1)
       expect(force.err).toContain("is an init/reset/fix option")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// CLI: lane isolation end to end (auto-core plans/0068 §7 S2,
+// OPENCODE_AUTO_LANE_ISOLATION): the whole lane machinery running serially —
+// one lane at a time, per-task worktrees, spawned worker processes through
+// the shell's hidden `_lane` entry, and the landing protocol — over the fake
+// `claude` on PATH. What these cases pin: a task round at isolation-on
+// produces the same unit outcomes as today's serial path (D10's
+// byte-identical floor, at the outcome level); the launcher injection point
+// drives a spawned bootstrap that needs no shell (§6.4); and the kill
+// property — a lane worker killed mid-lane leaves the main tree clean, and
+// the re-dispatched lane resumes in the same worktree from its own progress
+// record (D14's crash-recovery-as-lane-local-resume). `--max-sessions` above
+// 1 still refuses: the concurrency scheduler is S3's.
+describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
+  const TASK = "T-001"
+  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
+
+  // A committed project with one pending task under the default config; the
+  // fake claude answers run's lead (a small context figure rejects the
+  // split, a fork of the lead finishes), the wrap-up and nothing else. An
+  // `extra` goes into the fake agent's environment (the isolation switch).
+  const setup = async (prefix: string, extra: Record<string, string> = {}) => {
+    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const agent = await fakeClaude(extra)
+    const git = gitOf(dir)
+    await git("init")
+    expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["plan", dir])).code).toBe(0)
+    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+    await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
+    await git("add", "-A")
+    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+    return { dir, agent, git }
+  }
+
+  // The unit-level outcomes a run of this fixture produces (D10: the same
+  // outcomes, not the same logs).
+  const outcomes = async (dir: string, git: ReturnType<typeof gitOf>) => ({
+    alpha: await Bun.file(join(dir, "src", "alpha.ts")).text().catch(() => "missing"),
+    beta: await Bun.file(join(dir, "src", "beta.ts")).text().catch(() => "missing"),
+    report: await Bun.file(join(dir, "docs", TASK, "report.md")).text().catch(() => "missing"),
+    done: await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists(),
+    pendingGone: !(await Bun.file(join(dir, taskStatePaths(TASK).pending)).exists()),
+    index: await Bun.file(join(dir, P01.dir, "tasks.md")).text(),
+    clean: (await git("status", "--porcelain")).trim() === "",
+  })
+
+  test("a task round at isolation-on produces the same unit outcomes as today's serial path, landing through the merge protocol", async () => {
+    const serial = await setup("auto-cli-lane-serial-")
+    const isolated = await setup("auto-cli-lane-iso-", { OPENCODE_AUTO_LANE_ISOLATION: "on" })
+    try {
+      const plain = await serial.agent.run(["run", serial.dir])
+      expect(plain.code, `${plain.out}\n${plain.err}`).toBe(0)
+      const lanes = await isolated.agent.run(["run", isolated.dir])
+      expect(lanes.code, `${lanes.out}\n${lanes.err}`).toBe(0)
+      // Same unit outcomes on both paths.
+      expect(await outcomes(isolated.dir, isolated.git)).toEqual(await outcomes(serial.dir, serial.git))
+      // The isolated round ran through a lane and landed it.
+      expect(lanes.out).toContain(`${TASK} dispatching an isolation lane`)
+      expect(lanes.out).toContain(`${TASK} done (lane landed:`)
+      const log = await isolated.git("log", "--format=%B")
+      expect(log).toContain("Auto-Stage: landing")
+      // The park is torn down and the lane branch deleted after landing.
+      expect(await readdir(join(isolated.dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
+      expect((await isolated.git("branch", "--list", `auto-lane/${TASK}`)).trim()).toBe("")
+    } finally {
+      await serial.agent.done()
+      await isolated.agent.done()
+      await rm(serial.dir, { recursive: true, force: true })
+      await rm(isolated.dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  test("a spawned lane-worker fixture that needs no shell: the launcher injection point drives the unit end to end", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-boot-"))
+    const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
+    const git = gitOf(dir)
+    await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`)
+    await chmod(join(binDir, "claude"), 0o755)
+    // The in-process parent never dispatches a session itself (every unit is
+    // a lane), so its agent is a stub host; the spawned workers run the
+    // bootstrap fixture over the fake claude.
+    const stubHost = {
+      client: { capabilities: { resume: false, fork: "none", steer: false, abort: false, question: false, permission: false, history: false, usage: "none" } },
+      syncContext: async () => {},
+      restart: async () => false,
+      close: () => {},
+    } as unknown as AgentHost
+    try {
+      await git("init")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+
+      // The isolation switch is per-run environment: plant it, and reset the
+      // switch memo so this process parses the planted layer (restored in
+      // the finally; the deliverables' driver-variable pattern).
+      const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key)))
+      for (const key of Object.keys(ambient)) delete process.env[key]
+      process.env.OPENCODE_AUTO_LANE_ISOLATION = "on"
+      setSwitchModelRegistry(undefined)
+      setShellProfile({
+        laneLauncher: (worktree, unit) =>
+          Bun.spawn([process.execPath, join(import.meta.dir, "fixtures", "lane-worker.ts"), worktree, "--unit", unit], {
+            env: {
+              ...ambient,
+              PATH: `${binDir}:${process.env.PATH ?? ""}`,
+              OPENCODE_AUTO_AGENT: "claude",
+              OPENCODE_AUTO_LANE_ISOLATION: "on",
+              OPENCODE_AUTO_MODELS: join(EMPTY_CONFIG_HOME, "no-operator-layer.json"),
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          }),
+      })
+      let code: number | undefined
+      try {
+        code = await runAll(dir, { managed: stubHost })
+      } finally {
+        setShellProfile({ laneLauncher: undefined })
+        delete process.env.OPENCODE_AUTO_LANE_ISOLATION
+        for (const [key, value] of Object.entries(ambient)) process.env[key] = value
+        setSwitchModelRegistry(undefined)
+      }
+      expect(code).toBe(0)
+      // The unit completed through the bootstrap-driven lane and landed.
+      const done = await outcomes(dir, git)
+      expect(done.alpha).toBe('export const alpha = "lead"\n')
+      expect(done.done).toBe(true)
+      expect(done.index).toContain(`- [x] ${TASK} the widget`)
+      expect(done.clean).toBe(true)
+      expect(await readdir(join(dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
+      expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
+    } finally {
+      await rm(binDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  test("kill mid-lane: the main tree stays clean; the re-dispatched lane resumes from its own progress record", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-kill-"))
+    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-gate-"))
+    const gate = join(gateDir, "go")
+    const turns = join(gateDir, "turns.jsonl")
+    const agent = await fakeClaude({ FAKE_CLAUDE_GATE: gate, FAKE_CLAUDE_GATE_DIE: "1", FAKE_CLAUDE_LOG: turns, OPENCODE_AUTO_LANE_ISOLATION: "on" })
+    const git = gitOf(dir)
+    const units = async () => JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as { tasks: Record<string, { pid?: number; attempts?: number }> }
+    const worktree = join(dir, ".auto", "worktrees", TASK)
+    const parkThere = async () => stat(worktree).then(() => true, () => false)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+
+      // First run: the lane worker parks in its first session turn (the
+      // gate); kill it mid-lane once the registry names its pid.
+      const firstRun = agent.run(["run", dir])
+      // Wait until the worker is mid-lane: the registry names its pid and the
+      // worktree holds the lane's own progress record (the session in flight,
+      // parked at the fake's gate).
+      let pid: number | undefined
+      let progress: { task: string; active: boolean } | undefined
+      for (let i = 0; i < 1200 && (pid === undefined || progress?.active !== true); i++) {
+        await Bun.sleep(50)
+        pid = (await units()).tasks[TASK]?.pid
+        if (pid !== undefined) {
+          const raw = await Bun.file(join(worktree, ".auto", "progress.json")).text().catch(() => undefined)
+          if (raw !== undefined) progress = JSON.parse(raw)
+        }
+      }
+      expect(pid).toBeGreaterThan(0)
+      expect(progress?.task).toBe(TASK)
+      expect(progress?.active).toBe(true)
+      // The fake records the turn before parking at the gate: only a
+      // recorded turn is safely parked (the release then makes it die
+      // without writing, so the killed lane's worktree stays as it was).
+      let parked = false
+      for (let i = 0; i < 600 && !parked; i++) {
+        await Bun.sleep(50)
+        parked = (await Bun.file(turns).text().catch(() => "")).includes("Split rule (adaptive decomposition)")
+      }
+      expect(parked).toBe(true)
+      process.kill(pid!, "SIGKILL")
+      await Bun.write(gate, "released\n")
+      const first = await firstRun
+      expect(first.code, `${first.out}\n${first.err}`).toBe(2)
+      // The kill property: the main tree is clean, the scene kept in the park.
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      expect(await parkThere()).toBe(true)
+
+      // Re-run: the dispatch reuses the recorded worktree; the worker
+      // resumes from its own progress record (the line lands in the
+      // worktree's own run log before the landing tears it down).
+      const secondRun = agent.run(["run", dir])
+      let resumed = false
+      for (let i = 0; i < 600 && !resumed; i++) {
+        await Bun.sleep(50)
+        const logs = join(worktree, ".auto", "logs")
+        for (const file of await readdir(logs).catch(() => [] as string[])) {
+          if ((await Bun.file(join(logs, file)).text().catch(() => "")).includes("resume after interruption")) resumed = true
+        }
+      }
+      const second = await secondRun
+      expect(second.code, `${second.out}\n${second.err}`).toBe(0)
+      expect(resumed).toBe(true)
+      expect(second.out).toContain("re-dispatching its lane in the existing worktree")
+      // Landed: the unit done, the index ticked, the tree clean, the park
+      // torn down, the branch deleted, both dispatches booked.
+      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      expect(await parkThere()).toBe(false)
+      expect((await git("branch", "--list", `auto-lane/${TASK}`)).trim()).toBe("")
+      expect((await units()).tasks[TASK]?.attempts).toBe(2)
+      expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
+    } finally {
+      await Bun.write(gate, "released\n").catch(() => {})
+      await agent.done()
+      await rm(gateDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 180_000)
+
+  test("--max-sessions still refuses above 1 (the concurrency scheduler is not live)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-max-"))
+    try {
+      const run = await runCli(["run", dir, "--max-sessions", "2"], { OPENCODE_AUTO_LANE_ISOLATION: "on" })
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("concurrent execution is not supported yet")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

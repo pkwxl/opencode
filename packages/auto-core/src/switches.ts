@@ -31,6 +31,11 @@ export const SWITCH_ENV = {
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
   hibernate: "OPENCODE_AUTO_HIBERNATE",
   agent: "OPENCODE_AUTO_AGENT",
+  // Lane isolation (plans/0068 D10/S2): force lane-per-task execution at one
+  // session — the full isolation machinery (per-unit worktree, child worker,
+  // the landing protocol) with zero concurrency. The rollout/testing answer to
+  // 0036 D13's "plan for parallelism, execute serially" trap.
+  laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -292,6 +297,13 @@ export type Switches = {
   // the project config's `agent` key decides (absent = opencode). A shell
   // whose profile names an agent (setShellProfile `agent`) overrides both.
   agent: AgentChoice | undefined
+  // Lane isolation (OPENCODE_AUTO_LANE_ISOLATION, plans/0068 D10/S2, default
+  // off = zero change from the status quo): on routes the task loop through
+  // one-lane-at-a-time — every task of the routed phase runs in its own
+  // worktree through its own worker process and lands through the merge
+  // protocol, still strictly serially. The isolation rollout stage of the
+  // lanes design: full machinery, zero concurrency, per-run only.
+  laneIsolation: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -318,6 +330,7 @@ const SWITCH_DEFAULTS: Switches = {
   strictResume: false,
   hibernate: undefined,
   agent: undefined,
+  laneIsolation: false,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -545,6 +558,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
     agent,
+    laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
 }
 
@@ -582,6 +596,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.strictResume === SWITCH_DEFAULTS.strictResume ? undefined : `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
+    switches.laneIsolation === SWITCH_DEFAULTS.laneIsolation ? undefined : `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -607,6 +622,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
+    `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
   ].join(", ")
 }
 

@@ -258,11 +258,32 @@ const usage = (used: number) => ({ input_tokens: used, output_tokens: 10, cache_
 
 let turn = 0
 let booted = false
+
+// The lane kill e2e's gate (auto-core plans/0068 S2): with FAKE_CLAUDE_GATE
+// naming a file, the FIRST turn of this process waits before acting until
+// the file exists — a test parks the lane worker mid-session at a
+// deterministic point, then releases it. With FAKE_CLAUDE_GATE_DIE on, the
+// release makes the process exit without writing its artifacts or answering
+// (the killed worker's worktree must stay exactly as the kill left it). A
+// gate file that already exists (the re-dispatched run) passes straight
+// through.
+const gate = async (): Promise<void> => {
+  const file = process.env.FAKE_CLAUDE_GATE
+  if (!file || turn !== 1) return
+  if (await Bun.file(file).exists()) return
+  while (!(await Bun.file(file).exists())) await Bun.sleep(50)
+  if (process.env.FAKE_CLAUDE_GATE_DIE) process.exit(0)
+}
+
 for (;;) {
   const text = await nextText()
   if (text === undefined) break
   turn++
+  // The record precedes the gate on purpose: a test polls FAKE_CLAUDE_LOG for
+  // the turn's arrival, and only a turn already recorded is safely parked
+  // (recording after the gate would race the release).
   record(text)
+  await gate()
   const used = act(text)
   // The turn's stream: init once per process, the replay acknowledgment,
   // one assistant message with usage, the closing result (idle).

@@ -570,6 +570,100 @@ export async function commitPending(
   return commitTree(dir, task, info)
 }
 
+// —— Lane worktrees (plans/0068 §6.5, D1/D16) ——
+
+// The result of a lane-worktree operation: ok, or the error's first line (the
+// caller logs it and decides between blocking and keeping the scene).
+export type WorktreeResult = { ok: boolean; error?: string }
+
+// Create a lane worktree at path (the park, `.auto/worktrees/<task-id>`,
+// gitignored with the rest of `.auto/`) on the new branch `auto-lane/<task-id>`
+// at the repository's current HEAD (plans/0068 D1: the lane's commit boundary
+// — beginUnit's clean gate, the SHA baseline, commitTree and unitViolations —
+// then holds per worktree by construction). path and branch are the caller's
+// protocol strings (src/lanes.ts builds them); nothing here knows task ids.
+export async function addWorktree(dir: string, path: string, branch: string): Promise<WorktreeResult> {
+  const added = await git(dir, ["worktree", "add", "-b", branch, path])
+  if (added.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+}
+
+// Remove a lane worktree (D7's landing step ⑤): a plain `git worktree remove`
+// first — the worktree is clean by then, the landing verification passed — and
+// one `--force` retry for leftover ignored state before giving up (the caller
+// keeps the scene and names the path; never a silent loss).
+export async function removeWorktree(dir: string, path: string): Promise<WorktreeResult> {
+  const removed = await git(dir, ["worktree", "remove", path])
+  if (removed.code === 0) return { ok: true }
+  const forced = await git(dir, ["worktree", "remove", "--force", path])
+  if (forced.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(forced.err || forced.out) || `git worktree remove exit code ${forced.code}` }
+}
+
+// `git worktree prune`: drop the administrative entries of worktrees whose
+// directories are gone (the park-straggler cleanup primitive; which straggler
+// may be pruned is D14's orphan scan's to decide, not this one's).
+export async function pruneWorktrees(dir: string): Promise<WorktreeResult> {
+  const pruned = await git(dir, ["worktree", "prune"])
+  if (pruned.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(pruned.err || pruned.out) || `git worktree prune exit code ${pruned.code}` }
+}
+
+// The short SHA of the merge base of two revisions (D7's landing step ① needs
+// the lane branch's creation point — where the lane worktree forked the main
+// tree's history — as the unitViolations baseline; the main tree's HEAD may
+// have moved past it through sibling landings). undefined when either side
+// cannot be resolved. The full SHA is cut to the 7-character form the
+// baselines elsewhere carry (rev-parse --short's floor).
+export async function mergeBaseSha(dir: string, a: string, b: string): Promise<string | undefined> {
+  const base = await git(dir, ["merge-base", a, b]).catch(() => undefined)
+  const sha = base?.code === 0 ? base.out.trim() : ""
+  return sha ? sha.slice(0, 7) : undefined
+}
+
+// The short SHAs of the commits in `<sha>..HEAD` (the lane report's `commits`
+// list, D8: what the lane worker's run posted since it started — an empty
+// baseline sha lists the whole history). Read-only; never a seam member.
+export async function commitsSince(dir: string, sha: string): Promise<string[]> {
+  const listed = await git(dir, ["log", "--format=%h", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])]).catch(() => undefined)
+  if (!listed || listed.code !== 0) return []
+  return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
+}
+
+// Delete a lane branch (D7's landing step ⑤; called only after the branch
+// merged, so -d would do — -D keeps a decided teardown from failing on a
+// hand-moved ref and silently keeping park state alive).
+export async function deleteBranch(dir: string, branch: string): Promise<WorktreeResult> {
+  const deleted = await git(dir, ["branch", "-D", branch])
+  if (deleted.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(deleted.err || deleted.out) || `git branch -D exit code ${deleted.code}` }
+}
+
+// The landing merge (D7's step ②): `git merge --no-ff <branch>` in the main
+// tree, the merge commit carrying `Auto-Task: <task>` / `Auto-Stage: landing`
+// so the parent's own close-outs see a trailer-bearing range. Conflict
+// detection leaves the main tree clean again (`git merge --abort`): the caller
+// keeps the lane's worktree and branch for the conflict protocol.
+export type LandResult = { type: "ok" } | { type: "conflict"; detail: string } | { type: "failed"; error: string }
+
+export async function landBranch(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult> {
+  // The identity fallback applies to the merge commit like any other.
+  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} landing ${task.title}`), task, "landing"), branch])
+  if (merged.code === 0) return { type: "ok" }
+  // A conflicted merge leaves MERGE_HEAD and conflicted entries; aborting
+  // restores the pre-merge state (a merge refused before starting — dirty
+  // tree, unknown revision — has no MERGE_HEAD and needs no abort).
+  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
+  if (conflict) {
+    const aborted = await git(dir, ["merge", "--abort"])
+    if (aborted.code === 0 && !(await changedFiles(dir)).length) {
+      return { type: "conflict", detail: firstLine(merged.err || merged.out) }
+    }
+    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the main tree must be handled manually` }
+  }
+  return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
+}
+
 // —— The git service (the run services' commit-side seam) ——
 
 // The run's git service: the commit-side operations the kernel and the
@@ -625,6 +719,13 @@ export type GitOps = {
   ): Promise<{ type: "ok" } | { type: "failed"; question: string }>
   unitBaseline(dir: string): Promise<UnitBaseline>
   changedFiles(dir: string): Promise<string[]>
+  // Lane worktrees and the landing merge (plans/0068 §6.5, D7): the dispatch
+  // and landing choreography (src/lanes.ts) reaches these through the seam so
+  // a test's holder can switch the whole lane machinery off with the double.
+  addWorktree(dir: string, path: string, branch: string): Promise<WorktreeResult>
+  removeWorktree(dir: string, path: string): Promise<WorktreeResult>
+  pruneWorktrees(dir: string): Promise<WorktreeResult>
+  landBranch(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult>
 }
 
 // The repository containing the target directory plus every nested repository
@@ -635,18 +736,25 @@ export type GitOps = {
 // inside that subtree. Returned sorted by descending path depth, guaranteeing
 // inner-before-outer commits; the loop's verbose changed-file watch
 // (watchFiles) also reuses this discovery.
+// The lane park (plans/0068 D16/F6) is skipped: a linked worktree parked in
+// `.auto/worktrees/` holds a `.git` **file**, and the entry test below cannot
+// tell it from a nested repository — a lane worktree classified as one would
+// be separately committed by the unified commit and swept into the parent's
+// Auto-Nested lines. The park is gitignored with the rest of `.auto/`, so
+// skipping its subtree changes nothing else.
 export async function repoRoots(dir: string): Promise<string[]> {
   const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
     .then((out) => out.code === 0)
     .catch(() => false)
   const roots = new Set<string>(inRepo ? [dir] : [])
+  const park = join(dir, ".auto", "worktrees")
   const pending = [dir]
   while (pending.length) {
     const current = pending.pop()!
     const entries = await readdir(current, { withFileTypes: true }).catch(() => [])
     if (entries.some((entry) => entry.name === ".git")) roots.add(current)
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules") {
+      if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules" && join(current, entry.name) !== park) {
         pending.push(join(current, entry.name))
       }
     }

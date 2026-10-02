@@ -9,6 +9,29 @@
 import type { AgentCapabilities, AgentHostFactory } from "./agent/types"
 import { setAuditLog } from "./log"
 
+// The process a lane launcher returns (plans/0068 §6.4, D2): the pid the
+// dispatch registry records, the exit promise the lane loop awaits and the
+// piped output streams the loop drains (a full pipe would deadlock the
+// worker) and reads back for the failure matrix's relays. Structural on
+// purpose: Bun.spawn with `stdout: "pipe"` satisfies it, and a test double
+// satisfies it with an already-exited stub and no process at all — the
+// launcher is the seam the shell contract keeps shell-free.
+export type LaneWorker = {
+  pid?: number
+  exited: Promise<number>
+  stdout?: ReadableStream<Uint8Array> | null
+  stderr?: ReadableStream<Uint8Array> | null
+}
+
+// The default lane launcher: re-invoke this shell's CLI with the hidden
+// `_lane` subcommand (§6.4 — "re-invoke this shell's CLI with the hidden lane
+// subcommand"). process.argv[1] is the CLI entry this process started from,
+// so a shell's run spawning lanes reproduces its own invocation; a host
+// without one (a test, a 0067 daemon worker) overrides the profile field.
+export function defaultLaneLauncher(worktree: string, unit: string): LaneWorker {
+  return Bun.spawn([process.execPath, process.argv[1]!, "_lane", worktree, "--unit", unit], { stdout: "pipe", stderr: "pipe" })
+}
+
 export type ShellProfile = {
   // The run-time program name: for the message pattern "re-run X"
   // (general shell: "opencode-auto run").
@@ -36,6 +59,14 @@ export type ShellProfile = {
   // operator layer of the model registry, `<configDir>/models.json`
   // (src/models.ts). OPENCODE_AUTO_MODELS overrides the whole path.
   configDir: string
+  // The lane worker launcher (plans/0068 §6.4, D2): spawns the child process
+  // that runs one lane's unit-scoped runAll in its worktree. Absent = the
+  // default — re-invoke this shell's CLI (`_lane <dir> --unit <id>`,
+  // defaultLaneLauncher above); the shell contract's §E item makes that
+  // entry a shell obligation. A host that owns its workers differently (a
+  // 0067 daemon's "register a worker", a test's bootstrap script) injects
+  // its own here; the core never names a shell.
+  laneLauncher?: (worktree: string, unit: string) => LaneWorker
 }
 
 export type AgentProfile = {

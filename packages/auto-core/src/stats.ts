@@ -159,7 +159,18 @@ export type StatsDoc = {
   roundB: Bucket
   sessions: Record<string, SessionStat>
   history: { rounds: number; totals: Totals } // aggregate of rolled-out past rounds (single bounded bucket)
+  // Per-lane usage of the units this run landed through lanes (plans/0068
+  // D7 step ④, D13): keyed by the unit id, accumulated across a unit's
+  // re-dispatches. Additive and absent until the first landing, so a run
+  // without lanes keeps the exact persisted shape. The S4 roll-up decides
+  // how these figures join the conclusion's per-model lines.
+  lanes?: Record<string, LaneStat>
 }
+
+// One landed lane's booked figures: the report's usage (a single token
+// figure — the sum of the lane's own task bucket's usage fields) and its
+// session count.
+export type LaneStat = { tokens: number; wallMs: number; sessions: number }
 
 // Resume information for loadStats (returned when an old document exists,
 // printed by the startup banner; plans/STATS_PLAN.md §4.6). The snapshot is
@@ -382,10 +393,24 @@ function parseStatsDoc(raw: string): StatsDoc | undefined {
       roundB: parseBucket(p.roundB, ""),
       sessions: parseSessions(p.sessions),
       history: { rounds: num(history.rounds), totals: parseTotals(history.totals) },
+      lanes: parseLaneStats(p.lanes),
     }
   } catch {
     return undefined
   }
+}
+
+// Lane records, leniently (the parseSessions mirror): a bad entry reads as
+// missing fields, an absent or empty section stays absent.
+function parseLaneStats(raw: unknown): Record<string, LaneStat> | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const lanes: Record<string, LaneStat> = {}
+  for (const [unit, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "object" || !value) continue
+    const entry = value as Record<string, unknown>
+    lanes[unit] = { tokens: num(entry.tokens), wallMs: num(entry.wallMs), sessions: num(entry.sessions) }
+  }
+  return Object.keys(lanes).length ? lanes : undefined
 }
 
 // ===== fold / depreciation / round rollover =====
@@ -1010,6 +1035,27 @@ export async function statsModelEvent(
     else if (kind === "stuck") stat.stuckHints += 1
     else stat.reprompts += 1
   }
+  queueWrite(dir, handle)
+}
+
+// The lane report's usage booking (plans/0068 D7 landing step ④, D13): the
+// parent books each landed lane's figures into its run stats under the unit
+// id — the durable record the S4 roll-up reads. A re-dispatched unit's later
+// report accumulates into the same entry. Lazy-loaded like the other APIs;
+// not into the three buckets' usage/sessions (the lane's sessions are the
+// child process's own, booked there; folding them here would double-count
+// the moment S4 wires per-model lines).
+export async function statsLaneUsage(
+  dir: string | undefined,
+  unit: string,
+  usage: { tokens: number; wallMs: number; sessions: number },
+): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  const entry = ((handle.doc.lanes ??= {})[unit] ??= { tokens: 0, wallMs: 0, sessions: 0 })
+  entry.tokens += num(usage.tokens)
+  entry.wallMs += num(usage.wallMs)
+  entry.sessions += num(usage.sessions)
   queueWrite(dir, handle)
 }
 

@@ -142,6 +142,14 @@ export type RunAllOpts = {
   // mode implies the append from an input on a non-empty index, so the flag
   // only matters for the phased execute and handover routes.
   append?: boolean
+  // The unit-scoped lane entry (plans/0068 §6.3, D2): internal, never
+  // constitutional — set only by a lane launcher (the shell's `_lane`
+  // subcommand or a host's own worker entry), never by a person's CLI. With
+  // it set, runAll is a lane worker: the worktree's own run lock (the lock is
+  // per-directory, unchanged), a preflight scoped to the worktree (below),
+  // then loadPlan → the named unit → runTask unchanged, and the lane report
+  // written at every controlled exit.
+  lane?: { unit: string }
 }
 
 // the preflight section: produces the agentName, the run's services and the
@@ -384,11 +392,16 @@ export async function preflight(
   // redundant named marker blocks across the board). AGENTS.md is read-only
   // during run (protect.ts), sessions never maintain it (plans/0054 D2);
   // ensurePointer unprotects and re-protects around its own writes.
-  const ensured = await ensurePointer(directory, { testByDriver: opts.testByDriver })
-  if (ensured.block === "inserted") log("inserted: AGENTS.md opencode-auto block")
-  if (ensured.block === "replaced") log("refreshed: AGENTS.md opencode-auto block (differed from the current config rendering)")
-  if (ensured.legacyRemoved) log(`cleaned: ${ensured.legacyRemoved} legacy/redundant opencode-auto marker block(s) in AGENTS.md`)
-  if (await ensureGitignore(directory)) log("updated: .gitignore now ignores tmp/ and .auto/(driver working directory and runtime state)")
+  // A lane worker (opts.lane) skips this and the gitignore write below: its
+  // worktree received both by the scaffolding copy (§6.5 ③ — already correct
+  // by copy), and the parent owns the main tree's housekeeping (D6).
+  if (!opts.lane) {
+    const ensured = await ensurePointer(directory, { testByDriver: opts.testByDriver })
+    if (ensured.block === "inserted") log("inserted: AGENTS.md opencode-auto block")
+    if (ensured.block === "replaced") log("refreshed: AGENTS.md opencode-auto block (differed from the current config rendering)")
+    if (ensured.legacyRemoved) log(`cleaned: ${ensured.legacyRemoved} legacy/redundant opencode-auto marker block(s) in AGENTS.md`)
+    if (await ensureGitignore(directory)) log("updated: .gitignore now ignores tmp/ and .auto/(driver working directory and runtime state)")
+  }
   // the housekeeping close-out commit: the writes ensurePointer/ensureGitignore
   // make are driver changes, booked at once so the worktree is clean when the
   // first execution unit starts; commit failure exits 2 as an environment

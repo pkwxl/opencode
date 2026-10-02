@@ -382,17 +382,17 @@ concurrency exists.
   the reduction property "one slot + empty in-flight = `next()`"; ☑
   `test/import-direction.test.ts` placement for the new module. No behavior
   change anywhere (`--max-sessions` still refuses > 1).
-- **S2 — lane machinery, serial (isolation rollout).** ☐ git primitives
+- **S2 — lane machinery, serial (isolation rollout).** ☑ git primitives
   (`addWorktree`/`removeWorktree`/`prune`/`landBranch`) + park skip in
-  `repoRoots` + real-git tests; ☐ dispatch/landing choreography and
-  scaffolding copy in `src/lanes.ts`; ☐ `RunAllOpts.lane` + the lane
+  `repoRoots` + real-git tests; ☑ dispatch/landing choreography and
+  scaffolding copy in `src/lanes.ts`; ☑ `RunAllOpts.lane` + the lane
   preflight branch in `src/loop.ts`/`loop-preflight.ts` + `.auto/lane.json`
-  writer; ☐ `laneLauncher` profile field + default; ☐ `_lane` hidden
-  subcommand in `packages/auto` + shell-contract §E item; ☐
+  writer; ☑ `laneLauncher` profile field + default; ☑ `_lane` hidden
+  subcommand in `packages/auto` + shell-contract §E item; ☑
   `OPENCODE_AUTO_LANE_ISOLATION` switch routing the task loop through
-  one-lane-at-a-time; ☐ e2e: spawned lane-worker fixture (no shell), a task
+  one-lane-at-a-time; ☑ e2e: spawned lane-worker fixture (no shell), a task
   round at isolation-on, kill-mid-lane → main tree clean, re-dispatch
-  resumes; ☐ goldens untouched. Value delivered alone: per-task crash
+  resumes; ☑ goldens untouched. Value delivered alone: per-task crash
   isolation and the whole landing protocol, validated with zero
   concurrency.
 - **S3 — the scheduler (concurrency live).** ☐ Lift the `--max-sessions`
@@ -556,4 +556,82 @@ the tests, any decision taken.
   (D8: every controlled exit writes the report), and a code/report
   contradiction (0 with a failing report, 2 with a clean one) is blocked,
   never land.
+**S2 — lane machinery, serial (the isolation rollout), 2026-10-02.**
+- Landed: the git primitives beside the commit boundary (`src/git.ts`:
+  `addWorktree` / `removeWorktree` / `pruneWorktrees` / `deleteBranch` /
+  `landBranch` — `merge --no-ff` with `Auto-Task:`/`Auto-Stage: landing`
+  trailers, conflict detection that aborts and leaves the main tree clean —
+  plus the read-only `mergeBaseSha` / `commitsSince`), the F6 park skip in
+  `repoRoots`' walk, and the four write-side members on the `GitOps` seam
+  (`src/git-ops.ts`; the no-commit double fails `addWorktree`/`landBranch`
+  closed and answers removal/prune ok). The dispatch and landing
+  choreography in `src/lanes.ts`: `dispatchLane` (attempts through `begin`,
+  worktree creation or registry-driven reuse, the scaffolding copy — the F7
+  set, `.gitignore`, best-effort windows and nested content — spawn through
+  the profile launcher, `setLane` with the pid) and `landLane` (D7's five
+  steps: verify over the merge-base baseline, merge, `syncIndexTicks`
+  committed as `landing-sync`, `clearLane` + the report's usage into
+  `statsLaneUsage`, teardown). The lane entry: `RunAllOpts.lane` in
+  `src/loop-preflight.ts` (lane mode skips the AGENTS.md/gitignore
+  housekeeping writes — correct by copy), the routing/drift pre-check skip
+  in `src/loop.ts`, `runLaneUnit` in `src/loop-task.ts` (routing → the named
+  unit → the unchanged `runTask` → the serial loop's terminal commit,
+  close-out check and interruption-scene handling, minus the human
+  boundaries, which stay parent-side), and `runLaneWorker` (`src/loop.ts`)
+  wrapping `runAll` with the D8 report writer at every controlled exit —
+  the export a shell's `_lane` subcommand (`packages/auto`, hidden) and any
+  bootstrap import alike. `ShellProfile.laneLauncher` + the default
+  (`src/shell.ts`: re-invoke this shell's CLI; the structural `LaneWorker`
+  return type) and the shell-contract §E item. The switch
+  `OPENCODE_AUTO_LANE_ISOLATION` (`src/switches.ts`, on|off, env-only)
+  routes `runTaskLoop` through `runIsolationLoop` — one lane at a time over
+  the same `next()` selection, §6.2's failure matrix at each lane exit,
+  the parent's boundary hooks at each landing. `--max-sessions` still
+  refuses above 1; goldens untouched.
+- Tests: `test/git.test.ts` — the primitives over real git (creation at
+  HEAD on the branch, F6's park skip, force-retry removal, prune, merge
+  trailers, the conflict abort leaving the main tree clean, the double);
+  `test/lanes-scheduler.test.ts` — the choreography over real git with the
+  launcher stubbed through the profile (fresh dispatch and scaffolding,
+  registry-driven reuse, the straggler refusals, the landed five steps with
+  a drifted tick re-derived onto a `landing-sync` commit, conflict and
+  verification failures keeping the scene), moved to the repo lane of the
+  test manifest for it; `packages/auto/test/e2e.test.ts` — a task round at
+  isolation-on with outcomes equal to the serial path's plus the landing
+  commit and a torn-down park, a spawned bootstrap fixture
+  (`test/fixtures/lane-worker.ts`, no shell: `runLaneWorker` is the whole
+  import) driven through the launcher injection point, and the kill
+  property (worker killed mid-session at a new fake-claude gate knob: main
+  tree clean, scene kept, re-run re-dispatches in the same worktree and the
+  resume line lands in the worktree's own log, then lands with attempts
+  booked twice); the `--max-sessions` refusal.
+- AUTO-DECISION (`src/lanes.ts`): the dispatch writes the runtime fields
+  after the spawn, not before — §6.5 orders ④ before ⑤, but the pid half of
+  the record exists only once the worker process does, and a record naming
+  a pid that was never spawned would read as a dead orphan.
+- AUTO-DECISION (`src/lanes.ts`): `.gitignore` rides in the scaffolding
+  copy although F7's list does not name it — init ignores the file itself
+  (gitignore.ts INIT_ENTRIES), so a fresh worktree does not carry it, and
+  without it the worktree's own `.auto/` and `tmp/` would surface as
+  untracked dirt at the lane's first clean gate.
+- AUTO-DECISION (`src/loop-task.ts`): a landing conflict blocks immediately
+  (D21's `low` posture) — the level-derived repair budget and the conflict
+  re-dispatch protocol are S3 wiring; and an orphan (no report) keeps the
+  scene and exits 2 naming the park path rather than re-dispatching
+  in-process — the re-dispatch is the next run's (D14's preflight orphan
+  scan and the liveness probe are S3's), which the e2e drives exactly that
+  way.
+- AUTO-DECISION (`src/loop.ts`): the report's `commits` list is
+  `base..HEAD` of this worker's own start (the worktree HEAD after
+  preflight), so a resumed lane lists this run's commits — the parent
+  derives the branch baseline itself at landing (merge-base), and no S2
+  consumer reads the list.
+- AUTO-DECISION (`src/stats.ts`): the lane report's usage books into an
+  additive per-unit `lanes` section of the stats document, not into the
+  three buckets' usage/sessions — the lane's sessions are the child
+  process's own (booked there); folding them into the parent's buckets
+  would double-count the moment S4 wires the per-model roll-up.
+- AUTO-DECISION (`src/switches.ts`): the switch takes on|off like every
+  registered switch, not D10's informal `=1` — the registry's uniform
+  grammar wins over the design note's shorthand.
 <!-- auto: eof -->

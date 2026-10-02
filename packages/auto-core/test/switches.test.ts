@@ -42,10 +42,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       strictResume: false,
       hibernate: undefined,
       agent: undefined,
+      laneIsolation: false,
     })
   })
 
-  test("an empty string counts as unset (all sixteen variables tested together)", () => {
+  test("an empty string counts as unset (all seventeen variables tested together)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -64,6 +65,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.strictResume]: "",
         [SWITCH_ENV.hibernate]: "",
         [SWITCH_ENV.agent]: "",
+        [SWITCH_ENV.laneIsolation]: "",
       }),
     ).toEqual({
       fork: true,
@@ -81,6 +83,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       strictResume: false,
       hibernate: undefined,
       agent: undefined,
+      laneIsolation: false,
     })
   })
 
@@ -118,6 +121,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       strictResume: true,
       hibernate: { startMin: 240, durationMin: 360 },
       agent: "claude",
+      laneIsolation: false,
     })
   })
 
@@ -313,11 +317,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
-  test("the default combination is silent: non-default items undefined; the full listing names all sixteen", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all seventeen", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
     )
   })
 
@@ -325,7 +329,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
@@ -358,6 +362,12 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     expect(nonDefaultSwitches(hibernating)).toBe("OPENCODE_AUTO_HIBERNATE=04:00+6.5")
     expect(formatSwitches(hibernating)).toContain("OPENCODE_AUTO_HIBERNATE=04:00+6.5")
     expect(formatSwitches(parseSwitches({}))).toContain("OPENCODE_AUTO_HIBERNATE=")
+    // lane isolation (plans/0068 D10/S2): default off is silent, on stands as
+    // its own item
+    const isolated = parseSwitches({ [SWITCH_ENV.laneIsolation]: "on" })
+    expect(isolated.laneIsolation).toBe(true)
+    expect(nonDefaultSwitches(isolated)).toBe("OPENCODE_AUTO_LANE_ISOLATION=on")
+    expect(() => parseSwitches({ [SWITCH_ENV.laneIsolation]: "maybe" })).toThrow(/OPENCODE_AUTO_LANE_ISOLATION/)
   })
 })
 

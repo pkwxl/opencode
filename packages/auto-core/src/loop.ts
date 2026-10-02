@@ -1,11 +1,14 @@
+import { join } from "node:path"
 import { ExitRequested } from "./exit"
 import { startRunEvents } from "./engine/events"
 import { hibernatePause } from "./hibernate"
 import { interactiveChannel, startInteractive, type Interactive } from "./interactive"
 import { acquireRunLock, lockLines } from "./lock"
-import type { LoopCtx } from "./loop-task"
+import { runLaneUnit, type LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
+import { commitsSince, headSha } from "./git"
+import { writeLaneReport, type LaneReport } from "./lanes"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
@@ -17,9 +20,11 @@ import type { AgentPool } from "./agent-pool"
 import { startPool } from "./agent-pool"
 import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
-import { flushStats, statsClassifyUsage } from "./stats"
+import { flushStats, statsClassifyUsage, statsTotals } from "./stats"
 import { freezeSwitches } from "./switches"
-import { loadPlan } from "./tasks"
+import { loadPlan, taskStatePaths } from "./tasks"
+import { parseUnitDoc } from "./document/unit"
+import { peekProgress } from "./resume"
 import { emitStatus, endRunStatus, startRunStatus } from "./run-status"
 import type { RunExitCode } from "./run-status-schema"
 
@@ -130,8 +135,13 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // service up just to exit; the real routing is re-evaluated per round
     // inside the phase loop (derived state). The no-phase mode ("m") is the
     // manual single phase R-01/P01-implement and routes the same way.
+    // A lane worker (opts.lane, plans/0068 §6.3) skips this whole pre-check:
+    // round routing and establishment, the phase loop and the drift checks
+    // are the parent's (D6) — the worktree's docs/ is a fixed snapshot of
+    // the phase, and the lane entry routes for its one unit after the
+    // services are up.
     const phases = opts.phases ?? "m"
-    if (!opts.dryrun) {
+    if (!opts.dryrun && !opts.lane) {
       const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
@@ -281,6 +291,8 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       git: run.git,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
     }
+    // The lane entry (plans/0068 §6.3): one unit, no phase loop.
+    if (opts.lane) return await runLaneUnit(ctx)
     return await runPhaseLoop(ctx)
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe
@@ -317,5 +329,74 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // still read the run's clock (the stats flush); a run nested in a
     // holder-using caller — a test — restores the caller's holder.
     uninstallServices()
+  }
+}
+
+// —— The lane worker entry (plans/0068 §6.3/D8) —— //
+
+// What a shell's hidden `_lane <dir> --unit <id>` subcommand — and any
+// bootstrap that imports the core, no shell involved — calls: runAll scoped
+// to the one unit, then the lane report written at this controlled exit (the
+// report is the only contract the parent reads; its absence is the orphan
+// signal, so an unexpected throw here is caught and reported as an
+// environment failure rather than left report-less).
+// AUTO-DECISION (the report's commits list): the baseline is the worktree's
+// HEAD when this worker starts, so a resumed lane (a re-dispatch over an
+// earlier attempt's commits) lists this run's commits, not the branch's
+// whole history — the parent derives the branch baseline itself at landing
+// (merge-base), and no S2 consumer reads the list; D8 keeps the field for
+// the observability stage.
+export async function runLaneWorker(directory: string, opts: RunAllOpts & { lane: { unit: string } }): Promise<number> {
+  const unit = opts.lane.unit
+  const start = Date.now()
+  const base = (await headSha(directory)) ?? ""
+  let code: number
+  try {
+    code = await runAll(directory, opts)
+  } catch (error) {
+    log(`⚠ lane worker failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`)
+    code = 1
+  }
+  try {
+    await writeLaneReport(directory, await laneReportOf(directory, opts, unit, code, base, start))
+  } catch (error) {
+    // The writer failing must not mask the run's own exit code; the parent
+    // reads the absent report as the orphan signal and keeps the scene.
+    log(`⚠ writing the lane report failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return code
+}
+
+// The report of one lane run (D8's fields): the unit's own task bucket of the
+// worktree's stats carries usage, sessions and the per-model keys; the agent
+// rides the progress record (the session-bearing field §8.2 wrote) with the
+// options' choice as the floor.
+async function laneReportOf(
+  directory: string,
+  opts: RunAllOpts,
+  unit: string,
+  code: number,
+  base: string,
+  start: number,
+): Promise<LaneReport> {
+  const totals = await statsTotals(directory, "task")
+  const bucket = totals && totals.id === unit ? totals : undefined
+  const usage = bucket?.usage
+  const tokens = usage ? usage.input + usage.output + usage.reasoning + usage.cacheRead + usage.cacheWrite : 0
+  const progress = await peekProgress(directory).catch(() => undefined)
+  const paths = taskStatePaths(unit)
+  const doc = await Bun.file(join(directory, paths.complete)).text().catch(() => Bun.file(join(directory, paths.pending)).text().catch(() => ""))
+  return {
+    unit,
+    phase: parseUnitDoc(doc).fields.phase ?? "",
+    ok: code === 0,
+    // A FAIL result line would have blocked the unit instead of completing
+    // it, so a zero exit carries the pass verdict by construction.
+    ...(code === 0 ? { result: "PASS" as const } : { blocked: `lane worker exit ${code} (the reason is in this worktree's run log)` }),
+    usage: { tokens, wallMs: bucket?.wallMs ?? Date.now() - start },
+    sessions: bucket?.sessions ?? 0,
+    commits: await commitsSince(directory, base),
+    agent: progress?.agent ?? opts.agent ?? "opencode",
+    models: bucket?.models ? Object.keys(bucket.models) : [],
   }
 }

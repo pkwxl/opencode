@@ -26,7 +26,7 @@ import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-c
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
-import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
+import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
@@ -102,6 +102,8 @@ const VALUE_FLAGS = new Set([
   "scan-exempt",
   "max-sessions",
   "new-task",
+  // `_lane`'s alone (hidden, below): the unit the lane worker runs.
+  "unit",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
 for (let i = 1; i < args.length; i++) {
@@ -459,6 +461,28 @@ if (command === "run") {
     maxSessions,
   })
   process.exit(code)
+}
+
+// `_lane <dir> --unit <id>` (hidden, auto-core plans/0068 §6.4/D2): the lane
+// worker entry the parent run's default lane launcher re-invokes this CLI
+// with — a machine surface, never a person's (absent from the usage text; the
+// shell contract's §E obligation makes providing it part of being a shell).
+// It loads the project config like run (the worktree received it by the
+// scaffolding copy), then runs the one unit through runLaneWorker, which
+// writes the lane report the parent reads after this process exits. Session
+// flags take their defaults; everything the lane needs beyond them rides the
+// copied scaffolding and the inherited environment.
+if (command === "_lane") {
+  const unit = flags.get("unit")
+  if (!unit) {
+    console.error("_lane requires --unit <task id> (the unit this lane worker runs); it is the entry the parent run's lane launcher invokes")
+    process.exit(1)
+  }
+  const session = parseSessionFlags()
+  startRunLog(directory, session)
+  const { config, mode } = await loadRunConfig(directory)
+  await logRunBanner(directory, config)
+  process.exit(await runLaneWorker(directory, { ...runOptions(config, mode, session), lane: { unit } }))
 }
 
 // plan (auto-core plans/0053 D14, D23, D28; --new-task plans/0058): plan the

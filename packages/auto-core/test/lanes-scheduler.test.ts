@@ -4,15 +4,38 @@
 // free-slot clause, lane eligibility (D15), the landing-side tick sync
 // (D7 step ③), the lane runtime fields (D6) and the lane report contract
 // with the failure matrix (D8, §6.2). Plans and registry views are hand
-// built; the file-writing cases use plain temp directories (no git, no
-// spawn): the scheduler is pure.
+// built; those cases are pure.
+// Since stage S2 the file also covers the dispatch and landing choreography
+// (§6.5) over real git repositories — the worktree, the scaffolding copy, the
+// landing merge — with the lane launcher stubbed through the shell profile
+// (no process spawn: the launcher is the seam, and the stub answers an
+// already-exited worker). That half is why the file lives in the repo lane
+// of the test manifest despite its pure S1 half.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { laneEligible, laneOutcome, parseLaneReport, readyUnits, syncIndexTicks, type InFlightLane, type LaneRuntime } from "../src/lanes"
+import {
+  dispatchLane,
+  laneBranch,
+  laneEligible,
+  laneExit,
+  laneOutcome,
+  lanePark,
+  landLane,
+  parseLaneReport,
+  readyUnits,
+  syncIndexTicks,
+  writeLaneReport,
+  type InFlightLane,
+  type LaneReport,
+  type LaneRuntime,
+} from "../src/lanes"
+import { changedFiles, commitTree } from "../src/git"
+import { createGitOps } from "../src/git-ops"
+import { setShellProfile, type LaneWorker } from "../src/shell"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
-import { begin, clearLane, laneRecords, next, setLane, UNITS_FILE, type Plan, type Task } from "../src/tasks"
+import { begin, clearLane, laneRecords, markDone, next, setLane, UNITS_FILE, type Plan, type Task } from "../src/tasks"
 import { seedUnits, unitsText } from "./fixtures/units"
 
 // —— Hand-built plans ——
@@ -155,6 +178,9 @@ beforeEach(async () => {
   ;[phase] = await syncPhaseIndex(dir, 1, "m")
 })
 afterEach(async () => {
+  // The choreography cases stub the lane launcher through the profile; the
+  // restore names the key the tests touched (shell.test.ts's pattern).
+  setShellProfile({ laneLauncher: undefined })
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -266,5 +292,192 @@ describe("the failure matrix (§6.2)", () => {
     expect(laneOutcome(2, blockedReport)).toEqual({ kind: "blocked", report: blockedReport })
     expect(laneOutcome(1, okReport)).toEqual({ kind: "environment", report: okReport })
     expect(laneOutcome(137, undefined)).toEqual({ kind: "orphan" })
+  })
+})
+
+// —— The dispatch and landing choreography (§6.5, stage S2) over real git ——
+
+// git over the fixture dir, asserting exit 0.
+async function git(root: string, ...args: string[]) {
+  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
+  return out
+}
+
+// Whether a directory exists (Bun.file targets files; a directory answers
+// false — the park assertions need the real thing).
+const dirExists = (path: string) => stat(path).then(() => true, () => false)
+
+// An already-exited worker the stub launcher answers with (no process).
+const stubWorker = (code = 0): LaneWorker => ({ pid: 4242, exited: Promise.resolve(code) })
+
+// A hand-built report of the D8 shape.
+const reportOf = (unit: string, over: Partial<LaneReport> = {}): LaneReport => ({
+  unit,
+  phase: "R-01.P01",
+  ok: true,
+  result: "PASS",
+  usage: { tokens: 100, wallMs: 1000 },
+  sessions: 2,
+  commits: ["abc1234"],
+  agent: "claude",
+  models: ["opus"],
+  ...over,
+})
+
+// A committed project with one pending task, its scaffolding local-only
+// (gitignored like init writes it): the scene a parent dispatches a lane
+// from. Returns the loaded task.
+async function laneProject(text = "## T-001: the widget [pending]\nBuild the widget.\n"): Promise<Task> {
+  await git(dir, "init", "-q")
+  const plan = await seedUnits(dir, text)
+  await Bun.write(join(dir, ".gitignore"), [".auto/", "tmp/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", ""].join("\n"))
+  await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
+  await Bun.write(join(dir, ".opencode", "agent", "auto.md"), "the agent contract\n")
+  await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
+  await Bun.write(join(dir, ".opencode", "auto", "config.json"), "{}\n")
+  await Bun.write(join(dir, "opencode.json"), "{}\n")
+  await Bun.write(join(dir, "AGENTS.md"), "the agents block\n")
+  await git(dir, "add", "-A")
+  await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+  return plan.tasks[0]!
+}
+
+describe("dispatchLane (§6.5 ①–⑤)", () => {
+  test("a fresh dispatch: the worktree on the lane branch at HEAD, the scaffolding copied, the runtime fields written; laneExit drains the worker", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    expect(lane.fresh).toBe(true)
+    expect(lane.worktree).toBe(join(dir, lanePark("T-001")))
+    // The checkout carries the branch's content, the copy the local-only set.
+    expect(await Bun.file(join(lane.worktree, "docs", "T-001", "todo.md")).exists()).toBe(true)
+    expect(await Bun.file(join(lane.worktree, "AGENTS.md")).text()).toBe("the agents block\n")
+    expect(await Bun.file(join(lane.worktree, "opencode.json")).exists()).toBe(true)
+    expect(await Bun.file(join(lane.worktree, ".gitignore")).text()).toContain(".auto/")
+    expect(await Bun.file(join(lane.worktree, ".opencode", "agent", "auto.md")).exists()).toBe(true)
+    expect((await git(lane.worktree, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(laneBranch("T-001"))
+    // The registry records the dispatch; attempts booked through begin.
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({
+      status: "in_progress",
+      attempts: 1,
+      worktree: lanePark("T-001"),
+      pid: 4242,
+    })
+    // The parent tree stays clean — the park is gitignored and skipped.
+    expect(await changedFiles(dir)).toEqual([])
+    expect(await laneExit(lane.worker)).toEqual({ code: 0, output: "" })
+  })
+
+  test("a re-dispatch reuses the recorded worktree (the crash-resume property) and books another attempt", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const first = await dispatchLane(createGitOps(), dir, task)
+    if (first.type !== "spawned") throw new Error(first.error)
+    const second = await dispatchLane(createGitOps(), dir, task)
+    if (second.type !== "spawned") throw new Error(second.error)
+    expect(second.fresh).toBe(false)
+    expect(second.worktree).toBe(first.worktree)
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"].attempts).toBe(2)
+  })
+
+  test("a park straggler without a lane record fails the dispatch naming the path", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const first = await dispatchLane(createGitOps(), dir, task)
+    if (first.type !== "spawned") throw new Error(first.error)
+    await clearLane(dir, "T-001")
+    const stray = await dispatchLane(createGitOps(), dir, task)
+    expect(stray.type).toBe("failed")
+    if (stray.type === "failed") expect(stray.error).toContain("no lane record")
+  })
+
+  test("a record naming a missing worktree fails the dispatch", async () => {
+    const task = await laneProject()
+    await setLane(dir, "T-001", { worktree: lanePark("T-001"), pid: 1 })
+    const gone = await dispatchLane(createGitOps(), dir, task)
+    expect(gone.type).toBe("failed")
+    if (gone.type === "failed") expect(gone.error).toContain("no longer exists")
+  })
+})
+
+describe("landLane (D7's five steps)", () => {
+  test("a landed lane: the verified branch merges with Auto-Stage: landing, the tick re-derivation commits as landing-sync, the record clears, the park tears down", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    // The lane completes its unit the real way: the rename + tick inside its
+    // own close-out commit — but the index tick is left drifted (the tick
+    // alone, uncommitted) so the parent's landing-sync has a change to make.
+    await markDone({ dir: lane.worktree, index: join(phase.dir, "tasks.md") }, "T-001")
+    const ticked = await Bun.file(join(lane.worktree, phase.dir, "tasks.md")).text()
+    await Bun.write(join(lane.worktree, phase.dir, "tasks.md"), ticked.replace("- [x] T-001", "- [ ] T-001"))
+    await mkdir(join(lane.worktree, "src"), { recursive: true })
+    await Bun.write(join(lane.worktree, "src", "widget.ts"), "export const widget = 1\n")
+    const settled = await commitTree(lane.worktree, task, { stage: "done", subject: "T-001 done the widget" })
+    expect(settled.ok).toBe(true)
+    await writeLaneReport(lane.worktree, reportOf("T-001"))
+
+    const landed = await landLane(createGitOps(), dir, phase, task, reportOf("T-001"))
+    expect(landed).toEqual({ type: "landed", teardown: true })
+    // The work, the done state and the re-derived tick arrived in the main tree.
+    expect(await Bun.file(join(dir, "src", "widget.ts")).text()).toBe("export const widget = 1\n")
+    expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "docs", "T-001", "todo.md")).exists()).toBe(false)
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+    expect(await changedFiles(dir)).toEqual([])
+    // The merge commit carries the landing trailers; the tick sync landed on
+    // its own landing-sync commit.
+    const log = await git(dir, "log", "--format=%B", "-3")
+    expect(log).toContain("Auto-Stage: landing\n")
+    expect(log).toContain("Auto-Stage: landing-sync\n")
+    expect(log).toContain("Auto-Task: T-001")
+    // The record, the worktree and the branch are gone; the usage booked.
+    const units = JSON.parse(await unitsText(dir))
+    expect(units.tasks["T-001"].worktree).toBeUndefined()
+    expect(units.tasks["T-001"].pid).toBeUndefined()
+    expect(await dirExists(join(dir, lanePark("T-001")))).toBe(false)
+    expect((await git(dir, "branch", "--list", laneBranch("T-001"))).trim()).toBe("")
+    const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text())
+    expect(stats.lanes["T-001"]).toEqual({ tokens: 100, wallMs: 1000, sessions: 2 })
+  })
+
+  test("a conflict: the merge aborts, the main tree is clean again, the lane's scene (worktree, branch, record) is kept", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    // Both sides move the task document.
+    await Bun.write(join(lane.worktree, "docs", "T-001", "todo.md"), "# T-001: lane side\n")
+    await commitTree(lane.worktree, task, { stage: "done", subject: "T-001 done the widget" })
+    await Bun.write(join(dir, "docs", "T-001", "todo.md"), "# T-001: main side\n")
+    await commitTree(dir, task, { stage: "housekeeping", subject: "PLAN housekeeping sibling move" })
+
+    const landed = await landLane(createGitOps(), dir, phase, task, reportOf("T-001"))
+    expect(landed.type).toBe("conflict")
+    expect(await Bun.file(join(dir, "docs", "T-001", "todo.md")).text()).toBe("# T-001: main side\n")
+    expect(await changedFiles(dir)).toEqual([])
+    expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
+    expect((await git(dir, "branch", "--list", laneBranch("T-001"))).trim()).toContain(laneBranch("T-001"))
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBe(lanePark("T-001"))
+  })
+
+  test("a foreign commit inside the lane branch blocks the landing and keeps the scene", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    await Bun.write(join(lane.worktree, "src.ts"), "x\n")
+    await git(lane.worktree, "add", "-A")
+    await git(lane.worktree, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "manual commit")
+
+    const landed = await landLane(createGitOps(), dir, phase, task, reportOf("T-001"))
+    expect(landed.type).toBe("blocked")
+    if (landed.type === "blocked") expect(landed.error).toContain("non-driver commit")
+    expect(await changedFiles(dir)).toEqual([])
+    expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
   })
 })

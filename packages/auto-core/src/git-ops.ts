@@ -26,10 +26,14 @@
 // This mirrors exit.ts (the control service's home) and router.ts: the
 // service's home keeps its factory.
 import {
+  addWorktree,
   beginUnit,
   changedFiles,
   commitPending,
   commitTree,
+  landBranch,
+  pruneWorktrees,
+  removeWorktree,
   unitBaseline,
   unitViolations,
   type GitOps,
@@ -120,6 +124,10 @@ export function createGitOps(): GitOps {
     afterSession,
     unitBaseline,
     changedFiles,
+    addWorktree,
+    removeWorktree,
+    pruneWorktrees,
+    landBranch,
   }
 }
 
@@ -134,6 +142,10 @@ export function createGitOps(): GitOps {
 // unwritten, as it did under the switch). afterSession still collects the
 // session's proxy-answer markers first (H4: the collection was hoisted
 // before the commit gate on purpose), then answers ok.
+// The lane-worktree members fail closed: the double is the committing-off
+// strategy, and a lane that cannot create its worktree or land its branch
+// must surface that (a silent ok would strand a park directory nothing
+// owns); removeWorktree/prune still answer ok — they only clean up.
 export function noCommitGit(): GitOps {
   return {
     records: false,
@@ -147,5 +159,9 @@ export function noCommitGit(): GitOps {
     },
     unitBaseline: async () => [],
     changedFiles: async () => [],
+    addWorktree: async () => ({ ok: false, error: "the no-commit git double does not manage lane worktrees" }),
+    removeWorktree: async () => ({ ok: true }),
+    pruneWorktrees: async () => ({ ok: true }),
+    landBranch: async () => ({ type: "failed", error: "the no-commit git double does not merge lane branches" }),
   }
 }

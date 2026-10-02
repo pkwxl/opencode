@@ -2,7 +2,33 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitIdentityProblem, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import {
+  addWorktree,
+  baselineIntact,
+  beginUnit,
+  changedFiles,
+  commitIdentityProblem,
+  commitPending,
+  commitTitle,
+  commitTree,
+  deletedFiles,
+  deleteBranch,
+  fileCommitted,
+  fileTracked,
+  landBranch,
+  mergeBaseSha,
+  pendingChanges,
+  pruneWorktrees,
+  removeIfUntracked,
+  removeWorktree,
+  repoRoots,
+  restoreFile,
+  rollbackUnit,
+  suffixedTitle,
+  trackedSourceChanges,
+  unitBaseline,
+  unitViolations,
+} from "../src/git"
 import { noCommitGit } from "../src/git-ops"
 
 async function git(dir: string, ...args: string[]) {
@@ -672,5 +698,182 @@ describe("suffixedTitle (handover commit title = unit title + handover marker)",
     const base = "x".repeat(100 - suffix.length - 1)
     expect(suffixedTitle(base, suffix)).toBe(`${base} ${suffix}`)
     expect(suffixedTitle(base, suffix).length).toBe(100)
+  })
+})
+
+// ---- Lane worktrees and the landing merge (plans/0068 §6.5, D1/D7/D16/F6) ----
+
+// A committed repository with a lane worktree on auto-lane/T-001, the park
+// inside .auto/worktrees/ (gitignored like the rest of .auto/): the shared
+// scene of the worktree cases below. Returns the park path.
+async function laneScene(): Promise<{ dir: string; park: string; branch: string }> {
+  const dir = await fresh()
+  await writeFile(join(dir, ".gitignore"), ".auto/\n")
+  await writeFile(join(dir, "base.txt"), "base\n")
+  await commitTree(dir, task, { stage: "execute", subject: "T-001: baseline" })
+  const park = join(dir, ".auto", "worktrees", task.id)
+  const branch = `auto-lane/${task.id}`
+  const added = await addWorktree(dir, park, branch)
+  if (!added.ok) throw new Error(added.error)
+  return { dir, park, branch }
+}
+
+describe("addWorktree / removeWorktree / pruneWorktrees / mergeBaseSha (the lane git primitives)", () => {
+  test("addWorktree creates the worktree on the lane branch at HEAD; the park is not a nested repo (F6); removeWorktree and prune clean up", async () => {
+    const { dir, park, branch } = await laneScene()
+    try {
+      // The worktree is a checkout of the main HEAD on its own branch.
+      expect(await Bun.file(join(park, "base.txt")).text()).toBe("base\n")
+      expect(await Bun.file(join(park, ".git")).exists()).toBe(true)
+      expect((await git(dir, "rev-parse", "--abbrev-ref", "HEAD")).trim()).not.toBe(branch)
+      expect((await git(park, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(branch)
+      // F6: the linked worktree's `.git` file must not classify it as a
+      // nested repository — the unified commit would commit inside the park.
+      expect(await repoRoots(dir)).toEqual([dir])
+      expect(await changedFiles(dir)).toEqual([])
+      // A nested repository beside the park is still discovered: the skip is
+      // the park alone, not `.auto/` at large.
+      await mkdir(join(dir, "vendor", "lib"), { recursive: true })
+      await git(join(dir, "vendor", "lib"), "init", "-q")
+      expect(await repoRoots(dir)).toContain(join(dir, "vendor", "lib"))
+      // removeWorktree tears the worktree down; prune is then a no-op.
+      const removed = await removeWorktree(dir, park)
+      expect(removed.ok).toBe(true)
+      expect(await Bun.file(park).exists()).toBe(false)
+      expect((await git(dir, "worktree", "list")).trim()).not.toContain(park)
+      expect(await pruneWorktrees(dir)).toEqual({ ok: true })
+      // removeWorktree of a missing path fails and says so.
+      const missing = await removeWorktree(dir, park)
+      expect(missing.ok).toBe(false)
+      expect(missing.error).toBeTruthy()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a dirty lane worktree needs the force retry: removeWorktree still succeeds", async () => {
+    const { dir, park } = await laneScene()
+    try {
+      await writeFile(join(park, "uncommitted.txt"), "dirt\n")
+      expect((await removeWorktree(dir, park)).ok).toBe(true)
+      expect(await Bun.file(park).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("pruneWorktrees drops the administrative entry of a manually deleted worktree directory", async () => {
+    const { dir, park } = await laneScene()
+    try {
+      await rm(park, { recursive: true, force: true })
+      expect((await git(dir, "worktree", "list")).trim()).toContain(task.id)
+      expect(await pruneWorktrees(dir)).toEqual({ ok: true })
+      expect((await git(dir, "worktree", "list")).trim()).not.toContain(task.id)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("addWorktree of an existing path or branch fails with git's error", async () => {
+    const { dir, park, branch } = await laneScene()
+    try {
+      const again = await addWorktree(dir, park, "auto-lane/T-002")
+      expect(again.ok).toBe(false)
+      expect(again.error).toBeTruthy()
+      const taken = await addWorktree(dir, join(dir, ".auto", "worktrees", "T-002"), branch)
+      expect(taken.ok).toBe(false)
+      expect(taken.error).toBeTruthy()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("mergeBaseSha names where the lane forked; a lane commit keeps it, a main commit moves it", async () => {
+    const { dir, park } = await laneScene()
+    try {
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      expect(await mergeBaseSha(dir, "HEAD", "auto-lane/T-001")).toBe(head)
+      // A driver commit on the lane branch leaves the fork point alone.
+      await writeFile(join(park, "lane.txt"), "lane\n")
+      await commitTree(park, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      expect(await mergeBaseSha(dir, "HEAD", "auto-lane/T-001")).toBe(head)
+      // An unresolved side names nothing.
+      expect(await mergeBaseSha(dir, "HEAD", "auto-lane/T-999")).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("landBranch (D7's landing merge)", () => {
+  test("merges the lane branch --no-ff with Auto-Task/Auto-Stage: landing trailers; deleteBranch cleans up after", async () => {
+    const { dir, park, branch } = await laneScene()
+    try {
+      await writeFile(join(park, "lane.txt"), "lane\n")
+      await commitTree(park, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      const landed = await landBranch(dir, branch, task)
+      expect(landed).toEqual({ type: "ok" })
+      // The lane's work arrived in the main tree through a merge commit.
+      expect(await Bun.file(join(dir, "lane.txt")).text()).toBe("lane\n")
+      expect(await pendingChanges(dir)).toBe(false)
+      const parents = (await git(dir, "log", "-1", "--format=%P")).trim().split(" ")
+      expect(parents).toHaveLength(2)
+      const message = await git(dir, "log", "-1", "--pretty=%B")
+      expect(message).toContain("Auto-Task: T-001")
+      expect(message).toContain("Auto-Stage: landing")
+      // The merged branch deletes cleanly once its worktree is gone (the
+      // teardown order landLane keeps: worktree first, branch second).
+      expect(await removeWorktree(dir, park)).toEqual({ ok: true })
+      expect(await deleteBranch(dir, branch)).toEqual({ ok: true })
+      expect((await git(dir, "branch", "--list", branch)).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a conflicting main-tree commit: the merge aborts as a conflict and leaves the main tree clean", async () => {
+    const { dir, park, branch } = await laneScene()
+    try {
+      // Both sides move the same file.
+      await writeFile(join(park, "base.txt"), "lane side\n")
+      await commitTree(park, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      await writeFile(join(dir, "base.txt"), "main side\n")
+      await commitTree(dir, task, { stage: "housekeeping", subject: "PLAN housekeeping sibling move" })
+      const landed = await landBranch(dir, branch, task)
+      expect(landed.type).toBe("conflict")
+      // The main tree is exactly the pre-merge state again.
+      expect(await Bun.file(join(dir, "base.txt")).text()).toBe("main side\n")
+      expect(await changedFiles(dir)).toEqual([])
+      // The lane branch and worktree survive for the conflict protocol (`+`
+      // marks a branch checked out in another worktree).
+      expect((await git(dir, "branch", "--list", branch)).trim()).toContain(branch)
+      expect(await Bun.file(join(park, "base.txt")).text()).toBe("lane side\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("landing an unknown branch is a plain failure, not a conflict", async () => {
+    const { dir } = await laneScene()
+    try {
+      const landed = await landBranch(dir, "auto-lane/T-999", task)
+      expect(landed.type).toBe("failed")
+      if (landed.type === "failed") expect(landed.error).toBeTruthy()
+      expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the git seam's lane members (the no-commit double)", () => {
+  test("the double fails closed on worktree creation and landing; removal and prune answer ok", async () => {
+    const double = noCommitGit()
+    const created = await double.addWorktree("/nowhere", "/nowhere/park", "auto-lane/T-001")
+    expect(created.ok).toBe(false)
+    const landed = await double.landBranch("/nowhere", "auto-lane/T-001", task)
+    expect(landed.type).toBe("failed")
+    expect(await double.removeWorktree("/nowhere", "/nowhere/park")).toEqual({ ok: true })
+    expect(await double.pruneWorktrees("/nowhere")).toEqual({ ok: true })
   })
 })
