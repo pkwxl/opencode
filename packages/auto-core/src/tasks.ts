@@ -274,7 +274,20 @@ export function renderTaskIndex(phase: string, tasks: readonly { id: string; tit
 
 export const UNITS_FILE = join(".auto", "units.json")
 
-type Runtime = { status?: "in_progress" | "blocked"; attempts?: number; forkBase?: string | Record<string, string>; split?: UnitBaseline; leadUsed?: number }
+type Runtime = {
+  status?: "in_progress" | "blocked"
+  attempts?: number
+  forkBase?: string | Record<string, string>
+  split?: UnitBaseline
+  leadUsed?: number
+  // Lane scheduling fields (plans/0068 D6; 0051 D3's registry, built at
+  // last): the worktree the unit's lane runs in (the park path) and the lane
+  // worker's pid. Parent-exclusive, written at dispatch, cleared at landing;
+  // the dispatch attempts cap rides `attempts` above — begin increments it
+  // at every dispatch, so there is no duplicate field.
+  worktree?: string
+  pid?: number
+}
 type Units = { tasks: Record<string, Runtime> }
 
 // The persisted fork base record sanitized for a Task: a plain string as-is,
@@ -568,6 +581,47 @@ export async function setForkBase(dir: string, id: string, sessionID: string, ag
 // that starts again makes an earlier record stale.
 export async function setSplit(dir: string, id: string, split: UnitBaseline | undefined, leadUsed?: number): Promise<void> {
   await updateTask(dir, id, (entry) => ({ ...entry, split, leadUsed: split !== undefined ? leadUsed : undefined }))
+}
+
+// —— Lane scheduling fields (plans/0068 §6.2 S1, D6; 0051 D3 built at last) ——
+
+// One unit's lane dispatch as the registry holds it: the worktree the lane
+// runs in (the park path, a protocol string) and the lane worker's pid —
+// exactly what D14's orphan scan reads. Entries without a worktree are not
+// lanes and are not listed by laneRecords.
+export type LaneRecord = { unit: string; worktree: string; pid?: number }
+
+// Records a lane dispatch (D6: the scheduling fields are parent-exclusive):
+// the worktree, and the lane worker's pid once it is spawned. The attempts
+// cap rides begin's `attempts` increment — no field of its own.
+export async function setLane(dir: string, id: string, lane: { worktree: string; pid?: number }): Promise<void> {
+  await updateTask(dir, id, (entry) => ({ ...entry, worktree: lane.worktree, ...(lane.pid !== undefined ? { pid: lane.pid } : {}) }))
+}
+
+// Clears the lane fields (D7's landing step ④); the unit's other runtime
+// state (attempts, fork base) survives. Idempotent.
+export async function clearLane(dir: string, id: string): Promise<void> {
+  await updateTask(dir, id, (entry) => {
+    const rest = { ...entry }
+    delete rest.worktree
+    delete rest.pid
+    return rest
+  })
+}
+
+// Every unit whose runtime entry carries a lane worktree — the live and the
+// orphaned lanes of the registry, D14's scan input — sanitized like the other
+// runtime reads: a non-string worktree drops the entry, a non-finite pid the
+// field.
+export async function laneRecords(dir: string): Promise<LaneRecord[]> {
+  const units = await readUnits(dir)
+  const out: LaneRecord[] = []
+  for (const [unit, entry] of Object.entries(units.tasks)) {
+    if (typeof entry.worktree !== "string" || entry.worktree === "") continue
+    const pid = typeof entry.pid === "number" && Number.isFinite(entry.pid) ? entry.pid : undefined
+    out.push({ unit, worktree: entry.worktree, ...(pid !== undefined ? { pid } : {}) })
+  }
+  return out
 }
 
 // Task completion: rename todo.md → done.md and tick the index line (the task

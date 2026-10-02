@@ -375,11 +375,11 @@ exists (D11's future half). Nothing in S1–S4 depends on 0067; nothing in
 Each stage is independently shippable and revertable; S1–S2 before any
 concurrency exists.
 
-- **S1 — readiness and registry (pure, inert).** ☐ `readyUnits`,
+- **S1 — readiness and registry (pure, inert).** ☑ `readyUnits`,
   `laneEligible`, `syncIndexTicks`, `parseLaneReport`, `laneOutcome` in new
-  `src/lanes.ts`; ☐ `Runtime.worktree` / lane fields in `src/tasks.ts`
-  (0051 D3/P1 at last) with write/read helpers; ☐ unit tests (pure) incl.
-  the reduction property "one slot + empty in-flight = `next()`"; ☐
+  `src/lanes.ts`; ☑ `Runtime.worktree` / lane fields in `src/tasks.ts`
+  (0051 D3/P1 at last) with write/read helpers; ☑ unit tests (pure) incl.
+  the reduction property "one slot + empty in-flight = `next()`"; ☑
   `test/import-direction.test.ts` placement for the new module. No behavior
   change anywhere (`--max-sessions` still refuses > 1).
 - **S2 — lane machinery, serial (isolation rollout).** ☐ git primitives
@@ -513,4 +513,47 @@ lowerable per run by passing a smaller `--max-sessions`, which is already
 the flag's semantics). 0036's D16 per-unit state list is dissolved by D6,
 its D18 test-queue item by per-worktree `tmp/` (the slot is per lane
 automatically); its observability half lands as D13.
+
+## 13. Implementation record
+
+Each stage appends one entry here (the plans/0061 §10 format): what landed,
+the tests, any decision taken.
+
+**S1 — readiness and registry (pure, inert), 2026-10-02.**
+- Landed: `src/lanes.ts` (new) — `readyUnits` (D5's predicate: nextReady +
+  Touches-disjointness + a free slot, index order as the tie-break),
+  `laneEligible` (D15), `syncIndexTicks` (D7 step ③, driver-exclusive),
+  `parseLaneReport` / `laneOutcome` (D8's contract + §6.2's failure matrix);
+  and `src/tasks.ts`'s `Runtime` gains the lane fields (`worktree`, `pid`)
+  with `setLane` / `clearLane` / `laneRecords` through the existing
+  serialized `.auto/units.json` write chain — the dispatch attempts cap
+  rides `attempts` (begin increments it), no duplicate field. No caller of
+  any of it outside tests: `--max-sessions` still exits 1 above 1 at
+  preflight, goldens untouched.
+- Tests: `test/lanes-scheduler.test.ts` (new, `unit` lane) — the reduction
+  property (every done-mask over five declaration shapes: one slot, empty
+  in-flight, nothing executing = `next()` exactly), the touches-everything
+  rule in both directions, prefix-containment overlap, the free-slot cap
+  with index-order tie-break, the mutual disjointness of one call's admits,
+  D15 eligibility, `syncIndexTicks` in both directions + idempotence +
+  missing-index no-op, the lane-field round-trip with hand-edit degradation,
+  the report contract, and the failure-matrix table; `test/lanes.ts`
+  classifies the file into `UNIT_LANE`; `test/import-direction.test.ts`
+  places the module (driver domain, pipeline sub-domain, and a one-way rule
+  barring the loops and the session-driving layer).
+- AUTO-DECISION (`src/lanes.ts`): `readyUnits`'s disjointness clause is also
+  checked against the units the same call has already admitted — the
+  returned batch is dispatched together, so it must be mutually disjoint,
+  and greedy index order equals recomputing after each dispatch.
+- AUTO-DECISION (`src/lanes.ts`): `laneEligible`'s reach test is overlap,
+  not strict containment — `Touches: vendor/` over the nested root
+  `vendor/lib/` is not lane-eligible either (D15 words the rule as "paths
+  under a root"; the parent covers them, and a lane that cannot land is a
+  wasted dispatch).
+- AUTO-DECISION (`src/lanes.ts`): `laneOutcome` maps the pairs the matrix
+  does not name conservatively — a report that is absent (or fails
+  `parseLaneReport`'s contract) is the orphan outcome for every exit code
+  (D8: every controlled exit writes the report), and a code/report
+  contradiction (0 with a failing report, 2 with a clean one) is blocked,
+  never land.
 <!-- auto: eof -->

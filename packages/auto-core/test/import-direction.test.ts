@@ -254,6 +254,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // below the session layer, above the agent domain (§12).
   keyring: "driver",
   knowledge: "driver",
+  // The lane scheduler (plans/0068 §6.2): the pure readiness core over the
+  // loaded plan and the runtime registry — the ready set, lane eligibility,
+  // the landing-side tick re-derivation, the lane report's parse and the
+  // failure-matrix mapping. No caller outside tests until S3's lane loop.
+  lanes: "driver",
   // The run lock .auto/run.lock (plans/0053 D1–D3).
   lock: "driver",
   log: "driver",
@@ -492,6 +497,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   runner: "pipeline",
   execute: "pipeline",
   split: "pipeline",
+  // The lane scheduler (plans/0068 §6.2) — pipeline beside the loops it will
+  // branch (S3): pure functions over the task store's structures and the
+  // document domain's unit machinery, reaching no session-driving layer.
+  lanes: "pipeline",
   loop: "pipeline",
   "loop-phase": "pipeline",
   "loop-plan": "pipeline",
@@ -836,6 +845,25 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "the agent pool holds the run's agent hosts (plans/0055 §8.1, §12): the loop starts it, the session layer resolves every client through it and preflight checks its bins, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the classifier or the models command's data",
+  },
+  // AUTO-DECISION: lanes gets a one-way rule besides its classification row (plans/0068 §6.2: the scheduler is pure readiness over the loaded plan and the registry; the lane loop that drives it is S3's, so until then — and after — nothing in it may reach a loop or the session-driving layer)
+  {
+    from: "lanes",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+    ],
+    why: "the lane scheduler decides readiness from the plan, the merged unit states and the registry (plans/0068 §6.2, D5) — pure over injected facts in select.ts's shape — so it must not import the loops or the session-driving layer; the lane loop that consumes it arrives with S3 and drives it from above",
   },
   {
     from: "watch",
