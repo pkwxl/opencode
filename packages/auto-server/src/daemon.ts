@@ -13,9 +13,10 @@
 //     token without the route's scope → 403. `config` guards the P1d config
 //     operations, `control` the unit/lifecycle operations that write git
 //     through the core, `read` the models table; `answer` names the P3c
-//     question queue; `probe` is opt-in and disabled by default (no route
-//     requires it — its confirmation and rate limit land with the Web write
-//     surface);
+//     question queue; `probe` guards the model probe alone (P4b, POST
+//     /projects/<project>/models) — opt-in and disabled by default: no
+//     default token set carries it, and beside the scope the probe takes an
+//     explicit confirm field and this daemon's own rate window (below);
 //   - the run registry and worker supervision: one worker child process per
 //     run (the P1b entry, spawned as a subprocess — never imported: one run
 //     per process is the core's own invariant), with the run's exit-code
@@ -268,6 +269,32 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const opInFlight = new Set<string>()
   const liveRunOn = (directory: string): RunRecord | undefined =>
     [...runs.values()].find((run) => run.directory === directory && (run.state === "starting" || run.state === "running"))
+
+  // The daemon-wide model-probe rate window (P4b, assessment §8 Q7): one
+  // probe per window per DAEMON — not per token, not per project, because
+  // the tokens a probe spends are the operator's one wallet and the agents
+  // it starts are this machine's. The claim is atomic (checked and recorded
+  // in one step), so two concurrent confirmed probes cannot both fire; a
+  // request that never reaches the claim (no scope, no confirmation, no
+  // registry) consumes nothing. Daemon-owned in-memory state, gone with the
+  // daemon: a restart reopens the window, which is the operator's own act.
+  // AUTO-DECISION (10 minutes): the probe's cost is N short agent turns per
+  // fire; a window that spans a coffee break bounds an over-eager operator
+  // (or a refreshed tab) to six fires an hour while a deliberate fleet
+  // check stays anytime-the-window-is-open. The CLI knows no such limit —
+  // a terminal is one person's one act; a served route is not.
+  const PROBE_RATE_WINDOW_MS = 10 * 60_000
+  let probeFiredAt: number | undefined
+  const probeWindow = {
+    claim: (): { ok: true } | { ok: false; firedAt: string; retryAt: string } => {
+      const now = Date.now()
+      if (probeFiredAt !== undefined && now - probeFiredAt < PROBE_RATE_WINDOW_MS) {
+        return { ok: false, firedAt: new Date(probeFiredAt).toISOString(), retryAt: new Date(probeFiredAt + PROBE_RATE_WINDOW_MS).toISOString() }
+      }
+      probeFiredAt = now
+      return { ok: true }
+    },
+  }
 
   const view = (run: RunRecord): RunView => {
     const { proc: _proc, watcher: _watcher, ...rest } = run
@@ -781,7 +808,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); the P4a client surface is GET / (the Web client), GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}${entry.method === "POST" && entry.segment === "models" ? " — the probe: its own probe scope, the confirm field, rate-limited" : ""}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); the P4a client surface is GET / (the Web client), GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -844,7 +871,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             },
           }
         }
-        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun }))
+        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, probeWindow }))
         if (opInFlight.has(project.directory)) {
           return json(409, {
             error: `an operation is already in flight on ${project.name}; retry once it finishes (one write operation holds a directory at a time — the run lock arbitrates processes, not requests of this one)`,
@@ -861,7 +888,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
         opInFlight.add(project.directory)
         try {
-          return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun }))
+          return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, probeWindow }))
         } finally {
           opInFlight.delete(project.directory)
         }
@@ -876,7 +903,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations; P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); P4a serves GET / — the Web client — with GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))` })
+    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations (GET models is the table; POST models is the probe — its own probe scope, the confirm field, rate-limited); P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); P4a serves GET / — the Web client — with GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))` })
   }
 
   const server = Bun.serve<SocketData>({

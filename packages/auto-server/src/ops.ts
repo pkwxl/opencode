@@ -5,7 +5,11 @@
 // whitelist resolves the project exactly as POST /runs does), this module is
 // the API's own shell duty in the CLI's shape: every gate the CLI's shell
 // runs, every refusal text, every write ordering — but through the core's
-// library functions, never a re-implementation. The constitution of this
+// library functions, never a re-implementation. Since P4b the models probe
+// is served too (POST /projects/<project>/models, the CLI's --probe): behind
+// its own opt-in `probe` scope, an explicit `confirm` request field and the
+// per-daemon rate limit the daemon passes in (assessment §8 Q7 — default
+// disabled everywhere). The constitution of this
 // layer (plans/0067 §五, assessment §11 risk 1):
 //   - every state change reaches disk through the core (saveProjectConfig,
 //     renderAgentContract, renderProjectBrief, ensurePointer,
@@ -26,7 +30,13 @@
 //     themselves around their writes (acquire "close"/"plan", the CLI's
 //     own command names, so a live holder answers before any write);
 //   - models and `fix` dryrun are read-only: no lock, no refusal beside a
-//     live run (shell-contract §9; the CLI's fix --dryrun skip list).
+//     live run (shell-contract §9; the CLI's fix --dryrun skip list). The
+//     probe (POST models) reads nothing from the target either, but it
+//     starts agents through the pool and spends tokens, so its gates are its
+//     own: the `probe` scope, the `confirm` field, the daemon-wide rate
+//     window (src/daemon.ts) — none of them shared with the config gates;
+//   - 429 is the probe's rate-limit status (the one status this module
+//     adds): the body names when the window reopens.
 //
 // Status vocabulary (documented in docs/daemon.md): 200 the op served (body
 // carries `code`, the CLI's own exit code, and `lines`, the CLI's own
@@ -57,6 +67,7 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract } from "@opencode-ai/auto-core/config-fix"
+import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
@@ -104,6 +115,16 @@ export type OpRequest = {
   // armed, questions over the interactive transport). Only the daemon
   // provides it; an operation that never spawns ignores it.
   spawnPlanningRun: (plan: PlanPayload) => OpOutcome
+  // The daemon-wide model-probe rate window (P4b, assessment §8 Q7): claim
+  // is called by the probe operation once a request passed its scope and
+  // confirmation checks and a registry exists to probe — it records the
+  // fire and answers whether this one may run (a probe inside the window is
+  // refused with the instants the refusal names). Daemon-owned by design:
+  // the limit is per-daemon, not per-token and not per-project, because the
+  // tokens it protects are the operator's one wallet. Required — the daemon
+  // is the only constructor of this type, so an operation cannot ship a
+  // probe that forgot its limiter.
+  probeWindow: { claim: () => { ok: true } | { ok: false; firedAt: string; retryAt: string } }
 }
 
 export type OpOutcome = { status: number; body: Record<string, unknown> }
@@ -936,19 +957,14 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
 
 // models (shell-contract §9): the registry's effective table, read-only —
 // describeModels writes nothing and takes no lock, so it runs beside a live
-// run. probeModels is NOT exposed in P1: its opt-in scope stays disabled (no
-// route requires it), and its confirmation parameter and per-daemon rate
-// limit land with the Web write surface.
+// run. The probe (POST, the CLI's --probe) is its own operation below.
 async function runModels(request: OpRequest): Promise<OpOutcome> {
   const { project, query } = request
   for (const key of [...new Set([...query.keys()])]) {
-    if (key === "probe") continue
-    return bad(`unknown query parameter "${key}" (the models operation takes only ?probe — which is not exposed in P1)`)
-  }
-  if (query.has("probe")) {
-    return notImplemented(
-      "the model probe is not exposed in P1: it starts agents through the pool and burns tokens — its opt-in scope, its confirmation parameter and its per-daemon rate limit arrive with the Web write surface",
-    )
+    if (key === "probe") {
+      return bad(`the probe is the POST route, not a query parameter: POST ${route(project, "models")} with { "probe": true, "confirm": true } — it starts agents and spends tokens, so it takes the probe scope, an explicit confirmation and the daemon's rate window (the table this GET answers is free)`)
+    }
+    return bad(`unknown query parameter "${key}" (the models operation takes none; the probe is the POST route with { "probe": true, "confirm": true })`)
   }
   const description = await describeModels(project.directory, Date.now(), { env: runEnv() })
   const code = description.problems.length ? 1 : 0
@@ -965,10 +981,108 @@ async function runModels(request: OpRequest): Promise<OpOutcome> {
   }
 }
 
+// The model probe (P4b — the CLI's `models --probe`, shell-contract §9):
+// probeModels sends the recovery-probe prompt to every listed model through
+// the agent pool, one short provider round trip each — the only operation
+// that starts agents, which is why it sits behind three gates NONE of which
+// it shares with the config ops (assessment §8 Q7, "default: not enabled"):
+//   ① the `probe` scope — opt-in, carried by no default token set (the
+//      daemon's needScope answers 403 before this function runs);
+//   ② the explicit `confirm: true` request field — the same [y/N] shape the
+//      config ops' confirmation gate uses (428 with the question in the
+//      body), but its own question: the probe spends tokens, it overwrites
+//      nothing;
+//   ③ the daemon-wide rate window (request.probeWindow, src/daemon.ts) —
+//      one probe per window per daemon, whatever token or project asked;
+//      the second inside the window answers 429 naming when it reopens.
+// The registry must exist for any of the costly half to matter: with none,
+// the CLI's "nothing to probe" line is served (200, or 409 with the
+// problems when the layer refused to load) and NO window is consumed — the
+// rate limit bounds fires, and nothing fired. A probe that fails is a
+// per-model finding, never a command error (the core's own rule): the
+// status stays the table's own problems vocabulary.
+// AUTO-DECISION (the probe is a POST on the models segment, not ?probe on
+// the GET): the probe is a mutation of the operator's wallet, not a read —
+// a GET with side effects would cache, prefetch and replay its way into
+// tokens; the POST body also gives the confirmation a field to live in,
+// exactly the confirm/cleanTree shape the config ops established.
+async function runProbe(request: OpRequest): Promise<OpOutcome> {
+  const { project, body, probeWindow } = request
+  const dir = project.directory
+  for (const key of Object.keys(body ?? {})) {
+    if (key === "probe" || key === "confirm") continue
+    return bad(`unknown probe field "${key}" (the probe request takes "probe" and "confirm")`)
+  }
+  if (body?.probe !== true) {
+    return bad(`the probe request carries "probe": true (this POST is the probe route; the free table is GET ${route(project, "models")})`)
+  }
+  // The table half is shared with the GET: the caller sees the fleet the
+  // probe is about to spend on, and its problems carry the same weight.
+  const description = await describeModels(dir, Date.now(), { env: runEnv() })
+  const code = () => (description.problems.length ? 1 : 0)
+  if (description.registry === undefined) {
+    const lines = [...formatModels(description), "probe: no model registry, nothing to probe"]
+    return { status: code() === 0 ? 200 : 409, body: { code: code(), lines, operatorPath: description.operatorPath, problems: description.problems, notes: description.notes } }
+  }
+  const listed = [...new Set([...Object.values(description.registry.tiers).flatMap((tier) => tier?.names ?? []), ...[...description.registry.routes.values()].flatMap((route) => ("names" in route ? route.names : [])), ...description.registry.classifier?.names ?? []])].filter((name) => description.registry!.models.has(name))
+  const answer = await askConfirm(
+    `send the service-availability probe prompt to all ${listed.length} listed model(s) of ${dir}? this starts agents through the pool — one short provider round trip per model — and spends real tokens. continue? [y/N] `,
+    body?.confirm === true,
+  )
+  if (!answer.ok) {
+    return {
+      status: 428,
+      body: {
+        error: "confirmation required: the model probe starts agents and spends tokens, and this request did not confirm it (nothing was started)",
+        gate: "confirm",
+        question: answer.asked,
+        hint: 'send "probe": true with "confirm": true to proceed; the free table (GET models) answers everything the probe does not',
+        listed: listed.length,
+      },
+    }
+  }
+  const window = probeWindow.claim()
+  if (!window.ok) {
+    return {
+      status: 429,
+      body: {
+        error: `the model probe is rate-limited on this daemon: one probe per rate window (it starts an agent per listed model and spends real tokens); the last probe fired at ${window.firedAt}, the next may fire at ${window.retryAt}`,
+        gate: "probeRate",
+        firedAt: window.firedAt,
+        retryAt: window.retryAt,
+        hint: "wait for the window to reopen, then confirm again; the table (GET models) is free and always available",
+      },
+    }
+  }
+  const probes = await probeModels(description.registry, dir)
+  const lines = [
+    ...formatModels(description),
+    "probing every listed model (this sends one short prompt to each; it may take a while)",
+    ...probes.map((probe) => `${probe.ok ? "◇" : "⚠"} probe ${probe.name} (${probe.agent}): ${probe.line}`),
+  ]
+  return {
+    status: code() === 0 ? 200 : 409,
+    body: {
+      code: code(),
+      lines,
+      operatorPath: description.operatorPath,
+      problems: description.problems,
+      notes: description.notes,
+      probes,
+      ...(description.table === undefined ? {} : { table: description.table }),
+    },
+  }
+}
+
 // The P1d operation table: what the daemon serves under
 // /projects/<project>/<segment>. Scopes are the assessment's §8 Q6 tiers —
 // config for the config ops, control for the unit/lifecycle ops that write
-// git through the core, read for the models table.
+// git through the core, read for the models table, and probe (P4b) for the
+// model probe alone: its own opt-in scope, carried by no default token set.
+// The probe's `write` is false like the table's — it writes nothing into the
+// target and takes no lock (it runs beside a live run, the CLI's own rule) —
+// its cost gates are its own three (scope, confirm, rate window), never the
+// in-flight slot.
 export const OP_DEFINITIONS: readonly OpDefinition[] = [
   { method: "POST", segment: "init", what: "the init operation", scope: "config", write: () => true, run: (request) => runConfigOp("init", request) },
   { method: "POST", segment: "amend", what: "the amend operation", scope: "config", write: () => true, run: (request) => runConfigOp("amend", request) },
@@ -978,4 +1092,5 @@ export const OP_DEFINITIONS: readonly OpDefinition[] = [
   { method: "POST", segment: "tasks", what: "the task-add operation", scope: "control", write: () => true, run: runTaskAdd },
   { method: "POST", segment: "plan", what: "the plan operation", scope: "control", write: () => true, run: runPlan },
   { method: "GET", segment: "models", what: "the models operation", scope: "read", write: () => false, run: runModels },
+  { method: "POST", segment: "models", what: "the model probe", scope: "probe", write: () => false, run: runProbe },
 ]

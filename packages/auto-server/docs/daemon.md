@@ -1,4 +1,4 @@
-# The opencode-auto-server daemon (P1c/P1d/P1e/P3/P4a)
+# The opencode-auto-server daemon (P1c/P1d/P1e/P3/P4)
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
@@ -9,10 +9,11 @@ read model and the SSE log/journal tails), the WebSocket interactive
 transport (P3b — questions and run control bridged between a run's worker and
 its clients) and the persistent pending-question queue with its journal (P3c —
 reconnect-safe, restart-safe question delivery, and the unlocked plan
-sessions), and serves the Web client (P4a — the browser shell over all of the
-above: the read surface and run control) on `Bun.serve` — self-contained,
-zero added runtime dependencies (the isolation line of T-086; the core never
-knows HTTP).
+sessions), and serves the Web client (P4 — the browser shell over all of the
+above: the read surface, run control, and the write surface — question
+answering, the units/config/plan operations and the probe-gated models view)
+on `Bun.serve` — self-contained, zero added runtime dependencies (the
+isolation line of T-086; the core never knows HTTP).
 
 ## v1 boundary: single machine, multiple directories
 
@@ -64,7 +65,7 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 | `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` — the persistent pending-question queue (P3c) | active |
-| `probe`  | `models --probe` — burns tokens by starting agents                | opt-in, **disabled by default**: no route requires it; its confirmation parameter and per-daemon rate limit land with the Web write surface |
+| `probe`  | the model probe alone (`POST /projects/<p>/models` — burns tokens by starting agents) | **opt-in, disabled by default**: carried by no default token set; beside the scope the probe takes an explicit `confirm` field and the per-daemon rate window (see the model probe below) |
 
 `GET /session` (any known token, no specific scope) answers the presented
 token's own scopes — the typed source the Web client's scope-aware UI reads
@@ -183,6 +184,7 @@ CLI shell does and never touch `.auto/`, `docs/` unit state or an index tick
 | `POST /projects/<p>/tasks`          | `control`| task-add: one task by title, no session (the CLI's `plan --new-task` route, over addTask) |
 | `POST /projects/<p>/plan`           | `control`| the plan surface: planPrelude's no-agent routes served in-process; the agent-planning routes spawned as runs (see below) |
 | `GET  /projects/<p>/models`         | `read`   | the model registry's effective table (describeModels / formatModels) |
+| `POST /projects/<p>/models`         | `probe`  | the model probe (the CLI's `models --probe`): one confirmed, rate-limited fire — see below |
 
 `<p>` is a registered project (name or registered absolute path,
 percent-encoded in the URL) — the whitelist is the same absolute rule as
@@ -246,6 +248,41 @@ releases its lock before the spawn, and the worker's own `runAll` takes it —
 the window between is the lock's own jurisdiction, whichever driver process
 takes it first wins, the same rule the CLI and the daemon already share).
 
+### The model probe (P4b)
+
+`POST /projects/<p>/models` is the CLI's `models --probe` — `probeModels`
+sends the recovery-probe prompt to every listed model through the agent
+pool, one short provider round trip each. It is the only operation that
+**starts agents and spends tokens**, and it sits behind three gates none of
+which it shares with the config ops (the assessment's §8 Q7; "default: not
+enabled"):
+
+1. **the `probe` scope** — its own opt-in tier, carried by no default token
+   set; issuing one is a deliberate admin act
+   (`opencode-auto-server token issue --scopes read,probe`). Without it the
+   route answers **403** like every scope miss.
+2. **the explicit `confirm: true` request field** — the same [y/N] shape the
+   config ops' confirmation gate uses (the core's io-injectable gate), with
+   its own question naming the model count and the cost. An unconfirmed
+   request answers **428** with `gate: "confirm"` and the question; nothing
+   was started. The body also carries `probe: true` — the request spells
+   what it asks, the CLI's `--probe` flag in field form.
+3. **the per-daemon rate window** (10 minutes): one probe per window **per
+   daemon** — not per token, not per project, because the tokens a probe
+   spends are the operator's one wallet. The claim is atomic (two concurrent
+   confirmed probes cannot both fire); the second inside the window answers
+   **429** with `gate: "probeRate"` and `retryAt`, the instant the window
+   reopens. The window is daemon-owned in-memory state: a daemon restart
+   reopens it, which is the operator's own act.
+
+A directory with no registry (or one that failed to load) answers the CLI's
+own "nothing to probe" line — **without consuming the window** (nothing
+fired). A probe that fails is a per-model finding in the body's `probes`
+array and the `lines`, never a command error: the status stays the table's
+own problems vocabulary (200 / 409 with `code` 1). Like the table, the probe
+writes nothing into the target and takes no lock — it runs beside a live
+run.
+
 ### Operation status vocabulary
 
 Every operation answers a body carrying `code` (the CLI's own exit code for
@@ -261,7 +298,8 @@ vocabulary through either shell:
 | 409 | the target's state refuses — the CLI's exit-1/2 refusals (body carries `code` 1 or 2 and the `lines`); the clean-tree gate (`gate: "cleanTree"`); a live registry run or an in-flight operation on the directory (retryable) |
 | 423 | a live run lock holder (the CLI's `lockLines` holder text) |
 | 428 | the confirmation gate unanswered (`gate: "confirm"`, the question included) |
-| 501 | a route this version refuses: the models probe (agent planning's 501 ended with the P3c unlock) |
+| 429 | the model probe's rate window (`gate: "probeRate"`, `retryAt` included) |
+| 501 | a routing fact this version does not serve (the task-add fallback guard; the models probe's P1 refusal ended with P4b) |
 
 `fix` with `"dryrun": true` is the scriptable config-drift gate: findings
 answer 409 with `code: 1` (the CLI's `fix --dryrun` exit 1), a consistent
@@ -278,8 +316,8 @@ command names). Beside a live run of this daemon the write operations answer
 **409** (retryable, the run id in the body) — the registry is ahead of the
 lock during a run's starting window — and one write operation holds a
 directory at a time (a second answers 409; the run lock arbitrates processes,
-not requests of this one). `models` and `fix` dryrun take no lock and run
-beside a live run.
+not requests of this one). `models`, `fix` dryrun and the probe take no lock
+and run beside a live run.
 
 ## The observability surface (P1e)
 
@@ -555,7 +593,7 @@ refusal; the P2b stream carries the true lifecycle). Run **history** still
 does not survive a restart (P1's own decision, unchanged) — only the pending
 set does.
 
-## The Web client (P4a)
+## The Web client (P4)
 
 A browser shell over the daemon's own surfaces — a thin layer, by the
 direction draft's §三.4: it consumes the REST/SSE/WS endpoints P1–P3 exposed
@@ -615,10 +653,49 @@ never config mutation, and stays within the `control` scope.
 
 **Scope-awareness**: the client asks `GET /session` once per token and gates
 its own surface — controls hidden without `control`, the question UI without
-`answer`, the config UI (arriving with P4b) without `config`. The two static
+`answer`, the write surface's config ops without `config`, the probe without
+`probe`. The two static
 assets themselves are unauthenticated by the `/health` reasoning: the shell
 is the login form — it carries no project names, no run state, and cannot
 prompt for a token before it has loaded.
+
+### The write surface (P4b)
+
+The client's closing half: the operations panel (`web/ops.ts`), the question
+answering flow and the models view with the probe. Its constitution — the
+client never touches target-repo state directly: **no git in the browser, no
+`.auto/` awareness beyond the read endpoints; every mutation goes API →
+daemon → core function** (`closeUnit`, `addTask`, the config writers,
+`runAll`), preserving driver-exclusive writes end to end.
+
+- **question answering** (the `answer` scope) — the pending-question cards
+  of the run detail (P4a's list, joined by frame id, replayed on reconnect),
+  with the answer input; the centerpiece flow is the planning session: the
+  plan form starts one (`POST /projects/<p>/plan`), the spawned run is
+  selected as THE run, its questions arrive in its card, and answering them
+  is what lands the tasks — the verdict table re-renders from the commit
+  verdicts when they do;
+- **units** (`control`) — close (the explicit ref and the one-line reason
+  are the confirmation; the undo is git revert) and task-add, plus the plan
+  surface: the planning input (the CLI's `-p`), `append`, and the no-agent
+  routes on an empty form; `plan --force-close` composes as close-then-plan,
+  each half its own form;
+- **the config ops** (`config`) — init / amend over the constitutional keys
+  (the two hand-edited keys have no field), fix with `dryrun` as the
+  pre-view of its findings, and reset. **Confirm and clean-tree are two
+  explicit, separate steps, never one bundled force**: the first request of
+  a gated flow carries no gate field at all; each refusal (409
+  `gate: "cleanTree"` with the file list, 428 `gate: "confirm"` with the
+  exact question) renders its own step with its own button — answering adds
+  exactly that step's field (`answerGate`), refusing is simply not sending,
+  and each step is independently refusable with nothing changed on disk;
+- **the models view** (`read`) — the describe table (the CLI's own rendered
+  lines verbatim), read-only beside a live run. **The probe** (`probe`)
+  sits behind its own opt-in scope and an **explicit two-step in-UI act**:
+  arm (a deliberate button that reveals the confirmation), then confirm and
+  fire — never a checkbox; a rate-limit 429 renders the reopen instant and
+  never auto-retries. Default disabled everywhere: without the scope the
+  whole probe block is hidden.
 
 <!-- AUTO-DECISION: the page shell is served unauthenticated (GET / and
      /app.js): a browser navigation cannot attach a Bearer header, and the
@@ -630,12 +707,23 @@ prompt for a token before it has loaded.
      existed), and GET /session (any known token) because scope-aware UI
      gating needs a typed source — parsing 403 refusal prose for scopes
      would violate the no-scraping discipline this client exists to keep. -->
+<!-- AUTO-DECISION (the probe is a POST on the models segment, not ?probe on
+     the GET): the probe is a mutation of the operator's wallet, not a read
+     — a GET with side effects would cache and prefetch its way into
+     tokens; the POST body also gives the confirmation a field to live in,
+     exactly the confirm/cleanTree shape the config ops established. -->
 
 <!-- AUTO-DECISION: this document is extended in place again by T-096 (P4a) —
      the header and the P1c/P1e sections already promised the client surface
      ("the Web write surface" named by the probe row; the draft's §三.4), and
      the extension is the designed continuation of the package's living
      documentation. -->
+<!-- AUTO-DECISION: extended in place again by T-097 (P4b) — the probe row's
+     "lands with the Web write surface" promise, the scope-awareness
+     paragraph's "the config UI (arriving with P4b)" and the operations
+     table's probe route are the surfaces this extension describes; the
+     model-probe subsection and the write-surface subsection above are its
+     own designed end. -->
 
 ## Supervision and the daemon's lifetime
 

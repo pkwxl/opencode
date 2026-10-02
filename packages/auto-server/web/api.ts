@@ -142,6 +142,69 @@ export class AutoApi {
     return (await this.call("DELETE", `/runs/${encodeURIComponent(id)}`)) as unknown as RunView
   }
 
+  // —— the write operations (P4b, the P1d surface) ——
+  //
+  // Every mutation the client can build goes through one of these — there is
+  // no other path to the target's state (no git in the browser, no .auto/
+  // awareness beyond the read endpoints). The raw record is returned (not a
+  // narrowed type) because the gate refusals carry their own vocabulary
+  // (gate/question/lines) the UI renders; !ok throws ApiError with the same
+  // body attached.
+
+  // close: the explicit ref and the one-line reason ARE the confirmation —
+  // the request carries no gate fields.
+  async closeUnit(project: string, request: { ref: string; reason: string; cascade?: true; changes?: "commit" | "stash" }): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/close`, request)
+  }
+
+  // task-add: one task by title (the CLI's plan --new-task route).
+  async addTask(project: string, request: { title: string }): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/tasks`, request)
+  }
+
+  // The plan surface: the no-agent routes (empty request), input / append
+  // (the planning session), answering 202 with the spawned run's resource
+  // when the planning session starts.
+  async plan(project: string, request: { input?: string; append?: true } = {}): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/plan`, request)
+  }
+
+  // init: the stateless full overwrite. The gate fields ride ONLY as the
+  // two-step flow adds them (answerGate) — the first request carries the
+  // config alone, so the daemon's gates ask in their own order.
+  async init(project: string, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/init`, request)
+  }
+
+  // amend: the per-key revision (no gate fields — amend discards no key).
+  async amend(project: string, request: { config: Record<string, unknown> }): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/amend`, request)
+  }
+
+  // fix: dryrun is the read-only drift gate (the pre-view with its
+  // findings); the apply is the gated flow.
+  async fix(project: string, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/fix`, request)
+  }
+
+  // reset: de-initialization — always the gated flow.
+  async reset(project: string, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/reset`, request)
+  }
+
+  // The models table (read-only; the CLI's own rendered lines verbatim).
+  async models(project: string): Promise<Record<string, unknown>> {
+    return this.call("GET", `/projects/${encodeURIComponent(project)}/models`)
+  }
+
+  // The model probe — the only token-spending read. The client calls this
+  // ONLY from the confirm step of its two-step act (buildProbeRequest
+  // refuses to build anything earlier); the daemon's own three gates (scope,
+  // confirm field, rate window) answer whatever arrives anyway.
+  async probeModels(project: string): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/models`, { probe: true, confirm: true })
+  }
+
   // The polled status read model (the read scope).
   async status(project: string): Promise<StatusModel> {
     return (await this.call("GET", `/projects/${encodeURIComponent(project)}/status`)) as unknown as StatusModel

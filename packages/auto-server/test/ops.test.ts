@@ -16,7 +16,7 @@
 //     close commit) and task-add over addTask through planPrelude's
 //     no-session route (the document, the index line, the commit);
 //   - the models operation: read-only, no lock, runs beside a live run;
-//     probe refused (not exposed in P1);
+//     the probe is the POST route behind its own opt-in scope (P4b);
 //   - the planPrelude boundary matrix: the no-agent routes served with
 //     their lines and codes (round establishment, the round-close gate,
 //     the drift re-sync, the refusal stops), and — since the P3c unlock —
@@ -629,7 +629,7 @@ describe("the lifecycle operations (P1d)", () => {
     })
   }, 180_000)
 
-  test("models: read-only, no lock, the table's own exit vocabulary; probe is not exposed in P1", async () => {
+  test("models: read-only, no lock, the table's own exit vocabulary; the probe is the POST route (P4b)", async () => {
     await withOps(async (h) => {
       const dir = await fixtureProject("auto-ops-models-", {})
       const name = h.register(dir)
@@ -639,11 +639,17 @@ describe("the lifecycle operations (P1d)", () => {
       expect(table.body.problems).toEqual([])
       expect(has(table.body, "model registry: implicit")).toBe(true)
       expect(String(table.body.operatorPath)).toContain("models.json")
-      // the probe is opt-in and disabled: no route takes it in P1
-      const probe = await h.call("GET", `/projects/${name}/models?probe=1`, h.read)
-      expect(probe.status).toBe(501)
-      expect(String(probe.body.error)).toContain("not exposed in P1")
+      // the probe is its own POST route behind its own scope — not a query
+      // parameter on the free table
+      const query = await h.call("GET", `/projects/${name}/models?probe=1`, h.read)
+      expect(query.status).toBe(400)
+      expect(String(query.body.error)).toContain("the POST route")
       expect((await h.call("GET", `/projects/${name}/models?bogus=1`, h.read)).status).toBe(400)
+      // the probe's scope tier: read does not carry it, and no default token
+      // set does — the gate is the scope itself
+      const probeDenied = await h.call("POST", `/projects/${name}/models`, h.read, { probe: true, confirm: true })
+      expect(probeDenied.status).toBe(403)
+      expect(String(probeDenied.body.error)).toContain('"probe" scope')
       // a broken project layer is a problem a run start would refuse → the CLI's exit 1
       await Bun.write(join(dir, ".opencode", "auto", "models.json"), "{ not json")
       const broken = await h.call("GET", `/projects/${name}/models`, h.read)

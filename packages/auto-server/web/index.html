@@ -67,10 +67,21 @@
   details { margin: 6px 0; }
   details summary { cursor: pointer; color: var(--dim); }
   input[type="text"], input[type="password"], input[type="number"], select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit; padding: 4px 6px; border-radius: 4px; }
+  textarea { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit; padding: 5px 8px; border-radius: 4px; width: 100%; min-height: 64px; }
   .field { display: grid; grid-template-columns: 170px 1fr; gap: 6px 8px; align-items: center; }
   .field .hint { grid-column: 2; color: var(--dim); font-size: 11.5px; }
   .switchrow { display: grid; grid-template-columns: 1fr 1fr 28px; gap: 6px; }
   .err { color: var(--bad); white-space: pre-wrap; }
+  .ok-note { color: var(--ok); font-size: 12px; }
+  #ops-wrap .ops > h2 { margin-top: 14px; }
+  .ops-block { border: 1px solid var(--line); border-radius: 4px; padding: 8px; margin: 8px 0; background: var(--panel-2); }
+  .ops-block h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 2px 0 6px; }
+  .ops-block > div { margin: 4px 0; }
+  .ops-block label { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
+  .ops-block label > span:first-child { color: var(--dim); min-width: 150px; font-size: 12px; }
+  .ops-block input[type="text"], .ops-block input[type="number"], .ops-block select { max-width: 320px; }
+  .gatestep { border: 1px solid var(--warn); border-radius: 4px; padding: 8px; margin: 6px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ops-outcome { margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -113,6 +124,10 @@
           <span class="dim">options are the run's own; config keys are frozen by init — the form offers none</span></div>
         <div id="start-error" class="err"></div>
       </div>
+      <!-- not hidden itself: #project-body (its parent) governs visibility
+           until a project is selected; the blocks inside re-gate per token
+           and project (web/ops.ts refresh) -->
+      <div id="ops-wrap"></div>
     </div>
   </section>
 

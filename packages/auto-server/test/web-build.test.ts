@@ -40,5 +40,11 @@ describe("the web client build pipeline", () => {
     expect(CLIENT_APP_JS).toContain("verdictRows")
     expect(CLIENT_APP_JS).toContain("START_OPTION_FIELDS")
     expect(CLIENT_APP_JS).toContain("frozen by init")
+    // The write surface's constitution rides the same bytes (P4b): the
+    // two-step gate flow, the probe's two-step act, and the scope gating.
+    expect(CLIENT_APP_JS).toContain("answerGate")
+    expect(CLIENT_APP_JS).toContain("buildProbeRequest")
+    expect(CLIENT_APP_JS).toContain("spends real tokens")
+    expect(CLIENT_APP_JS).toContain("the client never touches the repository itself")
   })
 })

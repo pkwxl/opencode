@@ -22,6 +22,7 @@
 import { AutoApi, ApiError, type ProjectSummary, type RunView, type StatusModel } from "./api"
 import { SseTail, type SseFrame } from "./sse"
 import { InteractiveSession, type PendingQuestion } from "./interactive"
+import { buildOpsPanel, type OpsPanel } from "./ops"
 import { buildStartOptions, buildSwitches, capabilitiesOf, closedNote, isLiveState, isTerminalState, START_OPTION_FIELDS, stateLabel, verdictBanner, verdictRows, type Capabilities } from "./render"
 
 // —— tiny DOM helpers (textContent everywhere: no dynamic HTML is ever built) ——
@@ -103,6 +104,7 @@ const ui = {
   startOptions: byId<HTMLDivElement>("start-options"),
   switchRows: byId<HTMLDivElement>("switch-rows"),
   startError: byId<HTMLDivElement>("start-error"),
+  opsWrap: byId<HTMLDivElement>("ops-wrap"),
   runsNote: byId<HTMLParagraphElement>("runs-note"),
   runs: byId<HTMLTableElement>("runs"),
   runDetail: byId<HTMLDivElement>("run-detail"),
@@ -115,6 +117,23 @@ const ui = {
   engineEvents: byId<HTMLPreElement>("engine-events"),
   tail: byId<HTMLPreElement>("tail"),
 }
+
+// The write-operations panel (P4b): built once, re-gated per token and per
+// project selection (its deps are read live, so a reconnect with another
+// token re-hides every surface that token cannot use — and disarms an armed
+// probe). The deps wire the two flows the panel cannot own: the planning
+// session it spawns is selected as THE run (its questions land in the
+// pending-questions card above — answering them is the centerpiece flow),
+// and every successful write refreshes the read model (the status tree and
+// its commit verdicts re-render from the disk the operation just changed).
+const ops: OpsPanel = buildOpsPanel({
+  api: () => state.api,
+  caps: () => state.caps,
+  project: () => state.project,
+  onRunStarted: (id) => void selectRun(id),
+  onWrite: () => void refreshStatus(),
+})
+ui.opsWrap.append(ops.root)
 
 // —— connection ——
 
@@ -139,6 +158,7 @@ async function connect(token: string): Promise<void> {
   setConn(`connected · ${session.service}`, "ok")
   renderScopes()
   buildStartForm()
+  ops.refresh()
   await Promise.all([refreshProjects(), refreshRuns()])
   window.setInterval(() => void refreshRuns(), 2000)
   window.setInterval(() => void refreshStatus(), 3000)
@@ -188,6 +208,7 @@ async function selectProject(name: string): Promise<void> {
   show(ui.projectBody, true)
   show(ui.projectEmpty, false)
   show(ui.startWrap, state.caps.control)
+  ops.refresh()
 }
 
 // —— the status read model ——

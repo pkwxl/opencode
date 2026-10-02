@@ -27,14 +27,15 @@ import { basename, isAbsolute, join, resolve } from "node:path"
 
 // The token scopes, the authorization tiers of the assessment's §8 Q6:
 //   read    status, logs, events (and the SSE feeds of P1e)
-//   control run control (spawn, kill), close, task-add — the surfaces that
-//           spend tokens and write git through a run
-//   config  init/amend/fix/reset (P1d's routes; the schema exists now)
-//   answer  the pending-question queue (P3c; unused until then)
-//   probe   `models --probe` — its own opt-in scope, DISABLED BY DEFAULT:
-//           no route requires it in P1 and no default token set carries it
-//           (it burns tokens by starting agents; the confirmation parameter
-//           and per-daemon rate limit land with the Web write surface, P4b)
+//   control run control (spawn, kill), close, task-add, plan — the surfaces
+//           that spend tokens and write git through a run
+//   config  init/amend/fix/reset (P1d's routes)
+//   answer  the pending-question queue (P3c)
+//   probe   the model probe (POST /projects/<project>/models, P4b) — its
+//           own opt-in scope, DISABLED BY DEFAULT: carried by no default
+//           token set (it burns tokens by starting agents; beside the scope
+//           the route takes an explicit confirm field and the daemon's
+//           per-daemon rate window)
 export const SCOPES = ["read", "control", "config", "answer", "probe"] as const
 export type Scope = (typeof SCOPES)[number]
 
@@ -160,8 +161,9 @@ export class DaemonStore {
   }
 
   // Issues a token carrying exactly the given scopes. The scopes must be a
-  // non-empty subset of the schema; `probe` is choosable here (the schema
-  // exists now) but nothing requires it until its route lands.
+  // non-empty subset of the schema; `probe` is choosable here and required
+  // by the probe route (P4b) — still opt-in, still carried by nothing until
+  // an operator names it.
   issueToken(rawScopes: string, name?: string): { token: string; stored: StoredToken } {
     const wanted = [...new Set(rawScopes.split(",").map((part) => part.trim()).filter(Boolean))]
     if (!wanted.length) throw new StoreError("a token needs at least one scope (read, control, config, answer, probe)")

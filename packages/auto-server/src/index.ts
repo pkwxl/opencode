@@ -40,16 +40,22 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d/P1e/P3/P4a). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
+serve — the daemon (P1c/P1d/P1e/P3/P4). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
   default (v1 is single-machine; widen with --host at your own trust
   boundary). The Web client is served at the root: open the daemon's URL in
   a browser, paste a token, and the read surface (the project whitelist, the
   run list in the exit-code vocabulary, the status tree with its commit
-  verdicts, the SSE log/event streams, the pending questions) and the run
-  controls (start with per-run options, the graceful pause, kill) render
-  scope-aware from the API — controls hidden without the control scope, the
-  question UI without the answer scope; the page itself carries no data and
-  needs no token. The run-control REST surface: GET /health, GET /runs,
+  verdicts, the SSE log/event streams, the pending questions) and the write
+  surface (P4b: answering the pending questions — the answer scope; the
+  units close / task-add and the plan surface that spawns planning sessions
+  whose questions land in the run's card — the control scope; init / amend /
+  fix / reset with confirm and clean-tree as two explicit separate steps,
+  never one bundled force — the config scope; the models table and, behind
+  its own opt-in probe scope plus an explicit two-step in-UI confirmation
+  plus a per-daemon rate limit, the model probe) render scope-aware from the
+  API — every write surface hidden without its scope; the page itself
+  carries no data and needs no token. The run-control REST surface: GET
+  /health, GET /runs,
   POST /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
   force-terminate, mapped to killed/130); GET /projects (the whitelist) and
   GET /session (the token's scopes) are the client's two read endpoints; the
@@ -59,7 +65,8 @@ serve — the daemon (P1c/P1d/P1e/P3/P4a). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_P
   runs under stopBefore: execute with their questions over the interactive
   transport — the request takes "input" and "append"; plan --force-close
   composes as the close operation followed by the plan operation) and models
-  (read-only, runs beside a live run); the observability surface (P1e, the
+  (GET: the read-only table; POST: the probe — its own probe scope, the
+  confirm field, rate-limited to one fire per 10-minute window per daemon); the observability surface (P1e, the
   read scope): GET /projects/<project>/status (the polled read model over
   .auto/*.json, git dirty/clean per worktree, the core's rendered status tree
   and its commit-verdict completion — commit-is-completion, agent self-report
@@ -96,8 +103,11 @@ register — add a target directory to the daemon's whitelist. The whitelist
 token — manage bearer tokens and their scopes: read (status/logs/events),
   control (run control, close, task-add, /exit and /failback over the
   interactive transport), config (init/amend/fix/reset), answer (answering
-  questions over the interactive transport), probe (models --probe; opt-in,
-  disabled by default — no route requires it yet). Unauthenticated requests
+  questions over the interactive transport), probe (the model probe, POST
+  /projects/<project>/models — opt-in and disabled by default: carried by no
+  default token set, and beside the scope the probe takes an explicit
+  confirm field and the daemon's own rate window, one fire per 10 minutes).
+  Unauthenticated requests
   get 401, a token without the route's scope 403. The plaintext token is
   printed once at issue; the store keeps only its digest.
 
