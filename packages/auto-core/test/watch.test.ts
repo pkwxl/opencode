@@ -138,14 +138,14 @@ describe("liveness probe wiring (timer cleanup, the H7 POST abort)", () => {
 // surface are the recovery concern's cells (test/turn-recovery.test.ts),
 // which pins the consult, the per-minute exemption and the settle shapes
 // beside these end-to-end exits. What stays here is the wiring the exits and
-// books need: the marks riding attempt's returns (failover, errorClass,
-// retryable), the abort-before-settle ordering, and the no-early-settle
-// paths' session discipline.
+// books need: the marks riding attempt's returns (errorClass, retryable),
+// the abort-before-settle ordering, and the no-early-settle paths' session
+// discipline.
 describe("error-signal wiring: watch's three trigger surfaces → attempt exits (P3 classifies and marks only, makes no candidate decisions)", () => {
   // Zero-wait ladder: this block only checks error classification and exit
   // marks; retry backoff must not drag it out to minutes.
   const SIGNAL_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
-  test("retry part quota (isRetryable:false): early settle — abort first, then return; failover=true, errorClass=quota", async () => {
+  test("retry part quota (isRetryable:false): early settle — abort first, then return; errorClass=quota", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -171,8 +171,7 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await attempt(client, task, "prompt", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
-    const blocked = result as { question: string; failover?: boolean; errorClass?: string; retryable?: boolean }
-    expect(blocked.failover).toBe(true)
+    const blocked = result as { question: string; errorClass?: string; retryable?: boolean }
     expect(blocked.errorClass).toBe("quota")
     expect(blocked.retryable).toBe(false)
     expect(blocked.question).toContain("session error: ")
@@ -198,8 +197,7 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     // rate carries no isRetryable:false → retryable stays undefined → P3
     // changes no control flow; runSession still retries with new sessions in
-    // the existing order until RETRIES is exhausted and it blocks (the
-    // failover decision is left to P4 reading result.failover). But every
+    // the existing order until RETRIES is exhausted and it blocks. But every
     // attempt's early settle necessarily aborts — the aborts record proves
     // trigger surface 3 of D.2 is in effect.
     const result = await attempt(client, task, "prompt", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
@@ -208,7 +206,7 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
     expect(calls.aborts).toContain("ses_new_1")
   })
 
-  test("session.error quota (isRetryable:false): carries errorClass=quota, but no failover, no abort, no early settle", async () => {
+  test("session.error quota (isRetryable:false): carries errorClass=quota, but no abort, no early settle", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -222,15 +220,14 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await attempt(client, task, "prompt", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
-    const blocked = result as { errorClass?: string; failover?: boolean; retryable?: boolean }
+    const blocked = result as { errorClass?: string; retryable?: boolean }
     expect(blocked.errorClass).toBe("quota")
-    expect(blocked.failover).toBeUndefined()
     expect(blocked.retryable).toBe(false)
     // The session.error path never does the early-settle abort.
     expect(calls.aborts).toEqual([])
   })
 
-  test("session.error ordinary retryable 500: no early failover (takes the existing retry-exhaustion path)", async () => {
+  test("session.error ordinary retryable 500: no early settle (takes the existing retry-exhaustion path)", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -244,10 +241,9 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await attempt(client, task, "prompt", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
-    expect((result as { failover?: boolean }).failover).toBeUndefined()
-    // Retryable 500 → errorClass transient (reported only, no failover; the
-    // ladder and wait-and-probe consumption on the runSession side are
-    // covered in test/session.test.ts).
+    // Retryable 500 → errorClass transient (reported only; the ladder and
+    // wait-and-probe consumption on the runSession side are covered in
+    // test/session.test.ts).
     expect(calls.creates).toBe(1)
   })
 

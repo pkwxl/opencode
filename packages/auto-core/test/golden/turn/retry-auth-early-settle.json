@@ -35,7 +35,6 @@
       "statusCode": 401,
       "attempt": 1
     },
-    "errorClass": "auth",
-    "failover": true
+    "errorClass": "auth"
   }
 }

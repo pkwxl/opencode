@@ -279,11 +279,6 @@ export async function runSession(
   // hour-scaled, extra attempts do not help, waiting is all there is.
   const waits = switches.retryWaits
   let i = 1
-  // The /failback override ring's current length, as the ladder facts
-  // report it (the registry's tier lists are the candidate table otherwise;
-  // the override replaces every list while it is in force). The registry
-  // flag itself is constant now — every run has a registry.
-  const overrideRing = () => router.failbackOverride()?.fallback ?? []
   // The common action of a candidate failover (shared by the two trigger
   // faces: the quota-failover branch below and the fallback after ladder
   // exhaustion): pick the next usable candidate, switch the chain's route,
@@ -874,9 +869,9 @@ export async function runSession(
   // The loop itself is only the executor of the pure ladder decision
   // (src/engine/ladder.ts): every dispatch's outcome is handed to nextStep
   // with the facts the decision cannot read itself (the routing facts'
-  // presence, the fallback ring's current length, the ladder's waits, the
-  // managed server, the account a failure books against), and the step it
-  // answers is executed below with today's side effects in their places.
+  // presence, the ladder's waits, the managed server, the account a failure
+  // books against), and the step it answers is executed below with today's
+  // side effects in their places.
   for (;;) {
     let result: SessionResult
     try {
@@ -897,13 +892,11 @@ export async function runSession(
       result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
     }
     const account = accountOf(chain, routing)
-    // The registry flag the pure ladder decision reads is constant now:
-    // every run has a registry, the implicit one included, so the tier
-    // lists (or the /failback override that replaces them) are always the
-    // candidate table.
+    // The facts carry only what varies between dispatches (0069 §2.2 D2):
+    // the ladder's waits, the managed server and the booking account —
+    // every run has a registry since the implicit registry (0061 F2), so
+    // the candidate table needs no flag.
     const facts: LadderFacts = {
-      registry: true,
-      ringLength: overrideRing().length,
       waits,
       server: opts.server !== undefined,
       account,

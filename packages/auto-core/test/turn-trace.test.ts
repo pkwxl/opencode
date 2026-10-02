@@ -997,9 +997,9 @@ const scenarios: TurnScenario[] = [
   // outright — the turn settles early: the still-running old turn is
   // aborted first, then the fixed snapshot field set (error from the
   // errorInfo message, retryable:false passed down, errorInfo, errorClass
-  // "quota", failover:true) plus the stated reset fields (the event's own
-  // resetAt/scope outrank every other source). The ↻ vlog never fires —
-  // the settle precedes it.
+  // "quota") plus the stated reset fields (the event's own resetAt/scope
+  // outrank every other source). The ↻ vlog never fires — the settle
+  // precedes it.
   {
     id: "retry-quota-early-settle",
     kinds: ["message", "retry"],
@@ -1177,7 +1177,7 @@ const scenarios: TurnScenario[] = [
   // class, trip() preempts the held event wait, and the post-loop raised
   // settle aborts the still-running old turn before handing the class to
   // the escalation: the ⚖ line naming the answer and its reset, then the
-  // fixed snapshot field set (errorClass, failover, classified) with
+  // fixed snapshot field set (errorClass, classified) with
   // resetSource "classifier".
   {
     id: "answer-quota-raised-settle",

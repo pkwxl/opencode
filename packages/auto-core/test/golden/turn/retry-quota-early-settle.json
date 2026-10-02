@@ -39,7 +39,6 @@
       "scope": "5h"
     },
     "errorClass": "quota",
-    "failover": true,
     "resetAt": 1790647200000,
     "scope": "5h",
     "resetSource": "stated"

@@ -1,9 +1,8 @@
 // The ladder decision (plans/0061 §4.7): what the session-driving loop does
 // with a dispatch's outcome — one row per Step kind, per class label, per
-// spent window, per ring-or-no-ring gate and per ladder position, over
-// hand-built results, counters and facts. The decision is pure: the result
-// and the ladder are inputs, and runSession (the executor) owns every
-// effect the steps name.
+// spent window and per ladder position, over hand-built results, counters
+// and facts. The decision is pure: the result and the ladder are inputs, and
+// runSession (the executor) owns every effect the steps name.
 import { describe, expect, test } from "bun:test"
 import type { SessionResult, WindowWait } from "../src/chain"
 import { nextStep, type LadderFacts, type LadderState } from "../src/engine/ladder"
@@ -15,9 +14,10 @@ const blocked = (question: string, over: Partial<Extract<SessionResult, { type: 
 // by default: retries 1, 2, 3).
 const ladder = (i = 1): LadderState => ({ i, tried: [], clipped: [] })
 
-// The run's facts: no registry, no fallback ring, no managed server, no
-// account unless a row says otherwise.
-const facts = (over: Partial<LadderFacts> = {}): LadderFacts => ({ registry: false, ringLength: 0, waits: [0, 1, 2], server: false, ...over })
+// The run's facts: no managed server, no account unless a row says otherwise.
+// (Every run has a registry since the implicit registry, 0061 F2 — the
+// candidate table needs no fact.)
+const facts = (over: Partial<LadderFacts> = {}): LadderFacts => ({ waits: [0, 1, 2], server: false, ...over })
 
 describe("the ladder decision", () => {
   test("a live outcome returns as-is (the executor books the answered account on the way out)", () => {
@@ -33,17 +33,17 @@ describe("the ladder decision", () => {
   test("a no-model wait sleeps on the window and dispatches again", () => {
     const wait: WindowWait = { until: 1_750_000_000_000, model: "e2", tier: "simple", opens: "opens 12:30 UTC" }
     const result = blocked("no usable model candidate now: every candidate of the simple list is outside its windows; waiting for the earliest opening", { noModel: true, windowWait: wait })
-    expect(nextStep(result, ladder(), facts({ registry: true }))).toEqual({ kind: "window-wait", wait })
+    expect(nextStep(result, ladder(), facts())).toEqual({ kind: "window-wait", wait })
   })
 
   test("a no-model exhaustion enters the wait-and-probe loop with no cause (no session ran)", () => {
     const result = blocked("no usable model candidate: every candidate of the simple list is down\nsecond line", { noModel: true })
-    expect(nextStep(result, ladder(), facts({ registry: true }))).toEqual({ kind: "recover", why: "no usable model candidate: every candidate of the simple list is down" })
+    expect(nextStep(result, ladder(), facts())).toEqual({ kind: "recover", why: "no usable model candidate: every candidate of the simple list is down" })
   })
 
-  test("quota with a fallback ring escalates: the key ring first, then the model, then recovery", () => {
+  test("quota escalates: the key ring first, then the model, then recovery", () => {
     const result = blocked("session error: insufficient_quota", { errorClass: "quota" })
-    expect(nextStep(result, ladder(), facts({ ringLength: 2, account: "prov" }))).toEqual({
+    expect(nextStep(result, ladder(), facts({ account: "prov" }))).toEqual({
       kind: "escalate",
       label: "quota restricted",
       until: undefined,
@@ -52,9 +52,9 @@ describe("the ladder decision", () => {
     })
   })
 
-  test("auth under a registry escalates the same way (the tier lists are the candidate table)", () => {
+  test("auth escalates the same way (the tier lists are the candidate table)", () => {
     const result = blocked("session creation failed: 401 unauthorized", { errorClass: "auth" })
-    expect(nextStep(result, ladder(), facts({ registry: true }))).toEqual({
+    expect(nextStep(result, ladder(), facts())).toEqual({
       kind: "escalate",
       label: "provider auth failed",
       until: undefined,
@@ -63,9 +63,9 @@ describe("the ladder decision", () => {
     })
   })
 
-  test("rate with a ring escalates likewise", () => {
+  test("rate escalates likewise", () => {
     const result = blocked("session error: rate limit exceeded", { errorClass: "rate" })
-    expect(nextStep(result, ladder(), facts({ ringLength: 1, account: "zai-coding-plan" }))).toEqual({
+    expect(nextStep(result, ladder(), facts({ account: "zai-coding-plan" }))).toEqual({
       kind: "escalate",
       label: "rate-limit wait too long",
       until: undefined,
@@ -76,7 +76,7 @@ describe("the ladder decision", () => {
 
   test("a classifier-raised class marks the label and carries the reset into the down marks", () => {
     const result = blocked("session error: usage limit reached", { errorClass: "quota", classified: true, resetAt: 1_750_000_000_000 })
-    expect(nextStep(result, ladder(), facts({ registry: true }))).toEqual({
+    expect(nextStep(result, ladder(), facts())).toEqual({
       kind: "escalate",
       label: "quota restricted (classifier)",
       until: 1_750_000_000_000,
@@ -87,7 +87,7 @@ describe("the ladder decision", () => {
 
   test("a spent five-hour window with a stated reset escalates without a class (the ladder would only hit it again)", () => {
     const result = blocked("session error: usage window spent", { resetAt: 1_750_000_000_000, scope: "5h" })
-    expect(nextStep(result, ladder(), facts({ ringLength: 2 }))).toEqual({
+    expect(nextStep(result, ladder(), facts())).toEqual({
       kind: "escalate",
       label: "five-hour usage window spent",
       until: 1_750_000_000_000,
@@ -98,14 +98,14 @@ describe("the ladder decision", () => {
 
   test("a spent weekly window escalates as the weekly label", () => {
     const result = blocked("session error: usage window spent", { resetAt: 1_750_000_000_000, scope: "7d" })
-    const step = nextStep(result, ladder(), facts({ ringLength: 2 }))
+    const step = nextStep(result, ladder(), facts())
     if (step.kind !== "escalate") throw new Error(`expected escalate, got ${step.kind}`)
     expect(step.label).toBe("weekly usage window spent")
   })
 
   test("a spent daily window escalates as the daily label", () => {
     const result = blocked("session error: usage window spent", { resetAt: 1_750_000_000_000, scope: "day" })
-    const step = nextStep(result, ladder(), facts({ ringLength: 2 }))
+    const step = nextStep(result, ladder(), facts())
     if (step.kind !== "escalate") throw new Error(`expected escalate, got ${step.kind}`)
     expect(step.label).toBe("daily usage window spent")
   })
@@ -120,26 +120,12 @@ describe("the ladder decision", () => {
     expect(nextStep(result, ladder(), facts())).toEqual({ kind: "retry", nth: 1, waitMinutes: 0, restartServer: false })
   })
 
-  test("a class without any candidate table and non-retryable: straight into the wait-and-probe loop", () => {
-    const result = blocked("session error: insufficient_quota\nretryable: false", { errorClass: "quota", retryable: false })
+  test("a non-retryable error outside the escalation classes: straight into the wait-and-probe loop", () => {
+    const result = blocked("session error: hard gateway failure", { errorClass: "unknown", retryable: false })
     expect(nextStep(result, ladder(), facts({ account: "prov" }))).toEqual({
       kind: "recover",
-      why: "non-retryable session error encountered (session error: insufficient_quota)",
+      why: "non-retryable session error encountered (session error: hard gateway failure)",
       cause: { ...result, account: "prov" },
-    })
-  })
-
-  test("a retryable class error without any candidate table stays on the ladder (the class alone cannot switch the model)", () => {
-    const result = blocked("session error: insufficient_quota", { errorClass: "quota" })
-    expect(nextStep(result, ladder(), facts())).toEqual({ kind: "retry", nth: 1, waitMinutes: 0, restartServer: false })
-  })
-
-  test("a spent window without any candidate table: the wait sleeps to the reset instead of the ladder retrying", () => {
-    const result = blocked("session error: five-hour window spent", { resetAt: 1_750_000_000_000, scope: "5h" })
-    expect(nextStep(result, ladder(), facts())).toEqual({
-      kind: "recover",
-      why: "the five-hour usage window is spent (session error: five-hour window spent)",
-      cause: { ...result, account: undefined },
     })
   })
 
@@ -153,24 +139,10 @@ describe("the ladder decision", () => {
     expect(nextStep(result, ladder(3), facts())).toEqual({ kind: "retry", nth: 3, waitMinutes: 2, restartServer: false })
   })
 
-  test("ladder exhausted with a fallback ring: the model failover runs first, recovery takes what it cannot move", () => {
-    const result = blocked("session error: stream disconnected")
-    expect(nextStep(result, ladder(4), facts({ ringLength: 2 }))).toEqual({
-      kind: "after-ladder",
-      why: "retry ladder exhausted (3 retries) without success",
-      cause: { ...result, account: undefined },
-    })
-  })
-
-  test("ladder exhausted under a registry alone: the failover runs there too", () => {
-    const result = blocked("session error: stream disconnected")
-    expect(nextStep(result, ladder(4), facts({ registry: true })).kind).toBe("after-ladder")
-  })
-
-  test("ladder exhausted with neither ring nor registry: straight into the wait-and-probe loop", () => {
+  test("ladder exhausted: the model failover runs first, recovery takes what it cannot move", () => {
     const result = blocked("session error: stream disconnected")
     expect(nextStep(result, ladder(4), facts())).toEqual({
-      kind: "recover",
+      kind: "after-ladder",
       why: "retry ladder exhausted (3 retries) without success",
       cause: { ...result, account: undefined },
     })
@@ -179,7 +151,7 @@ describe("the ladder decision", () => {
   test("an empty ladder (RETRY_WAITS=off) exhausts on the first failure", () => {
     const result = blocked("session error: stream disconnected")
     expect(nextStep(result, ladder(1), facts({ waits: [] }))).toEqual({
-      kind: "recover",
+      kind: "after-ladder",
       why: "retry ladder exhausted (0 retries) without success",
       cause: { ...result, account: undefined },
     })
@@ -205,7 +177,6 @@ describe("the ladder decision", () => {
     const state = ladder(2)
     const before = structuredClone(state)
     const beforeResult = structuredClone(result)
-    nextStep(result, state, facts({ ringLength: 2 }))
     nextStep(result, state, facts())
     expect(state).toEqual(before)
     expect(result).toEqual(beforeResult)

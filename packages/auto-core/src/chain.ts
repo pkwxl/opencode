@@ -63,11 +63,6 @@ export type Watch = {
   // The classification of the above errorInfo through classifySessionError
   // (meaningful only when error information exists).
   errorClass?: ErrorClass
-  // Set true only on the two early-settlement surfaces, the retry part and
-  // session.status retry: marks this error as failover-eligible for
-  // runSession's P4 failover decision to read (this only marks, it does not
-  // pick a candidate).
-  failover?: boolean
   // The failure-message classifier (plans/0055 §7.1; set only under a
   // registry with a classifier list, only when its answer applies):
   // `classified` = errorClass came from the classifier's answer, which raised
@@ -114,7 +109,7 @@ export type Watch = {
 
 export type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
-  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & Pick<Watch, "classified" | "resetAt" | "scope" | "resetSource" | "pendingReset"> & {
+  | ({ type: "blocked"; question: string; retryable?: boolean; errorClass?: ErrorClass } & Pick<Watch, "classified" | "resetAt" | "scope" | "resetSource" | "pendingReset"> & {
       // Strict recovery: this blocked outcome was triggered by an invalid
       // handover document; the unit owner (executeWhole/runSubtask) rolls
       // back to the unit baseline and redoes the unit from a cold start

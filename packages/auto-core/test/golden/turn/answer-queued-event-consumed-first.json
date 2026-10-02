@@ -39,7 +39,6 @@
       "attempt": 2
     },
     "errorClass": "quota",
-    "failover": true,
     "classified": true,
     "resetAt": 1790647200000,
     "resetSource": "classifier"

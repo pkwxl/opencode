@@ -59,7 +59,6 @@ export function settleToWatch(settle: Settle, view: TurnView, channels: ResultCh
       retryable: failureInfo?.isRetryable === false ? false : undefined,
       errorInfo: failureInfo,
       errorClass: settle.cls,
-      failover: true,
       ...(settle.classified ? { classified: true } : {}),
       ...resetFields(view.recovery, failureInfo, ctx),
     })

@@ -610,7 +610,6 @@ export async function attempt(
         question: `session error: ${result.error}`,
         retryable: result.retryable,
         errorClass: result.errorClass,
-        failover: result.failover,
         ...(result.classified ? { classified: true } : {}),
         ...(result.resetAt !== undefined ? { resetAt: result.resetAt } : {}),
         ...(result.scope !== undefined ? { scope: result.scope } : {}),

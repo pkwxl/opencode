@@ -4,9 +4,9 @@
 // ring and the model failover into the wait-and-probe loop, exhaust the
 // retry ladder into the failover, or retry the transient error. runSession
 // (src/session.ts) is the executor: it builds the facts at the seam (the
-// routing facts' presence, the fallback ring's current length, the account
-// a failure books against — volatile run state reaches the decision only
-// as data), asks this function, and keeps every side effect in its place:
+// routing facts' presence, the account a failure books against — volatile
+// run state reaches the decision only as data), asks this function, and
+// keeps every side effect in its place:
 // the learned-window booking, the escalation's down marks, the server
 // restart, the backoff sleep and the fork seeding.
 //
@@ -33,20 +33,24 @@ export type WaitCause = Pick<Extract<SessionResult, { type: "blocked" }>, "error
 // paths are the only writers.
 export type LadderState = { i: number; tried: string[]; clipped: string[] }
 
-// What the decision needs of the run: whether a model registry drives it
-// (the tier lists are then the candidate table), how long the no-registry
-// fallback ring currently is (0 = no ring; a /failback override can change
-// it between prompts), the retry ladder's wait minutes (the minutes before
-// each retry; the element count is the retry cap), whether a managed
-// server exists that a network failure can restart, and the account a
-// failure books its learned windows against (the wait cause carries it, so
-// the loop that waits a failure out knows whose windows to read).
+// What the decision needs of the run: the retry ladder's wait minutes (the
+// minutes before each retry; the element count is the retry cap), whether a
+// managed server exists that a network failure can restart, and the account
+// a failure books its learned windows against (the wait cause carries it, so
+// the loop that waits a failure out knows whose windows to read). Every run
+// has a registry since the implicit registry (0061 F2), so the candidate
+// table needs no flag: the tier lists (or the /failback override that
+// replaces them) always are one.
 // AUTO-DECISION: `account` sits in the facts although the ruled sketch
 // named four fields — the steps' causes need it (the learned windows are
 // read by the account), and the executor books the same read for its
 // learnFailure/accountAnswered wiring, so one computation per dispatch
 // serves both without the executor enriching the steps after the decision.
-export type LadderFacts = { registry: boolean; ringLength: number; waits: number[]; server: boolean; account?: string }
+// AUTO-DECISION (0069 §2.2 D2, T-109): the `registry` flag and the
+// `ringLength` field are deleted — dead in production since the implicit
+// registry (0061 F2) removed the no-registry path, where the call site
+// wrote the constants `registry: true` and the override ring's length.
+export type LadderFacts = { waits: number[]; server: boolean; account?: string }
 
 // The step runSession executes:
 // - return: the outcome leaves the loop as-is (a live result, or an
@@ -106,8 +110,8 @@ function spentWindow(result: WaitCause): string | undefined {
 // of the branches is the ladder's policy and reproduces today's statement
 // order exactly: a live outcome first, then the registry's no-model
 // outcomes, then the session faults (escalation before the retry verdicts,
-// the non-retryable and spent-window recoveries before the ladder, and the
-// ladder's own exhaustion last).
+// the non-retryable recovery before the ladder, and the ladder's own
+// exhaustion last).
 export function nextStep(result: SessionResult, ladder: LadderState, facts: LadderFacts): Step {
   // A live outcome leaves the loop (the executor books the answered account
   // on the way out).
@@ -149,36 +153,40 @@ export function nextStep(result: SessionResult, ladder: LadderState, facts: Ladd
   const classLabel = classBase !== undefined && result.classified ? `${classBase} (classifier)` : classBase
   // The quota-failover escalation (design D.3/D.4, P4): when the class is
   // quota/auth/rate — or a spent window states a reset, whatever the class
-  // — and a candidate table is configured (a registry's tier lists, or the
-  // no-registry fallback ring), the escalation runs: key → model → wait
-  // (plans/0055 §7). A ringed provider rotates to its next key first, the
-  // model failover follows only when no key is left, and the wait-and-probe
-  // loop takes what neither can move. A spent window reaches here at once,
-  // skipping the retry ladder: a fresh session would only hit it again.
-  if ((facts.registry || facts.ringLength > 0) && classLabel !== undefined) {
+  // — the escalation runs: key → model → wait (plans/0055 §7). A ringed
+  // provider rotates to its next key first, the model failover follows only
+  // when no key is left, and the wait-and-probe loop takes what neither can
+  // move. A spent window reaches here at once, skipping the retry ladder:
+  // a fresh session would only hit it again.
+  // AUTO-DECISION (0069 §2.2 D2, T-109): the candidate-table gate is gone
+  // with the fields that fed it — every run has a registry since the
+  // implicit registry (0061 F2), so the tier lists (or the /failback
+  // override that replaces them) are always the candidate table and the
+  // escalation runs on every class label. The collapse also retires the
+  // spent-window recover arm below: a spent window always builds a class
+  // label, which escalates here first.
+  if (classLabel !== undefined) {
     return { kind: "escalate", label: classLabel, until: result.resetAt, classified: result.classified, cause }
   }
-  // Non-retryable (isRetryable:false, the quota/auth classes): switching
-  // sessions is pointless, and without a candidate table the model cannot
-  // be switched either — the wait-and-probe loop waits indefinitely for
-  // the quota to recover, probing with fresh temporary sessions, and after
-  // recovery forks the interrupted session to continue. A spent window
-  // (above) takes the same path without a candidate table: the wait sleeps
-  // to its reset instead of the ladder retrying (plans/0057 §4.1).
+  // Non-retryable (isRetryable:false) outside the escalation classes:
+  // switching sessions is pointless, and the escalation above did not fire
+  // (no class label) — the wait-and-probe loop waits indefinitely for the
+  // failure to clear, probing with fresh temporary sessions, and after
+  // recovery forks the interrupted session to continue.
   if (result.retryable === false) {
     return { kind: "recover", why: `non-retryable session error encountered (${firstLine(result.question)})`, cause }
   }
-  if (spent !== undefined) {
-    return { kind: "recover", why: `the ${spent} usage window is spent (${firstLine(result.question)})`, cause }
-  }
   // Ladder exhausted: the failover candidates are tried first (switching
   // provider is the only lever outside the ladder not yet tried); when
-  // those are exhausted too (or none configured), the wait-and-probe loop
-  // takes over, every interval until service recovers, then continuing
-  // from a fork of the interrupted session with the ladder restarted.
+  // those are exhausted too, the wait-and-probe loop takes over, every
+  // interval until service recovers, then continuing from a fork of the
+  // interrupted session with the ladder restarted.
+  // AUTO-DECISION (0069 §2.2 D2, T-109): the no-candidate-table recover
+  // arm of this branch is gone with the gate — unreachable in production
+  // since 0061 F2 (the call site's registry flag was the constant true).
   if (ladder.i > facts.waits.length) {
     const why = `retry ladder exhausted (${facts.waits.length} retries) without success`
-    return facts.registry || facts.ringLength > 0 ? { kind: "after-ladder", why, cause } : { kind: "recover", why, cause }
+    return { kind: "after-ladder", why, cause }
   }
   // The backoff before this retry: the counter advances before the action
   // (the executor writes it), and a network/service failure restarts the

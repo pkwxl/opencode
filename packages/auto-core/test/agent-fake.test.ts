@@ -334,7 +334,7 @@ describe("error signals", () => {
   test("a retry signal classed as quota settles early and aborts the running turn", async () => {
     const agent = make()
     const result = await watch(agent.client, "s", stream([{ type: "retry", session: "s", attempt: 1, error: { message: "usage limit reached", statusCode: 429 } }]), opts)
-    expect(result.failover).toBe(true)
+    expect(result.errorClass).toBe("quota")
     expect(agent.argsOf("abort")).toEqual([["s"]])
   })
 
@@ -392,15 +392,13 @@ describe("the agent's retry policy (plans/0057 §4)", () => {
     const early = await watch(neutral.client, "s", stream([throttled(3, 5_000), ev.idle("s")]), opts)
     expect(early.errorClass).toBe("rate")
     const declared = make({ retryPolicy: POLICY })
-    const still = await watch(declared.client, "s", stream([throttled(3, 5_000), ev.idle("s")]), opts)
-    expect(still.failover).toBeUndefined()
+    await watch(declared.client, "s", stream([throttled(3, 5_000), ev.idle("s")]), opts)
     expect(declared.argsOf("abort")).toEqual([])
     // Its cap spent, or a wait above its own backoff: settled as rate.
     for (const signal of [throttled(5, 5_000), throttled(1, 15_000)]) {
       const agent = make({ retryPolicy: POLICY })
       const result = await watch(agent.client, "s", stream([signal, ev.idle("s")]), opts)
       expect(result.errorClass).toBe("rate")
-      expect(result.failover).toBe(true)
       expect(agent.argsOf("abort")).toEqual([["s"]])
     }
   })
@@ -1983,7 +1981,6 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       const agent = make()
       const result = await watch(agent.client, "s", stream([signal, ev.idle("s")]), opts)
       expect(result.errorClass).toBe("quota")
-      expect(result.failover).toBe(true)
       expect(agent.argsOf("abort")).toEqual([["s"]])
     }
   })

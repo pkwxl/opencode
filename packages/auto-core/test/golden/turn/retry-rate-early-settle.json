@@ -36,7 +36,6 @@
       "attempt": 2,
       "next": 120000
     },
-    "errorClass": "rate",
-    "failover": true
+    "errorClass": "rate"
   }
 }
