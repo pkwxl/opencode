@@ -670,8 +670,12 @@ export async function landBranch(dir: string, branch: string, task: { id: string
     .map((line) => line.trim())
     .filter(Boolean)
   if (conflicted.length && conflicted.every((path) => own.includes(path))) {
-    for (const path of own) await git(dir, ["checkout", "--ours", "--", path])
-    await git(dir, ["add", "--", ...own])
+    // Only the actually-conflicted subset: an `own` entry a lane never
+    // touched (a task without a checklist, an index line moved) matches no
+    // pathspec and would leave the merge unmerged (S5's checklist entry
+    // exposed the shape).
+    for (const path of conflicted) await git(dir, ["checkout", "--ours", "--", path])
+    await git(dir, ["add", "--", ...conflicted])
     const concluded = await git(dir, [...(await identityArgs(dir)), "commit", "-m", subject])
     if (concluded.code === 0) return { type: "ok" }
     const aborted = await git(dir, ["merge", "--abort"])

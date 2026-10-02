@@ -4035,3 +4035,106 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
     }
   }, 240_000)
 })
+
+// The scheduler's task-internal width (auto-core plans/0068 S5: D3 stage 2,
+// D18, D19, §6.8): a split task at --max-sessions 2 runs its streams as
+// lanes — the lead lane stops at its taken split (the report carries the
+// split to the parent), the parent lands it and schedules the stream lanes
+// T-NNN.S<nn> as cold starts (no fork of the lead: the workers' turns carry
+// no --resume/--fork-session), a dependent stream sees the files changed
+// since the split (the seeded split record, read in its own worktree), the
+// last stream's delta carries the task's full acceptance verification, and
+// its lane runs the wrap-up and closes the task.
+describe("CLI: stream lanes (auto-core plans/0068 S5)", () => {
+  type Turn = { session?: string; resume?: string; fork: boolean; text: string }
+  const TASK = "T-001"
+  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\nDepends: none\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
+
+  test("a split task at maxSessions 2: the lead lane stops at the split, the streams run as cold-start lanes, the last one carries the full verification and wraps up", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-s5-"))
+    const log = join(await mkdtemp(join(tmpdir(), "auto-cli-s5-turns-")), "turns.jsonl")
+    const agent = await fakeClaude({ FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_LEAD_CONTEXT: "70000" })
+    const git = gitOf(dir)
+    const turns = async (): Promise<Turn[]> =>
+      (await Bun.file(log).text().catch(() => ""))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Turn)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+
+      const run = await agent.run(["run", dir, "--max-sessions", "2"])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      const all = await turns()
+      // The lead ran inside its lane under D18's guidance: the split clause
+      // names the level the streams will actually get.
+      const lead = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))
+      expect(lead).toBeDefined()
+      expect(lead!.text).toContain("The streams run side by side under this project's parallel level low")
+      // The lead's lane stopped at the taken split; the parent landed it and
+      // scheduled the streams as lanes of their own (the relayed story).
+      expect(run.out).toContain("the lead split the remaining work into 2 streams")
+      expect(run.out).toContain("each as a lane of its own")
+      expect(run.out).toContain("T-001.S01 dispatching a lane")
+      expect(run.out).toContain("T-001.S02 dispatching a lane")
+      // The streams are cold starts (D19): fresh sessions, no --resume, no
+      // --fork-session — nothing of the lead's server survives its process.
+      const streams = all.filter((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))
+      expect(streams).toHaveLength(2)
+      for (const stream of streams) {
+        expect(stream.fork).toBe(false)
+        expect(stream.resume).toBeUndefined()
+        expect(stream.text).toContain("a fresh session that forks nothing")
+      }
+      expect(streams[0]!.text).toContain(`runs stream ${TASK}.S01`)
+      expect(streams[1]!.text).toContain(`runs stream ${TASK}.S02`)
+      // The cold delta carries the task and the stream's own scope file.
+      expect(streams[0]!.text).toContain("The task (its document is docs/T-001/todo.md):")
+      expect(streams[0]!.text).toContain("Your stream's scope file (docs/T-001/S01/todo.md) in full:")
+      // The dependent stream saw the files changed since the split (its
+      // worktree's seeded record), and the last stream carries the task's
+      // full acceptance verification.
+      expect(streams[1]!.text).toContain("Since the split, the streams that ran before this one changed these files")
+      expect(streams[1]!.text).toContain("src/alpha.ts")
+      expect(streams[1]!.text).toContain("This is the last stream")
+      // The wrap-up ran inside the last stream's lane, as a session of its own.
+      const wrapup = all.find((turn) => turn.text.includes("This session only performs the wrap-up"))
+      expect(wrapup).toBeDefined()
+      expect(wrapup!.fork).toBe(false)
+      // On disk: the lead's foundation, both streams' modules, the scope
+      // files done, the checklist fully ticked, the task done and the index
+      // ticked — the lane story ends where the serial one does.
+      expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe("export const shared = 1\n")
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe(`export const alpha = "${TASK}.S01"\n`)
+      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe(`export const beta = "${TASK}.S02"\n`)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(true)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 2, "done"))).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).text()).not.toContain("- [ ]")
+      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
+      expect(await Bun.file(join(dir, taskDoc(TASK, "report"))).text()).toContain("Result: PASS")
+      // The split record travelled: the lead worktree's registry died at
+      // teardown, the parent re-persisted the split at landing, re-rooted
+      // onto the main tree.
+      const units = JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text()) as { tasks: Record<string, { split?: { root: string; sha: string }[] }> }
+      expect(units.tasks[TASK]?.split?.map((line) => line.root)).toEqual([dir])
+      // Three landings (the lead, both streams), the park and branches torn
+      // down, the tree clean.
+      const bodies = await git("log", "--format=%B")
+      expect(bodies.match(/Auto-Stage: landing\n/g)?.length).toBe(3)
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
+      expect((await git("branch", "--list", "auto-lane/*")).trim()).toBe("")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dirname(log), { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 300_000)
+})

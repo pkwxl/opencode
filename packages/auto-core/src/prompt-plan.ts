@@ -11,7 +11,7 @@
 // and every render takes the PromptFacts value the caller built.
 import type { ModeSpec } from "./mode"
 import type { ParallelLevel } from "./intent/types"
-import { intentText, modeText, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
+import { intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
 
 // Phase planning session (design doc plans/0006-phases-design.md §E): a
 // one-shot bypass session whose artifacts = this phase's task index
@@ -81,17 +81,15 @@ export function renderPhasePlan(facts: PromptFacts, input: {
     trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     planDuties: input.planDuties,
-    ...parallelism(facts, input.parallel),
+    ...parallelismVars(facts, input.parallel),
   })
 }
 
 // Planning parallelism guidance (MP.1, plans/0046 D10/D11): the level's
-// `## parallelism` intent subsection. At none, or when the pack lacks the
+// `## parallelism` intent subsection — prompt.ts's shared parallelismVars
+// (since plans/0068 S5 the decompose family and the whole-task split clause
+// inject the same subsection). At none, or when the pack lacks the
 // subsection, both keys are undefined and the template's block renders nothing.
-function parallelism(facts: PromptFacts, level: ParallelLevel | undefined): { parallel?: string; parallelRules?: string } {
-  const rules = level ? intentText(facts, "parallelism", level, {}) : undefined
-  return rules ? { parallel: level, parallelRules: rules } : {}
-}
 
 // m-mode planning (phases = "m", plans/0053 D12; formerly the init shortcut
 // --implement-file/--implement-prompt): a one-shot bypass session whose
@@ -124,7 +122,7 @@ export function renderImplementPlan(facts: PromptFacts, input: {
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
-    ...parallelism(facts, input.parallel),
+    ...parallelismVars(facts, input.parallel),
   })
 }
 
@@ -202,6 +200,6 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
     planDuties: input.planDuties,
-    ...parallelism(facts, input.parallel),
+    ...parallelismVars(facts, input.parallel),
   })
 }

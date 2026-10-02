@@ -44,17 +44,20 @@ export type Steer = {
 // for unit tests): not constructed while the experiment switch
 // OPENCODE_AUTO_STEER is off (on = autoSwitches().steer) — no usage notices,
 // no hard-wall hint, and the post-session handover check is disabled with it.
-export function handoffSteer(on: boolean, cap: number, task: Task): Steer | undefined {
+// A subtask names its per-stream document docs/T-NNN/S<nn>/handoff.md
+// (plans/0068 S5: side-by-side stream lanes hand over through one document
+// each); without one the steer names the task-level file.
+export function handoffSteer(on: boolean, cap: number, task: Task, subtask?: number): Steer | undefined {
   return on
     ? {
         limit: cap * 2,
-        // The steer texts and usage notices render no intent sections and no
+        // The steer texts and usage notes render no intent sections and no
         // question rule, so their facts carry the built-in pack (the render
         // exit takes facts uniformly; the values never reach these bytes).
-        text: renderHandoffSteer(promptFacts(), taskDocPaths(task.id)),
+        text: renderHandoffSteer(promptFacts(), { ...taskDocPaths(task.id), handoff: handoffFile(task, subtask) }),
         notes: [
-          { at: 0.5, text: renderUsageNoteInfo(promptFacts(), taskDocPaths(task.id)) },
-          { at: 0.85, text: renderUsageNoteWinddown(promptFacts(), taskDocPaths(task.id)) },
+          { at: 0.5, text: renderUsageNoteInfo(promptFacts(), { ...taskDocPaths(task.id), handoff: handoffFile(task, subtask) }) },
+          { at: 0.85, text: renderUsageNoteWinddown(promptFacts(), { ...taskDocPaths(task.id), handoff: handoffFile(task, subtask) }) },
         ],
       }
     : undefined

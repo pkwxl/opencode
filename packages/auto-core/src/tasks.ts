@@ -211,6 +211,39 @@ export async function tickSubtask(dir: string, id: string, index: number): Promi
   if (changed) await Bun.write(file, out)
 }
 
+// Re-derives every checklist tick of docs/T-NNN/subtasks.md from the S<nn>
+// state files — the load-time merge's (effectiveDone's) inverse, the
+// checklist-level sibling of lanes' syncIndexTicks: the state files are the
+// progress fact, the ticks a view two lanes may have ticked adjacently (no
+// textual merge survives that; plans/0068 S5 resolves such a landing onto
+// the main side and re-derives the truth here). Driver-exclusive. Returns
+// the S-ids whose marks changed; a missing file or a checklist without
+// items changes nothing.
+export async function syncChecklistTicks(dir: string, id: string): Promise<string[]> {
+  const file = join(dir, taskDoc(id, "subtasks"))
+  const text = await Bun.file(file).text().catch(() => undefined)
+  if (text === undefined) return []
+  const items = subtasks(text)
+  if (!items.length) return []
+  const done = effectiveDone(await scanSubtaskStates(dir, id, items.length), items)
+  const lines = text.split("\n")
+  const changed: string[] = []
+  let at = 0
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*- \[( |x|X)\]/.test(lines[i]!)) continue
+    const index = at++
+    if (index >= items.length) continue
+    const mark = done[index] ? "x" : " "
+    const next = lines[i]!.replace(/^(\s*- \[)[ xX](\])/, `$1${mark}$2`)
+    if (next !== lines[i]) {
+      lines[i] = next
+      changed.push(subtaskId(index + 1))
+    }
+  }
+  if (changed.length) await Bun.write(file, lines.join("\n"))
+  return changed
+}
+
 // —— Task documents ——
 
 // The body of a task document: everything after the title line and the field
@@ -583,6 +616,15 @@ export async function setSplit(dir: string, id: string, split: UnitBaseline | un
   await updateTask(dir, id, (entry) => ({ ...entry, split, leadUsed: split !== undefined ? leadUsed : undefined }))
 }
 
+// Reads the split point a task's registry entry records (Task.split, without
+// loading a plan): the lane report's writer reads it from the lane
+// worktree's own .auto/units.json (plans/0068 S5 — the record travels by the
+// report to the parent's registry at landing).
+export async function runtimeSplit(dir: string, id: string): Promise<UnitBaseline | undefined> {
+  const units = await readUnits(dir)
+  return parseSplitPoint(units.tasks[id]?.split)
+}
+
 // —— Lane scheduling fields (plans/0068 §6.2 S1, D6; 0051 D3 built at last) ——
 
 // One unit's lane dispatch as the registry holds it: the worktree the lane
@@ -599,12 +641,19 @@ export async function setLane(dir: string, id: string, lane: { worktree: string;
 }
 
 // Clears the lane fields (D7's landing step ④); the unit's other runtime
-// state (attempts, fork base) survives. Idempotent.
+// state (attempts, fork base) survives. An in_progress mark does not: the
+// landed unit is executing nowhere — it is done (done.md, the common task
+// landing) or partial (S5: a lead stopped at its split, a stream lane of a
+// split), and a stale in_progress would keep the closing lane out of the
+// ready set forever. A blocked lane re-marks itself after its landing (the
+// failure matrix's block() follows clearLane), so the blocked state is safe.
+// Idempotent.
 export async function clearLane(dir: string, id: string): Promise<void> {
   await updateTask(dir, id, (entry) => {
     const rest = { ...entry }
     delete rest.worktree
     delete rest.pid
+    if (rest.status === "in_progress") delete rest.status
     return rest
   })
 }

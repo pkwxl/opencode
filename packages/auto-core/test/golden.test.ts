@@ -113,6 +113,14 @@ describe("golden render snapshots", () => {
     for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
       golden(`decompose-${phase}`, renderDecompose(facts, views.plan, views.task, docs, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter(phase) } }))
     }
+    // D18 (plans/0068 S5): one decompose render above a parallel level — the
+    // `## parallelism` subsection of the configured level, framed onto the
+    // checklist items; every golden above renders at none and stays
+    // byte-identical (the byte-identical floor).
+    golden(
+      "decompose-m-parallel-high",
+      renderDecompose(facts, views.plan, views.task, docs, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter("m") }, parallel: "high" }),
+    )
     // The generic decompose is the fallback when the builtin library has no
     // decompose-<phase>; renderDecompose never reaches it, so it is rendered
     // directly through renderTemplate (ctx assembled on the same basis as
@@ -175,9 +183,28 @@ describe("golden render snapshots", () => {
         last: true,
       }),
     )
+    // The cold-start delta a stream LANE gets (plans/0068 S5/D19): no fork
+    // holds the task, so the delta is the whole prompt — the task block, the
+    // stream's own scope file in full, the per-stream handoff document, and
+    // the changed files since the split for the dependent stream.
+    golden(
+      "fanout-cold",
+      renderFanout(facts, views.plan, views.task, docs, "write the execution logic: src/exec.ts, verify with its test Depends: S01 Artifacts: src/exec.ts", 2, {
+        ...execOpts,
+        siblings: ["S01 write the schema part (done)", "S03 write the docs"],
+        changed: ["src/schema.ts", "test/schema.test.ts"],
+        budget: true,
+        cold: true,
+        scope: "Depends: S01\nTouches: src/exec.ts\n\n## Scope\n\nwrite the execution logic\n\n## Artifacts\n\n- src/exec.ts\n",
+        handoff: "docs/T-002/S02/handoff.md",
+      }),
+    )
     golden("whole", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true }))
     golden("whole-budget", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true }))
     golden("whole-adaptive", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true }))
+    // D18 (plans/0068 S5): the split clause under a parallel level — the
+    // lead arranges its streams for the width they will actually get.
+    golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true, parallel: "medium" }))
     golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
   })
 

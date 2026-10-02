@@ -46,9 +46,15 @@ export type ClientSource = AgentClient | ServerControl
 // Task outcomes. dirty (plans/0021-commit-boundary-design.md) = the dedicated
 // exit for a unit-start clean-gate failure: writes no runtime state, makes no
 // sweeping commit, the authority over git state stays with the human; the
-// caller halts directly with exit 2.
+// caller halts directly with exit 2. unit-done (plans/0068 S5) = a lane
+// worker closed its unit without completing the task — a lead that stopped at
+// its taken split (the streams run as lanes of their own) or one stream of a
+// split: the unit's work is committed and the lane exits cleanly, and the
+// task continues in other lanes; only the lane entry produces it (a serial
+// caller never sees it).
 export type Outcome =
   | { type: "completed" }
+  | { type: "unit-done" }
   | { type: "blocked"; question: string }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
@@ -227,6 +233,26 @@ export type Opts = {
   // config.scanExempt (plans/0059 X2): globs of deliverable paths the
   // subtask close-out's P1 scan and terminator scan skip.
   scanExempt?: string[]
+  // The parallel level in effect for this execution surface (plans/0068
+  // D18/S5): set only where execution width is real — a concurrent run
+  // (maxSessions ≥ 2 under a level) or a lane worker of one — so the
+  // decompose family and the whole-task split clause carry the
+  // `## parallelism` guidance of the configured level, and a lane worker
+  // stops at a taken split whose streams run as lanes. Absent at one
+  // session in the main process whatever the level (D10's byte-identical
+  // floor). Type-only import; opts stays a pure type module.
+  parallel?: import("./intent/types").ParallelLevel
+  // The lane worker's scope (plans/0068 §6.3, RunAllOpts.lane re-stated for
+  // the task pipeline): present only inside a spawned lane worker. The
+  // pipeline reads it for the lead's split stop (S5) — never set by a
+  // person's CLI. Type-only import; opts stays a pure type module.
+  lane?: { unit: string; merge?: string }
+  // The lane unit is one stream of a split (plans/0068 S5, `T-NNN.S<nn>`):
+  // the task pipeline runs exactly that checklist item — the single-subtask
+  // path with the cold-start delta (D19) — and, when the stream is the
+  // last, the wrap-up and close-out in the same lane. Set only by the lane
+  // entry from the unit id; never by a person's CLI.
+  stream?: number
 }
 
 // —— The session-options builder (the loop family's one Opts factory) ——
@@ -268,6 +294,13 @@ export type SessionCtx = {
     wrapup?: boolean
     scanExempt?: string[]
     stopBefore?: "execute"
+    // The width facts of plans/0068 (D10/D18/S5): the level and the slot
+    // count decide whether the decompose-side guidance rides the execution
+    // options, and the lane scope marks a lane worker (the lead's split
+    // stop). Optional like every field of the slice.
+    parallel?: import("./intent/types").ParallelLevel
+    maxSessions?: number
+    lane?: { unit: string; merge?: string }
   }
 }
 
@@ -276,9 +309,11 @@ export type SessionCtx = {
 // step names; plan-numbering / append-numbering are the numbering-record
 // restore sessions planning and appending open). The task variant carries its
 // phase as the caller-computed PhaseKey — computing it here would need the
-// phases value graph, which opts must not pull under every importer.
+// phases value graph, which opts must not pull under every importer — and,
+// since plans/0068 S5, the stream ordinal of a stream lane unit (the task
+// pipeline runs exactly that checklist item).
 export type SessionSite =
-  | { site: "task"; phase: PhaseKey }
+  | { site: "task"; phase: PhaseKey; stream?: number }
   | { site: "plan-numbering" }
   | { site: "phase-plan" }
   | { site: "append-numbering" }
@@ -303,6 +338,17 @@ export type SessionSite =
 // bottom while a real loop context still assigns unchanged).
 export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
   if (site.site === "task") {
+    // D18/D10 (plans/0068 S5): the decompose-side parallelism guidance rides
+    // the execution options only where execution width is real — a
+    // concurrent run (maxSessions ≥ 2 under a level) or a lane worker of
+    // one (opts.lane is set only by a launcher the scheduler or the
+    // isolation switch drove; the guidance arranges splits whose streams
+    // then run side by side). The rule is inlined (two comparisons) rather
+    // than imported from src/lanes.ts — opts sits at the dependency bottom
+    // and may not reach the scheduler. At one session in the main process
+    // nothing is injected for any project whatever the level (the
+    // byte-identical floor).
+    const width = (ctx.opts.maxSessions ?? 1) >= 2 || ctx.opts.lane !== undefined
     return {
       agent: ctx.agentName,
       dir: ctx.directory,
@@ -328,6 +374,12 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       git: ctx.git,
       // present only when the fleet cannot fork
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
+      // present only under real width (the level beside it)
+      ...(width && ctx.opts.parallel !== undefined ? { parallel: ctx.opts.parallel } : {}),
+      // present only inside a lane worker
+      ...(ctx.opts.lane !== undefined ? { lane: ctx.opts.lane } : {}),
+      // present only for a stream lane unit (the single-subtask path)
+      ...(site.stream !== undefined ? { stream: site.stream } : {}),
     }
   }
   // the bypass sessions (numbering restore, planning, appending, handover

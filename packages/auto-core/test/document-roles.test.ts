@@ -26,6 +26,9 @@ describe("roleOf", () => {
     ["docs/R-01/phases.md", "ledger"], // phase index
     ["docs/T-001/handoff.md", "handoff"],
     ["docs/T-001/S02/testhandoff-3.md", "handoff"],
+    // the per-stream session handoff of lane streams (plans/0068 S5): the
+    // family reads by file name, wherever under docs/ it sits
+    ["docs/T-001/S02/handoff.md", "handoff"],
     ["docs/R-02/P02-design/handover.md", "handoff"], // phase handover
     ["docs/R-100/P12-custom-type/handover.md", "handoff"],
     ["docs/R-01/P05-acceptance/acceptance.md", "phaseAcceptance"],

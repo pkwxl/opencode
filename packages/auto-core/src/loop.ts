@@ -22,7 +22,7 @@ import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
 import { flushStats, statsClassifyUsage, statsTotals } from "./stats"
 import { freezeSwitches } from "./switches"
-import { loadPlan, taskStatePaths } from "./tasks"
+import { loadPlan, readChecklist, runtimeSplit, taskStatePaths } from "./tasks"
 import { parseUnitDoc } from "./document/unit"
 import { peekProgress } from "./resume"
 import { emitStatus, endRunStatus, startRunStatus } from "./run-status"
@@ -374,7 +374,10 @@ export async function runLaneWorker(directory: string, opts: RunAllOpts & { lane
 // detail (D13's roll-up): the bucket's usage breakdown and its per-model /
 // per-tier sections, so the parent's stats keep their per-model and per-tier
 // lines working without reading this worktree's document — it is discarded
-// at teardown, the report is what survives.
+// at teardown, the report is what survives. Since S5 a lead's report carries
+// its taken split (§6.8): the stream count and the split point this
+// worktree's own registry records — the record the parent re-persists at
+// landing (the worktree's .auto/ dies with the teardown).
 async function laneReportOf(
   directory: string,
   opts: RunAllOpts,
@@ -390,6 +393,8 @@ async function laneReportOf(
   const progress = await peekProgress(directory).catch(() => undefined)
   const paths = taskStatePaths(unit)
   const doc = await Bun.file(join(directory, paths.complete)).text().catch(() => Bun.file(join(directory, paths.pending)).text().catch(() => ""))
+  const split = await runtimeSplit(directory, unit)
+  const items = split ? await readChecklist(directory, unit) : []
   return {
     unit,
     phase: parseUnitDoc(doc).fields.phase ?? "",
@@ -402,6 +407,7 @@ async function laneReportOf(
     commits: await commitsSince(directory, base),
     agent: progress?.agent ?? opts.agent ?? "opencode",
     models: bucket?.models ? Object.keys(bucket.models) : [],
+    ...(split !== undefined && items.length ? { split: { items: items.length, baseline: split } } : {}),
     ...(bucket !== undefined
       ? {
           detail: {

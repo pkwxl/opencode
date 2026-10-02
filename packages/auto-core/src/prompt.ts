@@ -14,7 +14,7 @@
 // document-path view (docpaths' taskDocPaths). No module state remains here.
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, packSubsection } from "./intent/load"
-import type { IntentPack, IntentSection } from "./intent/types"
+import type { IntentPack, IntentSection, ParallelLevel } from "./intent/types"
 import { renderTemplate, renderText, type Ctx } from "./template"
 
 // —— The render layer's views of driver data (E2) ——
@@ -156,6 +156,12 @@ type Opts = {
   contextLimit?: number
   fine?: boolean
   taskContext?: "off" | "small" | "medium" | "large"
+  // The parallel level in effect for this execution surface (plans/0068
+  // D18/S5): the decompose family and the whole-task split clause inject the
+  // `## parallelism` subsection of the configured level; absent (none, or a
+  // serial run's options that never carried it) renders nothing — the
+  // byte-identical floor.
+  parallel?: ParallelLevel
 }
 
 // The single render exit, also for src/prompt-plan.ts's planning renderers.
@@ -187,6 +193,18 @@ export function promptCtx(facts: PromptFacts, ctx: Ctx): Ctx {
   const full: Ctx = { ask: facts.ask, humanQuestions: facts.humanQuestions, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
   const key = full.ask ? "decisionsAsk" : "decisionsUnattended"
   return { ...full, [key]: intentText(facts, "governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
+}
+
+// Parallelism guidance (MP.1, plans/0046 D10/D11; the decompose side since
+// plans/0068 D18/S5): the level's `## parallelism` intent subsection. At
+// none — or when the pack lacks the subsection — both keys are undefined and
+// every template's block renders nothing. Shared by the planning renderers
+// (src/prompt-plan.ts) and, since S5, by the decompose family and the
+// whole-task split clause; the level's own text speaks of tasks, and the
+// decompose/split blocks frame it onto subtasks and streams.
+export function parallelismVars(facts: PromptFacts, level: ParallelLevel | undefined): { parallel?: string; parallelRules?: string } {
+  const rules = level ? intentText(facts, "parallelism", level, {}) : undefined
+  return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
 export function renderPrompt(facts: PromptFacts, name: string, ctx: Ctx): string {
@@ -323,6 +341,11 @@ export function renderDecompose(facts: PromptFacts, plan: PlanView, task: TaskVi
     phaseDuties: duties && renderText(duties, ctx),
     // context.md section layout (M2.1): `## artifact spec` / `### context-digest`.
     contextDigest: intentText(facts, "artifactSpec", "context-digest", ctx),
+    // D18 (plans/0068 S5): the level's parallelism guidance, so decomposition
+    // arranges subtask independence the way planning arranges task
+    // independence — injected only where the caller's options carry a level
+    // (real width; the byte-identical floor at one session).
+    ...parallelismVars(facts, opts.parallel),
   })
 }
 
@@ -411,7 +434,7 @@ export function renderSubtask(
   task: TaskView,
   docs: TaskDocs,
   subtask: string,
-  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean } = {},
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean; handoff?: string } = {},
 ): string {
   const items = task.checklist ?? []
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
@@ -428,7 +451,7 @@ export function renderSubtask(
     ...ctx,
     subtask,
     continuation: Boolean(opts.continuation),
-    handoffFile: docs.handoff,
+    handoffFile: opts.handoff ?? docs.handoff,
     // Closing self-check sentence (M1.3): (b)-class quality intent from the
     // active pack's `## quality` / `### self-check-subtask`; the guard drops
     // the wrap-up item cleanly when the pack omits it (zero-intent baseline).
@@ -481,6 +504,12 @@ export function renderSubtask(
 //   - the document terminator discipline, which the lead's prompt never
 //     carried and the stream's close-out checks;
 //   - budget: the context-budget protocol, scoped to the stream.
+// cold (plans/0068 S5/D19): the stream is a lane unit that starts fresh — no
+// fork holds the task — so the delta is the whole prompt: it opens with the
+// task block, the stream's own scope file in full (scope) and the per-stream
+// handoff document (handoff, docs/T-NNN/S<nn>/handoff.md), and the template
+// words the opening for a session that inherited nothing. The serial in-lane
+// delta (no cold) is byte-identical to before.
 // AUTO-DECISION: the delta also carries the terminator rule and names the stream's own test-handover document (the lead's prompt had neither — its test handover is the task-level one — and the stream's close-out checks the terminator and reads the stream-level document)
 export function renderFanout(
   facts: PromptFacts,
@@ -489,7 +518,7 @@ export function renderFanout(
   docs: TaskDocs,
   subtask: string,
   index: number,
-  opts: Opts & { siblings: string[]; changed?: string[]; last?: boolean; budget?: boolean },
+  opts: Opts & { siblings: string[]; changed?: string[]; last?: boolean; budget?: boolean; cold?: boolean; scope?: string; handoff?: string },
 ): string {
   const ctx = baseCtx(facts, plan, task, docs, { ...opts, index })
   return renderPrompt(facts, "fanout", {
@@ -500,8 +529,11 @@ export function renderFanout(
     changed: opts.changed?.length ? opts.changed.map((path) => `- ${path}`).join("\n") : undefined,
     last: Boolean(opts.last),
     budget: Boolean(opts.budget),
-    handoffFile: docs.handoff,
+    cold: Boolean(opts.cold),
+    scope: opts.scope,
+    handoffFile: opts.handoff ?? docs.handoff,
     subtasksFile: docs.subtasks,
+    todoFile: docs.subtask(index).todo,
     outputFile: docs.subtask(index).output,
     // The stream's closing self-check (M1.3), the subtask one.
     selfCheck: intentText(facts, "quality", "self-check-subtask", ctx),
@@ -756,6 +788,10 @@ export function renderWhole(
     selfCheck: intentText(facts, "quality", "self-check-whole", ctx),
     // P1 discipline (M2.3), same subsection as renderSubtask.
     processRefs: intentText(facts, "governance", "process-references", ctx),
+    // D18 (plans/0068 S5): the level's parallelism guidance inside the split
+    // clause, so the lead's streams are arranged for the width they will
+    // actually get (lane streams under the scheduler).
+    ...parallelismVars(facts, opts.parallel),
   })
 }
 

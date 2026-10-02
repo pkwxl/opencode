@@ -370,6 +370,92 @@ field already reserved in their shapes; the persistent question queue
 exists (D11's future half). Nothing in S1–S4 depends on 0067; nothing in
 0067 is blocked by this plan.
 
+### 6.8 Stream lanes (S5, written before implementation — the amendment §7's row orders)
+
+D3's stage 2, D18 and D19 made concrete. The unit of scheduling widens inside
+a task: a taken split's streams (`T-NNN.S<nn>`) become lane units.
+
+**Stream units and the closing lane.** After a lead lane lands, the parent
+expands the task for scheduling: each *pending* checklist item becomes a
+stream unit `T-NNN.S<nn>` — id, title (the line's title), `Depends:` (the
+item's sibling ids by their qualified `T-NNN.S<nn>` names, G3's
+previous-item default resolved at expansion — the expanded set has no index
+adjacency) and `Touches:` (the S<nn>/todo.md field block, which the split
+guard's writer derives from the line's `Artifacts:`). Readiness is D5's
+predicate over the expanded set; a stream is done when its done.md exists in
+the merged tree. The parent task unit itself is **suppressed while any
+stream is pending** (nothing re-runs the lead's pipeline against half a
+split) and re-ents the set once every stream is done, as the **closing
+lane** — a plain re-dispatch of the task unit whose worker runs the existing
+pipeline tail (split taken → the subtask loop finds nothing → wrap-up →
+close-out), no new code path.
+
+**The split record's journey.** The lead lane's `.auto/units.json` (with the
+split point) dies at teardown, so the record travels by the lane report and
+is re-persisted by the parent at landing into the main tree's own registry
+(`Runtime.split`, the field the serial path already writes) — the parent-,
+and recovery-, side fact. A stream dispatch then **seeds** the record into
+the fresh worktree's own `.auto/units.json` (re-rooted onto the worktree's
+paths) before the spawn, so the worker reads `Task.split` exactly as the
+serial world does.
+
+**The stream report shape** (D8's `split`, typed): a lead's report carries
+`split: { items: <count>, baseline: [{ root, sha }…] }` — the stream count
+and the split point the lead recorded; absent on a lead that took no split
+(and on every stream's own report). `parseLaneReport` validates the shape.
+
+**Cold start (D19) and the amended fanout delta.** A stream lane worker runs
+the task pipeline scoped to one item (`opts.stream`, set from the unit id):
+the subtask loop's body extracted — the state scan, the dependency check,
+one `runSubtask` — with **no fork of the lead** and the **per-stream handoff
+document**. The `fanout` delta is enriched for the cold start with four
+fields beside the existing `siblings` / `changed` / `last` (all computed
+from the worker's own merged view, as the serial delta computes them):
+
+- `cold` — the delta is the whole prompt: no fork holds the task;
+- `taskBlock` — the task's id, title and body (the goal the stream serves);
+- `scope` — the stream's own S<nn>/todo.md in full (scope + artifacts);
+- `handoffFile` — the per-stream document `docs/T-NNN/S<nn>/handoff.md`.
+
+`changed` (the files changed since the split, a dependent stream) reads the
+seeded split baseline; `last` is true when every sibling is done in the
+worker's view. The in-lane serial path (no level: the default serial run,
+the isolation switch) keeps today's fork-based delta and the task-level
+handoff untouched — the byte-identical floor.
+
+**The lead stops at a taken split.** A lane worker under a parallel level
+returns as soon as a split is taken with streams remaining (its unit outcome
+is "unit done, task continues elsewhere") — the parent lands the lead and
+schedules the streams. Without a level the worker runs the streams in-lane
+as today (S2's story, forks included); the isolation switch never stops (its
+loop schedules tasks only, so a stop would idle the split forever).
+
+**Per-stream handoff role.** The deferral at `src/execute.ts` ("all streams
+of a task share one handoff.md … worth it only once streams run side by
+side") retires: side-by-side streams hand over through
+`docs/T-NNN/S<nn>/handoff.md` — the handoff role's family gains the
+per-stream shape (the classifier reads the family by file name; the role's
+policies and its status-line check apply unchanged), docpaths constructs it,
+and a lane stream's steer, continuation reads and close-out clear that file
+alone. The recovery path reads it through the record's subtask index.
+
+**Wrap-up.** The last stream — every sibling done at the worker's own start
+— closes the task in its lane: after its subtask close-out it runs the
+wrap-up session and the close-out (the pipeline tail, in the same worker).
+A split whose streams all dispatch together (none is last at its own start)
+leaves the wrap-up to the closing lane after the drain; a re-dispatched last
+stream whose subtask already closed short-circuits the same way — the
+closing lane absorbs every shape in which no in-lane wrap-up ran.
+
+**Decompose-side guidance (D18), level-gated on real width.** The
+`## parallelism` subsection of the configured level is injected into the
+decompose family and the whole-task split clause only where execution width
+is real: a concurrent run (maxSessions ≥ 2 under a level) or a lane worker
+of one (`opts.lane` — set only by a launcher the scheduler or the isolation
+switch drove). At one session in the main process nothing is injected for
+any project whatever the level (D10's byte-identical floor); the level's
+task-worded text is framed by the templates' own subtask/stream wording.
+
 ## 7. Stages
 
 Each stage is independently shippable and revertable; S1–S2 before any
@@ -406,18 +492,19 @@ concurrency exists.
   in-flight lanes section; ☑ stats booking from lane reports + conclusion
   roll-up; ☑ `/exit`/step/wait-between drain semantics at boundaries; ☑
   parent-level lane event lines shaped for the 0067 bus (§6.7).
-- **S5 — stream lanes (task-internal width).** ☐ Runner exposes the
-  single-subtask execution path (`T-NNN.S<nn>` lane units); ☐ lead lane
-  report carries the split (items, split baseline); ☐ parent lands the
+- **S5 — stream lanes (task-internal width).** ☑ Runner exposes the
+  single-subtask execution path (`T-NNN.S<nn>` lane units); ☑ lead lane
+  report carries the split (items, split baseline); ☑ parent lands the
   lead, then schedules stream lanes from the split baseline — cold start
   (D19) with an enriched fanout delta computed from merged state (siblings
   by title + done flags; files-since-split for dependent streams from the
-  landing history; last-stream full verification); ☐ per-stream handoff
-  document role (the deferral at `src/execute.ts:590` retired); ☐
-  decompose-side parallelism guidance, level-gated (D18) + golden batch; ☐
+  landing history; last-stream full verification); ☑ per-stream handoff
+  document role (the deferral at `src/execute.ts:590` retired); ☑
+  decompose-side parallelism guidance, level-gated (D18) + golden batch; ☑
   wrap-up runs in the last lane / a closing lane after streams drain.
   *Template-heavy; a short amendment to this document precedes
-  implementation (the fanout delta's exact fields and the stream report).*
+  implementation (the fanout delta's exact fields and the stream report) —
+  §6.8.*
 - **S6 — polish, docs, retirement.** ☐ Documentation set (§9); ☐ status
   notes on 0036 (executional half superseded) and 0051 (fully absorbed); ☐
   `packages/auto` e2e + README; ☐ risk hardening (Windows teardown retries,
@@ -448,6 +535,19 @@ task-bucket usage breakdown and its per-model/per-tier records, so the
 parent books them without reading the worktree's discarded stats document).
 A new English protocol string in this list's own grammar, never dual-read;
 nothing existing moved.
+AUTO-DECISION (S5 typed one registered literal and appended one): the split
+field's inner shape — `items` / `baseline` (D8's opaque `split`, given its
+contract at last: the lead's stream count and split point, §6.8) — reuses
+the registered field name `split` with the baseline restating the unit
+baseline's own `{root, sha}` grammar rather than new literals; and the
+stream lane unit id `T-NNN.S<nn>` joins the branch/park/registry grammar —
+a composition of the task id and the subtask positional id (document/state's
+established `S<nn>`), flowing into `auto-lane/<unit>` and the park path with
+no new separator vocabulary. Both are new English protocol strings in this
+list's own grammar, never dual-read; nothing existing moved. The per-stream
+handoff path `docs/T-NNN/S<nn>/handoff.md` needs no registration: it is the
+handoff role's established file-name family inside the established S<nn>
+directory grammar.
 
 ## 9. Documentation updates (with S6, pointers earlier)
 
@@ -845,4 +945,107 @@ the tests, any decision taken.
   on the report (the run-status-schema precedent) rather than inventing a
   parallel grammar — the parent books it field-for-field, and one new
   protocol literal (`detail`, §8) covers the whole roll-up.
+**S5 — stream lanes (task-internal width), 2026-10-02.**
+- Landed: the amendment first (§6.8 — the fanout delta's exact fields, the
+  stream report shape, the closing-lane rule), then the implementation to
+  it. The runner's single-subtask path: `opts.stream` scopes `runTask`'s
+  pipeline to one checklist item (`runStreamLaneItem`, the subtask loop's
+  body extracted — the state scan and the dependency check word for word,
+  the selection the lane unit's ordinal), run cold (`runSubtask`'s
+  `laneStream` flag: no fork, the enriched `fanout` delta, the per-stream
+  handoff document `docs/T-NNN/S<nn>/handoff.md` for the steer, the
+  continuation reads and the close-out). The lead's stop: a lane worker
+  under a level returns at a taken split with streams remaining (the new
+  `unit-done` outcome), the parent landing it; without a level, in the main
+  process (the serial degrade) or under the isolation switch the in-lane
+  stream path keeps today's fork behavior byte for byte. The split record's
+  journey: the lead's report carries it typed (`split: { items, baseline }`
+  — `parseLaneReport` validates, a malformed split rejects the report), the
+  landing re-persists it into the main tree's registry re-rooted
+  (`setSplit`), and every stream dispatch seeds it into the fresh
+  worktree's own `.auto/units.json` (re-rooted again) before the spawn —
+  the worker reads `Task.split` exactly as the serial world does. The
+  scheduler's expansion (`streamUnits` in `src/lanes.ts`): a task with a
+  split record and an active state protocol contributes its pending streams
+  as `T-NNN.S<nn>` units (qualified `Depends:` with G3 resolved at
+  expansion, `Touches:` from the S<nn>/todo.md field block) and is
+  suppressed while any stream pends; with all streams done it returns as
+  the closing lane — a plain task re-dispatch running the existing pipeline
+  tail. The wrap-up runs in the last stream's lane (every sibling done at
+  the worker's own start) or, for a co-dispatched split, in the closing
+  lane after the drain. D18: the level's `## parallelism` subsection is
+  injected into the decompose family and the whole-task split clause,
+  gated on real width (`sessionOpts`: maxSessions ≥ 2 under a level, or a
+  lane worker — at one session in the main process nothing changes for any
+  project, the byte-identical floor); the level's task-worded text is
+  framed onto subtasks and streams by the templates' own wording.
+- Tests: `test/lanes-scheduler.test.ts` — `streamUnits` derivation (ids,
+  depends, touches, done flags; undefined without the record or the state
+  protocol), the dependent-split round over real git at maxSessions = 2
+  (the lead lane's split lands, the stream lanes run one after the other
+  from the seeded split baselines — re-rooted per worktree, asserted — the
+  last stream's lane writes the report and closes the task, the park and
+  branches torn down), and the co-dispatched round (both streams side by
+  side, the checklist's adjacent ticks resolved at landing, the wrap-up in
+  the closing lane after the drain); `parseLaneReport`'s split shape
+  matrix. `test/prompt-exec.test.ts` — the cold delta (the task block, the
+  scope file, the per-stream handoff, the fresh-session re-reading wording,
+  the question rule), D18's injection in the decompose and split-clause
+  renders and their byte-identity at none. `test/golden.test.ts` — the
+  batch as one reviewed diff: `fanout-cold`, `decompose-m-parallel-high`,
+  `whole-adaptive-parallel-medium` new; every existing golden byte-identical
+  (all renders at none unchanged). `test/session-opts.test.ts` — the width
+  keys (the level under concurrency or a lane worker, never at one session
+  in the main process; the lane scope and the stream ordinal).
+  `test/document-roles.test.ts` — the per-stream handoff classification.
+  `packages/auto/test/e2e.test.ts` — the acceptance round: a split task at
+  `--max-sessions 2` over the real `_lane` entry and the fake claude — the
+  lead lane stops at its taken split (its split-clause turn carries D18's
+  level guidance), the streams run as cold-start lanes (the recorded turns
+  carry no `--resume`/`--fork-session`), the dependent stream's delta names
+  `src/alpha.ts` changed since the split, the last stream carries the full
+  acceptance verification and its lane runs the wrap-up, the split record
+  lands re-rooted in the parent registry, three landing merges, the park
+  and branches gone, the tree clean.
+- AUTO-DECISION (`src/runner.ts`, the stop rule's discriminators): the
+  split RECORD — not the state files — makes a checklist stream lanes (a
+  true-mode decomposition has the files but no record, and its subtasks are
+  not lane units), the stop needs streams remaining (the closing lane re-enters the same pipeline and must run its tail), and the isolation switch never stops — its loop schedules tasks only, so a stop would idle the split forever.
+- AUTO-DECISION (`src/opts.ts`/`src/loop-task.ts`, the unit-done outcome):
+  a lane that closes its unit without completing the task (a lead's split
+  stop, one stream) needed its own outcome word — a plain "completed" would
+  log and emit task-done for a task whose index line stays unticked; the
+  word joins the task-end vocabulary (`TASK_OUTCOMES`) and the parent's
+  landing emits it when the merged tree holds no done.md for the owning
+  task.
+- AUTO-DECISION (`src/lanes.ts`/`src/tasks.ts`, the checklist at landing):
+  concurrent stream lanes tick adjacent lines of one `subtasks.md` — no
+  textual merge survives that, the phase-index problem (D6) at the
+  checklist level — so the landing's `own` resolution gains the OWNING
+  task's checklist (a stream unit's id is `T-NNN.S<nn>`; the path is the
+  owner's) beside the phase index, and step ③ re-derives the checklist
+  ticks from the merged S<nn> state files (`syncChecklistTicks`, the
+  load-time merge's inverse) on the same landing-sync commit. Sessions
+  never write the checklist, so a conflict over it is tick-shaped by
+  construction.
+- AUTO-DECISION (`src/git.ts` `landBranch`): the own-resolution now
+  checks out and stages the actually-conflicted subset of `own`, not every
+  entry — an own path a lane never touched (a task without a checklist)
+  matches no pathspec and left the merge unmerged; S5's checklist entry
+  exposed the shape, the fix is strictly narrower.
+- AUTO-DECISION (`src/tasks.ts` `clearLane`): the landing drops a stale
+  `in_progress` mark beside the worktree/pid fields — a landed partial unit
+  (the lead's split stop, a stream) executes nowhere, and the stale mark
+  kept the closing lane out of the ready set forever; a blocked lane
+  re-marks itself after its landing (the failure matrix's `block` follows
+  `clearLane`), so the blocked state is safe.
+- AUTO-DECISION (the cold delta's question rule): the cold fanout block
+  carries the question rule (and the docs-addition constraint around it) —
+  a fresh stream session inherited no task rules, and the fork-based delta
+  never needed them; the reference count pin in
+  `test/prompt-template.test.ts` moved 16 → 17 with the step noted.
+- AUTO-DECISION (`src/execute.ts`, the lead's split log line): the line's
+  closing clause ("each a fork of the lead") is conditional — under the
+  scheduler the streams run "each as a lane of its own"; the serial world
+  keeps the exact former bytes (its e2e asserts them).
 <!-- auto: eof -->

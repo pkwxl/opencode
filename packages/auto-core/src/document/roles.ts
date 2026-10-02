@@ -62,6 +62,13 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // driver owns the format, so no terminator.
   ledger: { eofScan: false, process: true },
   // Carries its own final-state contract (status line / four sections).
+  // The session handoff family spans three shapes since plans/0068 S5: the
+  // task-level handoff.md (ondemand whole-task sessions, auto's lead), the
+  // per-stream handoff.md inside docs/T-NNN/S<nn>/ (side-by-side stream
+  // lanes hand over through one document each — the deferral "all streams
+  // of a task share one handoff.md" retired with it), and the test-handover
+  // testhandoff(-<n>).md family; one role, one policy set, one status-line
+  // check for all of them.
   handoff: { eofScan: false, process: true },
   // Drafted by the handover session, signed by a human; the acceptance gate
   // reads its marker, not a terminator.
@@ -89,8 +96,11 @@ const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json"]
 // test/document-roles.test.ts.
 export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json"] as const
 
-// The session handoff family by file name: handoff.md, testhandoff.md and the
-// archived testhandoff-<n>.md.
+// The session handoff family by file name, wherever it sits: the task-level
+// handoff.md, the per-stream handoff.md of docs/T-NNN/S<nn>/ (plans/0068 S5
+// — classification is by name, so the per-stream document already read as
+// this role the day the family gained it), testhandoff.md and the archived
+// testhandoff-<n>.md.
 const HANDOFF_NAME = /^(?:test)?handoff(?:-\d+)?\.md$/
 
 // Phase index: docs/R-NN/phases.md (M3.3).

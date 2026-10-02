@@ -100,8 +100,11 @@ export const UNIT_STATUSES = ["pending", "in_progress", "blocked", "done"] as co
 export type UnitStatus = (typeof UNIT_STATUSES)[number]
 
 // The task outcomes (Outcome, src/opts.ts): the pipeline's own close-out
-// words, carried by the task and subtask brackets.
-export const TASK_OUTCOMES = ["completed", "blocked", "incomplete", "dirty"] as const
+// words, carried by the task and subtask brackets. `unit-done` since
+// plans/0068 S5: a stream lane or a lead that stopped at its taken split
+// closed its lane unit without completing the task (the bracket's task goes
+// on in other lanes).
+export const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty"] as const
 
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 

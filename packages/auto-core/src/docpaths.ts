@@ -47,12 +47,14 @@ export function subtaskDir(id: string, k: number): string {
 }
 
 // docs/T-003/S04/index.md (the subtask artifact),
-// docs/T-003/S02/testhandoff.md (the subtask-level test handover) and
-// docs/T-003/S04/todo.md|done.md (the subtask directory state protocol, M1.0
-// plans/0030: todo.md = the scope statement fixed during decomposition,
-// done.md = the fact of completion DRIVER renames it to at subtask
-// close-out).
-export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" | "todo" | "done"): string {
+// docs/T-003/S02/testhandoff.md (the subtask-level test handover),
+// docs/T-003/S02/handoff.md (the per-stream session handoff of lane
+// streams, plans/0068 S5/D19 — side-by-side streams hand over through one
+// document each) and docs/T-003/S04/todo.md|done.md (the subtask directory
+// state protocol, M1.0 plans/0030: todo.md = the scope statement fixed
+// during decomposition, done.md = the fact of completion DRIVER renames it
+// to at subtask close-out).
+export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" | "handoff" | "todo" | "done"): string {
   return join(subtaskDir(id, k), `${role}.md`)
 }
 
@@ -65,9 +67,12 @@ export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" 
 // whole-task session when it hands its context over (self-decided at a natural
 // boundary, or after the hard-wall steer; plans/0056) — the session writes its
 // progress into this file, and the trailing line `Status: continue|done` is
-// parsed by the driver.
-export function handoffFile(task: { id: string }): string {
-  return taskDoc(task.id, "handoff")
+// parsed by the driver. A subtask names the per-stream document
+// docs/T-NNN/S<nn>/handoff.md instead (plans/0068 S5: side-by-side stream
+// lanes hand over through one document each; the serial in-lane stream path
+// keeps the task-level file, the byte-identical floor).
+export function handoffFile(task: { id: string }, subtask?: number): string {
+  return subtask !== undefined ? subtaskDoc(task.id, subtask, "handoff") : taskDoc(task.id, "handoff")
 }
 
 // --handover-test's test handover document (relative to the target
@@ -107,6 +112,7 @@ export function taskDocPaths(id: string) {
     testHandoff: taskDoc(id, "testhandoff"),
     subtask: (k: number) => ({
       testHandoff: subtaskDoc(id, k, "testhandoff"),
+      handoff: subtaskDoc(id, k, "handoff"),
       todo: subtaskDoc(id, k, "todo"),
       output: subtaskDoc(id, k, "index"),
     }),

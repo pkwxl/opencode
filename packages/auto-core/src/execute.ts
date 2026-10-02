@@ -227,7 +227,7 @@ export async function executeWhole(
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open" }) + feedback,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel }) + feedback,
       opts,
       chain,
       steer,
@@ -281,7 +281,12 @@ export async function executeWhole(
       // prerequisites change are read against it, and the record marks the
       // checklist as the lead's streams.
       await setSplit(planDir, task.id, !opts.dryrun ? await git.unitBaseline(dir) : [], verdict.used)
-      log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, each a fork of the lead`)
+      // S5 (plans/0068 D19): under the scheduler the streams run as lanes of
+      // their own — cold starts, no fork of the lead (its agent server dies
+      // with its process); the task pipeline stops at the split (runner's
+      // lead stop). Everywhere else they fork the lead, as they always did.
+      const asLanes = opts.lane !== undefined && opts.parallel !== undefined && !autoSwitches().laneIsolation
+      log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, ${asLanes ? "each as a lane of its own" : "each a fork of the lead"}`)
       return undefined
     }
     if (verdict?.type === "rejected") {
@@ -533,6 +538,15 @@ export async function leadForkBase(client: ClientSource, task: Task, opts: Opts,
 //     stream), inside the same unit — one commit at its close-out;
 //   - without a fork (the lead gone, an agent that cannot fork) or resumed
 //     after an interruption, gets the full subtask prompt with the protocol.
+// `laneStream` (plans/0068 S5, D19) = the stream is a lane unit of its own
+// (T-NNN.S<nn>, scheduled side by side by the parent): it never forks the
+// lead — the lead's agent server belonged to the lead's process and is gone
+// — so its first session is a cold start carrying the enriched fanout delta
+// (the task block and its own scope file in full), and its handover runs
+// through the per-stream document docs/T-NNN/S<nn>/handoff.md (side-by-side
+// streams share no handoff file). The in-lane serial path (one lane or one
+// process running its own streams after the lead's split) passes nothing and
+// keeps today's behavior byte for byte.
 // The unit state protocol, the commit boundary and the shape check are the
 // same for every subtask.
 export async function runSubtask(
@@ -550,6 +564,7 @@ export async function runSubtask(
   // together at close-out (plans/0021-commit-boundary-design.md).
   resumeUnit = false,
   split?: UnitBaseline,
+  laneStream = false,
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
@@ -582,13 +597,17 @@ export async function runSubtask(
   anchorBaseline(chain, baseline)
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
-  const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
   // A stream of the lead's split runs under the usage protocol (the lead's
   // own steer: notices at 50%/85% of the wall, the hard-wall hint); none with
   // OPENCODE_AUTO_STEER=off, which leaves the stream without a handover, as
-  // it leaves every session.
-  // AUTO-DECISION: a stream hands over through the task's own handoff.md, not a per-stream file (streams run one at a time, this function's recovery seeding and close-out already read and clear that file, and the notices and the hard-wall hint name it; a per-stream document would need a new document role and recovery path, worth it only once streams run side by side)
-  const steer = split ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task) : undefined
+  // it leaves every session. A lane stream hands over through its own
+  // per-stream document (plans/0068 S5: side-by-side streams share no
+  // handoff file — the deferral that had them all share the task's one
+  // handoff.md retired with stream lanes); the in-lane serial stream keeps
+  // the task-level file, as it always did.
+  const streamHandoff = laneStream ? subtaskDoc(task.id, index, "handoff") : handoffFile(task)
+  const readHandoff = async (): Promise<string> => Bun.file(join(planDir, streamHandoff)).text().catch(() => "")
+  const steer = split ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task, laneStream ? index : undefined) : undefined
   // Subtask-directory state protocol (M1.0, plans/0030 D8): done.md already
   // existing = this subtask already closed out (including the recovery board
   // where the interruption landed exactly between the rename and the unified
@@ -625,10 +644,16 @@ export async function runSubtask(
     // instead: forking the lead again would put it back at the lead's size.
     // AUTO-DECISION: a stream's handover continuation is a new session without a fork (the design's "fresh session from its handoff.md"; a new fork of the lead would restart at the lead's size, at or above half the wall, and hand over again soon)
     let warm = split && continuation ? false : await seedForkSession(client, opts, chain, base, subject)
+    // A lane stream never forks (plans/0068 D19): the lead's agent server
+    // belonged to the lead's process and is gone, and the cold start is the
+    // design — the delta is enriched to be the whole prompt instead.
+    if (laneStream) warm = false
     // A stream in a fresh fork of the lead: the delta prompt alone. A session
     // the recovery resumed gets the full prompt instead.
     // AUTO-DECISION: a stream's session resumed after an interruption gets the full subtask prompt, not the delta (the resumed session may be a new session the stream started in without a fork, which the delta would leave without the task; the full prompt is right for a fork too)
-    let forked = split !== undefined && warm && !resumed
+    // A lane stream's first session carries the delta too — the cold one,
+    // with the task and the stream's scope file in full (S5).
+    let forked = split !== undefined && !resumed && (warm || laneStream)
     // The delta's changing parts, read once the fork is made: the other
     // streams by title, the files changed since the split for a stream whose
     // prerequisites ran, and whether this is the last stream.
@@ -645,6 +670,10 @@ export async function runSubtask(
         siblings: items.flatMap((item, i) => (i + 1 === index ? [] : [`${subtaskId(i + 1)} ${checklistTitle(item.text)}${item.done ? " (done)" : ""}`])),
         changed,
         last: items.every((item, i) => item.done || i + 1 === index),
+        // The cold delta's own two: the stream's scope file in full (the
+        // fork-less session has read nothing; the file holds the scope and
+        // the artifacts) — read once here, passed through below.
+        scope: await Bun.file(join(planDir, subtaskDoc(task.id, index, "todo"))).text().catch(() => ""),
       }
     }
     const delta = forked ? await fanout() : undefined
@@ -652,8 +681,22 @@ export async function runSubtask(
       const views = promptViews(plan, task)
       const docs = taskDocPaths(task.id)
       return forked && delta
-        ? renderFanout(promptFacts(opts), views.plan, views.task, docs, text, index, { ...opts, ...delta, budget: steer !== undefined })
-        : renderSubtask(promptFacts(opts), views.plan, views.task, docs, text, { ...opts, continuation, index, warm: split ? false : warm, digest: Boolean(base?.digest), budget: steer !== undefined })
+        ? renderFanout(promptFacts(opts), views.plan, views.task, docs, text, index, {
+            ...opts,
+            ...delta,
+            cold: laneStream,
+            handoff: laneStream ? subtaskDoc(task.id, index, "handoff") : docs.handoff,
+            budget: steer !== undefined,
+          })
+        : renderSubtask(promptFacts(opts), views.plan, views.task, docs, text, {
+            ...opts,
+            continuation,
+            index,
+            warm: split ? false : warm,
+            digest: Boolean(base?.digest),
+            budget: steer !== undefined,
+            ...(laneStream ? { handoff: subtaskDoc(task.id, index, "handoff") } : {}),
+          })
     }
     let feedback = ""
     // Re-prompt count for the artifact shape check (D2): one re-prompt with
@@ -692,9 +735,11 @@ export async function runSubtask(
       consumeNote(chain)
       resetRoute(chain)
       // The cold-start redo forks from the base again (the same shape as the
-      // subtask's first session, recovering the warm prefix).
+      // subtask's first session, recovering the warm prefix); a lane stream
+      // stays fork-less and takes the cold delta again (D19).
       warm = await seedForkSession(client, opts, chain, base, subject)
-      forked = split !== undefined && warm && delta !== undefined
+      if (laneStream) warm = false
+      forked = split !== undefined && (warm || laneStream) && delta !== undefined
       return "done"
     }
     for (;;) {
@@ -815,8 +860,10 @@ export async function runSubtask(
   // Subtask done: clear the handover documents (the ondemand handover and the
   // test handover — the next subtask starts counting anew; the test handover
   // is named per subtask, so this removes this subtask's file; the driver's
-  // tick is recorded by the unified commit that follows).
-  await rm(join(planDir, handoffFile(task)), { force: true })
+  // tick is recorded by the unified commit that follows). A lane stream's
+  // handover document is its own per-stream file (S5); the serial in-lane
+  // stream keeps clearing the task-level one.
+  await rm(join(planDir, streamHandoff), { force: true })
   await removeHandoffChain(planDir, testHandoffFile(task, index))
   // Subtask-directory state protocol close-out (plans/0030 D7): the DRIVER
   // renames todo.md to done.md inside the commit boundary — on-disk file

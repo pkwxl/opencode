@@ -15,6 +15,7 @@ import { relative } from "node:path"
 import { join } from "node:path"
 import type { Control } from "./exit"
 import { parseUnitDoc } from "./document/unit"
+import { subtaskStateSpec } from "./document/spec"
 import { currentBranch, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
 import { mergeLaneUpstream } from "./git"
 import { hibernatePause } from "./hibernate"
@@ -39,6 +40,8 @@ import {
   readyUnits,
   readLaneReport,
   schedulerActive,
+  streamUnitOf,
+  streamUnits,
   type InFlightLane,
   type LaneReport,
   type LaneRuntime,
@@ -503,26 +506,58 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // D15's nested-repo roots, repository-relative — the lane-eligibility test.
   const nestedRoots = (await repoRoots(directory)).filter((root) => root !== directory).map((root) => relative(directory, root))
 
+  // S5 (D3 stage 2, §6.8): the schedulable set with taken splits expanded —
+  // a task whose lead's split was taken contributes its stream units
+  // (T-NNN.S<nn>) while any stream is pending; with every stream done the
+  // task itself returns as the closing lane (the pipeline tail: wrap-up +
+  // close-out). A task without a split record stays whole, exactly as
+  // before. The expansion also collects each stream's seed — the owning
+  // task's split record, planted into the fresh lane worktree at dispatch —
+  // and the done flags of finished streams, which the readiness predicate
+  // reads through the merged states.
+  const seeds = new Map<string, { task: string; split: UnitBaseline }>()
+  const expandStreams = async (plan: Plan): Promise<Task[]> => {
+    seeds.clear()
+    const out: Task[] = []
+    for (const unit of plan.tasks) {
+      if (unit.status === "done") {
+        out.push(unit)
+        continue
+      }
+      const streams = await streamUnits(directory, unit)
+      if (streams === undefined) {
+        out.push(unit)
+        continue
+      }
+      if (unit.split !== undefined) for (const stream of streams) seeds.set(stream.id, { task: unit.id, split: unit.split })
+      out.push(...(streams.some((stream) => stream.status !== "done") ? streams : [unit]))
+    }
+    return out
+  }
+
   // The ready set of one pass over the reloaded plan (D5's predicate with the
-  // current in-flight lanes): done = the merged unit states, runtime = the
+  // current in-flight lanes): done = the merged unit states (a landed
+  // stream's done.md included, through the expansion), runtime = the
   // registry's executing entries.
   const readyNow = async (inFlightLanes: ReadonlyMap<string, InFlightLane>): Promise<Task[]> => {
     const plan = await loadPlan(directory, phase)
-    const states = new Set(plan.tasks.filter((task) => task.status === "done").map((task) => task.id))
+    const units = await expandStreams(plan)
+    const states = new Set(units.filter((unit) => unit.status === "done").map((unit) => unit.id))
     const runtime = new Map<string, LaneRuntime>()
     for (const task of plan.tasks) if (task.status === "in_progress") runtime.set(task.id, { status: "in_progress" })
-    return readyUnits(plan, states, runtime, inFlightLanes, slots)
+    return readyUnits({ ...plan, tasks: units }, states, runtime, inFlightLanes, slots)
   }
 
   // Dispatch one lane for a ready unit: the bracket lines, the bookkeeping
   // and the spawn. Returns false when the dispatch failed (the caller stops
-  // scheduling and exits 2 naming the error).
+  // scheduling and exits 2 naming the error). A stream unit's dispatch seeds
+  // its fresh worktree with the owning task's split record (S5).
   const dispatch = async (task: Task): Promise<boolean> => {
     banner(`${task.id} ${task.title}`)
     log(`▶ ${task.id} dispatching a lane (attempt ${task.attempts + 1})`)
     emitStatus({ type: "task-start", task: task.id, title: task.title })
     await statsTask(directory, task.id)
-    const dispatched = await dispatchLane(ctx.git, directory, task)
+    const dispatched = await dispatchLane(ctx.git, directory, task, undefined, seeds.get(task.id))
     if (dispatched.type === "failed") {
       log(`⏸ ${dispatched.error}`)
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: dispatched.error })
@@ -577,11 +612,22 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return false
     }
     if (!landed.teardown) log(`⚠ ${task.id} landed, but the lane's park cleanup left something behind (see the warnings above); the lane record is cleared`)
+    // S5: a landed lane may close its unit without completing the task — a
+    // lead that stopped at its taken split, one stream of a split. The
+    // merged state decides (the owning task's done.md); the bracket's task
+    // stays open until the closing lane's own landing completes it.
+    const owner = streamUnitOf(task.id)?.task ?? task.id
+    const completed = await Bun.file(join(directory, taskStatePaths(owner).complete)).exists()
     const firstLanding = ctx.ran === 0
     ctx.ran++
-    for (const line of await taskResolveLines(directory, task.id)) log(line)
-    log(`✓ ${task.id} done (lane landed: ${report.sessions} session(s))`)
-    emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+    for (const line of await taskResolveLines(directory, owner)) log(line)
+    if (completed) {
+      log(`✓ ${task.id} done (lane landed: ${report.sessions} session(s))`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+    } else {
+      log(`✓ ${task.id} landed (lane unit closed; the task continues in its other lanes — ${report.sessions} session(s))`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "unit-done" })
+    }
     // The boundary hooks at each landing (§6.2: unit granularity — a step
     // pause or /exit stops scheduling and drains, then proceeds).
     await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
@@ -637,9 +683,13 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       // D4's serial degrade: with the slots free and nothing lane-eligible
       // ready, the ready units are exactly the not-isolable ones (a declared
       // `Touches` reach under a nested-repo root, D15). The first runs in the
-      // main tree through today's path — alone, after all lanes drained.
-      const states = new Set(plan.tasks.filter((unit) => unit.status === "done").map((unit) => unit.id))
-      const serial = readyUnits(plan, states, new Map(), new Map(), 1).find((unit) => !laneEligible(unit, nestedRoots))
+      // main tree through today's path — alone, after all lanes drained. A
+      // not-isolable STREAM degrades as its whole task (the remaining
+      // streams run in-lane, serially, exactly the serial world's path).
+      const units = await expandStreams(plan)
+      const states = new Set(units.filter((unit) => unit.status === "done").map((unit) => unit.id))
+      const ineligible = readyUnits({ ...plan, tasks: units }, states, new Map(), new Map(), 1).find((unit) => !laneEligible(unit, nestedRoots))
+      const serial = ineligible === undefined ? undefined : plan.tasks.find((entry) => entry.id === (streamUnitOf(ineligible.id)?.task ?? ineligible.id))
       if (serial === undefined) {
         // Unreachable with a checked graph and nothing executing: every
         // not-done unit has an unmet dependency forever. Stop rather than
@@ -757,6 +807,12 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   const unit = opts.lane!.unit
   const instruction = opts.lane!.merge
+  // S5 (D3 stage 2, §6.8): a stream unit `T-NNN.S<nn>` scopes the whole
+  // entry to that one checklist item — the task pipeline runs it through
+  // opts.stream (the single-subtask path, D19's cold start), the plan lookup
+  // and the stats bucket key by the unit id while the pipeline itself works
+  // on the owning task. A task unit (a lead, a closing lane) runs unchanged.
+  const stream = streamUnitOf(unit)
   // D7's merge instruction (a conflict repair's re-dispatch only), ahead of
   // the routing and the already-complete short-circuit below: the repair
   // exists for the landing, and the landing needs the merged branch whether
@@ -782,8 +838,15 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   }
   // A re-dispatched lane whose unit already completed in an earlier attempt
   // (killed between the unit's terminal commit and the parent's landing):
-  // nothing to run — the report lands the finished work.
-  if (await Bun.file(join(directory, taskStatePaths(unit).complete)).exists()) {
+  // nothing to run — the report lands the finished work. A stream's state
+  // file is the fact (a last stream whose wrap-up was interrupted lands the
+  // same way: the closing lane takes the tail).
+  if (stream !== undefined) {
+    if (await Bun.file(join(directory, subtaskStateSpec(stream.task, stream.index).complete.path)).exists()) {
+      log(`↻ ${unit} is already complete in this worktree; the lane has nothing to run`)
+      return 0
+    }
+  } else if (await Bun.file(join(directory, taskStatePaths(unit).complete)).exists()) {
     log(`↻ ${unit} is already complete in this worktree; the lane has nothing to run`)
     return 0
   }
@@ -793,32 +856,50 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     return 1
   }
   const plan = await loadPlan(directory, route.phase)
-  const task = plan.tasks.find((entry) => entry.id === unit)
+  const task = plan.tasks.find((entry) => entry.id === (stream?.task ?? unit))
   if (!task) {
-    log(`⏸ lane worker: ${plan.index} does not list ${unit}; re-dispatch it from the parent`)
+    log(`⏸ lane worker: ${plan.index} does not list ${stream?.task ?? unit}; re-dispatch it from the parent`)
     return 1
   }
-  banner(`${task.id} ${task.title}`)
-  log(`▶ ${task.id} lane worker: running the unit (attempt ${task.attempts + 1})`)
-  await statsTask(directory, task.id)
-  emitStatus({ type: "task-start", task: task.id, title: task.title })
+  banner(`${unit} ${task.title}`)
+  log(`▶ ${unit} lane worker: running the ${stream !== undefined ? "stream" : "unit"} (attempt ${task.attempts + 1})`)
+  await statsTask(directory, unit)
+  emitStatus({ type: "task-start", task: unit, title: task.title })
   const taskBaseline = await ctx.git.unitBaseline(directory)
-  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(route.phase) }))
+  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(route.phase), ...(stream !== undefined ? { stream: stream.index } : {}) }))
   if (outcome.type === "dirty") {
-    log(`⏸ ${task.id} worktree not clean before the execution unit starts; handle it manually (commit/clean) and re-run:`)
+    log(`⏸ ${unit} worktree not clean before the execution unit starts; handle it manually (commit/clean) and re-run:`)
     for (const file of outcome.files) log(`  ${file}`)
-    emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
+    emitStatus({ type: "task-end", task: unit, outcome: "dirty", detail: outcome.files.join("; ") })
     return 2
   }
   if (outcome.type === "blocked" || outcome.type === "incomplete") {
     const reason = outcome.type === "blocked" ? outcome.question : outcome.reason
-    if (outcome.type === "blocked") await block(directory, task.id)
-    log(`⏸ ${task.id} ${outcome.type === "blocked" ? "is blocked (the reason is recorded only in this log)" : "incomplete, reverted to pending"}:\n${reason}`)
+    if (outcome.type === "blocked") await block(directory, unit)
+    log(`⏸ ${unit} ${outcome.type === "blocked" ? "is blocked (the reason is recorded only in this log)" : "incomplete, reverted to pending"}:\n${reason}`)
     for (const line of await taskResolveLines(directory, task.id)) log(line)
-    const settled = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${outcome.type === "blocked" ? "blocked" : "pending"} ${task.title}` })
+    const settled = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${unit} ${outcome.type === "blocked" ? "blocked" : "pending"} ${task.title}` })
     if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
-    emitStatus({ type: "task-end", task: task.id, outcome: outcome.type, detail: reason })
+    emitStatus({ type: "task-end", task: unit, outcome: outcome.type, detail: reason })
     return 2
+  }
+  if (outcome.type === "unit-done") {
+    // S5: the lane's unit closed without completing the task — a lead that
+    // stopped at its taken split, one stream of a split. Its work is
+    // committed (the lead's exec commit, the subtask close-out), the report
+    // lands it, and the task goes on in other lanes; only the close-out
+    // check remains, over this worktree.
+    log(`✓ ${unit} closed (the task continues in its other lanes)`)
+    if (taskBaseline.length) {
+      const violations = await unitViolations(directory, taskBaseline)
+      if (violations.length) {
+        log(`⏸ ${unit} unit close-out check failed (the lane landed, but the isolation boundary has been violated; investigate manually):`)
+        for (const problem of violations) log(`  ${problem}`)
+        emitStatus({ type: "failure", message: `${unit} unit close-out check failed (isolation boundary violated): ${violations.join("; ")}` })
+        return 2
+      }
+    }
+    return 0
   }
   // completed: the terminal commit and the close-out check (the serial loop's
   // tail, over this worktree).
@@ -835,10 +916,10 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     const failure = `${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}`
     log(`⏸ ${failure}. The task mark is still in the worktree; commit manually and re-run`)
     emitStatus({ type: "failure", message: failure })
-    emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: failure })
+    emitStatus({ type: "task-end", task: unit, outcome: "blocked", detail: failure })
     return 2
   }
-  emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+  emitStatus({ type: "task-end", task: unit, outcome: "completed" })
   if (taskBaseline.length) {
     const violations = await unitViolations(directory, taskBaseline)
     if (violations.length) {

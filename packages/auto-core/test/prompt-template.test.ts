@@ -65,12 +65,17 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("exactly 16 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1; a new reference needs the design document updated in step)", () => {
-    expect(consumers.length).toBe(16)
+  test("exactly 17 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1; a new reference needs the design document updated in step)", () => {
+    expect(consumers.length).toBe(17)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
     expect(consumers).toContain("phase-append.md")
+    // fanout's reference sits inside the cold-start block (plans/0068 S5): a
+    // fresh stream lane session has no fork holding the task's rules, so the
+    // cold delta is the stream's whole prompt and carries the question rule
+    // itself.
+    expect(consumers).toContain("fanout.md")
     // wrapup does not reference the partial (the wrap-up session asks no questions); T-007's "Proxy-answered questions" section is a separate conditional block
     expect(consumers).not.toContain("wrapup.md")
   })
@@ -162,10 +167,13 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     expect(fragment(false)).toBe(renderText("{{> question-rule}}", promptCtx(facts(), { ask: false })))
   })
 
-  test("all 23 consumer templates render under both settings (a partial change reaches every referencing side)", () => {
+  test("all consumer templates render under both settings (a partial change reaches every referencing side)", () => {
     for (const ask of [false, true]) {
       for (const name of consumers) {
-        const rendered = renderTemplate(name.replace(/\.md$/, ""), { ask })
+        // fanout's partial sits in the cold-start block (S5): only a cold
+        // delta carries it — render it cold for the check.
+        const ctx = name === "fanout.md" ? { ask, cold: true } : { ask }
+        const rendered = renderTemplate(name.replace(/\.md$/, ""), ctx)
         expect(rendered).toContain("question tool")
       }
     }

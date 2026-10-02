@@ -32,6 +32,8 @@ import {
   parseLaneReport,
   readyUnits,
   relayLaneOutput,
+  streamUnitOf,
+  streamUnits,
   syncIndexTicks,
   writeLaneReport,
   type InFlightLane,
@@ -40,11 +42,14 @@ import {
 } from "../src/lanes"
 import { addStatusSink, startRunStatus, stopRunStatus } from "../src/run-status"
 import type { RunStatusEvent } from "../src/run-status-schema"
-import { changedFiles, commitTree } from "../src/git"
+import { changedFiles, commitTree, unitBaseline } from "../src/git"
 import { createGitOps } from "../src/git-ops"
 import { setShellProfile, type LaneWorker } from "../src/shell"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
-import { begin, clearLane, laneRecords, markDone, next, renderTaskIndex, setLane, UNITS_FILE, unitAttempts, type Plan, type Task } from "../src/tasks"
+import { begin, clearLane, laneRecords, loadPlan, markDone, next, readChecklist, renderTaskIndex, setLane, setSplit, tickSubtask, UNITS_FILE, unitAttempts, type Plan, type Task } from "../src/tasks"
+import { parseSplit, writeSplitTodos } from "../src/split"
+import { renameTodoToDone } from "../src/document/state"
+import { taskDoc } from "../src/docpaths"
 import { seedUnits, unitsText } from "./fixtures/units"
 import { ExitRequested } from "../src/exit"
 import { runTaskLoop, type LoopCtx } from "../src/loop-task"
@@ -222,7 +227,7 @@ describe("syncIndexTicks (D7 step ③)", () => {
 })
 
 describe("the lane runtime fields (D6; 0051 D3)", () => {
-  test("setLane writes worktree and pid through the serialized chain; clearLane drops exactly them", async () => {
+  test("setLane writes worktree and pid through the serialized chain; clearLane drops exactly them (and a stale in_progress — S5: a landed partial unit executes nowhere)", async () => {
     await begin(dir, "T-001")
     await setLane(dir, "T-001", { worktree: parkOf("T-001"), pid: 4242 })
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({
@@ -233,7 +238,7 @@ describe("the lane runtime fields (D6; 0051 D3)", () => {
     })
     expect(await laneRecords(dir)).toEqual([{ unit: "T-001", worktree: parkOf("T-001"), pid: 4242 }])
     await clearLane(dir, "T-001")
-    expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({ status: "in_progress", attempts: 1 })
+    expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({ attempts: 1 })
     expect(await laneRecords(dir)).toEqual([])
   })
 
@@ -264,11 +269,11 @@ describe("parseLaneReport (D8)", () => {
   // the parser's own type.
   const round = (over: Record<string, unknown> = {}): ReturnType<typeof parseLaneReport> => parseLaneReport(JSON.stringify({ ...REPORT, ...over }))
 
-  test("parses the report shape; unknown fields are ignored; split rides through opaquely", () => {
+  test("parses the report shape; unknown fields are ignored; the S5 split rides typed", () => {
     expect(round()).toBeDefined()
     expect(round({ extra: "ignored" })).toEqual(round())
-    const withSplit = round({ split: { items: 3 } })!
-    expect(withSplit).toEqual({ ...withSplit, split: { items: 3 } })
+    const withSplit = round({ split: { items: 3, baseline: [{ root: "/w", sha: "abc1234" }] } })!
+    expect(withSplit).toEqual({ ...withSplit, split: { items: 3, baseline: [{ root: "/w", sha: "abc1234" }] } })
   })
 
   test("a record that does not carry the contract is not a report (the orphan signal)", () => {
@@ -280,6 +285,11 @@ describe("parseLaneReport (D8)", () => {
     expect(parseLaneReport(JSON.stringify({ ...REPORT, result: "MAYBE" }))).toBeUndefined()
     expect(parseLaneReport(JSON.stringify({ ...REPORT, blocked: 2 }))).toBeUndefined()
     expect(parseLaneReport(JSON.stringify({ ...REPORT, split: [] }))).toBeUndefined()
+    // S5's split shape: a positive item count and a {root, sha} baseline.
+    expect(parseLaneReport(JSON.stringify({ ...REPORT, split: { items: 0, baseline: [] } }))).toBeUndefined()
+    expect(parseLaneReport(JSON.stringify({ ...REPORT, split: { items: 2 } }))).toBeUndefined()
+    expect(parseLaneReport(JSON.stringify({ ...REPORT, split: { items: 2, baseline: [{ root: "/w", sha: 7 }] } }))).toBeUndefined()
+    expect(parseLaneReport(JSON.stringify({ ...REPORT, split: { items: 2, baseline: [] } }))).toBeDefined()
   })
 })
 
@@ -1254,5 +1264,225 @@ describe("recoverOrphanLanes (D14)", () => {
     expect(await dirExists(locked)).toBe(true)
     expect(lines.some((line) => line.includes("leaving it alone"))).toBe(true)
     await worker.exited
+  })
+})
+
+// —— Stream lanes (plans/0068 S5: D3 stage 2, D19, §6.8) —— //
+
+// A two-stream split of T-001, the second waiting for the first (a dependent
+// stream's lane starts only after its sibling landed), and the independent
+// two-stream shape (both co-dispatched, the wrap-up left to the closing lane).
+const DEPENDENT_SPLIT = [
+  "- [ ] alpha: the alpha module in src/alpha.ts, verify it by reading it back Depends: none Artifacts: src/alpha.ts",
+  "- [ ] beta: the beta module in src/beta.ts on alpha, verify it by reading it back Depends: S01 Artifacts: src/beta.ts",
+  "",
+].join("\n")
+const INDEPENDENT_SPLIT = [
+  "- [ ] alpha: the alpha module in src/alpha.ts, verify it by reading it back Depends: none Artifacts: src/alpha.ts",
+  "- [ ] beta: the beta module in src/beta.ts beside it, verify it by reading it back Depends: none Artifacts: src/beta.ts",
+  "",
+].join("\n")
+
+// The lead's landing shape: the checklist, the scope files and the lead's own
+// work committed, the split recorded in the given tree's registry (the real
+// lead lane writes all of this inside its worktree; a hand-built scene writes
+// it wherever the caller points — the main tree for the pure cases, the lead
+// worktree for the loop's).
+async function takeSplit(root: string, text: string, task: { id: string; title: string }, work = true): Promise<{ items: number; baseline: { root: string; sha: string }[] }> {
+  const items = parseSplit(text)
+  await writeSplitTodos(root, task.id, items)
+  await Bun.write(join(root, taskDoc(task.id, "subtasks")), text)
+  if (work) {
+    await mkdir(join(root, "src"), { recursive: true })
+    await Bun.write(join(root, "src", "shared.ts"), "export const shared = 1\n")
+  }
+  const settled = await commitTree(root, task, { stage: "execute", subject: `${task.id} exec ${task.title}` })
+  if (!settled.ok) throw new Error(`the lead's exec commit failed: ${settled.failures.map((failure) => failure.error).join("; ")}`)
+  // The split point: every repository's HEAD right after the lead's commit,
+  // recorded in this tree's own registry (execute.ts's own order).
+  const baseline = await unitBaseline(root)
+  await setSplit(root, task.id, baseline)
+  return { items: items.length, baseline }
+}
+
+describe("streamUnits (D3 stage 2, §6.8)", () => {
+  const unit = (id: string, title: string, over: Partial<Task> = {}): Task => ({ id, title, status: "pending", attempts: 0, body: "", ...over })
+
+  test("derives the streams of a taken split: qualified ids, resolved depends, touches from the artifacts, done flags from the state files", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    const plan = await loadPlan(dir, phase)
+    await takeSplit(dir, DEPENDENT_SPLIT, plan.tasks[0]!)
+    const fresh = await loadPlan(dir, phase)
+    expect(await streamUnits(dir, fresh.tasks[0]!)).toEqual([
+      { id: "T-001.S01", title: "alpha", status: "pending", attempts: 0, body: "", depends: "none", touches: ["src/alpha.ts"], checklist: [] },
+      { id: "T-001.S02", title: "beta", status: "pending", attempts: 0, body: "", depends: ["T-001.S01"], touches: ["src/beta.ts"], checklist: [] },
+    ])
+    // A landed stream drops out of the pending set by its done flag (the
+    // state file, not the tick): S01 done → only S02 remains schedulable.
+    await renameTodoToDone(dir, "T-001", 1)
+    await tickSubtask(dir, "T-001", 1)
+    const landed = await loadPlan(dir, phase)
+    const units = (await streamUnits(dir, landed.tasks[0]!))!
+    expect(units.map((item) => [item.id, item.status])).toEqual([
+      ["T-001.S01", "done"],
+      ["T-001.S02", "pending"],
+    ])
+    // The grammar helper round-trips the ids the loop parses back apart.
+    expect(streamUnitOf("T-001.S02")).toEqual({ task: "T-001", index: 2 })
+    expect(streamUnitOf("T-001")).toBeUndefined()
+  })
+
+  test("no split record, or no state protocol: the task stays whole (undefined)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    const plan = await loadPlan(dir, phase)
+    const task = plan.tasks[0]!
+    // A checklist without the record (a true-mode decomposition or a
+    // hand-written checklist) is not a stream fan-out.
+    await writeSplitTodos(dir, "T-001", parseSplit(DEPENDENT_SPLIT))
+    await Bun.write(join(dir, taskDoc("T-001", "subtasks")), DEPENDENT_SPLIT)
+    const withFiles = await loadPlan(dir, phase)
+    expect(await streamUnits(dir, withFiles.tasks[0]!)).toBeUndefined()
+    // The record without the state files (nothing taken yet) likewise.
+    await setSplit(dir, "T-001", await unitBaseline(dir))
+    expect(await streamUnits(dir, task)).toBeUndefined()
+  })
+})
+
+describe("runLaneLoop with a taken split (S5, D19)", () => {
+  test("the lead lane lands its split; the dependent stream lanes run from the split baseline; the last stream's lane runs the wrap-up and closes the task", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", root: true, file: "src/widget.ts" }])
+    const launches: string[] = []
+    const seeded: Record<string, unknown> = {}
+    let wrappedIn: string | undefined
+    setShellProfile({
+      laneLauncher: (worktree, unit) => {
+        launches.push(unit)
+        const stream = streamUnitOf(unit)
+        return workingStub(
+          (async () => {
+            if (stream === undefined) {
+              // The lead: the split taken and committed, the record in its
+              // own registry, the report carrying it (the real lane worker's
+              // lead-stop shape — its unit closes, the task goes on).
+              const split = await takeSplit(worktree, DEPENDENT_SPLIT, { id: "T-001", title: "the widget" })
+              await writeLaneReport(worktree, reportOf("T-001", { split }))
+              return
+            }
+            // A stream lane: the seeded split record (re-rooted onto this
+            // worktree) is its own registry's first fact.
+            seeded[unit] = JSON.parse(await Bun.file(join(worktree, UNITS_FILE)).text()).tasks["T-001"]?.split
+            const file = stream.index === 1 ? "src/alpha.ts" : "src/beta.ts"
+            await mkdir(dirname(join(worktree, file)), { recursive: true })
+            await Bun.write(join(worktree, file), `export const done = "${unit}"\n`)
+            await renameTodoToDone(worktree, "T-001", stream.index)
+            await tickSubtask(worktree, "T-001", stream.index)
+            const settled = await commitTree(worktree, { id: "T-001", title: "the widget" }, { stage: `subtask ${stream.index}`, subject: `T-001 S${stream.index} the widget` })
+            if (!settled.ok) throw new Error("the stream's commit failed")
+            // The last stream (every sibling done in this worktree's own
+            // merged view) runs the wrap-up and the close-out in its lane.
+            const items = await readChecklist(worktree, "T-001")
+            if (items.every((item) => item.done)) {
+              wrappedIn = unit
+              await Bun.write(join(worktree, taskDoc("T-001", "report")), `# T-001 report\n\n${"Delivered. ".repeat(20)}\n\nResult: PASS\n\n${EOF_MARK}\n`)
+              await markDone({ dir: worktree, index: join(phase.dir, "tasks.md") }, "T-001")
+              const closed = await commitTree(worktree, { id: "T-001", title: "the widget" }, { stage: "done", subject: "T-001 done the widget" })
+              if (!closed.ok) throw new Error("the close-out commit failed")
+            }
+            await writeLaneReport(worktree, reportOf(unit))
+          })(),
+        )
+      },
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    if (run.code !== 0) process.stderr.write(`DEBUG\n${run.lines.join("\n")}\n`)
+    expect(run.code).toBe(0)
+    // The scheduling story: the lead lane first (the task unit), its landing
+    // expands the split — S02 waits for S01, so the streams run one after
+    // the other, each its own lane unit, and no task lane re-runs between
+    // them (the task is suppressed while a stream is pending).
+    expect(launches).toEqual(["T-001", "T-001.S01", "T-001.S02"])
+    expect(run.lines.some((line) => line.includes("T-001 landed (lane unit closed; the task continues in its other lanes"))).toBe(true)
+    // The split record travelled: the lead worktree's registry died at
+    // teardown, the parent re-persisted it at landing (re-rooted onto the
+    // main tree), and every stream's fresh worktree was seeded with it
+    // (re-rooted again onto that worktree) before its spawn.
+    const parent = JSON.parse(await unitsText(dir)).tasks["T-001"].split
+    expect(parent.map((line: { root: string }) => line.root)).toEqual([dir])
+    for (const unit of ["T-001.S01", "T-001.S02"]) {
+      expect((seeded[unit] as { root: string }[]).map((line) => line.root)).toEqual([join(dir, lanePark(unit))])
+    }
+    // The last stream's lane ran the wrap-up and closed the task.
+    expect(wrappedIn).toBe("T-001.S02")
+    // The end state: both streams' work landed, the checklist and the task
+    // closed, the index ticked, the park torn down, the tree clean.
+    expect(await Bun.file(join(dir, "src", "alpha.ts")).text()).toContain("T-001.S01")
+    expect(await Bun.file(join(dir, "src", "beta.ts")).text()).toContain("T-001.S02")
+    expect(await Bun.file(join(dir, "docs", "T-001", "S01", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "docs", "T-001", "S02", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, taskDoc("T-001", "report"))).text()).toContain("Result: PASS")
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
+    expect((await git(dir, "branch", "--list", "auto-lane/T-001*")).trim()).toBe("")
+  })
+
+  test("co-dispatched streams (none last at its own start) leave the wrap-up to the closing lane after the drain", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", root: true, file: "src/widget.ts" }])
+    const launches: string[] = []
+    const streamsInFlightTogether: string[][] = []
+    let wrappedIn: string | undefined
+    setShellProfile({
+      laneLauncher: (worktree, unit) => {
+        launches.push(unit)
+        if (unit === "T-001.S02") streamsInFlightTogether.push(readdirSync(join(dir, ".auto", "worktrees")).sort())
+        const stream = streamUnitOf(unit)
+        return workingStub(
+          (async () => {
+            if (stream === undefined) {
+              const first = !await Bun.file(join(worktree, taskDoc("T-001", "subtasks"))).exists()
+              if (first) {
+                const split = await takeSplit(worktree, INDEPENDENT_SPLIT, { id: "T-001", title: "the widget" })
+                await writeLaneReport(worktree, reportOf("T-001", { split }))
+                return
+              }
+              // The closing lane: every stream done, the task unit returns as
+              // the pipeline tail — the wrap-up and the close-out, nothing
+              // else (the shape the lead's re-entry takes after the drain).
+              wrappedIn = unit
+              await Bun.write(join(worktree, taskDoc("T-001", "report")), `# T-001 report\n\n${"Delivered. ".repeat(20)}\n\nResult: PASS\n\n${EOF_MARK}\n`)
+              await markDone({ dir: worktree, index: join(phase.dir, "tasks.md") }, "T-001")
+              const closed = await commitTree(worktree, { id: "T-001", title: "the widget" }, { stage: "done", subject: "T-001 done the widget" })
+              if (!closed.ok) throw new Error("the close-out commit failed")
+              await writeLaneReport(worktree, reportOf(unit))
+              return
+            }
+            const file = stream.index === 1 ? "src/alpha.ts" : "src/beta.ts"
+            await mkdir(dirname(join(worktree, file)), { recursive: true })
+            await Bun.write(join(worktree, file), `export const done = "${unit}"\n`)
+            await renameTodoToDone(worktree, "T-001", stream.index)
+            await tickSubtask(worktree, "T-001", stream.index)
+            const settled = await commitTree(worktree, { id: "T-001", title: "the widget" }, { stage: `subtask ${stream.index}`, subject: `T-001 S${stream.index} the widget` })
+            if (!settled.ok) throw new Error("the stream's commit failed")
+            await writeLaneReport(worktree, reportOf(unit))
+          })(),
+        )
+      },
+    })
+    const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
+    if (run.code !== 0) process.stderr.write(`DEBUG\n${run.lines.join("\n")}\n`)
+    expect(run.code).toBe(0)
+    // The lead first, both streams side by side (co-dispatched — S02's launch
+    // saw S01's worktree still parked), then the closing lane after the
+    // drain; the wrap-up ran there, not in either stream.
+    expect(launches[0]).toBe("T-001")
+    expect(launches.slice(1, 3).sort()).toEqual(["T-001.S01", "T-001.S02"])
+    expect(launches[3]).toBe("T-001")
+    expect(streamsInFlightTogether).toEqual([["T-001.S01", "T-001.S02"]])
+    expect(wrappedIn).toBe("T-001")
+    expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
   })
 })

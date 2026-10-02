@@ -33,13 +33,16 @@
 import { cp, mkdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
-import { deleteBranch, mergeBaseSha, repoRoots, unitViolations, type GitOps } from "./git"
+import { checklistPrerequisites, subtaskId } from "./document/state"
+import { deleteBranch, mergeBaseSha, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
 import type { ParallelLevel } from "./intent/types"
 import { log } from "./log"
 import { emitStatus } from "./run-status"
 import { statsLaneUsage, type LaneUsageDetail } from "./stats"
+import { splitTaken } from "./split"
+import { taskDoc } from "./docpaths"
 import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
-import { begin, clearLane, laneRecords, setLane, taskIndexPath, type Plan, type PlanPhase, type Task } from "./tasks"
+import { begin, checklistTitle, clearLane, laneRecords, setLane, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, type Plan, type PlanPhase, type Task } from "./tasks"
 
 // —— Activation and policy (D10, D21) ——
 
@@ -224,8 +227,13 @@ export async function syncIndexTicks(dir: string, phase: PlanPhase): Promise<str
 // worktree at every exit it controls; the parent reads it after process
 // exit, and its absence (crash, kill) is the orphan signal (D14). Field
 // names are protocol strings (plans/0068 §8); `result` reuses the
-// `Result: PASS|FAIL` semantics verbatim. `split` is S5's field — carried
-// opaquely until that stage types it.
+// `Result: PASS|FAIL` semantics verbatim. `split` is S5's field, typed at
+// last (§6.8): a lead's taken split — the stream count and the split point
+// (per-repo SHAs, recorded in the lead worktree's own coordinates and
+// re-rooted by the parent at landing); absent on a lead that took no split
+// and on every stream's own report.
+export type LaneSplit = { items: number; baseline: { root: string; sha: string }[] }
+
 export type LaneReport = {
   unit: string
   phase: string
@@ -237,7 +245,7 @@ export type LaneReport = {
   commits: string[]
   agent: string
   models: string[]
-  split?: Record<string, unknown>
+  split?: LaneSplit
   // The usage detail of the S4 roll-up (D13): the lane's own task bucket's
   // usage breakdown and per-model/per-tier sections, so the parent's stats
   // keep their per-model and per-tier lines working under the scheduler
@@ -251,6 +259,20 @@ const plainObject = (value: unknown): value is Record<string, unknown> => value 
 const finiteCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
 const integerCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0
 const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string")
+
+// S5's split field (§6.8): a positive item count and the split point as the
+// unit baseline's own `{ root, sha }` grammar.
+const parseLaneSplit = (raw: unknown): LaneSplit | undefined => {
+  if (!plainObject(raw)) return undefined
+  if (!integerCount(raw.items) || raw.items < 1) return undefined
+  if (!Array.isArray(raw.baseline)) return undefined
+  const baseline: { root: string; sha: string }[] = []
+  for (const entry of raw.baseline) {
+    if (!plainObject(entry) || typeof entry.root !== "string" || typeof entry.sha !== "string") return undefined
+    baseline.push({ root: entry.root, sha: entry.sha })
+  }
+  return { items: raw.items, baseline }
+}
 
 // One usage figure of the detail, leniently (the registry parsers' rule: a
 // field that is not a finite number reads as 0, never a throw).
@@ -341,7 +363,11 @@ export function parseLaneReport(json: string): LaneReport | undefined {
   if (!stringList(raw.commits) || !stringList(raw.models)) return undefined
   if (raw.result !== undefined && raw.result !== "PASS" && raw.result !== "FAIL") return undefined
   if (raw.blocked !== undefined && typeof raw.blocked !== "string") return undefined
-  if (raw.split !== undefined && !plainObject(raw.split)) return undefined
+  // A split that is present but malformed rejects the report (the registry
+  // parsers' strictness at a protocol boundary the parent acts on), rather
+  // than dropping the field and landing a lead whose streams no one schedules.
+  const split = parseLaneSplit(raw.split)
+  if (raw.split !== undefined && split === undefined) return undefined
   const detail = parseUsageDetail(raw.detail)
   return {
     unit: raw.unit,
@@ -354,7 +380,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
     models: raw.models,
     ...(raw.result !== undefined ? { result: raw.result } : {}),
     ...(raw.blocked !== undefined ? { blocked: raw.blocked } : {}),
-    ...(raw.split !== undefined ? { split: raw.split } : {}),
+    ...(split !== undefined ? { split } : {}),
     ...(detail !== undefined ? { detail } : {}),
   }
 }
@@ -391,6 +417,59 @@ export function laneOutcome(code: number, report: LaneReport | undefined): LaneO
   if (code === 1) return { kind: "environment", report }
   if (code === 0 && report.ok && report.result !== "FAIL" && report.blocked === undefined) return { kind: "land", report }
   return { kind: "blocked", report }
+}
+
+// —— The stream lane units (S5: D3's stage 2, §6.8) ——
+
+// The stream lane unit grammar: `T-NNN.S<nn>` — the task id and the subtask
+// positional id in one scheduling key (§8's registration; it flows into the
+// branch and park grammars unchanged).
+export const streamUnitId = (task: string, index: number): string => `${task}.${subtaskId(index)}`
+
+// The owning task and the 1-based item of a stream unit id; undefined = a
+// plain task unit.
+export function streamUnitOf(unit: string): { task: string; index: number } | undefined {
+  const match = /^(T-\d+)\.S(\d{2,})$/.exec(unit)
+  return match ? { task: match[1]!, index: Number(match[2]!) } : undefined
+}
+
+// The stream units of a task whose lead's split was taken (§6.8): one
+// T-NNN.S<nn> per checklist item, its done flag from the merged state files,
+// `Depends:` the item's sibling ids by their qualified names (G3's
+// previous-item default resolved here — the expanded set has no index
+// adjacency to derive it from), `Touches:` the S<nn>/todo.md field block
+// (the split guard's writer derives it from the line's `Artifacts:`).
+// undefined = no taken split on record: the task stays whole — one lane
+// running its own streams in-lane, the serial world's shape.
+export async function streamUnits(dir: string, task: Pick<Task, "id" | "split" | "checklist">): Promise<Task[] | undefined> {
+  const items = task.checklist ?? []
+  if (task.split === undefined || !items.length) return undefined
+  if (!(await splitTaken(dir, task.id, items.length))) return undefined
+  return items.map((item, i) => {
+    const deps = checklistPrerequisites(items, i + 1)
+    return {
+      id: streamUnitId(task.id, i + 1),
+      title: checklistTitle(item.text),
+      status: item.done ? ("done" as const) : ("pending" as const),
+      attempts: 0,
+      body: "",
+      // A dependent stream names its siblings by their qualified ids; a root
+      // stream declares none explicitly (never the G3 default — the expanded
+      // set's previous entry is another task's unit).
+      ...(deps.length ? { depends: deps.map((dep) => streamUnitId(task.id, Number(dep.slice(1)))) } : { depends: "none" as const }),
+      ...(item.touches !== undefined ? { touches: item.touches } : {}),
+      checklist: [],
+    }
+  })
+}
+
+// A split baseline's roots are absolute paths of the checkout the record was
+// written in (repoRoots of the writer); re-root them onto another checkout
+// of the same object store — the parent's main tree at landing, a fresh
+// stream worktree at dispatch. Every root sits under `from`, so the mapping
+// is each root's path relative to it, joined onto `to`.
+export function reRootSplit(baseline: readonly { root: string; sha: string }[], from: string, to: string): { root: string; sha: string }[] {
+  return baseline.map(({ root, sha }) => ({ root: join(to, relative(from, root)), sha }))
 }
 
 // —— The protocol paths (§8: all new English literals, registered) ——
@@ -454,7 +533,11 @@ const SCAFFOLD_FILES = [".gitignore", ".opencode", "opencode.json", "AGENTS.md"]
 // worktree, and the spawn through the profile's launcher. The optional
 // instruction is D7's merge instruction, carried only by a conflict repair's
 // re-dispatch (which is always a re-use dispatch: the repair happens on a lane
-// whose scene the conflict kept).
+// whose scene the conflict kept). The optional seed is S5's: a stream lane's
+// fresh worktree starts with the owning task's split record in its own
+// .auto/units.json (re-rooted onto the worktree's paths), so the worker reads
+// Task.split exactly as the serial world does — a re-dispatch's worktree keeps
+// the record its earlier dispatch wrote.
 // AUTO-DECISION (spawn before the runtime-field write): §6.5 orders ④ the
 // fields before ⑤ the spawn, but the pid half of the record exists only once
 // the worker process does; writing worktree and pid together after the spawn
@@ -465,6 +548,7 @@ export async function dispatchLane(
   dir: string,
   task: Pick<Task, "id" | "title">,
   instruction?: LaneMergeInstruction,
+  seed?: { task: string; split: { root: string; sha: string }[] },
 ): Promise<LaneDispatch> {
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
@@ -497,6 +581,12 @@ export async function dispatchLane(
       await gitOps.removeWorktree(dir, park)
       await deleteBranch(dir, branch)
       return { type: "failed", error: copied }
+    }
+    // S5: the seed precedes the spawn — the worker reads the record at its
+    // own loadPlan, and any later write would race it.
+    if (seed !== undefined) {
+      await mkdir(join(park, ".auto"), { recursive: true })
+      await Bun.write(join(park, UNITS_FILE), `${JSON.stringify({ tasks: { [seed.task]: { split: reRootSplit(seed.split, dir, park) } } }, null, 2)}\n`)
     }
   }
   const launch = shellProfile().laneLauncher ?? defaultLaneLauncher
@@ -706,12 +796,20 @@ export async function landLane(
     landedEvent("blocked", { detail: violations.join("; ") })
     return { type: "blocked", error: `the lane branch of ${task.id} failed the close-out check (${violations.join("; ")}); the lane scene is kept at ${lanePark(task.id)} for inspection` }
   }
-  // ② the landing merge. `own` names the parent-exclusive phase index (D6):
-  // concurrent lanes tick adjacent index lines — no textual merge survives
-  // that — so a conflict over exactly the index resolves onto the main tree's
-  // side and step ③ re-derives the true ticks; any other conflict stays the
-  // conflict protocol's.
-  const landed = await gitOps.landBranch(dir, branch, task, [taskIndexPath(phase)])
+  // ② the landing merge. `own` names the parent-exclusive ticks (D6): the
+  // phase index — concurrent lanes tick adjacent index lines, no textual
+  // merge survives that — and, since S5, the OWNING task's checklist
+  // (subtasks.md; a stream lane's unit id is T-NNN.S<nn>), where concurrent
+  // stream lanes tick adjacent stream lines the same way; both resolve onto
+  // the main tree's side and step ③ re-derives the true ticks from the
+  // merged state files. Any other conflicted path stays the conflict
+  // protocol's.
+  // AUTO-DECISION (subtasks.md in `own`): sessions never write the checklist
+  // (the fanout delta forbids it, the decompose session wrote it once at
+  // decomposition), so a conflict over it is tick-shaped by construction —
+  // exactly the shape the re-derivation below owns.
+  const owner = streamUnitOf(task.id)?.task ?? task.id
+  const landed = await gitOps.landBranch(dir, branch, task, [taskIndexPath(phase), taskDoc(owner, "subtasks")])
   if (landed.type === "conflict") {
     landedEvent("conflict", { detail: landed.detail })
     return { type: "conflict", detail: landed.detail }
@@ -720,8 +818,11 @@ export async function landLane(
     landedEvent("blocked", { detail: landed.error })
     return { type: "blocked", error: `landing ${branch} failed: ${landed.error}` }
   }
-  // ③ the tick re-derivation, committed as landing-sync.
+  // ③ the tick re-derivation, committed as landing-sync: the phase index's
+  // ticks and (S5) the landed task's checklist ticks, both from the merged
+  // state files.
   await syncIndexTicks(dir, phase)
+  await syncChecklistTicks(dir, owner)
   const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${task.title}` })
   if (!settled.ok) {
     // The merge itself is in and the unit's files are the fact; the ticks are
@@ -732,6 +833,16 @@ export async function landLane(
     await teardownLane(gitOps, dir, task.id)
     landedEvent("blocked", { detail: "the landing-sync commit failed" })
     return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
+  }
+  // S5 (§6.8): the lead's split record travels by the report and is
+  // parent-persisted at landing — the lane worktree's own .auto/ dies at the
+  // teardown below, and the main tree's registry is where the scheduler (the
+  // stream-unit expansion), the stream dispatches' seeds and the next run's
+  // recovery read the split point (Runtime.split, the field the serial path
+  // already writes). The baseline's roots named the lead worktree; the main
+  // tree's paths replace them.
+  if (report.split !== undefined) {
+    await setSplit(dir, task.id, reRootSplit(report.split.baseline, worktree, dir))
   }
   // ④ the runtime fields and the report's usage.
   await clearLane(dir, task.id)

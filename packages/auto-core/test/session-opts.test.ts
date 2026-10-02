@@ -178,3 +178,42 @@ describe("sessionOpts (the seven-site field-set pin)", () => {
     expect(bypass.git).toBe(ctx.git)
   })
 })
+
+// The S5 width keys (plans/0068 D10/D18/§6.8): parallel rides the task
+// options only where execution width is real — a concurrent run
+// (maxSessions ≥ 2 under a level) or a lane worker — and lane/stream mark
+// the lane worker's scope. At one session in the main process every key
+// stays absent whatever the level (the byte-identical floor).
+describe("sessionOpts width keys (plans/0068 S5)", () => {
+  const lane = { unit: "T-001.S02" }
+
+  test("a concurrent run carries the level; the lane scope and stream ordinal ride along", () => {
+    const wide: SessionCtx = { ...ctx, opts: { ...ctx.opts, parallel: "medium", maxSessions: 2 } }
+    const task = sessionOpts(wide, { site: "task", phase })
+    expect(task.parallel).toBe("medium")
+    expect("lane" in task).toBe(false)
+    expect("stream" in task).toBe(false)
+    // A lane worker: the level rides even without maxSessions (the flag
+    // never reaches the worker — its opts.lane is the width fact), and the
+    // stream ordinal scopes the pipeline to one checklist item.
+    const worker: SessionCtx = { ...ctx, opts: { ...ctx.opts, parallel: "medium", lane } }
+    const streamTask = sessionOpts(worker, { site: "task", phase, stream: 2 })
+    expect(streamTask.parallel).toBe("medium")
+    expect(streamTask.lane).toBe(lane)
+    expect(streamTask.stream).toBe(2)
+    expect(sessionOpts(worker, { site: "task", phase }).stream).toBeUndefined()
+  })
+
+  test("one session in the main process injects nothing whatever the level (the floor)", () => {
+    const serial: SessionCtx = { ...ctx, opts: { ...ctx.opts, parallel: "high" } }
+    const task = sessionOpts(serial, { site: "task", phase })
+    expect("parallel" in task).toBe(false)
+    expect("lane" in task).toBe(false)
+    // A lane without a level (the isolation switch's world) carries the
+    // scope but not the guidance.
+    const bare: SessionCtx = { ...ctx, opts: { ...ctx.opts, lane: { unit: "T-001" } } }
+    const isolation = sessionOpts(bare, { site: "task", phase })
+    expect("parallel" in isolation).toBe(false)
+    expect(isolation.lane).toEqual({ unit: "T-001" })
+  })
+})

@@ -99,6 +99,23 @@ describe("renderDecompose", () => {
     expect(decOf(plan, task, { taskContext: "large" })).toContain("aim for 500 lines or fewer")
   })
 
+  test("D18 (plans/0068 S5): a level injects the decompose-side parallelism guidance beside the checklist; none stays byte-identical", () => {
+    const plain = decOf(plan, task)
+    const wide = decOf(plan, task, { parallel: "high" })
+    expect(wide).toContain("Subtask parallelism (high): this project runs independent subtasks side by side")
+    // The level's own subsection text (the default pack's `## parallelism` /
+    // `### high`), framed onto the checklist items.
+    expect(wide).toContain("Optimize for the largest number of tasks that can proceed side by side")
+    expect(wide).not.toContain("## Parallelism (high)")
+    // The block sits between the checklist's format example and the scope-file
+    // step, so the framing reads as part of the checklist discipline.
+    expect(wide.indexOf("Subtask parallelism")).toBeGreaterThan(wide.indexOf("- [ ] <short title>"))
+    expect(wide.indexOf("Subtask parallelism")).toBeLessThan(wide.indexOf("Write a scope file for each subtask"))
+    // Without a level the prompt keeps its exact pre-S5 bytes.
+    expect(decOf(plan, task, { parallel: undefined })).toBe(plain)
+    expect(plain).not.toContain("parallelism")
+  })
+
   test("includes the already-done tasks, the current task and the state-file read-only rules; no longer restates PLAN.md blockage notes", () => {
     const text = decOf(plan, task)
     expect(text).toContain("[done] T-001: build the schema")
@@ -792,6 +809,21 @@ describe("renderWhole", () => {
     expect(wholeOf(plan, task, { ondemand: true, budget: true })).not.toContain("Split rule")
   })
 
+  test("D18 (plans/0068 S5): a level injects the split clause's parallelism guidance; without one the prompt is byte-identical", () => {
+    const plain = wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true })
+    const wide = wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true, parallel: "medium" })
+    expect(wide).toContain("The streams run side by side under this project's parallel level medium")
+    // The level's own subsection text (the default pack's `## parallelism` /
+    // `### medium`) rides inside the clause, framed onto the streams.
+    expect(wide).toContain("Prefer arrangements whose tasks are independent of each other")
+    expect(wide.indexOf("parallel level medium")).toBeGreaterThan(wide.indexOf("Split rule"))
+    expect(wide.indexOf("parallel level medium")).toBeLessThan(wide.indexOf("Before splitting"))
+    // None (or the serial run that never carried the level): the clause keeps
+    // its exact pre-S5 bytes.
+    expect(wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true, parallel: undefined })).toBe(plain)
+    expect(plain).not.toContain("parallel level")
+  })
+
   test("the rejected split's note: the reason, the removed checklist, no second split; the fresh-session fallback adds the committed earlier work", () => {
     const note = renderSplitRejected(facts(), docs, "1 item, where a split takes 2 to 5 streams")
     expect(note).toStartWith("[DRIVER] The split was not taken: 1 item, where a split takes 2 to 5 streams.")
@@ -880,6 +912,45 @@ describe("renderFanout and the stream's full prompt (plans/0059 D5)", () => {
     const plain = fanOf(listPlan, listTask, line, 2, { siblings })
     expect(plain).not.toContain("Status: continue")
     expect(plain).not.toContain("testhandoff")
+  })
+
+  test("the cold delta a stream lane gets (plans/0068 S5/D19): the task block, the scope file, the per-stream handoff — and no fork wording", () => {
+    const cold = fanOf(listPlan, listTask, line, 2, {
+      siblings,
+      changed: ["src/schema.ts"],
+      budget: true,
+      cold: true,
+      scope: "Depends: S01\nTouches: src/exec.ts\n\n## Scope\n\nwrite the execution logic\n\n## Artifacts\n\n- src/exec.ts\n",
+      handoff: "docs/T-004/S02/handoff.md",
+    })
+    // The cold opening: a fresh lane session, not a fork of the lead.
+    expect(cold).toStartWith("[DRIVER] Your split was taken")
+    expect(cold).toContain("a fresh session that forks nothing")
+    expect(cold).toContain("it runs stream T-004.S02, nothing else")
+    expect(cold).not.toContain("each in a fork of you")
+    // The task and the stream's own scope file ride in full — the session
+    // inherited nothing.
+    expect(cold).toContain("The task (its document is docs/T-004/todo.md):")
+    expect(cold).toContain("Whole-task description.")
+    expect(cold).toContain("Your stream's scope file (docs/T-004/S02/todo.md) in full:")
+    expect(cold).toContain("## Scope\n\nwrite the execution logic")
+    // The handover protocol names the per-stream document, and the budget
+    // sentence drops the inherited-prefix clause.
+    expect(cold).toContain("write docs/T-004/S02/handoff.md (overwriting it) for this stream alone")
+    expect(cold).not.toContain("the prefix it inherited counts")
+    // A fresh session carries the question rule the fork inherited.
+    expect(cold).toContain("question tool")
+    // The shared delta parts stay: the item, the siblings, the changed files.
+    expect(cold).toContain(`- [ ] ${line}`)
+    expect(cold).toContain("- S01 write the schema part (done)")
+    expect(cold).toContain("- src/schema.ts")
+  })
+
+  test("the cold delta without changed files tells a fresh session to read what it needs, not to skip re-reading", () => {
+    const quiet = fanOf(listPlan, listTask, line, 2, { siblings, cold: true, scope: "" })
+    expect(quiet).toContain("read what this stream needs fresh")
+    expect(quiet).not.toContain("Do not re-read what you already read")
+    expect(quiet).not.toContain("Since the split")
   })
 
   test("the full subtask prompt carries the context-budget protocol only with budget; without it the prompt is unchanged", () => {

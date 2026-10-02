@@ -3,7 +3,7 @@ import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chai
 import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
-import { handoffFile, taskDoc } from "./docpaths"
+import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
@@ -146,29 +146,42 @@ export async function runTask(
     // once the run has entered the next unit.
     let rerun = true
     if (recalled.active === true) {
-      // Checklist items come from subtasks.md, `done` is the value that
-      // counts (when the state files are active, done.md's existence is the
-      // progress fact and the tick is only the display track — plans/0030
-      // D10).
-      const fresh = await reloadTask(plan, task.id)
-      const items = fresh.checklist ?? []
-      rerun = unitReruns(recalled.phase, {
-        mode,
-        fork: switches.fork,
-        items,
-        subtasksFileItems: items.length,
-        wrapup: opts.wrapup ?? true,
-        // auto: a split already taken ends the lead's unit (its streams are
-        // the checklist items that remain).
-        split: mode === "auto" && (await splitTaken(dir, task.id, items.length)),
-      })
+      if (opts.stream !== undefined) {
+        // S5 (plans/0068 D19): this lane's unit is exactly one stream — the
+        // record's session belongs to it only when its phase names this
+        // subtask (a wrapup/closeout record never reaches here: the lane
+        // entry short-circuits a stream whose done.md already exists).
+        rerun = recalled.phase?.kind === "subtasks" && recalled.phase.index === opts.stream
+      } else {
+        // Checklist items come from subtasks.md, `done` is the value that
+        // counts (when the state files are active, done.md's existence is the
+        // progress fact and the tick is only the display track — plans/0030
+        // D10).
+        const fresh = await reloadTask(plan, task.id)
+        const items = fresh.checklist ?? []
+        rerun = unitReruns(recalled.phase, {
+          mode,
+          fork: switches.fork,
+          items,
+          subtasksFileItems: items.length,
+          wrapup: opts.wrapup ?? true,
+          // auto: a split already taken ends the lead's unit (its streams are
+          // the checklist items that remain).
+          split: mode === "auto" && (await splitTaken(dir, task.id, items.length)),
+        })
+      }
       if (!rerun) {
         await saveProgress(dir, { ...recalled, active: false })
         recalled.active = false
       }
     }
+    // A stream lane's handover document is its own per-stream file (S5) —
+    // the task-level file belongs to the lead's stage (and a taken split
+    // removed it anyway).
     const handoffRaw =
-      mode !== "off" ? await Bun.file(join(dir, taskDoc(task.id, "handoff"))).text().catch(() => undefined) : undefined
+      mode !== "off"
+        ? await Bun.file(join(dir, opts.stream !== undefined ? subtaskDoc(task.id, opts.stream, "handoff") : taskDoc(task.id, "handoff"))).text().catch(() => undefined)
+        : undefined
     const handedOff =
       recalled.active === true && (handoffRaw !== undefined || (opts.handoverTest === true && (await testHandoffExists(dir, task))))
     // Strict resume (plans/0022-session-recovery-fidelity-design.md 3.3): a
@@ -338,10 +351,17 @@ export async function runTask(
     }
   }
   const outcome = await pipeline(recalled?.phase)
-  if (outcome.type === "completed") {
+  if (outcome.type === "completed" || outcome.type === "unit-done") {
     // Terminal-state rename: the chain's last session title points at the
-    // done label (same wording as the loop's terminal-state commit).
-    await renameSession(await clientOf(client, chain.agent), chain, `${task.id} done ${task.title}`)
+    // done label (same wording as the loop's terminal-state commit); a
+    // unit-done lane names the unit that closed — the task itself goes on.
+    const label =
+      outcome.type === "completed"
+        ? `${task.id} done ${task.title}`
+        : opts.stream !== undefined
+          ? `${task.id}.${subtaskId(opts.stream)} done`
+          : `${task.id} lead done ${task.title}`
+    await renameSession(await clientOf(client, chain.agent), chain, label)
     await forgetProgress(dir)
     return outcome
   }
@@ -462,150 +482,264 @@ export async function runTask(
       }
     }
 
+    // S5 (plans/0068 §6.8, D19): the single-stream lane path — the subtask
+    // loop's body extracted for exactly one checklist item. The state scan
+    // and the dependency check are the loop's own (word for word), the
+    // selection is the caller's opts.stream (the lane unit T-NNN.S<nn>), and
+    // the subtask runs cold-started: no fork base at all (the lead's agent
+    // server belonged to the lead's process), runSubtask's laneStream flag
+    // carrying the enriched fanout delta and the per-stream handoff document.
+    // The driver-side boundaries of the loop (step pause, /exit, hibernate,
+    // failback) stay parent-side — a lane boundary is the parent's landing.
+    const runStreamLaneItem = async (): Promise<UnitStop | undefined> => {
+      const index = opts.stream!
+      const items = task.checklist ?? []
+      const scan = await scanSubtaskStates(dir, task.id, items.length)
+      if (scan.illegal.length) {
+        return {
+          type: "blocked",
+          question:
+            `${task.id} subtask state files are illegal (${scan.illegal
+              .map((v) => {
+                // State-file names come from the spec data (M1.4): the
+                // message follows the protocol declaration, not literals.
+                const spec = subtaskStateSpec(task.id, v.index)
+                const pending = basename(spec.pending.path)
+                const complete = basename(spec.complete.path)
+                return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
+              })
+              .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
+        }
+      }
+      const graph = checklistProblems(items)
+      if (graph.length) {
+        return {
+          type: "blocked",
+          question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
+        }
+      }
+      if (index < 1 || index > items.length) {
+        return {
+          type: "blocked",
+          question: `${task.id}.${subtaskId(index)} is not an item of ${taskDoc(task.id, "subtasks")}; re-dispatch the lane with a valid stream unit`,
+        }
+      }
+      const item = items[index - 1]!
+      // Closed by an earlier attempt of this lane: nothing to run — the
+      // short-circuit the loop's runSubtask performs through its own
+      // stateDone path, kept out here so the illegal-state and index checks
+      // above stay the first facts a bad dispatch hears.
+      if (item.done) {
+        log(`↻ ${task.id}.${subtaskId(index)} is already done in this worktree; the lane has nothing to run`)
+        return undefined
+      }
+      // The progress record tags the owning subtask (1-based index), the
+      // loop's own convention: an interruption mid-stream resumes the
+      // session (the preamble's stream rerun gate above) with the startup
+      // clean gate exempt.
+      enterPhase(chain, { kind: "subtasks", index })
+      const recalledPhase = recalled?.active === true ? recalled.phase : undefined
+      const resumeUnit = recalledPhase?.kind === "subtasks" && recalledPhase.index === index
+      const subtask = subtaskId(index)
+      const title = checklistTitle(item.text)
+      emitStatus({ type: "subtask-start", task: task.id, subtask, title })
+      const blocked = await runSubtask(client, plan, task, item.text, index, opts, chain, undefined, resumeUnit, task.split, true)
+      if (blocked) {
+        emitStatus({
+          type: "subtask-end",
+          task: task.id,
+          subtask,
+          outcome: blocked.type,
+          ...(blocked.type === "blocked" ? { detail: blocked.question } : { detail: blocked.files.join("; ") }),
+        })
+        return blocked
+      }
+      emitStatus({ type: "subtask-end", task: task.id, subtask, outcome: "completed" })
+      return undefined
+    }
+
+    // S5 (plans/0068 D3 stage 2 / D19 / §6.8): a lane worker under a parallel
+    // level stops at a taken split whose streams remain — the parent lands
+    // the lead and schedules the streams as their own lanes (T-NNN.S<nn>);
+    // the lead's agent server dies with its process, so no lane ever forks
+    // it. Without a level (the serial world) or in the main process (the
+    // serial degrade, whose in-lane streams fork a live lead) the stream
+    // loop below keeps today's behavior; the isolation switch never stops —
+    // its loop schedules tasks only, so a stop would idle the split forever.
+    // The split record (not just the state files) is the discriminator: a
+    // true-mode decomposition has the files but no record, and its subtasks
+    // are not stream lanes.
+    if (opts.lane !== undefined && opts.parallel !== undefined && opts.stream === undefined && !switches.laneIsolation && task.split !== undefined && (task.checklist ?? []).some((item) => !item.done) && (await splitTaken(dir, task.id, (task.checklist ?? []).length))) {
+      log(`⑂ ${task.id} the split's streams run as lanes of their own; this lane stops after the lead`)
+      return { type: "unit-done" }
+    }
+
     // closeout resume: the wrap-up already finished before the interruption
     // (or the record is a legacy verify/review one, which only ever followed
     // wrap-up) — only the result check and completion remain.
     if (resume?.kind !== "closeout") {
       await persistStage({ kind: "subtasks" })
-      // In true mode this is where the decomposed checklist items run; under
-      // auto, the streams of a split the lead's guard took, each a fork of
-      // the lead; off/ondemand (and auto without a split) only have the items
-      // hand-written in subtasks.md.
-      for (;;) {
-        const items = task.checklist ?? []
-        // Subtask-directory state protocol (M1.0, plans/0030): when the
-        // protocol is active (any todo/done file exists), done.md's existence
-        // overrides the tick as the progress fact (a `done` in items is the
-        // value that counts); an illegal state (both present / both missing)
-        // blocks for a human as soon as detected.
-        const scan = await scanSubtaskStates(dir, task.id, items.length)
-        if (scan.illegal.length) {
-          return {
-            type: "blocked",
-            question:
-              `${task.id} subtask state files are illegal (${scan.illegal
-                .map((v) => {
-                  // State-file names come from the spec data (M1.4): the
-                  // message follows the protocol declaration, not literals.
-                  const spec = subtaskStateSpec(task.id, v.index)
-                  const pending = basename(spec.pending.path)
-                  const complete = basename(spec.complete.path)
-                  return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
-                })
-                .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
-          }
+      if (opts.stream !== undefined) {
+        // S5 (plans/0068 §6.8): the single-stream lane path — the subtask
+        // loop's body extracted for exactly one item, cold-started (D19: no
+        // fork of the lead, the enriched fanout delta, the per-stream
+        // handoff document). Streams exist only under auto (a split's
+        // checklist); anything else naming a stream unit is a bad dispatch.
+        if (mode !== "auto") {
+          return { type: "blocked", question: `${task.id}.${subtaskId(opts.stream)} is a stream unit, but this run is --subtask ${mode}; re-dispatch the lane under --subtask auto` }
         }
-        // Dependency order (M3.5, plans/0047 G5): the next ready subtask by the
-        // `Depends:` fields of the S<nn>/todo.md files (none = the first
-        // unticked item); a bad graph blocks for a human fix.
-        const graph = checklistProblems(items)
-        if (graph.length) {
-          return {
-            type: "blocked",
-            question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
-          }
-        }
-        const index = nextChecklistIndex(items)
-        if (index === -1) break
-        // The progress record tags the owning subtask (1-based index):
-        // written with the record as soon as attempt dispatches
-        // successfully; on resume, the unit attribution gate (unitReruns)
-        // reuses its session only when that subtask will re-run.
-        const loopPhase: Phase = { kind: "subtasks" }
-        enterPhase(chain, { ...loopPhase, index: index + 1 })
-        // Resumed-run determination (the active record belongs exactly to
-        // this checklist item): the worktree's dirty areas at the
-        // interruption scene are this unit's own progress, and runSubtask's
-        // startup clean gate is exempt accordingly
-        // (plans/0021-commit-boundary-design.md).
-        const recalledPhase = recalled?.active === true ? recalled.phase : undefined
-        const resumeUnit = recalledPhase?.kind === "subtasks" && recalledPhase.index === index + 1
-        // Per-agent fork base (plans/0055 §8.4): each subtask resolves the
-        // base of the agent its chain currently runs on — reusing it while
-        // alive, building it lazily on the first subtask that forks on that
-        // agent (the subtask route's pick lands the build on the agent the
-        // subtask itself will dispatch on), and leaving the other agents'
-        // entries untouched. A subtask that moved to another agent forks from
-        // that agent's base, building it on first use. The reload at the loop
-        // tail keeps the record fresh; a layer-less run's single agent keeps
-        // the map at one entry, so the one base resolved after decompose
-        // still serves every subtask.
-        // auto's streams (plans/0059 D5): a checklist the lead's split
-        // produced (its split point recorded, Task.split) runs as forks of the
-        // lead — the lead's session is each stream's base, resolved per
-        // stream on the chain's agent. A checklist without the record (written
-        // by hand, left by the planned pipeline, or a split whose record was
-        // lost between its commit and the record) runs as plain subtasks.
-        // AUTO-RESOLVE: under auto, how does a checklist with state files but no split record run (a split taken by a release before the streams forked the lead, a checklist the planned pipeline left, or a split whose record was lost between its commit and the record)? -> as plain subtasks, the pre-fan-out path (no lead to fork is known; the record is written by the release that forks, so the path stays for as long as such checklists may exist)
-        const fanout = mode === "auto" ? task.split : undefined
-        if (fanout) fork = await leadForkBase(client, task, opts, chain)
-        else if (switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
-        // The subtask bracket (P2b, src/run-status.ts): the qualified id is
-        // the task id plus S<nn> — the pair the vocabulary's subtask events
-        // carry (the subtask's own close-out transition emits from
-        // execute.ts, where the state-file rename lands).
-        const subtask = subtaskId(index + 1)
-        const title = checklistTitle(items[index]!.text)
-        emitStatus({ type: "subtask-start", task: task.id, subtask, title })
-        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit, fanout)
-        if (blocked) {
-          emitStatus({
-            type: "subtask-end",
-            task: task.id,
-            subtask,
-            outcome: blocked.type,
-            ...(blocked.type === "blocked" ? { detail: blocked.question } : { detail: blocked.files.join("; ") }),
-          })
-          return blocked
-        }
-        emitStatus({ type: "subtask-end", task: task.id, subtask, outcome: "completed" })
-        // The post-tick mirror refresh already happened inside runSubtask
-        // before the unified commit; here the task is only re-read.
+        const stop = await runStreamLaneItem()
+        if (stop) return stop
         task = await reloadTask(plan, task.id)
-        // The subtask has closed out (tick + unified commit): the progress
-        // record refreshes to the summarized state (active=false, index
-        // stripped) — an interruption during a subtask gap (step-mode pause /
-        // failback handling) no longer leaves the previous unit's session
-        // "mid-way unsummarized", so on resume the next unit does not
-        // mistakenly continue it.
-        await persistStage(loopPhase)
-        // Step-mode pause (subtask boundary, OPENCODE_AUTO_STEP=subtask): a
-        // hard pause after the checklist item's tick and unified commit are
-        // done, before the next item.
-        // dir is passed so the pause wait is deducted from the time stats
-        // (STATS_PLAN §3).
-        await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
-        // /exit checkpoint (subtask boundary): the request flag lives in the
-        // run's control service, which rides the session options beside the
-        // router (the pipeline sits below the services' entry modules); a
-        // caller that hands runTask no control (a minimal test literal)
-        // skips the checkpoint, as it skips the run-state half of the
-        // failback boundary below.
-        opts.control?.maybeExit("subtask", `${task.id} subtask ${index + 1}`)
-        // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
-        // spot to check after check-off + unified commit; sleep until wake
-        // inside the window before continuing (plans/0027-hibernate-design.md).
-        await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
-        // failback retry (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): at
-        // subtask/session granularity the subtask boundary clears the chain's
-        // failover candidates and the next subtask fails back to the
-        // preferred model (task granularity is naturally covered by the chain
-        // being destroyed per task); /failback requests are consumed at the
-        // same point (and may redefine the model order wholesale). Registry routing
-        // (plans/0055 §6.4): the same boundary clears the down marks the scope
-        // covers, and the chain's selected entry with the raw candidate.
-        // The failback holders and the marks live in the run's router, which
-        // rides the session options (the pipeline sits below the services'
-        // entry modules): the loop fills it from the installed services; a
-        // caller that hands runTask no router (a minimal test literal)
-        // keeps the chain-side boundary and skips the run-state half.
-        if (failbackApplies(switches.modelFailbackScope, "subtask")) resetRoute(chain)
-        opts.router?.clearDownMarks("subtask", switches.modelFailbackScope)
-        // A consumed /failback order clears the route beside it (this
-        // boundary holds the chain; the task/phase boundaries destroy it
-        // with runTask before reaching here, so they pass no chain and clear
-        // nothing).
-        if (opts.router?.consumeFailback()) resetRoute(chain)
+        const items = task.checklist ?? []
+        if (items.some((item) => !item.done)) {
+          // This lane's stream closed; the task continues in its other
+          // lanes (and the closing lane, once they all drain).
+          return { type: "unit-done" }
+        }
+        // The last stream: the wrap-up and close-out run here, in this
+        // lane (§6.8 — the pipeline tail below, unchanged).
+      } else {
+        // In true mode this is where the decomposed checklist items run; under
+        // auto, the streams of a split the lead's guard took, each a fork of
+        // the lead; off/ondemand (and auto without a split) only have the items
+        // hand-written in subtasks.md.
+        for (;;) {
+          const items = task.checklist ?? []
+          // Subtask-directory state protocol (M1.0, plans/0030): when the
+          // protocol is active (any todo/done file exists), done.md's existence
+          // overrides the tick as the progress fact (a `done` in items is the
+          // value that counts); an illegal state (both present / both missing)
+          // blocks for a human as soon as detected.
+          const scan = await scanSubtaskStates(dir, task.id, items.length)
+          if (scan.illegal.length) {
+            return {
+              type: "blocked",
+              question:
+                `${task.id} subtask state files are illegal (${scan.illegal
+                  .map((v) => {
+                    // State-file names come from the spec data (M1.4): the
+                    // message follows the protocol declaration, not literals.
+                    const spec = subtaskStateSpec(task.id, v.index)
+                    const pending = basename(spec.pending.path)
+                    const complete = basename(spec.complete.path)
+                    return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
+                  })
+                  .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
+            }
+          }
+          // Dependency order (M3.5, plans/0047 G5): the next ready subtask by the
+          // `Depends:` fields of the S<nn>/todo.md files (none = the first
+          // unticked item); a bad graph blocks for a human fix.
+          const graph = checklistProblems(items)
+          if (graph.length) {
+            return {
+              type: "blocked",
+              question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
+            }
+          }
+          const index = nextChecklistIndex(items)
+          if (index === -1) break
+          // The progress record tags the owning subtask (1-based index):
+          // written with the record as soon as attempt dispatches
+          // successfully; on resume, the unit attribution gate (unitReruns)
+          // reuses its session only when that subtask will re-run.
+          const loopPhase: Phase = { kind: "subtasks" }
+          enterPhase(chain, { ...loopPhase, index: index + 1 })
+          // Resumed-run determination (the active record belongs exactly to
+          // this checklist item): the worktree's dirty areas at the
+          // interruption scene are this unit's own progress, and runSubtask's
+          // startup clean gate is exempt accordingly
+          // (plans/0021-commit-boundary-design.md).
+          const recalledPhase = recalled?.active === true ? recalled.phase : undefined
+          const resumeUnit = recalledPhase?.kind === "subtasks" && recalledPhase.index === index + 1
+          // Per-agent fork base (plans/0055 §8.4): each subtask resolves the
+          // base of the agent its chain currently runs on — reusing it while
+          // alive, building it lazily on the first subtask that forks on that
+          // agent (the subtask route's pick lands the build on the agent the
+          // subtask itself will dispatch on), and leaving the other agents'
+          // entries untouched. A subtask that moved to another agent forks from
+          // that agent's base, building it on first use. The reload at the loop
+          // tail keeps the record fresh; a layer-less run's single agent keeps
+          // the map at one entry, so the one base resolved after decompose
+          // still serves every subtask.
+          // auto's streams (plans/0059 D5): a checklist the lead's split
+          // produced (its split point recorded, Task.split) runs as forks of the
+          // lead — the lead's session is each stream's base, resolved per
+          // stream on the chain's agent. A checklist without the record (written
+          // by hand, left by the planned pipeline, or a split whose record was
+          // lost between its commit and the record) runs as plain subtasks.
+          // AUTO-RESOLVE: under auto, how does a checklist with state files but no split record run (a split taken by a release before the streams forked the lead, a checklist the planned pipeline left, or a split whose record was lost between its commit and the record)? -> as plain subtasks, the pre-fan-out path (no lead to fork is known; the record is written by the release that forks, so the path stays for as long as such checklists may exist)
+          const fanout = mode === "auto" ? task.split : undefined
+          if (fanout) fork = await leadForkBase(client, task, opts, chain)
+          else if (switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
+          // The subtask bracket (P2b, src/run-status.ts): the qualified id is
+          // the task id plus S<nn> — the pair the vocabulary's subtask events
+          // carry (the subtask's own close-out transition emits from
+          // execute.ts, where the state-file rename lands).
+          const subtask = subtaskId(index + 1)
+          const title = checklistTitle(items[index]!.text)
+          emitStatus({ type: "subtask-start", task: task.id, subtask, title })
+          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit, fanout)
+          if (blocked) {
+            emitStatus({
+              type: "subtask-end",
+              task: task.id,
+              subtask,
+              outcome: blocked.type,
+              ...(blocked.type === "blocked" ? { detail: blocked.question } : { detail: blocked.files.join("; ") }),
+            })
+            return blocked
+          }
+          emitStatus({ type: "subtask-end", task: task.id, subtask, outcome: "completed" })
+          // The post-tick mirror refresh already happened inside runSubtask
+          // before the unified commit; here the task is only re-read.
+          task = await reloadTask(plan, task.id)
+          // The subtask has closed out (tick + unified commit): the progress
+          // record refreshes to the summarized state (active=false, index
+          // stripped) — an interruption during a subtask gap (step-mode pause /
+          // failback handling) no longer leaves the previous unit's session
+          // "mid-way unsummarized", so on resume the next unit does not
+          // mistakenly continue it.
+          await persistStage(loopPhase)
+          // Step-mode pause (subtask boundary, OPENCODE_AUTO_STEP=subtask): a
+          // hard pause after the checklist item's tick and unified commit are
+          // done, before the next item.
+          // dir is passed so the pause wait is deducted from the time stats
+          // (STATS_PLAN §3).
+          await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
+          // /exit checkpoint (subtask boundary): the request flag lives in the
+          // run's control service, which rides the session options beside the
+          // router (the pipeline sits below the services' entry modules); a
+          // caller that hands runTask no control (a minimal test literal)
+          // skips the checkpoint, as it skips the run-state half of the
+          // failback boundary below.
+          opts.control?.maybeExit("subtask", `${task.id} subtask ${index + 1}`)
+          // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
+          // spot to check after check-off + unified commit; sleep until wake
+          // inside the window before continuing (plans/0027-hibernate-design.md).
+          await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
+          // failback retry (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): at
+          // subtask/session granularity the subtask boundary clears the chain's
+          // failover candidates and the next subtask fails back to the
+          // preferred model (task granularity is naturally covered by the chain
+          // being destroyed per task); /failback requests are consumed at the
+          // same point (and may redefine the model order wholesale). Registry routing
+          // (plans/0055 §6.4): the same boundary clears the down marks the scope
+          // covers, and the chain's selected entry with the raw candidate.
+          // The failback holders and the marks live in the run's router, which
+          // rides the session options (the pipeline sits below the services'
+          // entry modules): the loop fills it from the installed services; a
+          // caller that hands runTask no router (a minimal test literal)
+          // keeps the chain-side boundary and skips the run-state half.
+          if (failbackApplies(switches.modelFailbackScope, "subtask")) resetRoute(chain)
+          opts.router?.clearDownMarks("subtask", switches.modelFailbackScope)
+          // A consumed /failback order clears the route beside it (this
+          // boundary holds the chain; the task/phase boundaries destroy it
+          // with runTask before reaching here, so they pass no chain and clear
+          // nothing).
+          if (opts.router?.consumeFailback()) resetRoute(chain)
+        }
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
       // (--no-wrapup, default true). The report.md existence + shape-check
