@@ -1,6 +1,6 @@
 # 0053 — Lifecycle commands: `plan`, `close` and append planning (detailed design for 0052 P3)
 
-Status: **design, awaiting rulings** (2026-09-23). The P3 design pass that `plans/0052` §6 requires before any P3 code. No code change. §9 lists the points for ruling: the answers to 0052 Q1–Q6, plus the places where this document refines or departs from a 0052 decision. Line numbers are as of auto-core `33a208f80`; search by symbol if they drift. In this document "D3" means this document's decision; 0052's decisions are always written "0052 D17".
+Status: **landed — P3 implemented as T-008..T-015** (banner corrected 2026-10-02, `plans/0069` §4.2 A6; the design pass below is the 2026-09-23 pre-code pass; this document remains the spec of record for the live lifecycle commands). The P3 design pass that `plans/0052` §6 requires before any P3 code. No code change. §9 lists the points for ruling: the answers to 0052 Q1–Q6, plus the places where this document refines or departs from a 0052 decision. Line numbers are as of auto-core `33a208f80`; search by symbol if they drift. In this document "D3" means this document's decision; 0052's decisions are always written "0052 D17".
 
 ## 0. Scope
 

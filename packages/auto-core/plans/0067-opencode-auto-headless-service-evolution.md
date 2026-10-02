@@ -1,7 +1,7 @@
 # opencode-auto 无头化服务化演进 — 方向评估与预规划（待讨论）
 
 > 日期：2026-10-01
-> 状态：评估结论，未立项。供将来讨论并规划实施时使用。
+> 状态：评估结论；**已立项并实施完毕——T-086..T-098（2026-10-02）：`packages/auto-server` 壳包、daemon/worker 子进程拓扑、REST 控制面 + SSE/WS、Web 客户端与端到端收口**；旧状态"未立项，供将来讨论"作废（2026-10-02 勘正，`plans/0069` §4.2 A8）。正文保持评估稿原貌，实施真相以 `packages/auto-server` 及其文档为准。
 > 评估对象：`~/worksapce/aseo/opencode/packages/auto-core`（branch `auto-core`，HEAD `6e146c979`）+ `packages/auto`
 > 命题：把 opencode-auto 演进为纯无头自动化服务，经 RESTful API 操作、以 SSE 获取运行状态；配套纯 Web 客户端实现基本执行控制。
 > 备注：本文为讨论稿，用中文书写；若日后正式立项进入仓库 `plans/NNNN-*.md`，按 AGENTS.md 约定应重写为英文。
@@ -106,3 +106,5 @@ daemon (supervisor, packages/auto-server)
 - 终端绑定残留：`grep process.stdin|readline` → `confirm.ts`、`session-api.ts:377`、`loop-progress.ts:32`、`step.ts:57`
 - 恢复叙事：`src/exit.ts` 头注；resume/progress（0018-0022）
 - 同构先例：`src/agent/opencode/`（REST+SSE 消费）、monorepo `packages/server|web|console`
+
+<!-- auto: eof -->

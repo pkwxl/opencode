@@ -4,7 +4,9 @@
 > 《CLI 扩展需求规范:设计偏差追踪与迁移知识沉淀》(下称"规格书")修订而来。实现任务
 > 以本文为准;与规格书冲突之处以本文为准(冲突点在 §2 映射表与 §3 决策表中逐条给出
 > 理由)。`--extract-knowledge` 已按下方 P4 修订并入 `--phases` 的 k(知识提炼)阶段
-> 实现完毕;`--track-fixme` 仍按 §H 分期留待后续会话完成,实现合入前 CLI 不接受该选项。
+> 实现完毕;`--track-fixme` 从未实现(census:src/test/templates/壳均 0 命中,无任何 CLI
+> 旗标曾发布),且被 `plans/0044` D1 的完成侧退役永久阻塞(0069 §3.1 裁定为硬废弃),
+> 不再留待后续会话(状态勘正 2026-10-02,`plans/0069` §4.2 A2)。
 
 > **修订(基线变更)**:`--final-review` 的终审任务已强制跳过任务级三段式验收
 > 且不再写 verify 字段(终审不对检验再做检验,报告协议异常由路由时 brokenReport
@@ -410,3 +412,5 @@ track-fixme 侧的 P1/P2(及共用测试行)仍按上表待实现。
   tmp/fixme-scan.md、审计报告末三行协议、T-F 任务路由与知识文档产出;
   CRITICAL 路径用 fixture 注释单独验证 block 行为;
 - 全部完成后 `bun run build` 冒烟(templates/ 无新增,`type: "file"` 导入不受影响)。
+
+<!-- auto: eof -->
