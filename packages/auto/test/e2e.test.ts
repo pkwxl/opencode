@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -581,17 +581,37 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
 // Nor does it read the operator's model registry: run and plan load its
 // operator layer at every start ($OPENCODE_AUTO_MODELS, scrubbed above, or
 // $XDG_CONFIG_HOME/opencode-auto/models.json), so the base points
-// XDG_CONFIG_HOME at an empty directory. git in the subprocess then reads its
-// global config from ~/.gitconfig only. The opt-in in-process runs above call
-// runAll in this process, where OPENCODE_AUTO_MODELS names a file that does
-// not exist (no operator layer): moving XDG_CONFIG_HOME here would also hide
-// the operator's opencode config from the real server they start.
+// XDG_CONFIG_HOME at an empty directory. The opt-in in-process runs above
+// call runAll in this process, where OPENCODE_AUTO_MODELS names a file that
+// does not exist (no operator layer): moving XDG_CONFIG_HOME here would also
+// hide the operator's opencode config from the real server they start.
 // AUTO-DECISION: subprocesses get an empty XDG_CONFIG_HOME, this process an OPENCODE_AUTO_MODELS naming a missing file (a missing file is no operator layer, with no XDG fallback, and the in-process runs keep the real opencode config they need)
+
+// The suite also pins git's global config (T-127): hosts without a global
+// identity fail every committing path (init's prerequisite check refuses
+// "git cannot commit"), and a host without init.defaultBranch inits master
+// (git 2.43's default), flipping the lane merge-instruction literal below.
+// GIT_CONFIG_GLOBAL points every git this suite spawns at one temp config
+// carrying [user] name/email and [init] defaultBranch=main: the subprocess
+// side through the scrubbed base (beside the empty XDG_CONFIG_HOME), this
+// process's own fixture spawns (gitOf and the inline `git -C` calls read
+// process.env) through the module-level assignment. Never
+// GIT_AUTHOR_*/GIT_COMMITTER_* instead: env-level identity overrides every
+// config layer, which would break auto-core's deliberate identity-fallback
+// tests (test/git.test.ts) — and the init identity-prerequisite case must
+// neutralize GIT_CONFIG_GLOBAL itself to keep its no-identity premise.
+// AUTO-DECISION: one shared temp [user]+[init] defaultBranch=main config wired as GIT_CONFIG_GLOBAL for both environments (host-independent identity and initial branch in one place; the pinned `merge main into …` lane expectation stays an assertion of the real main-tree branch, not a weakened literal)
 const EMPTY_CONFIG_HOME = mkdtempSync(join(tmpdir(), "auto-cli-xdg-"))
 process.on("exit", () => rmSync(EMPTY_CONFIG_HOME, { recursive: true, force: true }))
+const GIT_TEST_CONFIG_DIR = mkdtempSync(join(tmpdir(), "auto-cli-git-"))
+const GIT_TEST_CONFIG = join(GIT_TEST_CONFIG_DIR, "gitconfig")
+writeFileSync(GIT_TEST_CONFIG, "[user]\n\tname = auto e2e\n\temail = auto-e2e@example.com\n[init]\n\tdefaultBranch = main\n")
+process.on("exit", () => rmSync(GIT_TEST_CONFIG_DIR, { recursive: true, force: true }))
+process.env.GIT_CONFIG_GLOBAL = GIT_TEST_CONFIG
 const CLI_ENV_BASE: Record<string, string | undefined> = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
   XDG_CONFIG_HOME: EMPTY_CONFIG_HOME,
+  GIT_CONFIG_GLOBAL: GIT_TEST_CONFIG,
 }
 process.env.OPENCODE_AUTO_MODELS = join(EMPTY_CONFIG_HOME, "no-operator-layer.json")
 
@@ -608,9 +628,14 @@ async function runCli(args: string[], env?: Record<string, string>) {
 
 // A git helper over a fixture dir: asserts exit 0 and returns stdout. The
 // close / --force-close / new-project-flow fixtures all commit through it.
+// The env is passed explicitly: Bun's default spawn env is the snapshot from
+// process start, so the module-level GIT_CONFIG_GLOBAL assignment (the pinned
+// identity and init.defaultBranch, T-127) would never reach a default-env
+// spawn — this way the fixture side sees the same pinned config the CLI
+// subprocesses do.
 const gitOf = (dir: string) => {
   return async (...args: string[]) => {
-    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+    const proc = Bun.spawn(["git", "-C", dir, ...args], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" })
     const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
     expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
     return out
@@ -1506,7 +1531,10 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       await git("init", "-q")
       // Shield the subprocess from the global/system git config, so the
       // repository has no identity source at all (its commits would fail).
-      const env = { HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1" }
+      // GIT_CONFIG_GLOBAL too (a nonexistent file is no global config): the
+      // CLI_ENV_BASE below pins a global identity for the whole suite, and
+      // merging the case env on top of it would leave that identity in view.
+      const env = { HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, "gitconfig") }
       const refused = await runCli(["init", dir], env)
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("git cannot commit")
@@ -3713,6 +3741,16 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key)))
       for (const key of Object.keys(ambient)) delete process.env[key]
       process.env.OPENCODE_AUTO_LANE_ISOLATION = "on"
+      // The scrub above also removed this module's hermetic OPENCODE_AUTO_MODELS
+      // pointer, and without it the in-process runAll's preflight falls back to
+      // the operator's real XDG registry ($XDG_CONFIG_HOME/opencode-auto/
+      // models.json), which may reference env keys this process does not carry
+      // (on such hosts preflight refuses and runAll exits 1 — T-127 found this
+      // host growing one mid-round). Re-plant the same no-operator-layer
+      // pointer the lane worker below runs with, so the parent is as hermetic
+      // as its worker.
+      // AUTO-DECISION: the in-process parent keeps the scrubbed no-operator layer for the run (the stub host dispatches nothing itself, so no operator routing is needed; the operator's registry must not gate this case)
+      process.env.OPENCODE_AUTO_MODELS = join(EMPTY_CONFIG_HOME, "no-operator-layer.json")
       setSwitchModelRegistry(undefined)
       setShellProfile({
         laneLauncher: (worktree, unit) =>
@@ -3734,6 +3772,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       } finally {
         setShellProfile({ laneLauncher: undefined })
         delete process.env.OPENCODE_AUTO_LANE_ISOLATION
+        delete process.env.OPENCODE_AUTO_MODELS
         for (const [key, value] of Object.entries(ambient)) process.env[key] = value
         setSwitchModelRegistry(undefined)
       }
@@ -3939,6 +3978,9 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       // the unit, the report and the park path (a second landing conflict
       // blocks the same way: the one repair is spent either way).
       expect(run.out).toContain("re-dispatching the lane with the merge instruction")
+      // `main` is no host luck: the fixture's initial branch is pinned by the
+      // suite's global git config (T-127), so the instruction naming it is the
+      // real main-tree branch, and the literal cannot drift with the host.
       expect(run.out).toContain("merge main into auto-lane/T-002")
       expect(run.out).toContain("T-002 is blocked")
       expect(run.out).toContain("blocked and its landing hit a conflict")
