@@ -1,6 +1,8 @@
 # 0070 — Driver-docs governance, R-01→R-02 transition, and the next-round program
 
-Status: **proposal, 2026-10-03.** Drafted at the person's direct instruction (not a driver
+Status: **ruled, 2026-10-03 — P-1..P-10 all as recommended; execution begins with the
+R-01→R-02 transition (target plans/0014) and the R-02 program (target plans/0015).**
+Drafted at the person's direct instruction (not a driver
 unit; no T-number). Grounded in three read-only investigations run 2026-10-03 over the
 target repo's task corpus (`docs/T-001..T-113`, `docs/R-01/`, `docs/temp/`, `docs/agents/`)
 and the auto-core tree at `27ffad490` (post plans-translation): (1) a reference census of
