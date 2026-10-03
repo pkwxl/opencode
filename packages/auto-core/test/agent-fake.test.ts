@@ -28,7 +28,9 @@ import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import type { Opts } from "../src/opts"
 import { cachedAnswer } from "../src/classify"
 import { isoInZone, parseWindow } from "../src/model-window"
+import { phaseType } from "../src/phases/registry"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
+import { sessionRole } from "../src/roles/registry"
 import { resetQuotaWindows } from "../src/quota-windows"
 import { recallProgress, saveProgress } from "../src/resume"
 import { runTask } from "../src/runner"
@@ -39,6 +41,7 @@ import { createServices, installServices, services, uninstallServices, type Cloc
 import { flushStats } from "../src/stats"
 import { clampSwitches, parseSwitches, setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
 import { handoffSteer } from "../src/testrun"
+import { defaultTier } from "../src/tier"
 import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
@@ -2565,6 +2568,89 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     expect((pipeline.outcome as { question: string }).question).toContain("decompose session ended twice")
     expect(pipeline.prompts[0]).toContain("This session completes the task-background understanding and the subtask decomposition")
     expect(pipeline.prompts[0]).not.toContain("Context-budget protocol")
+  })
+
+  // The session-role registry (U-R5, plans/0060 §5.6): a task's sessions
+  // dispatch on their work kind's tier route, and the expectations below are
+  // derived from the descriptors (src/roles/registry.ts), not hardcoded —
+  // the decompose descriptor's tier for the pipeline's head session, the
+  // subtask descriptor's "execute" resolved against the implicit implement
+  // phase for the digest base and the subtask sessions.
+  test("the pipeline's sessions dispatch on their role descriptors' tier routes (the role registry, plans/0060 §5.6)", async () => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "init")
+    const doc = (head: string) => `${head}\n\n${"Background the subtasks rely on. ".repeat(6)}\n\n<!-- auto: eof -->\n`
+    const checklist = [
+      "- [ ] alpha: the alpha module in src/alpha.ts, with its constant and a check that reads it back Artifacts: src/alpha.ts",
+      "",
+      "<!-- auto: eof -->",
+      "",
+    ].join("\n")
+    const agent = make({
+      turn: (ctx) => {
+        if (ctx.n === 1) {
+          mkdirSync(join(dir, "docs/T-001/S01"), { recursive: true })
+          writeFileSync(join(dir, "docs/T-001/context.md"), doc("## Relevant files and key symbols\n- src/alpha.ts"))
+          writeFileSync(join(dir, "docs/T-001/shared.md"), doc("- src/index.ts: the module index the item extends"))
+          writeFileSync(join(dir, "docs/T-001/subtasks.md"), checklist)
+          writeFileSync(join(dir, "docs/T-001/S01/todo.md"), doc("## Scope\n\nThe alpha module.\n\n## Artifacts\n\n- src/alpha.ts"))
+        }
+        if (ctx.text.includes("item 1 of that list only")) writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 1\n")
+        return undefined
+      },
+    })
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true })
+      // A two-tier fleet: deep [a, b], simple [s].
+      const entry = (name: string, model: string): ModelEntry => ({ name, layer: "operator", agent: "opencode", model })
+      const registry: ModelRegistry = {
+        layers: [{ name: "operator", path: "/unused/models.json" }],
+        tz: "UTC",
+        agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+        models: new Map([entry("a", "prov/a"), entry("b", "prov/b"), entry("s", "prov/s")].map((item) => [item.name, item])),
+        tiers: { deep: { tier: "deep", names: ["a", "b"], layer: "operator" }, simple: { tier: "simple", names: ["s"], layer: "operator" } },
+        routes: new Map(),
+        unused: [],
+      }
+      const routed: Opts = {
+        dir,
+        wrapup: false,
+        subtask: "true",
+        router: services().router,
+        get routing() {
+          return { registry, agentFilter: "opencode", filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode", router: services().router, clock: services().clock }
+        },
+      }
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, routed)
+      expect(outcome).toEqual({ type: "completed" })
+      // The descriptor-derived expectations: the model of a work kind's tier
+      // list, with "execute" resolved as the dispatch itself resolves it
+      // (tier.ts defaultTier over the implicit implement phase).
+      const modelOfTier = (tier: ReturnType<typeof sessionRole>["tier"]): string => {
+        const word = tier === "execute" ? defaultTier(phaseType("implement"), "subtask") : tier
+        const name = registry.tiers[word as "deep" | "simple"]!.names[0]!
+        return registry.models.get(name)!.model!
+      }
+      const deep = modelOfTier(sessionRole("decompose").tier)
+      const execute = modelOfTier(sessionRole("subtask").tier)
+      expect(deep).toBe("prov/a")
+      expect(execute).toBe("prov/s")
+      // decompose, the digest base, then the subtask (a fork of the base):
+      // the head session dispatches on the decompose route, every task
+      // session on the execute route.
+      expect(agent.prompts.map((prompt) => prompt.text)).toHaveLength(3)
+      expect(agent.prompts[0]).toMatchObject({ model: deep })
+      for (const prompt of agent.prompts.slice(1)) {
+        if (prompt.model !== undefined) expect(prompt.model).toBe(execute)
+      }
+      expect(agent.prompts[0]!.text).toContain("This session completes the task-background understanding and the subtask decomposition")
+      expect(agent.prompts[2]!.text).toContain("You are responsible for item 1 of that list only")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 

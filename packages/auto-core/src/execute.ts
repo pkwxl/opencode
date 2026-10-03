@@ -29,6 +29,7 @@ import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, rend
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { emitStatus } from "./run-status"
+import { sessionRole } from "./roles/registry"
 import { routingOf, runSession } from "./session"
 import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
 import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
@@ -91,7 +92,11 @@ export async function executeWhole(
   // switch off none of it exists — no notices, no hint, the post-session
   // handover check disabled with it (see usage.ts sessionHandoverDue) and a
   // spontaneously written document ignored; off mode never builds one anyway.
-  const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
+  // The role's usage policy (the whole descriptor's handover flag) declares
+  // the protocol exists for whole-task sessions at all; the mode (ondemand,
+  // auto's lead) is the per-call condition that builds it.
+  const usage = sessionRole("whole").usage
+  const steer = usage.handover && ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   nameSubject(chain, subject)
   // The lead's split. The checklist the stage starts from is the committed
@@ -147,11 +152,13 @@ export async function executeWhole(
     }
     const reasons = splitProblems(items)
     // The usage condition: the lead's final figure against the wall of its
-    // last measurement (the 2×cap budget where none was taken).
+    // last measurement (the 2×cap budget where none was taken). The
+    // mechanism itself is the whole role's split-guard flag (the registry);
+    // the lead is the only whole session judged by it.
     // AUTO-DECISION: the wall is the session's own last measured wall (SessionChain.wall), the budget without one (it is the wall the lead's notices were measured against, so the guard and criterion (c) read the same figure; recomputing it here would need the model window)
     const wall = chain.wall ?? steer!.limit
     const tier = (await clientOf(client, chain.agent)).capabilities.usage
-    if (!splitUsageReached(tier, chain.used, wall)) {
+    if (usage.splitGuard && !splitUsageReached(tier, chain.used, wall)) {
       reasons.push(`the lead's context (${formatTokens(chain.used)} tokens) is under half the wall (${formatTokens(wall)}), where finishing in this session is cheaper`)
     }
     if (reasons.length) {
@@ -615,7 +622,12 @@ export async function runSubtask(
   // the task-level file, as it always did.
   const streamHandoff = laneStream ? subtaskDoc(task.id, index, "handoff") : handoffFile(task)
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, streamHandoff)).text().catch(() => "")
-  const steer = split ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task, laneStream ? index : undefined) : undefined
+  // The role's usage policy (the subtask descriptor's handover flag)
+  // declares the protocol exists for subtask sessions; a stream of a taken
+  // split is the per-call condition that builds it (the planned pipeline's
+  // subtasks never do, plans/0056 D1).
+  const usage = sessionRole("subtask").usage
+  const steer = split && usage.handover ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task, laneStream ? index : undefined) : undefined
   // Subtask-directory state protocol (M1.0, plans/0030 D8): done.md already
   // existing = this subtask already closed out (including the recovery board
   // where the interruption landed exactly between the rename and the unified

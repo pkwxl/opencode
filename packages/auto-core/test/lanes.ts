@@ -114,6 +114,10 @@ export const UNIT_LANE: readonly string[] = [
   "test/protect.test.ts",
   "test/quota-windows.test.ts",
   "test/replay.test.ts",
+  // The session-role registry's completeness and totality (U-R5): pure
+  // descriptor lookups over in-memory tables — the template-library check
+  // reads the embedded built-ins, no disk repository, no spawn.
+  "test/roles-registry.test.ts",
   "test/resume-gate.test.ts",
   "test/resume.test.ts",
   "test/run-status-schema.test.ts",

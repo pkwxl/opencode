@@ -5,33 +5,24 @@
 // execute tier (`PhaseTypeEntry.reasoning`). Reports, distillation, extraction
 // and one-off sessions are simple.
 //
-// The tier is a property of the work (§3): it lives in the program (this table
-// and the builtin types) and in the project (a custom type's `Reasoning:`
-// field), never in the operator's model registry. An operator's registry
-// routes may override it for their own machine; that happens where a model is
-// selected, not here.
+// The tier is a property of the work (§3): it lives in the program (the
+// session-role registry's descriptors and the builtin phase types) and in the
+// project (a custom type's `Reasoning:` field), never in the operator's model
+// registry. An operator's registry routes may override it for their own
+// machine; that happens where a model is selected, not here.
 import { phaseType, type PhaseTypeEntry, type Tier } from "./phases/registry"
+import { roleTiers } from "./roles/registry"
 import type { ModelRole } from "./switches"
 
-// "execute" = the phase type's execute tier. Typed over every role word, so a
-// role added to MODEL_ROLES without a tier here fails the typecheck.
-const ROLE_TIERS: Record<ModelRole, Tier | "execute"> = {
-  // Append planning routes as phase-plan too (the phase-append step kind).
-  "phase-plan": "deep",
-  // m mode's planning scan.
-  "implement-scan": "deep",
-  // Understands the task and writes context.md and the subtask plan.
-  decompose: "deep",
-  whole: "execute",
-  subtask: "execute",
-  wrapup: "simple",
-  "phase-handover": "simple",
-  knowledge: "simple",
-  "prior-knowledge": "simple",
-  "number-recovery": "simple",
-  // Confirm turns and the other one-off sessions.
-  bypass: "simple",
-}
+// The role table of §5 reads from the session-role registry
+// (src/roles/registry.ts): each work kind's descriptor declares the tier its
+// routing words take — planning and understanding deep, the task sessions
+// "execute", reports/distillation/extraction simple — and the fallback
+// constant covers `bypass` (confirm turns and the other one-off sessions).
+// Total over MODEL_ROLES by construction: a role word added without a
+// descriptor home fails loudly at this table's build (roleTiers throws
+// naming the word), not silently here.
+const ROLE_TIERS: Record<ModelRole, Tier | "execute"> = roleTiers()
 
 // m mode runs without a phase entry: it is the implicit implement phase.
 const IMPLICIT_PHASE_TYPE = "implement"

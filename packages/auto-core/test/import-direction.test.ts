@@ -334,6 +334,13 @@ const CLASSIFIED: Record<string, Domain> = {
   resolve: "driver",
   "resume-gate": "driver",
   resume: "driver",
+  // The session-role registry (U-R5, plans/0060 §5.6 / 0069 §2.3 R5): the
+  // workflow-shape descriptors beside the phase registry — each work kind
+  // (decompose, whole, subtask, wrapup, planning, handover, knowledge)
+  // declaring its templates, tier route, usage source, collect policy and
+  // verdict policy as data; src/tier.ts's role table and the driving call
+  // sites' usage-policy reads resolve through it.
+  "roles/registry": "driver",
   // The round-close gate (M4.2, plans/0049 G8): whole-tree P1 scan, build, close listing.
   "round-close": "driver",
   // The run-status event table (the headless direction's P2a, plans/0067
@@ -497,6 +504,11 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "model-route": "policies",
   "model-window": "policies",
   tier: "policies",
+  // The session-role registry sits in policies beside the tier table it
+  // feeds: pure descriptors plus lookups over the routing words (its only
+  // value reach is the switches' MODEL_ROLES vocabulary), consumed by tier
+  // (same sub-domain) and by the pipeline's driving call sites.
+  "roles/registry": "policies",
   keyring: "policies",
   models: "policies",
   "models-schema": "policies",
