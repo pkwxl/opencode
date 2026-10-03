@@ -1,5 +1,9 @@
-// Ondemand context handover (plans/0056): executeWhole's document-
-// authoritative post-session decision. A fresh handoff.md (differing from
+// Ondemand context handover (plans/0056): the one post-session decision both
+// execution scopes run — the ondemand-handover engine handoverVerdict in
+// src/execute.ts (D4, plans/0069 §2.2), parameterized by retry policy:
+// executeWhole's "fresh" (the retry re-sends the full whole-task prompt) and
+// runSubtask's stream "fork" (the retry demands the document in a fork of the
+// ended session with the feedback alone). A fresh handoff.md (differing from
 // what the dispatch was seeded with) is honored whatever the usage figure —
 // the session handed itself over at a natural boundary; a document the
 // session did not touch means a natural finish; the hard-wall path (the hint
@@ -13,7 +17,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
-import { executeWhole } from "../src/execute"
+import { executeWhole, runSubtask } from "../src/execute"
 import { noCommitGit } from "../src/git-ops"
 import { clampSwitches } from "../src/switches"
 import { ev, fakeAgent, MODEL, type TurnScript } from "./fixtures/agent"
@@ -103,6 +107,13 @@ Body.
       // requirement, then the quiet second session finishes naturally.
       expect(agent.prompts).toHaveLength(2)
       expect(agent.prompts[1]!.text).toContain("This is a hard requirement")
+      // The fresh retry policy (D4): the whole-task prompt is re-sent whole
+      // (the protocol section exists only in the full render) with the demand
+      // appended — the demand never travels alone, and the ended session is
+      // never forked for it.
+      expect(agent.prompts[1]!.text).toContain("Context-budget protocol")
+      expect(agent.prompts[1]!.text).not.toStartWith("The last time you ended the session")
+      expect(agent.argsOf("fork")).toHaveLength(0)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -120,6 +131,69 @@ Body.
       expect(agent.steers).toHaveLength(1)
       expect(agent.steers[0]).toContain("wall 250.0k")
       expect(agent.prompts).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// The same engine's other retry policy (D4): a stream of auto's taken split
+// (runSubtask with a split baseline) that hits the wall without a handover
+// document is demanded in a fork of the ended session, with the feedback
+// alone — the working context the document must summarize lives there. The
+// no-commit git double keeps strict resume off (its records flag is false),
+// so the rollback redo declines and the retry itself runs; the strict paths
+// are the resume suites' subject, the end-to-end stream loop agent-fake's
+// (test/agent-fake.test.ts:2960/:2995).
+describe("runSubtask stream handover (the fork retry policy)", () => {
+  test("a handover due with no document: the retry is the demand alone in a fork of the ended session; the quiet fork then finishes the stream", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      const agent = fakeAgent({
+        turn: (ctx) =>
+          ctx.n === 1
+            ? [ev.message(ctx.session, "m_big", 90_000), ev.text(ctx.session, "t1", "still working"), ev.idle(ctx.session)]
+            : undefined,
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const text = "runs stream T-001.S01"
+      // split = [] marks a stream of a taken split (the steer is built for
+      // it); the no-commit double keeps the unit boundary off (no git repo).
+      const result = await runSubtask(agent.client, plan, plan.tasks[0]!, text, 1, { dir, git: noCommitGit() }, chain, undefined, false, [])
+      expect(result).toBeUndefined()
+      // The hard-wall hint went out once: the first session crossed the wall.
+      expect(agent.steers).toHaveLength(1)
+      // The retry is the demand alone — the full subtask prompt is not re-sent
+      // (the protocol section exists only in the full render) — and it names
+      // the subtask, exactly what executeWhole's fresh retry does not do.
+      expect(agent.prompts).toHaveLength(2)
+      expect(agent.prompts[1]!.text).toStartWith("The last time you ended the session a handover was due")
+      expect(agent.prompts[1]!.text).toContain("for this subtask")
+      expect(agent.prompts[1]!.text).not.toContain("Context-budget protocol")
+      // The demand went to a fork of the ended session (the fork policy's
+      // dispatch), not a new session of the whole prompt.
+      expect(agent.argsOf("fork")).toHaveLength(1)
+      expect(agent.argsOf("fork")[0]![0]).toBe(agent.prompts[0]!.session)
+      expect(agent.prompts[1]!.session).not.toBe(agent.prompts[0]!.session)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("without a split there is no steer and no handover protocol at all: a plain subtask session runs once and ends naturally", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      const agent = fakeAgent()
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const text = "a plain planned-pipeline subtask"
+      const result = await runSubtask(agent.client, plan, plan.tasks[0]!, text, 1, { dir, git: noCommitGit() }, chain)
+      expect(result).toBeUndefined()
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.text).not.toContain("Context-budget protocol")
+      expect(agent.argsOf("fork")).toHaveLength(0)
+      expect(agent.steers).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

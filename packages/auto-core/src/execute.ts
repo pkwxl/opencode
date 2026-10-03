@@ -8,6 +8,11 @@
 // Sits above exec-session/session and below runner; **must not import
 // runner** (§D.2).
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S12, pure move).
+// The ondemand-handover engine below (D4, plans/0069 §2.2) is the one
+// post-session handover decision both execution scopes run; the two loops
+// keep their own surroundings (the split guard and unit commit on the whole
+// side, the artifact shape check on the subtask side) and share the decision,
+// the retry bookkeeping and the rollback spending through it.
 
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -35,9 +40,149 @@ import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive
 import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
-import { handoffSteer, removeHandoffChain } from "./testrun"
+import { handoffSteer, removeHandoffChain, type Steer } from "./testrun"
 import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
 import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
+
+// —— The ondemand-handover engine (D4, plans/0069 §2.2: one engine for
+// executeWhole and runSubtask's streams) ——
+
+// The engine's per-scope state. consumed = the handover text the current
+// dispatch was seeded with (the recovery document, or the document a previous
+// session of this run handed over and the continuation prompt reads): a
+// post-session document differing from it was written by the session that
+// just ended — the self-decided handover signal; one equal to it is stale
+// (the session ended without touching it). retried = the one retry for a
+// handover due without a valid document was spent; rolled = the strict-resume
+// rollback redo was spent. The caller creates the holder (the pipeline seeds
+// consumed with the recovery document) and rewinds it inside its rollback
+// redo; the engine spends the two flags.
+type HandoverState = { consumed: string; retried: boolean; rolled: boolean }
+
+// The engine's verdict over one ended session's handover document:
+// - natural — the end stands: nothing was due and no fresh document exists,
+//   or the document marks the scope complete (executeWhole finishes the
+//   stage; a subtask falls to the artifact shape check and its close-out);
+// - continue — the document hands the session over (Status: continue): a new
+//   session continues from it;
+// - retry — a handover was due but the document is invalid (missing, or
+//   lacking a status line): one re-prompt with the hard-requirement feedback;
+//   brief = the retry dispatches the feedback alone in a fork of the ended
+//   session (the "fork" policy) or the full prompt in a new session
+//   ("fresh");
+// - coldstart — the strict-resume rollback redo was spent: the caller
+//   re-enters its loop on the cold-started scope;
+// - stop / blocked — the rollback's own stop, or the twice-failed hidden
+//   blockage: propagate.
+type HandoverVerdict =
+  | { type: "natural" }
+  | { type: "continue"; doc: string }
+  | { type: "retry"; feedback: string; brief: boolean }
+  | { type: "coldstart" }
+  | { type: "stop"; stop: UnitStop }
+  | { type: "blocked"; question: string }
+
+// The scope's parameterization — every deliberate difference between the two
+// callers lives here and nowhere else:
+// - retry, the policy this engine is named by. "fresh" (executeWhole): the
+//   retry sends the full prompt to a new session. "fork" (runSubtask's
+//   streams): the retry demands the document in a fork of the ended session
+//   with the feedback alone.
+//   AUTO-DECISION: a stream's missing handover document is demanded in a fork of the ended session with the feedback alone (it holds what the document must say; executeWhole's retry sends the full prompt to a new session, which cannot know it), and a new session with the full prompt only without a fork — the two policies stay separate parameters, not one unified "best" behavior (a unified fork-only policy would strand a whole task whose session died mid-handover without its full prompt; a unified fresh policy would throw away the working context the stream's document must summarize)
+// - subtask, the stream's number (a whole-task scope passes none): the
+//   scope's log lines name it, its retry feedback says "for this subtask",
+//   and its blocked and cold-start lines name the subtask; a whole scope's
+//   lines name the session and the task.
+// - rollbackRedo, the scope's strict-resume rollback redo (tightened in 3.3
+//   R3): the engine spends it once on the first invalid handover document,
+//   with no retry with feedback; a test-handover write-check failure spends
+//   it at the caller, before the engine runs. Failing again after it is
+//   escalated as a hidden blockage (the working state is already preserved
+//   in the stash).
+//   AUTO-DECISION: the redo bodies stay in the callers, only their spending shared (the whole scope resets its split state, the subtask re-seeds its fork — scope recovery, not handover policy; merging the bodies would take before/after reset callbacks that recreate the duplication as plumbing)
+// - subject, the chain's session subject (the fork policy's fork names it).
+type HandoverScope = {
+  retry: "fresh" | "fork"
+  subtask?: number
+  rollbackRedo: () => Promise<UnitStop | "done" | undefined>
+  subject: string
+}
+
+// The one post-session handover decision (plans/0056): a session that ended
+// under a live steer is judged by its handover document — due by the figure
+// (the hard-wall hint in watch + the usage figure) or by a fresh document the
+// session wrote at a boundary of its own choosing, honored whatever the
+// figure. With no steer built (off mode, OPENCODE_AUTO_STEER=off, the
+// planned pipeline's subtasks) none of it exists — no notices, no hint, the
+// check disabled — and the end is natural; a spontaneously written document
+// is ignored, and off mode never builds one anyway. `Status: done` marks the
+// scope complete; `Status: continue` hands over; anything else is invalid.
+// AUTO-DECISION: the engine is one verdict step inside the callers' loops, not a loop-owning engine (the loops' surroundings differ by design — executeWhole's split guard, unit commit and rejected-split fork, runSubtask's shape check and fan-out prompt — and owning them would need a callback per difference, recreating the duplication as plumbing)
+// AUTO-DECISION: a quiet end (nothing due, no fresh document) and a Status: done document both return "natural" with no distinction (both callers act identically on them — executeWhole finishes the stage, a subtask falls to the shape check — and no caller ever distinguished them before)
+async function handoverVerdict(
+  client: ClientSource,
+  task: Task,
+  chain: SessionChain,
+  steer: Steer | undefined,
+  state: HandoverState,
+  scope: HandoverScope,
+  readHandoff: () => Promise<string>,
+  lastText: string,
+): Promise<HandoverVerdict> {
+  if (steer === undefined) return { type: "natural" }
+  const who = scope.subtask !== undefined ? `${task.id} subtask ${scope.subtask}` : task.id
+  const file = handoffFile(task)
+  const doc = await readHandoff()
+  const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
+  const fresh = doc !== "" && doc !== state.consumed
+  if (!due && !fresh) return { type: "natural" }
+  const status = handoffStatus(doc)
+  if (status === "done") return { type: "natural" }
+  if (status === "continue") {
+    log(
+      due
+        ? `↻ ${who} context reached the handover wall; handed over as ${file}, continuing in a new session`
+        : `↻ ${who} session handed itself over as ${file}; continuing in a new session`,
+    )
+    state.consumed = doc
+    return { type: "continue", doc }
+  }
+  // A handover due but no valid document (strict resume): one invalid attempt
+  // rolls back to the unit baseline and cold-starts the redo first, with no
+  // retry with feedback; only past the rollback (or without one) does the
+  // single retry-with-feedback run, and a second failure is a hidden
+  // blockage.
+  if (!state.rolled) {
+    const redone = await scope.rollbackRedo()
+    if (redone === "done") {
+      state.rolled = true
+      log(`↻ ${who} handover due but no valid handover document ${file} was produced; strict resume already rolled back; cold-starting this ${scope.subtask !== undefined ? "subtask" : "task"}`)
+      return { type: "coldstart" }
+    }
+    if (redone) return { type: "stop", stop: redone }
+  }
+  if (state.retried) {
+    return {
+      type: "blocked",
+      question:
+        `${scope.subtask !== undefined ? `subtask ${scope.subtask}` : "session"} ended with a handover due but failed twice to produce a valid handover document ${file} (missing, or lacking a status line; hidden blockage). ` +
+        `Check the file and re-run. Last agent output:\n${lastText.trim().slice(-2000) || "(no output)"}`,
+    }
+  }
+  state.retried = true
+  // The retry's dispatch is the scope's policy: the fork policy demands the
+  // document in a fork of the ended session (the next round carries the
+  // feedback alone); the fresh policy sends the full prompt to a new session.
+  const brief = scope.retry === "fork" ? await forkEndedSession(client, chain, scope.subject) : false
+  log(`↻ ${who} handover due but ${file} was not validly produced; ${brief ? "forked from the ended session, " : ""}retrying once with feedback`)
+  return {
+    type: "retry",
+    feedback:
+      `\n\nThe last time you ended the session a handover was due, but no valid ${file} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
+      `This is a hard requirement: write that file${scope.subtask !== undefined ? " for this subtask" : ""} before ending the session.`,
+    brief,
+  }
+}
 
 // The execution stage for off/auto/ondemand: off finishes the whole task in
 // one session; ondemand and auto's lead (`ondemand` is true for both), when a
@@ -190,29 +335,27 @@ export async function executeWhole(
   // The rejected split's note goes alone into a fork of the lead (it holds the
   // task and all its work); forked marks that dispatch.
   let forked = false
-  // The handoff text the current dispatch was seeded with (recovery doc, or
-  // the document a previous session of this run handed over and the
-  // continuation prompt reads): a post-session document differing from it was
-  // written by the session that just ended — the self-decided handover signal.
-  // A document equal to it is stale (the session ended without touching it).
-  let consumed = priorText
   if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
-  let retried = false
+  // The ondemand-handover engine's per-scope state (D4): consumed is seeded
+  // with the recovery document; the engine spends the retry and rollback
+  // flags, the rollback redo below rewinds it (the rejected-split path below
+  // re-seeds consumed too — a document the lead left is not this round's
+  // signal).
+  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
   // Strict-resume rollback redo (tightened in 3.3 R3): one invalid handover
   // document (including a test-handover write-check failure) rolls back to the
   // unit baseline and cold-starts a redo of the unit, with no retry with
   // feedback; once only — failing again is escalated as a hidden blockage (the
   // working state is already preserved in the stash).
-  let rolled = false
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
     const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, { progress: await peekProgress(dir) })
     if (done.type !== "ok") return done
     continuation = false
     feedback = ""
-    retried = false
-    consumed = ""
+    handover.consumed = ""
+    handover.retried = false
     forked = false
     split = splitOffered ? "open" : "none"
     // The cold restart: the chain drops its session state and the one-shot
@@ -242,10 +385,10 @@ export async function executeWhole(
     if (result.type === "blocked") {
       // Test-handover write-check failure (strict resume): roll back and
       // cold-start the redo, once only.
-      if (result.rollback && !rolled) {
+      if (result.rollback && !handover.rolled) {
         const redone = await rollbackRedo()
         if (redone === "done") {
-          rolled = true
+          handover.rolled = true
           continue
         }
         if (redone) return redone
@@ -299,63 +442,32 @@ export async function executeWhole(
     if (verdict?.type === "rejected") {
       // A handover document the lead left is not this round's signal: the
       // fork continues in the lead's own context.
-      consumed = await readHandoff()
+      handover.consumed = await readHandoff()
       // AUTO-DECISION: without a fork (the lead's session is gone, or the fork call failed) the rejected lead continues in a new session with the full whole-task prompt, no clause, plus the note (the shape-check re-prompts' fallback; an agent that cannot fork never gets the clause, plans/0059 D7)
       forked = await forkEndedSession(client, chain, subject)
       feedback = `${forked ? "" : "\n\n"}${renderSplitRejected(promptFacts(opts), taskDocPaths(task.id), verdict.reason, !forked)}`
-      retried = false
+      handover.retried = false
       log(`↻ ${task.id} the lead's split was not taken (${verdict.reason}); ${forked ? "a fork of the lead" : "a new session"} finishes the task`)
       continue
     }
-    // Ending without hitting the handover threshold (2x cap, or the effective
-    // wall where a large window raised it above that) = the task
-    // finished naturally in a single session; when no steer was built (off
-    // mode or OPENCODE_AUTO_STEER=off) it likewise ends naturally, with no
-    // handover check. A fresh handoff document (differing from what this
-    // dispatch was seeded with) is honored whatever the figure — the session
-    // handed itself over at a natural boundary of its own choosing (plans/
-    // 0056); only with the steer built, an off-switch run ignores it.
-    const doc = await readHandoff()
-    const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
-    const fresh = steer !== undefined && doc !== "" && doc !== consumed
-    if (!due && !fresh) return undefined
-    const status = handoffStatus(doc)
-    if (status === "done") return undefined
-    if (status === "continue") {
-      log(
-        due
-          ? `↻ ${task.id} context reached the handover wall; handed over as ${handoffFile(task)}, continuing in a new session`
-          : `↻ ${task.id} session handed itself over as ${handoffFile(task)}; continuing in a new session`,
-      )
-      consumed = doc
+    // The ondemand-handover engine (D4): this scope's verdict over the ended
+    // session's handover document, under the fresh retry policy — a handover
+    // due without a valid document retries the full whole-task prompt in a new
+    // session (the fork policy belongs to runSubtask's streams).
+    const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fresh", subject, rollbackRedo }, readHandoff, result.lastText)
+    if (decision.type === "natural") return undefined
+    if (decision.type === "continue") {
       continuation = true
       feedback = ""
       continue
     }
-    // Handover-boundary write-check failure (strict resume): one invalid
-    // attempt rolls back and cold-starts the redo.
-    if (!rolled) {
-      const redone = await rollbackRedo()
-      if (redone === "done") {
-        rolled = true
-        log(`↻ ${task.id} handover due but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this task`)
-        continue
-      }
-      if (redone) return redone
+    if (decision.type === "retry") {
+      feedback = decision.feedback
+      continue
     }
-    if (retried) {
-      return {
-        type: "blocked",
-        question:
-          `session ended with a handover due but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
-          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
-      }
-    }
-    log(`↻ ${task.id} handover due but ${handoffFile(task)} was not validly produced; retrying once with feedback`)
-    retried = true
-    feedback =
-      `\n\nThe last time you ended the session a handover was due, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
-      `This is a hard requirement: write that file before ending the session.`
+    if (decision.type === "coldstart") continue
+    if (decision.type === "stop") return decision.stop
+    return decision
   }
 }
 
@@ -728,27 +840,23 @@ export async function runSubtask(
     // copy already holds the full prompt and all the working context, and
     // resending the whole thing would only induce starting over from scratch.
     let briefFork = false
-    // A stream's handover (plans/0059 D5, the ondemand loop of executeWhole):
-    // consumed = the handover text the current session was seeded with (a
-    // document differing from it was written by the session that just ended);
-    // handoverRetried = the one re-prompt for a handover due without a valid
-    // document was spent.
-    let consumed = priorText
-    let handoverRetried = false
+    // The ondemand-handover engine's per-scope state (D4): consumed is seeded
+    // with the recovery document; the engine spends the retry and rollback
+    // flags, the rollback redo below rewinds it.
+    const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
     // Strict-resume rollback redo (tightened in 3.3 R3): one test-handover
     // write-check failure rolls back to
     // the subtask baseline and cold-starts a redo, with no retry with
     // feedback; once only — failing again is escalated as a hidden blockage
     // (the working state is already preserved in the stash).
-    let rolled = false
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
       const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, { progress: await peekProgress(dir) })
       if (done.type !== "ok") return done
       continuation = false
       feedback = ""
-      consumed = ""
-      handoverRetried = false
+      handover.consumed = ""
+      handover.retried = false
       // The cold restart: the chain drops its session state and the one-shot
       // note; the redo is a new prompt under registry routing too.
       coldStart(chain)
@@ -769,70 +877,39 @@ export async function runSubtask(
       if (result.type === "blocked") {
         // Test-handover write-check failure (strict resume): roll back and
         // cold-start the redo, once only.
-        if (result.rollback && !rolled) {
+        if (result.rollback && !handover.rolled) {
           const redone = await rollbackRedo()
           if (redone === "done") {
-            rolled = true
+            handover.rolled = true
             continue
           }
           if (redone) return redone
         }
         return result
       }
-      // A stream's handover (only with the steer built): the ondemand loop's
-      // reading of executeWhole — a handover due by the figure (or the hint),
-      // or a fresh document the session wrote at a boundary of its choosing.
-      // Status continue → a new session continues the stream from the
-      // document; done → the stream is finished, judged below as a natural
-      // end; no valid document → one re-prompt through a fork of the ended
-      // session (it holds what the document needs), then blocked.
-      if (steer) {
-        const doc = await readHandoff()
-        const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
-        const fresh = doc !== "" && doc !== consumed
-        if (due || fresh) {
-          const status = handoffStatus(doc)
-          if (status === "continue") {
-            log(
-              due
-                ? `↻ ${task.id} subtask ${index} context reached the handover wall; handed over as ${handoffFile(task)}, continuing in a new session`
-                : `↻ ${task.id} subtask ${index} session handed itself over as ${handoffFile(task)}; continuing in a new session`,
-            )
-            consumed = doc
-            continuation = true
-            forked = false
-            feedback = ""
-            continue
-          }
-          if (status !== "done") {
-            if (!rolled) {
-              const redone = await rollbackRedo()
-              if (redone === "done") {
-                rolled = true
-                log(`↻ ${task.id} subtask ${index} handover due but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this subtask`)
-                continue
-              }
-              if (redone) return redone
-            }
-            if (handoverRetried) {
-              return {
-                type: "blocked",
-                question:
-                  `subtask ${index} ended with a handover due but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
-                  `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
-              }
-            }
-            handoverRetried = true
-            // AUTO-DECISION: a stream's missing handover document is demanded in a fork of the ended session with the feedback alone (it holds what the document must say; executeWhole's retry sends the full prompt to a new session, which cannot know it), and a new session with the full prompt only without a fork
-            feedback =
-              `\n\nThe last time you ended the session a handover was due, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
-              `This is a hard requirement: write that file for this subtask before ending the session.`
-            briefFork = await forkEndedSession(client, chain, subject)
-            log(`↻ ${task.id} subtask ${index} handover due but ${handoffFile(task)} was not validly produced; ${briefFork ? "forked from the ended session, " : ""}retrying once with feedback`)
-            continue
-          }
-        }
+      // A stream's handover (plans/0059 D5) runs through the same engine as
+      // executeWhole's ondemand loop (D4), under the fork retry policy — a
+      // handover due without a valid document is demanded in a fork of the
+      // ended session with the feedback alone. Status: continue hands the
+      // stream over; a Status: done document and a natural end both fall to
+      // the shape check below (a subtask's completion is judged by it, never
+      // by agent self-report). The planned pipeline's subtasks build no steer
+      // and end naturally here.
+      const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fork", subtask: index, subject, rollbackRedo }, readHandoff, result.lastText)
+      if (decision.type === "continue") {
+        continuation = true
+        forked = false
+        feedback = ""
+        continue
       }
+      if (decision.type === "retry") {
+        feedback = decision.feedback
+        briefFork = decision.brief
+        continue
+      }
+      if (decision.type === "coldstart") continue
+      if (decision.type === "stop") return decision.stop
+      if (decision.type === "blocked") return decision
       // Ending = the subtask session finished naturally (the planned
       // pipeline's subtasks have no context handover, plans/0056; a session
       // over the usage cap hits the provider-side compression / cap errors
