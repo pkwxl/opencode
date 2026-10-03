@@ -11,8 +11,10 @@
 
 ## 1. Self-check externalization
 
-- `subtask.md` 收尾 item a ("自我检查该子任务是否真正完成") and `whole.md`
-  constraint item 1 ("完成整个任务后自我检查是否真正完成") →
+- `subtask.md` wrap-up item a ("自我检查该子任务是否真正完成" — self-check whether
+  this subtask is truly complete) and `whole.md` constraint item 1
+  ("完成整个任务后自我检查是否真正完成" — after finishing the whole task,
+  self-check whether it is truly complete) →
   `templates/intents/default.md` `## quality`, as the subsections
   `### self-check-subtask` / `### self-check-whole`.
 - The pre-existing decompose criteria move under `### decompose` in the same
@@ -30,7 +32,7 @@
 | # | Decision | Content |
 |---|---|---|
 | D1 | Subsection addressing generalizes | `packSubsection(pack, section, key)` works on any section; `## quality` joins `## phase duties` as a subsectioned section. Text before the first `###` stays unaddressable (0032 D2 rule unchanged) — the M1.2-era flat `quality` body is re-anchored under `### decompose`, and prompt.ts/golden fixtures switch to the keyed form. |
-| D2 | Two self-check keys, not one | The two sentences differ in scope noun ("该子任务" vs "完成整个任务后"); two keys keep F9 byte-equivalence without growing a pack-level variable convention. |
+| D2 | Two self-check keys, not one | The two sentences differ in scope noun ("该子任务" this subtask vs "完成整个任务后" after finishing the whole task); two keys keep F9 byte-equivalence without growing a pack-level variable convention. |
 | D3 | Guard-style injection | `{{#if selfCheck}}…{{/if}}` wraps the whole item line (incl. its trailing newline), so zero-intent leaves no blank-line debris; surviving items keep their numbers (accepted in 0032 D4). |
 | D4 | Marker tiers | Tier-1 = driver-enforced anchors (missing → startup usage error); tier-2 = intent content, marker-free by definition (lives in intent packs, never guarded). All existing PROTOCOL_MARKERS entries classify tier-1 (list in §3). New: `PARTIAL_MARKERS` guards the three protocol-bearing shared partials against `_partials.md` overlays. `registerTemplate`'s markers parameter is confirmed tier-1-only (doc/comment semantics, no signature change). |
 | D5 | `_partials` registrable per section | `registerPartial(name, text, markers?)` registers/replaces one shared-partial section; whole-file `_partials` registration stays rejected (the error names registerPartial). Precedence mirrors templates: project overlay > registered > built-in; registrations survive `usePromptLibrary` reloads. |
@@ -87,13 +89,14 @@ M2.1/M2.2; line numbers as of this change.
 - MOVE (governance intent): the recording discipline (decision rationale +
   rejected alternatives into docs); the ownership classification catalog
   (what belongs to the user vs to the session, with the matched/paired
-  example); "同一决策只标一类、拿不准标 AUTO-RESOLVE".
+  example); "同一决策只标一类、拿不准标 AUTO-RESOLVE" (mark each decision with
+  exactly one kind; when unsure, mark it AUTO-RESOLVE).
 
 `{{#if ask}}` branch:
 
 - KEEP: permission protocol; auto-answer note; repeat-block.
 - MOVE: the ownership classification catalog (asking variant: user-owned →
-  ask, self-owned → decide without a trace; "拿不准就问").
+  ask, self-owned → decide without a trace; "拿不准就问" — when unsure, ask).
 
 Mechanics for M2.1: the partial needs an injection point (e.g. `{{#if
 governance}}`) fed from the render exit (renderPrompt) since the partial is
@@ -103,11 +106,14 @@ shared by 22 templates; the core-side remainder keeps the tier-1 anchors.
 
 - KEEP (handover protocol): the `[DRIVER]` framing; write `{{handoffFile}}`
   (overwrite); the content bullet list structure; the `状态: 继续` last-line
-  contract; "写完立即结束会话".
+  contract; "写完立即结束会话" (end the session immediately after writing).
 - SPLIT (completeness demand, (b) nested in the (a) carrier): item 1's
-  "把本执行范围内**不依赖本次测试结果**的剩余工作全部做完并落盘" — the anchor
+  "把本执行范围内**不依赖本次测试结果**的剩余工作全部做完并落盘" (finish and
+  persist every remaining piece of work in this execution scope that does not
+  depend on this test run's result) — the anchor
   phrase stays (tier-1), the degree/anti-skip rationale moves to the pack;
-  item 2's "**还没做完的事**" enumeration duty is likewise intent-grade
+  item 2's "**还没做完的事**" (things not yet finished) enumeration duty is
+  likewise intent-grade
   completeness pressure riding the protocol list.
 
 ### 4.3 M1.3's own templates (post-change audit)

@@ -1,4 +1,4 @@
-# 稳定引用与文件存放规范:设计基准与实施计划(stable-refs)
+# Stable References and File Storage Conventions: Design Baseline and Implementation Plan (stable-refs)
 
 > **Historical record (2026-09-28, `plans/0061` A3/A5): retired in part, not maintained.** The storage half of
 > this design lives on unchanged (permanent `docs/T-NNN/` task directories and round directories, `src/docpaths.ts`,
@@ -6,418 +6,419 @@
 > validation, rename rewrite, rename-history recovery, `@sha` range reconfirmation), the `OPENCODE_AUTO_REF_CHECK`
 > switch, the pre-commit gate and the `.auto/invalid-refs.md` stale list are deleted, and the block no longer names
 > any checking — keeping references valid is each session's own work. The successor rulings are `plans/0061` R6/R15.
-> Original preserved untranslated below.
+> Originally preserved untranslated; translated to English 2026-10-03 with the plans/ corpus
+> (protocol-string citations inside backticks keep their original Chinese spelling).
 
-> 状态:**设计定稿(2026-09-06)**。实施分 P1..P4 四期,建议每期一个独立会话;
-> P1 已实施(2026-09-07,见 §7);P1 的可执行规格、既定决策(P1-D1..D9)与会话切分
-> (P1-S1..S4)见 [plans/0011-stable-refs-p1-plan.md](./0011-stable-refs-p1-plan.md)。
-> 开工会话先读本文件全文,再按需读 plans/0006-phases-design.md(F/M 节)、plans/0001-auto-number-design.md、
-> plans/0003-fork-decompose-design.md(§产物命名)。每期完成后勾选 §5 清单并回写 §7 实施进度;
-> 实现与设计冲突时以实现为准回写本文对应小节并注明日期(镜像 plans/0009-verify-review-design.md 文首注记先例)。
+> Status: **Design finalized (2026-09-06)**. Implementation is split into four stages P1..P4, one dedicated session per stage recommended;
+> P1 is implemented (2026-09-07, see §7); P1's executable spec, settled decisions (P1-D1..D9), and session split
+> (P1-S1..S4) are in [plans/0011-stable-refs-p1-plan.md](./0011-stable-refs-p1-plan.md).
+> The kickoff session reads this file in full first, then plans/0006-phases-design.md (F/M sections), plans/0001-auto-number-design.md, and
+> plans/0003-fork-decompose-design.md (§ artifact naming) as needed. After each stage completes, tick the §5 checklist and write back §7 implementation progress;
+> when implementation and design conflict, the implementation wins — write back to the corresponding subsection of this file with the date noted (mirroring the headnote precedent of plans/0009-verify-review-design.md).
 
-## 0. 问题背景
+## 0. Problem Background
 
-三类失稳,均已被现状代码证实:
+Three classes of instability, all confirmed by the code as it currently stands:
 
-1. **文档间引用随阶段/轮次失效**:阶段交接把本阶段 docs/ 变更整体搬入
-   `docs/phases/<letter>-<slug>/`(src/phases.ts 的 snapshotDocs/archivePhaseDocs,mtime 差异
-   判定),continue 续轮再搬入 `docs/phases/round-<N>/`(archiveRound)。文档路径随阶段/轮次
-   变化,A 报告引用 B 报告的路径、handover 必读清单引用产物路径,搬移后全部断链。
-2. **文档对代码的引用随代码演进漂移**:报告/审计/设计文档中的源码路径,代码重构(改名/
-   移动/删除)后无人检查,逐渐失真。
-3. **两套路径认知并存**:任务文档是平铺后缀文件(`docs/<id>.context.md` / `.subtasks.md` /
-   `.report.md` / `.audit.md` / `.fix.md` / `.handoff.md` / `.testhandoff.md`,子任务级
-   `<id>-S<n>.testhandoff.md`),子任务产物却是目录单文件 `docs/<id>/S<NN>.md`;且 testhandoff
-   遗留检测靠 `name.startsWith(task.id-S)` 字符串前缀(src/runner.ts)、taskNumberFloor 靠平铺
-   正则(src/numbering.ts)。driver 构造、约 16 个提示词模板、文档内引用三方认知不统一。
+1. **Doc-to-doc references break as phases/rounds change**: phase handover moves the phase's whole docs/ change set into
+   `docs/phases/<letter>-<slug>/` (snapshotDocs/archivePhaseDocs in src/phases.ts, decided by mtime
+   differences); a continue into the next round moves them again into `docs/phases/round-<N>/` (archiveRound). Document paths change with phase/round,
+   so report A referencing report B's path, and the handover must-read list referencing artifact paths, all dangle after the move.
+2. **Doc-to-code references drift as the code evolves**: source paths in reports/audits/design docs go unchecked after
+   code refactoring (renames/moves/deletions) and gradually rot.
+3. **Two coexisting path models**: task documents are flat suffix files (`docs/<id>.context.md` / `.subtasks.md` /
+   `.report.md` / `.audit.md` / `.fix.md` / `.handoff.md` / `.testhandoff.md`, subtask-level
+   `<id>-S<n>.testhandoff.md`), while subtask artifacts are single files in directories, `docs/<id>/S<NN>.md`; and testhandoff
+   leftover detection relies on the `name.startsWith(task.id-S)` string prefix (src/runner.ts) while taskNumberFloor relies on a flat
+   regex (src/numbering.ts). The driver's construction, the ~16 prompt templates, and in-document references — three sides — disagree.
 
-## 1. 目标与非目标
+## 1. Goals and Non-Goals
 
-**目标**(核心恒等式):
+**Goals** (core identity):
 
-> 引用稳定性 = T-NNN 全局唯一编号 × 永久路径(文档落地不再移动)× 只有过期状态才归档
+> Reference stability = globally unique T-NNN task numbers × permanent paths (documents never move once landed) × only stale state ever gets archived
 
-1. driver、提示词模板、文档内引用三方对文档位置的认知统一为一条规则(任务文档 →
-   `docs/T-NNN/`,子任务文档 → `docs/T-NNN/S<kk>/`)。
-2. `docs/` 下文档一经创建永不移动;阶段/轮次差异经文件名前缀(`R<N>-`)与台账推导表达。
-3. 文档对代码/文档的引用在 driver 统一提交前经确定性检查,可机械修复的自动修复。
+1. The driver, prompt templates, and in-document references converge on one rule for where documents live (task documents →
+   `docs/T-NNN/`, subtask documents → `docs/T-NNN/S<kk>/`).
+2. Documents under `docs/` never move once created; phase/round differences are expressed via the filename prefix (`R<N>-`) and ledger derivation.
+3. Doc-to-code/doc references are deterministically checked before the driver's unified commit; whatever is mechanically repairable is auto-repaired.
 
-**非目标**:
+**Non-goals**:
 
-- 不做文档语义级校验(内容正确性仍归判定/审核会话);只做路径存在性、行号上限的确定性校验。
-- 不引入新的持久化状态:轮次、编号、提取守卫继续推导式(台账/目录推导)。
-- 不改核心/外壳边界:本特性无外壳差异,壳分支经 merge auto-core 自动继承。
+- No semantic-level document validation (content correctness still belongs to the judge/review sessions); only deterministic validation of path existence and the line-number cap.
+- No new persisted state: rounds, numbering, and the extraction guard stay derived (ledger/directory derivation).
+- No change to the core/shell boundary: this feature has no shell delta, and shell branches inherit it automatically via merge auto-core.
 
-## 2. 已确认决策(用户拍板,2026-09-06)
+## 2. Confirmed Decisions (user-approved, 2026-09-06)
 
-| # | 决策 |
+| # | Decision |
 |---|---|
-| D1 | 子任务产物 = `docs/T-003/S04/index.md`;testhandoff.md 等临时文件同级目录 |
-| D2 | 阶段产物目录折叠:a/d/t/v 产物与终审产物一律任务锚定(如 `docs/T-F1/audit-r1.md`);`PHASE_PRODUCTS` 与 phases-design A.1 产物目录约定删除 |
-| D3 | handover 永久化:`docs/handovers/R<N>-<字母>-<slug>.md`,落地不移动;`docs/phases/` 与 `round-<N>/` 只放过期状态文件 |
-| D4 | 存量兼容 = 读回落(新路径缺失回落旧平铺路径)+ run 启动自动迁移(housekeeping 统一提交) |
-| D5 | `autoNumber` 缺省翻转为 `true`(根本规则);`--no-auto-number` 保留为退出开关 |
-| D6 | 一致性检查三层:工具自动修复(auto-correct)+ `check` 子命令扫描 + verify 门禁 |
-| D7 | 过期 AGENTS.md 快照**每轮**归档(随轮末 PLAN.md 入 `round-<N>/`;轮内 AGENTS.md 基本静态,阶段级快照冗余) |
+| D1 | Subtask artifact = `docs/T-003/S04/index.md`; temporary files such as testhandoff.md live in the same directory |
+| D2 | Phase artifact directories collapse: a/d/t/v artifacts and final-review artifacts are all task-anchored (e.g. `docs/T-F1/audit-r1.md`); `PHASE_PRODUCTS` and the phases-design A.1 artifact-directory conventions are deleted |
+| D3 | Handovers become permanent: `docs/handovers/R<N>-<字母>-<slug>.md` (<字母> = the phase letter), landed and never moved; `docs/phases/` and `round-<N>/` hold only stale state files |
+| D4 | Legacy compatibility = read fallback (fall back to the old flat path when the new path is missing) + automatic migration at run startup (housekeeping unified commit) |
+| D5 | `autoNumber` default flips to `true` (the fundamental rule); `--no-auto-number` is kept as the opt-out switch |
+| D6 | Consistency checking in three layers: tool auto-repair (auto-correct) + `check` subcommand scan + verify gate |
+| D7 | Stale AGENTS.md snapshots are archived **every round** (into `round-<N>/` together with the end-of-round PLAN.md; AGENTS.md is mostly static within a round, so phase-level snapshots are redundant) |
 
-## 3. 规范本体(施加于目标目录,init 经 AGENTS.md 标记块下沉)
+## 3. The Specification Proper (imposed on the target directory; init sinks it down via the AGENTS.md marker block)
 
-### 3.1 身份与存放
+### 3.1 Identity and Storage
 
-目标目录文档布局(新规全貌):
+Target-directory document layout (the new rules in full):
 
 ```
 docs/
-  T-003/                    # 任务 003 全部文档(永久,R2)
-    context.md              # 理解摘要(understand 会话)
-    subtasks.md             # 分解检查项(decompose 会话)
-    report.md               # 收尾索引报告(wrapup)
-    audit.md / fix.md       # 独立审核报告 / 修复检查项
-    handoff.md              # ondemand 上下文交接(临时,driver 删)
-    testhandoff.md          # 任务级测试交接(临时,driver 删)
-    S04/                    # 子任务 04(永久)
-      index.md              # 子任务产出正文(driver 机械命名)
-      testhandoff.md        # 子任务级测试交接(临时,driver 删)
-  T-F1/                     # 终审任务文档:audit-r<r>.md / refactor-r<r>.md /
+  T-003/                    # all documents of task 003 (permanent, R2)
+    context.md              # understanding summary (understand session)
+    subtasks.md             # decomposition checklist (decompose session)
+    report.md               # wrapup index report (wrapup)
+    audit.md / fix.md       # independent review report / fix checklist
+    handoff.md              # ondemand context handoff (temporary, driver deletes)
+    testhandoff.md          # task-level test handoff (temporary, driver deletes)
+    S04/                    # subtask 04 (permanent)
+      index.md              # subtask artifact body (mechanically named by driver)
+      testhandoff.md        # subtask-level test handoff (temporary, driver deletes)
+  T-F1/                     # final-review task documents: audit-r<r>.md / refactor-r<r>.md /
                             #   patch-r<r>.md / validate-r<r>.md / finalize.md
-                            #   (各终审任务锚定自己的 docs/T-F<k>/,跨轮随任务递增,
-                            #    见 P1 实施设计 P1-D1)
-  handovers/                # 阶段交接蒸馏(旧平铺,永久,读回落):R<N>-<字母>-<slug>.md
-  migration-kb/             # 迁移知识(旧平铺,永久,读回落):R<N>-migration-<时间戳>.md
-  prior-kb/                 # 先验知识(旧平铺,永久,读回落)
-  agents/                   # AGENTS.md 维护规则块路由的跨阶段知识(不变)
-  R-01/                     # 第 1 轮轮次目录(轮首建立,落盘即永久,R2)
-    PLAN.md                 # 本轮任务台账(根 PLAN.md 是指向它的相对符号链接)
-    phases.md               # 本轮阶段台账(根 docs/phases.md 在新布局消亡)
-    AGENTS.md.bak           # 轮首 AGENTS.md 快照(.bak 避免被当指令自动加载)
-    a-analysis/PLAN.md      # 阶段 PLAN.md 快照(纯过期状态,不被任何文档引用)
-    handovers/              # 阶段交接蒸馏(永久):<字母>-<slug>.md(去 R<N>- 前缀)
-    phase-docs/             # 阶段级自由产物:<字母>-<slug>/(去 R<N>- 前缀)
-    prior-kb.md             # 本轮前置知识(轮内固定名)
-    migration-kb.md         # 本轮迁移知识(轮内固定名)
-  phases/                   # 旧布局(存量读回落):纯过期状态,不被任何文档引用
-    a-analysis/PLAN.md      # 阶段 PLAN.md 快照
-    round-1/                # phases.md + 轮末 PLAN.md + AGENTS.md + 各阶段归档目录
+                            #   (each final-review task anchors its own docs/T-F<k>/, incrementing
+                            #    across rounds with the task; see the P1 implementation design P1-D1)
+  handovers/                # phase-handover distillates (old flat, permanent, read fallback): R<N>-<字母>-<slug>.md
+  migration-kb/             # migration knowledge (old flat, permanent, read fallback): R<N>-migration-<时间戳>.md (<时间戳> = timestamp)
+  prior-kb/                 # prior knowledge (old flat, permanent, read fallback)
+  agents/                   # cross-phase knowledge routed by the AGENTS.md maintenance-rules block (unchanged)
+  R-01/                     # round 1's round directory (created at round start, permanent once on disk, R2)
+    PLAN.md                 # this round's task ledger (the root PLAN.md is a relative symlink to it)
+    phases.md               # this round's phase ledger (the root docs/phases.md dies out under the new layout)
+    AGENTS.md.bak           # AGENTS.md snapshot taken at round start (.bak avoids being auto-loaded as instructions)
+    a-analysis/PLAN.md      # phase PLAN.md snapshot (pure stale state, referenced by no document)
+    handovers/              # phase-handover distillates (permanent): <字母>-<slug>.md (minus the R<N>- prefix)
+    phase-docs/             # phase-level free artifacts: <字母>-<slug>/ (minus the R<N>- prefix)
+    prior-kb.md             # this round's prior knowledge (fixed name within the round)
+    migration-kb.md         # this round's migration knowledge (fixed name within the round)
+  phases/                   # old layout (legacy read fallback): pure stale state, referenced by no document
+    a-analysis/PLAN.md      # phase PLAN.md snapshot
+    round-1/                # phases.md + end-of-round PLAN.md + AGENTS.md + per-phase archive directories
 ```
 
-> **2026-09-08 轮次专用目录方案(plans/ROUND_WORKDIR_PLAN.md)**:每轮一个
-> `docs/R-NN/`(R 后两位零填充,自然进位;与 `docs/T-NNN/` 并列 = docs/ 下两类
-> 顶级命名空间:T = 跨轮永久编号的任务文档,R = 自包含轮次容器),轮首建立、
-> 其中一切落盘即永久,取代"共用目录 + 文件名前缀 + 轮末搬移归档"(archiveRound
-> 已删除)。存量兼容 = 只读回落:旧平铺 `docs/handovers/R<N>-*.md`、
-> `docs/prior-kb|migration-kb/`、`docs/phases/round-N/` 与根 `docs/phases.md`
-> 原地保留为读回落源,绝不搬移;写只写新布局。
+> **2026-09-08 dedicated round-directory scheme (plans/ROUND_WORKDIR_PLAN.md)**: one
+> `docs/R-NN/` per round (two zero-padded digits after R, natural carry; alongside `docs/T-NNN/` = the two
+> top-level namespaces under docs/: T = task documents with permanent cross-round numbers, R = self-contained round containers), created at round start;
+> everything inside it is permanent once written to disk, replacing "shared directory + filename prefix + end-of-round move-to-archive" (archiveRound
+> is deleted). Legacy compatibility = read-only fallback: the old flat `docs/handovers/R<N>-*.md`,
+> `docs/prior-kb|migration-kb/`, `docs/phases/round-N/`, and the root `docs/phases.md`
+> stay in place as read-fallback sources and are never moved; writes go only to the new layout.
 
-规则条款:
+Rule clauses:
 
-- **R1 编号根本规则**:T-NNN 全局唯一、只增不减(`autoNumber` 缺省 on,D5);文档身份锚定
-  任务编号;T-F<k> 终审编号独立命名空间,不进自动编号记录(既有语义)。
-- **R2 永久性**:`docs/` 下文档(`docs/T-*/`、`docs/R-*/`、旧平铺 `docs/handovers/`、
-  `docs/migration-kb/`、`docs/prior-kb/`、`docs/agents/`)一经创建永不移动、永不改名。
-- **R3 目录化**:任务文档只出现在 `docs/T-NNN/` 内;子任务文档只出现在 `docs/T-NNN/S<kk>/`
-  内(两位零填充,S04)。
-- **R4 角色文件名固定**:context / subtasks / report / audit / fix / handoff / testhandoff / index。
-- **R5 归档语义**:过期状态文件(每阶段 PLAN.md 快照)收在轮次目录
-  `docs/R-NN/<字母>-<slug>/` 内(旧布局 `docs/phases/` 同款,存量读回落);
-  状态文件不被任何文档引用。
-- **R6 临时文件**:handoff.md / testhandoff.md 生命周期 = 执行范围,完成即 driver 删除
-  (既有语义,仅位置移入目录)。
-- **R7 阶段差异表达**:轮次经 `docs/R-NN/` 轮次目录与台账推导表达(旧布局为文件名
-  前缀 `R<N>-`,存量读回落),不靠搬移目录。
+- **R1 fundamental numbering rule**: T-NNN globally unique, growing only (`autoNumber` on by default, D5); document identity is anchored to the
+  task number; T-F<k> final-review numbering is a separate namespace and does not enter the auto-numbering record (existing semantics).
+- **R2 permanence**: documents under `docs/` (`docs/T-*/`, `docs/R-*/`, the old flat `docs/handovers/`, 
+  `docs/migration-kb/`, `docs/prior-kb/`, `docs/agents/`) never move and are never renamed once created.
+- **R3 directories**: task documents appear only inside `docs/T-NNN/`; subtask documents only inside `docs/T-NNN/S<kk>/`
+  (two-digit zero padding, S04).
+- **R4 fixed role filenames**: context / subtasks / report / audit / fix / handoff / testhandoff / index.
+- **R5 archive semantics**: stale state files (each phase's PLAN.md snapshot) are kept inside the round directory
+  `docs/R-NN/<字母>-<slug>/` (same design as the old layout's `docs/phases/`, legacy read fallback);
+  state files are referenced by no document.
+- **R6 temporary files**: the handoff.md / testhandoff.md lifecycle = execution scope; the driver deletes them on completion
+  (existing semantics, only the location moves into the directory).
+- **R7 phase-difference expression**: rounds are expressed via the `docs/R-NN/` round directory and ledger derivation (the old layout used the filename
+  prefix `R<N>-`, legacy read fallback), not by moving directories.
 
-### 3.2 引用语法
+### 3.2 Reference Syntax
 
-- 唯一合法形态:**目标目录根相对路径**,反引号或 Markdown 链接;允许 `path:line` 行号锚。
-- 文档间引用指向 `docs/T-NNN/...` 永久路径;禁止引用轮次目录内的状态文件
-  (台账 phases.md、阶段归档内的 PLAN 快照;旧布局 `docs/phases/` 同)与
-  handover 路径(handover 是 driver 注入通道,非引用目标)。
-- 豁免:代码围栏(``` 配对)内的路径;行内含 `已删除` / `已归档` / `历史` 标记的引用
-  (描述过去状态)。
-- 校验语义:路径存在;行号 ≤ 文件总行数。
+- The only legal form: **paths relative to the target-directory root**, in backticks or as a Markdown link; `path:line` line anchors are allowed.
+- Doc-to-doc references point at `docs/T-NNN/...` permanent paths; referencing state files inside round directories
+  (the phases.md ledger, PLAN snapshots inside phase archives; likewise the old layout's `docs/phases/`) or
+  handover paths is forbidden (handover is a driver injection channel, not a reference target).
+- Exemptions: paths inside code fences (``` pairs); references on lines carrying the `已删除` / `已归档` / `历史` markers ("deleted" / "archived" / "historical")
+  (they describe past states).
+- Validation semantics: the path exists; line number ≤ the file's total line count.
 
-### 3.3 一致性检查三层(D6)
+### 3.3 Consistency Checking in Three Layers (D6)
 
-| 层 | 时机 | 行为 |
+| Layer | Timing | Behavior |
 |---|---|---|
-| auto-correct | 每次统一提交前(driver,确定性) | git rename 配对成功的旧路径 → 机械改写活文档引用;删除类无法自动修复 → finding |
-| check 子命令 | 手动 / CI | 全量活文档 doc→doc / doc→code 扫描,命中退出码 1 |
-| verify 门禁 | 任务边界(verifyTask 流程内,driver 确定性预扫) | 任务产物文档失效引用 = 差距 → 既有 fix 轮;耗尽隐性阻塞退出 2;verify 未启用时退化为日志提示(维持"verify 未启用即宽松"契约) |
+| auto-correct | before every unified commit (driver, deterministic) | old paths successfully paired by git rename → mechanically rewrite live-document references; deletion-type hits cannot be auto-repaired → finding |
+| check subcommand | manual / CI | full scan of live documents doc→doc / doc→code, exit code 1 on hits |
+| verify gate | task boundary (inside the verifyTask flow, driver deterministic pre-scan) | dangling references in task artifact documents = gap → existing fix rounds; silent block with exit code 2 on exhaustion; degrades to a log hint when verify is disabled (preserving the "no verify = lenient" contract) |
 
-活文档范围:`docs/**/*.md`,排除 `docs/phases/**`;豁免围栏与标记行。
+Live-document scope: `docs/**/*.md`, excluding `docs/phases/**`; fences and marker lines are exempt.
 
-## 4. 机制设计(文件级)
+## 4. Mechanism Design (file level)
 
-### 4.1 `src/docpaths.ts`(新增,P1)
+### 4.1 `src/docpaths.ts` (new, P1)
 
-全部任务文档路径的唯一构造点(代码侧的"三方认知一致"由本模块强制):
+The single construction point for all task-document paths (this module enforces the code side of the "three-way shared understanding"):
 
 - `taskDir(id)` / `taskDoc(id, role)` / `subtaskDir(id, k)` / `subtaskDoc(id, k, role)` /
   `knowledgeDoc(round, ts)` / `priorKnowledgeDoc(round, ts)` / `finalDoc(id, name)`。
-  **偏差注记(2026-09-07,P2 实施)**:`handoverDoc(round, phase)` 落在
-  `src/phases.ts` 而非本模块——文件名依赖阶段 slug 表(PHASE_SLUGS 归 phases.ts
-  所有),放此可避免 docpaths→phases 反向依赖;`knowledgeDoc`/`priorKnowledgeDoc`
-  按设计落本模块。
-- `resolveTaskDoc(dir, id, role)`:读时新路径缺失 → 回落旧平铺路径(D4 读回落,镜像
-  config.ts legacyModeFallback 先例);迁移完成后自然消亡。
-- 消费方改造:src/runner.ts(context/subtasks/handoff/testhandoff 路径构造与遗留清扫)、
-  src/prompt.ts(handoffFile/testHandoffFile)、src/resume.ts、src/numbering.ts(floor 扫描)、
-  src/knowledge.ts、src/final.ts(终审产物路径)。
+  **Deviation note (2026-09-07, implemented in P2)**: `handoverDoc(round, phase)` lives in
+  `src/phases.ts` rather than in this module — the filename depends on the phase slug table (PHASE_SLUGS belongs to phases.ts),
+  and placing it there avoids a docpaths→phases reverse dependency; `knowledgeDoc`/`priorKnowledgeDoc`
+  land in this module as designed.
+- `resolveTaskDoc(dir, id, role)`: on read, new path missing → fall back to the old flat path (D4 read fallback, mirroring
+  the config.ts legacyModeFallback precedent); it dies out naturally once migration completes.
+- Consumer refactors: src/runner.ts (context/subtasks/handoff/testhandoff path construction and legacy sweep),
+  src/prompt.ts (handoffFile/testHandOffFile), src/resume.ts, src/numbering.ts (floor scan),
+  src/knowledge.ts, src/final.ts (final-review artifact paths).
 
-### 4.2 存量自动迁移(P1)
+### 4.2 Automatic Legacy Migration (P1)
 
-- 挂点:run 启动(loop.ts,server 拉起前);幂等——无平铺文件即跳过、不产生空提交。
-- 扫描与搬移映射:
-  - `docs/T-003.context.md` → `docs/T-003/context.md`(subtasks/report/audit/fix/handoff/testhandoff 同法);
+- Hook point: run startup (loop.ts, before the server is brought up); idempotent — skipped when there are no flat files, producing no empty commit.
+- Scan and move mapping:
+  - `docs/T-003.context.md` → `docs/T-003/context.md` (subtasks/report/audit/fix/handoff/testhandoff likewise);
   - `docs/T-003-S2.testhandoff.md` → `docs/T-003/S02/testhandoff.md`;
   - `docs/T-003/S04.md` → `docs/T-003/S04/index.md`;
-  - 旧终审产物 `docs/final-audit.md`、`docs/final/audit-r<r>.md` 等 → `docs/T-F1/`(文件名不变)。
-- 搬移后对活文档执行引用改写(旧路径 → 新路径,全路径词边界匹配;复用 §4.5 的
-  extract/rewrite 基础函数,**该两函数在 P1 先行落地**,validate 与接线在 P4)。
-- housekeeping 统一提交:新 stage 标签 `doc-migrate`(src/git.ts 伪任务 label 清单、
-  behavior.md/structure.md 同步)。
+  - old final-review artifacts `docs/final-audit.md`, `docs/final/audit-r<r>.md`, etc. → `docs/T-F1/` (filenames unchanged).
+- After the move, references in live documents are rewritten (old path → new path, whole-path word-boundary matching; reusing the §4.5
+  extract/rewrite base functions, **those two functions land early in P1**, validate and wiring come in P4).
+- housekeeping unified commit: new stage label `doc-migrate` (the pseudo-task label list in src/git.ts,
+  synced in behavior.md/structure.md).
 
-### 4.3 归档缩减(P2:src/phases.ts / src/loop.ts / src/knowledge.ts)
+### 4.3 Archive Reduction (P2: src/phases.ts / src/loop.ts / src/knowledge.ts)
 
-- **删除**:`snapshotDocs` / `archivePhaseDocs` / `PHASE_PRODUCTS` / `.auto/phase-snapshot.json`
-  全链路(loop.planPhase 的快照调用、k 阶段"快照不刷新"特判、archiveRound 的 rm)。
-- **交接**(handoverPhase):蒸馏会话产物 = `docs/handovers/R<N>-<字母>-<slug>.md`
-  (currentRound × phaseArchive 推导文件名,driver 先建目录);PLAN.md 快照仍拷入
-  `docs/phases/<letter>-<slug>/`;appendLedger 新行协议
-  `→ docs/phases/<letter>-<slug>/(交接: docs/handovers/R<N>-...md)`;**parseLedger 兼容
-  旧行**(交接指针指向 docs/phases/.../handover.md 的行不 throw,字母与归档目录两列读取不变)。
-  **实施注记(2026-09-07)**:planPhase 的前序交接注入自 handovers/ 永久路径读取,
-  P2 前完成的阶段自归档目录内 handover.md 读回落(中轮升级兼容)。
-- **archiveRound**:+ 根 AGENTS.md 快照(D7,拷贝不移动、无可归档内容时不建目录);
-  不再搬 migration-kb / prior-kb;`round-<N>/` = 各阶段归档目录 + phases.md +
-  轮末 PLAN.md + AGENTS.md。
-- **knowledge.ts**:knowledgeFile → `docs/migration-kb/R<N>-migration-<时间戳>.md`;
-  existingKnowledge 改轮次推导守卫——**实施细化(2026-09-07)**:守卫 = 本轮
-  `R<round>-` 前缀非空 .md(交接前中断与已完成两窗口都覆盖;台账 k 行 done 时
-  提取挂点本就不触发,无需读台账),第 1 轮无 `R<N>-` 前缀存量按读回落视为本轮
-  产物;archivePriorKnowledge 整体删除——轮次前缀守卫取代轮间搬移
-  (priorKnowledgeFile 同样 `R<N>-prior-<时间戳>.md`;**migrate 壳合入 P2 时需删
-  archivePriorKnowledge 调用点并适配 existingKnowledge(round) 签名**,见
-  shell-contract 合入流程)。
-- **prevRoundDigest**:① 归档索引不变;② 最终 handover 改从 `docs/handovers/R<N>-<字母>-<slug>.md`
-  读(最后完成字母推导;**P2 前轮次自归档目录内 handover.md 读回落**);③ 知识收集 =
-  `docs/migration-kb/` 的 `R<N>-` 前缀文件(无前缀存量宽松归入上一轮;**P2 前轮次
-  归档内 migration-kb/ 读回落收集**,否则升级项目的既有知识自 digest 消失)。
+- **Delete**: `snapshotDocs` / `archivePhaseDocs` / `PHASE_PRODUCTS` / `.auto/phase-snapshot.json`
+  across the whole chain (the snapshot call in loop.planPhase, the phase-k "snapshot not refreshed" special case, the rm in archiveRound).
+- **Handover** (handoverPhase): the distillation session's artifact = `docs/handovers/R<N>-<字母>-<slug>.md`
+  (filename derived from currentRound × phaseArchive, the driver creates the directory first); the PLAN.md snapshot is still copied into
+  `docs/phases/<letter>-<slug>/`; appendLedger new-line protocol
+  `→ docs/phases/<letter>-<slug>/(交接: docs/handovers/R<N>-...md)` (the parenthetical reads "handover: ..."); **parseLedger stays
+  compatible with old lines** (lines whose handover pointer points at docs/phases/.../handover.md do not throw; the letter and archive-directory columns are still read unchanged).
+  **Implementation note (2026-09-07)**: planPhase's prior-handover injection reads from the permanent handovers/ path,
+  with read fallback to handover.md inside the archive directory for phases completed before P2 (mid-round upgrade compatibility).
+- **archiveRound**: + a root AGENTS.md snapshot (D7, copied not moved, no directory created when there is nothing to archive);
+  migration-kb / prior-kb are no longer moved; `round-<N>/` = per-phase archive directories + phases.md +
+  the end-of-round PLAN.md + AGENTS.md.
+- **knowledge.ts**: knowledgeFile → `docs/migration-kb/R<N>-migration-<时间戳>.md`;
+  existingKnowledge switches to a round-derivation guard — **implementation refinement (2026-09-07)**: guard = non-empty .md with this round's
+  `R<round>-` prefix (covering both windows, interrupted-before-handover and already-completed; when the ledger's k line is done
+  the extraction hook simply never fires, so the ledger need not be read); in round 1, legacy files without the `R<N>-` prefix are treated as this round's
+  output via read fallback; archivePriorKnowledge is deleted outright — the round-prefix guard replaces the between-round move
+  (priorKnowledgeFile likewise `R<N>-prior-<时间戳>.md`; **when the migrate shell merges into P2, the
+  archivePriorKnowledge call site must be deleted and the existingKnowledge(round) signature adapted**, see
+  the shell-contract merge process).
+- **prevRoundDigest**: (1) the archive index is unchanged; (2) the final handover is now read from `docs/handovers/R<N>-<字母>-<slug>.md`
+  (derived from the last completed letter; **for pre-P2 rounds, read fallback to handover.md inside the round's own archive directory**); (3) knowledge collection =
+  `R<N>-`-prefixed files in `docs/migration-kb/` (unprefixed legacy files leniently folded into the previous round; **for pre-P2 rounds,
+  collected via read fallback from migration-kb/ inside the round archive**, otherwise the upgraded project's existing knowledge disappears from the digest).
 - renderPhaseHandover / phase-handover.md / phase-plan.md / knowledge.md /
-  prior-knowledge.md / number-recovery.md 模板文案同步(产物约定改 docs/T-NNN/ 与
-  handovers/,A.1 产物目录表述删除)。**实施注记(2026-09-07)**:number-recovery.md
-  核对后零改动(证据清单双布局表述仍准确);phase-handover 协议标记随 `{{archive}}`
-  变量化改为 `{{handover}}`(template.ts PROTOCOL_MARKERS 同步)。
+  prior-knowledge.md / number-recovery.md template copy synced (artifact conventions change to docs/T-NNN/ and
+  handovers/, the A.1 artifact-directory wording is deleted). **Implementation note (2026-09-07)**: number-recovery.md
+  gets zero changes after review (the evidence-list dual-layout wording is still accurate); the phase-handover protocol marker changes to `{{handover}}` as `{{archive}}`
+  is variabilized (template.ts PROTOCOL_MARKERS synced).
 
-### 4.4 编号默认开启(P3:src/config.ts / src/index.ts)
+### 4.4 Numbering On by Default (P3: src/config.ts / src/index.ts)
 
-- `CONFIG_DEFAULTS.autoNumber = true`;formatProjectConfig 摘要逻辑不变(仍条件显示)。
-- init/run 文案、README、behavior.md 用法同步;plans/0001-auto-number-design.md 文首加修订注记
-  (缺省值翻转,机制零改动)。
-- e2e / config 测试快照更新。
+- `CONFIG_DEFAULTS.autoNumber = true`; the formatProjectConfig summary logic is unchanged (still conditionally displayed).
+- init/run copy, README, and behavior.md usage synced; plans/0001-auto-number-design.md gets a revision headnote
+  (default flipped, zero mechanism change).
+- e2e / config test snapshots updated.
 
-### 4.5 引用一致性三层(P4:src/refcheck.ts(新)/ src/check.ts / src/runner.ts / src/loop.ts)
+### 4.5 Reference Consistency in Three Layers (P4: src/refcheck.ts (new) / src/check.ts / src/runner.ts / src/loop.ts)
 
-refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
+refcheck core (extract/rewrite land early in P1 for migration reuse; P4 fills in the rest):
 
-- `extractRefs(text)`:反引号路径与 md 链接;过滤代码围栏与标记行
-  (`已删除|已归档|历史`);产出 `{ path, line?, at }`。
-- `validateRefs(dir, refs)`:存在性 + 行号 ≤ 总行数;产出 findings(file/line/text)。
+- `extractRefs(text)`: backtick paths and md links; filters out code fences and marker lines
+  (`已删除|已归档|历史` — "deleted|archived|historical"); produces `{ path, line?, at }`.
+- `validateRefs(dir, refs)`: existence + line number ≤ total line count; produces findings (file/line/text).
 - `renamePairs(root)`:`git diff --find-renames --diff-filter=R HEAD` → `{ old, new }`。
-- `rewriteRefs(docs, pairs)`:机械替换,仅全路径词边界匹配;**只配对 rename,删除/语义
-  变化不自动改**(防误修复历史叙述);**改写不动排版**(2026-09-08 需求追加)——只
-  就地替换命中 token 本身,行结构/空白/表格对齐/末尾换行原样保留,无命中不写回。
+- `rewriteRefs(docs, pairs)`: mechanical replacement, whole-path word-boundary matches only; **renames only — deletions/semantic
+  changes are not auto-rewritten** (to avoid mis-repairing historical narrative); **rewriting never touches layout** (2026-09-08 requirement addendum) — only
+  the matched token itself is replaced in place; line structure/whitespace/table alignment/trailing newline are preserved as-is, and files with no hits are not written back.
 
-接线:
+Wiring:
 
-- **提交前 auto-correct**:loop/runner 任务边界 commitTree 之前——renamePairs →
-  rewriteRefs(活文档)→ 复扫 findings;findings 在 verify 启用时入 fix 轮(既有
-  修复轮语义),未启用时记 ⚠ 日志。
-- **check 子命令**:findings 并入返回结构与 CLI 报文,命中退出码 1;对目标目录缺
-  引用规范块给 note。
-- **verify 门禁**:verifyTask 判定会话前 driver 先对任务产物文档跑 validateRefs——
-  确定性差距直接进 fix 轮,不消耗判定会话。
-- **init 下沉**:ensurePointer 增第六标记块 `opencode-auto:refs:start/end`(§3 规范
-  全文,幂等补写);wrapup.md(report 引用要求)、verify-script-gen.md、fix.md 增
-  引用规范提示文案。
+- **Pre-commit auto-correct**: before commitTree at the loop/runner task boundary — renamePairs →
+  rewriteRefs (live documents) → re-scan for findings; findings enter a fix round when verify is enabled (the existing
+  fix-round semantics), otherwise they are logged as ⚠.
+- **check subcommand**: findings merged into the return structure and CLI report, exit code 1 on hits; a note is given when the target directory lacks
+  the reference-spec block.
+- **verify gate**: before the verifyTask judge session the driver first runs validateRefs over the task artifact documents —
+  deterministic gaps go straight into a fix round, without spending a judge session.
+- **init sink-down**: ensurePointer gains a sixth marker block `opencode-auto:refs:start/end` (the full §3 spec,
+  idempotently backfilled); wrapup.md (report reference requirements), verify-script-gen.md, and fix.md gain
+  reference-spec reminder copy.
 
-> **2026-09-07 实施注记(stable-refs P4,以实现为准)**:
-> - validateRefs 签名收敛为 `(dir, refs) → Map<path, problem>`,findings 的位置回填
->   (file/line/text)由 scanRefs 组装(扫描入口);校验豁免在 §3.2 基础上细化——
->   URL/绝对路径/`~`/`./`/`../` 形态与纯版本号 token(如 `v1.2`,扩展名以字母开头
->   才算路径状)不校验,md 链接 `#fragment` 剥后验,目录引用只查存在性(行号锚忽略)。
-> - renamePairs 先 `git add -A` 暂存再 `git diff --cached --find-renames HEAD`——未跟踪
->   的新路径(AI 常见纯 mv 改名)否则不参与配对;暂存本就是下一次统一提交的前奏,不
->   改变提交结果;路径自仓库根换算为目标目录相对。
-> - auto-correct 挂点取 runner 的 afterSession(全部统一提交的公共入口,含
->   requireArtifact 旁路会话),loop 任务边界提交前必已有会话提交先行覆盖,不另挂
->   loop;findings 统一记 ⚠ 日志,"verify 启用时入 fix 轮"由 verify 门禁承担(下条)。
-> - verify 门禁在每个判定会话前执行(含修复轮后的重新判定),差距文案由 formatRefGap
->   组装;off 模式与判定差距同语义(回退 pending),FIX_ROUNDS 耗尽阻塞退出 2。
-> - check 的非 git note 仅在 docs/ 存在(引用机制有对象)时给出。
-> - **后缀消解与失效清单(2026-09-07,需求追加)**:validateRefs 对直接未命中的
->   路径按段边界后缀在目标目录树内找唯一文件匹配——带上下文语境的相对引用
->   (以引用者所在目录为基书写,尤其非 docs 引用)唯一命中即视为有效并消解到
->   匹配文件做行号校验,多重匹配属语境歧义按缺失(FileIndex 惰性全量文件清单,
->   node_modules/.git 剪枝,scanRefs 全程共享一份);autoCorrectRefs 另维护失效
->   清单 `.auto/invalid-refs.md`(键 = `文件 → 路径(problem)`,不含行号与原文——
->   随编辑漂移不能作身份;每轮按当前 findings 全量重写,修复后自动移除、复发
->   视为新出现),已收录键不再 ⚠,仅对新出现的失效引用输出警告日志——清单即
->   人工核验订正入口,同时防无休止重复警告;check 子命令为显式调用,报告不
->   按清单去重。同日另落 `script/fix-refs.ts`(bun run fix-refs [dir]):
->   autoCorrectRefs 的一次性手动入口,供迁移驱动运行前把按新目录结构重组后的
->   遗留工作树引用预清理(rename 配对改写 + 清单落盘,退出码 1 = 仍有失效引用);
->   `script/fix-docs.ts`(bun run fix-docs [dir])一条龙 = migrateLegacyDocs 目录
->   树还原 + autoCorrectRefs 引用清理。迁移冲突裁决升级为时间最新优先:候选按
->   目标新路径分组,组内 mtime 降序(同 mtime 路径字典序)依次搬移,最新者占领
->   空闲目标位,冲突方不移动原地保留(P1-D3 绝不覆盖不破);目标位为空目录不
->   算冲突,腾位后落位。同日补 P2 遗留落点空洞(P2 只定任务锚定口径,未给阶段
->   级自由产物——勘测/设计批次/覆盖矩阵/核验记录——落点):新增永久目录
->   `docs/phase-docs/R<N>-<字母>-<slug>/<name>.md`(D3 handovers 同款范式:落地
->   不移动、不参与轮次归档;R7 轮次前缀;与 handoverDoc 同名对位——蒸馏 =
->   `<slug>.md` 文件,原始产物 = 同名目录;构造器 phases.ts phaseDocsDir),
->   doc-layout 存放规范同步。旧版工具轮次归档提升(docpaths.phasesArchivePair
->   单一映射源,迁移扫描与旧引用改写共用):任务文档(含 T-F<k>)/伴生 S 产物
->   (S<k>.<name>.md)/交接变体(T-NNN.handover.md 实为阶段交接)/final/ 与
->   migration-kb、prior-kb(补 R<N> 前缀)/阶段自由产物(剥离首层阶段子目录)/
->   散落项目文档(docs/ 顶层编号系列)各归永久位;PLAN.md/phases.md/AGENTS.md
->   过期状态留在归档(R5);提升候选与平铺候选同池参与 mtime 裁决,跨轮同编号
->   任务文档自动保最新版。
-> - AGENTS.md 引用规范块为 §3 规范的精编全文(逐字全文会使六个标记块累计逼近维护
->   规则块的 150 行预算);规范细则以本设计文档为准。
+> **2026-09-07 implementation notes (stable-refs P4, implementation wins)**:
+> - The validateRefs signature converges on `(dir, refs) → Map<path, problem>`; backfilling the findings' position
+>   (file/line/text) is assembled by scanRefs (the scan entry point); validation exemptions are refined on top of §3.2 —
+>   URL/absolute-path/`~`/`./`/../` forms and pure version-number tokens (e.g. `v1.2`; only extensions starting with a letter count as path-like)
+>   are not validated; md-link `#fragment`s are stripped before validation; directory references are checked for existence only (line anchors ignored).
+> - renamePairs stages with `git add -A` first, then `git diff --cached --find-renames HEAD` — untracked
+>   new paths (the AI's common bare-mv renames) otherwise take no part in pairing; staging is anyway the prelude to the next unified commit and does not
+>   change the commit result; paths are converted from repo-root-relative to target-directory-relative.
+> - The auto-correct hook point is the runner's afterSession (the common entry of all unified commits, including
+>   requireArtifact bypass sessions); before the loop task-boundary commit a session commit has always covered it already, so loop is not hooked
+>   separately; findings are uniformly logged as ⚠, and "enter a fix round when verify is enabled" is borne by the verify gate (next item).
+> - The verify gate runs before every judge session (including re-judging after a fix round); gap copy is assembled by formatRefGap;
+>   off mode has the same semantics as judge gaps (fall back to pending), and FIX_ROUNDS exhaustion blocks with exit code 2.
+> - check's non-git note is given only when docs/ exists (the reference mechanism has an object to work on).
+> - **Suffix resolution and the invalid-refs list (2026-09-07, requirement addendum)**: for paths that miss directly, validateRefs
+>   looks for a unique file match by segment-boundary suffix inside the target-directory tree — a context-relative reference
+>   (written with the referencing document's own directory as base, especially non-docs references) counts as valid on a unique hit and resolves to
+>   the matched file for line-number validation; multiple matches are contextual ambiguity and count as missing (FileIndex is a lazy full file inventory,
+>   pruned of node_modules/.git, one instance shared across the whole scanRefs run); autoCorrectRefs additionally maintains the invalid-refs
+>   list `.auto/invalid-refs.md` (key = `文件 → 路径(problem)`, i.e. "file → path(problem)"; it carries no line number or original text —
+>   those drift with edits and cannot serve as identity; fully rewritten each round from current findings, auto-removed once fixed, recurrence
+>   treated as newly appearing); recorded keys no longer get ⚠, and warning logs are emitted only for newly appearing invalid references — the list is
+>   the manual verification/correction entry point and also prevents endless repeated warnings; the check subcommand is an explicit invocation, and its report is not
+>   deduplicated against the list. The same day also landed `script/fix-refs.ts` (bun run fix-refs [dir]):
+>   a one-shot manual entry for autoCorrectRefs, used before a migration-driven run to pre-clean leftover worktree references reorganized under
+>   the new directory structure (rename-pair rewriting + the list written to disk; exit code 1 = invalid references remain);
+>   `script/fix-docs.ts` (bun run fix-docs [dir]) is the all-in-one pipeline = migrateLegacyDocs directory-
+>   tree restoration + autoCorrectRefs reference cleanup. Migration-conflict arbitration is upgraded to newest-first: candidates are
+>   grouped by target new path; within each group they are moved in mtime-descending order (lexicographic by path on equal mtime); the newest takes the
+>   free target slot, while conflicting parties are not moved and stay in place (P1-D3: never overwrite, never break); an empty directory in the target slot
+>   does not count as a conflict — it is vacated and then filled. The same day fills P2's leftover placement gap (P2 fixed only the task-anchoring rule and gave no
+>   placement for phase-level free artifacts — survey/design batches/coverage matrices/verification records): a new permanent directory
+>   `docs/phase-docs/R<N>-<字母>-<slug>/<name>.md` (the same paradigm as D3 handovers: landed,
+>   never moved, not part of round archiving; R7 round prefix; name-paired with handoverDoc — distillate =
+>   the `<slug>.md` file, original artifacts = the same-named directory; constructor phases.ts phaseDocsDir),
+>   doc-layout storage spec synced. Old-tool round archives get promoted (docpaths.phasesArchivePair
+>   as the single mapping source, shared by the migration scan and old-reference rewriting): task documents (incl. T-F<k>)/companion S artifacts
+>   (S<k>.<name>.md)/handover variants (T-NNN.handover.md is really a phase handover)/final/ and
+>   migration-kb, prior-kb (R<N> prefix backfilled)/phase free artifacts (first-level phase subdirectory stripped)/
+>   scattered project documents (the numbered series at the top of docs/) each return to their permanent slots; PLAN.md/phases.md/AGENTS.md
+>   stale state stays in the archive (R5); promotion candidates and flat candidates join the same pool for mtime arbitration, and same-numbered task documents
+>   across rounds automatically keep the newest version.
+> - The AGENTS.md reference-spec block is a condensed rendering of the full §3 spec (a verbatim full text would push the six marker blocks cumulatively close to the
+>   150-line budget of the maintenance-rules block); the spec's details defer to this design document.
 
-> **2026-09-08 修订注记(refcheck-scope-design,对 §4.5/D6 的修订)**:
-> - 整个 refcheck 经 `OPENCODE_AUTO_REF_CHECK=on/off` 开关管控,**缺省 off**——
->   off 时三层挂点(提交前 auto-correct、check 引用扫描、verify 门禁预扫)全部
->   空转,目标目录零引用检查行为;fix-refs 手动脚本不受约束(P1 已实施)。
-> - 摒弃移动适配:migrateLegacyDocs 存量迁移(含 run 启动挂点与轮次归档提升)与
->   fix-docs 脚本一并退役;旧平铺布局原地保留,读回落永久保留,遗留引用失效改走
->   git 历史追踪恢复(refcheck-scope-design §4,P2 已实施)。
-> - 检查范围收敛为三类(缺失恢复/提交前移动修正/范围再确认 `@sha` 版本标记,
->   P3 已实施——行号锚漂移课题的落地即此项,见 §8),详见 plans/0013-refcheck-scope-design.md
->   D4 与 §4-§6。
+> **2026-09-08 revision note (refcheck-scope-design, revising §4.5/D6)**:
+> - The whole of refcheck is governed by the `OPENCODE_AUTO_REF_CHECK=on/off` switch, **default off** —
+>   when off, all three hook points (pre-commit auto-correct, check reference scan, verify-gate pre-scan) run
+>   as no-ops: zero reference-checking behavior in the target directory; the manual fix-refs script is not constrained (implemented in P1).
+> - The move-to-adapt approach is abandoned: the migrateLegacyDocs legacy migration (including the run-startup hook and round-archive promotion) and
+>   the fix-docs script are retired together; the old flat layout stays in place, read fallback stays permanently, and broken legacy references now go through
+>   git-history-tracking recovery instead (refcheck-scope-design §4, implemented in P2).
+> - The checking scope converges on three classes (missing recovery / pre-commit move correction / range-reconfirmation `@sha` version markers,
+>   implemented in P3 — the line-anchor-drift topic's landing is exactly this item, see §8); see plans/0013-refcheck-scope-design.md
+>   D4 and §4-§6 for details.
 
-## 5. 实施分期与清单(每期一个独立会话)
+## 5. Implementation Stages and Checklist (one dedicated session per stage)
 
-### P1 路径统一(行为等价改名 + 存量迁移)
+### P1 Path Unification (behavior-equivalent renames + legacy migration)
 
-- [x] `src/docpaths.ts` 新增(构造器 + 读回落)
-- [x] runner / prompt / numbering / final 消费 docpaths(resume / knowledge 按 P1-D5 零改动)
-- [x] testhandoff 遗留检测改 scope 枚举(`docs/T-NNN/**/testhandoff.md`,替换 `startsWith(task.id-S)`;旧平铺前缀扫描兼容期保留)
-- [x] taskNumberFloor 扫描改 `docs/**/T-*/*.md`(兼容期并存扫存量平铺 `docs/T-*.md`)
-- [x] 模板路径文案 16 处(understand / decompose×6 / subtask / context-base / handoff-steer /
-      test 三段 / wrapup / verify-judge / review / review-fix / final-task / phase-plan /
-      number-recovery)+ `_partials.md` 新增共享「文档存放规范」段(doc-layout);核对
-      PROTOCOL_MARKERS(understand 的 `context.md` 标记是子串匹配,路径前缀化后仍匹配,P1-D7 全部不变)
-- [x] refcheck 基础函数落地(extractRefs / rewriteRefs,§4.5;validate/renamePairs 留 P4)
-- [x] 存量自动迁移(§4.2)+ `doc-migrate` 提交标签(git.ts / behavior / structure)
-- [x] 测试:prompt / runner / template / numbering 快照更新 + docpaths / migrate 新测试
-- [x] 文档:behavior.md(路径契约与 doc-migrate)、structure.md(docpaths / refcheck 条目)、
-      包 AGENTS.md 导航行
-- 收口:`bun typecheck` + `bun test` 全绿(2026-09-07,340 pass);手工冒烟——新任务产物落
-  `docs/T-NNN/`、平铺存量被迁移、活文档引用被改写(待 auto/ worktree 集成会话执行,见 §7)
+- [x] `src/docpaths.ts` added (constructors + read fallback)
+- [x] runner / prompt / numbering / final consume docpaths (resume / knowledge zero changes per P1-D5)
+- [x] testhandoff leftover detection switches to scope enumeration (`docs/T-NNN/**/testhandoff.md`, replacing `startsWith(task.id-S)`; the old flat-prefix scan kept for the compatibility window)
+- [x] taskNumberFloor scan switches to `docs/**/T-*/*.md` (also scanning legacy flat `docs/T-*.md` during the compatibility window)
+- [x] template path copy in 16 places (understand / decompose×6 / subtask / context-base / handoff-steer /
+      test (three sections) / wrapup / verify-judge / review / review-fix / final-task / phase-plan /
+      number-recovery) + `_partials.md` gains a shared 「文档存放规范」 section (doc-layout; "document storage conventions"); checked
+      PROTOCOL_MARKERS (understand's `context.md` marker is a substring match and still matches after path prefixing; P1-D7 all unchanged)
+- [x] refcheck base functions landed (extractRefs / rewriteRefs, §4.5; validate/renamePairs left for P4)
+- [x] automatic legacy migration (§4.2) + `doc-migrate` commit label (git.ts / behavior / structure)
+- [x] tests: prompt / runner / template / numbering snapshot updates + new docpaths / migrate tests
+- [x] docs: behavior.md (path contract and doc-migrate), structure.md (docpaths / refcheck entries),
+      the package AGENTS.md navigation line
+- Wrap-up: `bun typecheck` + `bun test` all green (2026-09-07, 340 pass); manual smoke — new task artifacts land in
+  `docs/T-NNN/`, flat legacy files migrated, live-document references rewritten (pending execution by the auto/ worktree integration session, see §7)
 
-### P2 归档缩减(docs 永不移动)
+### P2 Archive Reduction (docs never move)
 
-- [x] phases.ts 删快照/归档链路;handoverPhase 改产出 `docs/handovers/`;appendLedger
-      新行协议(parseLedger 兼容旧行不 throw——LEDGER_ENTRY 只约束到归档目录列,新旧
-      指针形态均命中)
-- [x] archiveRound 增 AGENTS.md 快照、去 migration-kb / prior-kb 搬移
-- [x] knowledge.ts 轮次守卫 + `R<N>-` 前缀;prevRoundDigest 改读永久路径
-      (实施细化与 migrate 壳适配点见 §4.3 注记)
-- [x] loop.ts planPhase 去 snapshotDocs、k 阶段快照特判删除
-- [x] 模板与提示词(phase-handover / phase-plan / knowledge / prior-knowledge /
-      number-recovery——后者核对后零改动,见 §4.3 注记)
-- [x] 测试:phases / knowledge / prompt 快照(含 P2 前布局读回落用例;
-      archivePriorKnowledge 测试随函数删除)
-- [x] 文档:plans/0006-phases-design.md F/M 节修订注记(另及 A.1/C.1/D.4/E 节)、behavior.md、
-      structure.md、壳包 `packages/auto` README(归档布局变化)+ src/index.ts continue 文案
-- 收口:`bun typecheck` + `bun test` 全绿(2026-09-07,auto-core 340 pass + 壳包
-  27 pass/2 skip);冒烟——完整 admtvk 一轮 + continue 续轮,验证轮前后
-  `docs/` 顶层与 `docs/handovers/` 路径不变、`round-1/` 只含状态文件
-  (待 auto/ worktree 集成会话执行,同 P1)
+- [x] phases.ts drops the snapshot/archive chain; handoverPhase now produces `docs/handovers/`; appendLedger
+      new-line protocol (parseLedger tolerates old lines without throwing — LEDGER_ENTRY constrains only up to the archive-directory column, so both old and new
+      pointer forms match)
+- [x] archiveRound gains the AGENTS.md snapshot and drops the migration-kb / prior-kb moves
+- [x] knowledge.ts round guard + `R<N>-` prefix; prevRoundDigest now reads permanent paths
+      (implementation refinement and migrate-shell adaptation points in the §4.3 note)
+- [x] loop.ts planPhase drops snapshotDocs; the phase-k snapshot special case is deleted
+- [x] templates and prompts (phase-handover / phase-plan / knowledge / prior-knowledge /
+      number-recovery — the latter zero changes after review, see the §4.3 note)
+- [x] tests: phases / knowledge / prompt snapshots (incl. pre-P2-layout read-fallback cases;
+      archivePriorKnowledge tests deleted along with the function)
+- [x] docs: revision notes in plans/0006-phases-design.md F/M sections (plus A.1/C.1/D.4/E), behavior.md,
+      structure.md, the shell package `packages/auto` README (archive-layout change) + src/index.ts continue copy
+- Wrap-up: `bun typecheck` + `bun test` all green (2026-09-07, auto-core 340 pass + the shell package at
+  27 pass/2 skip); smoke — one full admtvk round + a continue into the next round, verifying that before vs. after the round
+  the `docs/` top level and `docs/handovers/` paths are unchanged and `round-1/` contains only state files
+  (pending execution by the auto/ worktree integration session, same as P1)
 
-### P3 编号默认开启
+### P3 Numbering On by Default
 
-- [x] config.ts 缺省翻转 + config / e2e 快照
-- [x] index.ts / README / behavior 文案;plans/0001-auto-number-design.md 修订注记
-- 收口:typecheck + test;init 冒烟确认缺省摘要「自动编号 on」
+- [x] config.ts default flip + config / e2e snapshots
+- [x] index.ts / README / behavior copy; revision note in plans/0001-auto-number-design.md
+- Wrap-up: typecheck + test; init smoke confirms the default summary 「自动编号 on」 ("auto numbering on")
 
-### P4 引用一致性三层
+### P4 Reference Consistency in Three Layers
 
-- [x] refcheck.ts 补 validateRefs / renamePairs;活文档枚举 activeDocs(排除 `docs/phases/`;
-      docs/phases.md 台账属活文档)+ scanRefs(逐文档提取→校验→findings)+
-      taskRefFindings/formatRefGap(门禁预扫范围与差距文案)+ gitAvailable/check 形态豁免
-- [x] 提交前 auto-correct + findings 修复路径接线(挂点 runner afterSession,覆盖全部
-      统一提交;verify 未启用退化日志)
-- [x] check.ts 扩展(refs 并入返回结构与 CLI 报文 + 退出码 1 + 缺规范块 note + 非 git note)
-- [x] verifyTask 确定性预扫(每个判定会话前;off 模式回退 pending,耗尽阻塞退出 2)
-- [x] ensurePointer 规范块(opencode-auto:refs)+ wrapup / verify-script-gen / fix 模板文案
-- [x] 测试:refcheck / check 新测试 + e2e(CLI check 引用命中退出 1 / 干净退出 0)
-- [x] 文档:behavior.md(检查契约)、structure.md、plans/0009-verify-review-design.md 注记、包 AGENTS.md 导航
-- 收口:typecheck + test 全绿(2026-09-07,auto-core 351 pass + 壳包 29 pass/2 skip);冒烟——
-  改代码文件名 → 活文档自动改写;删文件 → findings;check 命中退出 1(单测级覆盖,
-  真实运行冒烟待 auto/ worktree 集成会话一并执行)
+- [x] refcheck.ts fills in validateRefs / renamePairs; live-document enumeration activeDocs (excluding `docs/phases/`;
+      the docs/phases.md ledger counts as a live document) + scanRefs (per-document extract→validate→findings) +
+      taskRefFindings/formatRefGap (gate pre-scan scope and gap copy) + gitAvailable/check form exemptions
+- [x] pre-commit auto-correct + findings repair-path wiring (hooked at runner afterSession, covering all
+      unified commits; degrades to logging when verify is disabled)
+- [x] check.ts extended (refs merged into the return structure and CLI report + exit code 1 + missing-spec-block note + non-git note)
+- [x] verifyTask deterministic pre-scan (before every judge session; off mode falls back to pending, exhaustion blocks with exit 2)
+- [x] ensurePointer spec block (opencode-auto:refs) + wrapup / verify-script-gen / fix template copy
+- [x] tests: new refcheck / check tests + e2e (CLI check exits 1 on reference hits / clean exit 0)
+- [x] docs: behavior.md (checking contract), structure.md, plans/0009-verify-review-design.md note, package AGENTS.md navigation
+- Wrap-up: typecheck + test all green (2026-09-07, auto-core 351 pass + the shell package at 29 pass/2 skip); smoke —
+  rename a code file → live documents auto-rewritten; delete a file → findings; check exits 1 on hits (unit-test-level coverage;
+  the real-run smoke is pending, to be executed together by the auto/ worktree integration session)
 
-## 6. 会话交接约定
+## 6. Session Handover Conventions
 
-- 每期开工:读本文件 + `git log --oneline -10` 确认前序已合入;P2 起加读
-  plans/0006-phases-design.md F/M 节(修订版)。
-- 每期收尾:勾选 §5 清单、回写 §7 实施进度(日期 / commit / 验证结果);conventional
-  commit(`type(scope): summary`);**commit 前征得用户确认**(仓库约定)。
-- 偏差回写:实现与设计冲突时以实现为准回写本文对应小节并注明日期。
-- 集成冒烟(三包全量)在 `auto/` worktree 做,对齐根 AGENTS.md 约定。
+- Each stage kickoff: read this file + `git log --oneline -10` to confirm prior stages are merged; from P2 also read
+  the plans/0006-phases-design.md F/M sections (revised).
+- Each stage wrap-up: tick the §5 checklist, write back §7 implementation progress (date / commit / verification result); conventional
+  commit (`type(scope): summary`); **get user confirmation before committing** (repo convention).
+- Deviation write-back: when implementation and design conflict, the implementation wins — write back to the corresponding subsection of this file with the date noted.
+- Integration smoke (all three packages, in full) happens in the `auto/` worktree, per the root AGENTS.md conventions.
 
-## 7. 实施进度
+## 7. Implementation Progress
 
-| 期 | 状态 | 日期 | 提交 | 验证 |
+| Stage | Status | Date | Commit | Verification |
 |---|---|---|---|---|
-| P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 plans/0011-stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
-| P2 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P2 归档缩减(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);三包集成冒烟待执行(P1 冒烟一并补) |
-| P3 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P3 编号默认开启(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);init 冒烟确认缺省摘要「自动编号 on」与 phases="m" ℹ 提示;structure.md 同步缺省注记 |
-| P4 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P4 引用一致性三层(单会话提交) | 本包 typecheck + test 全绿(351 pass);壳包 packages/auto typecheck + test 绿(29 pass/2 skip);三层各就位(auto-correct 挂全部统一提交、check 子命令命中退出 1、verify 门禁进修复轮);真实运行冒烟待 auto/ worktree 集成会话执行(P1..P3 一并补) |
+| P1 | code complete, integration smoke pending | 2026-09-07 | feat(refs): P1-S1..S4 (four-session commit, see plans/0011-stable-refs-p1-plan.md §8) | this package's `bun typecheck` + `bun test` all green (340 pass); three-package integration smoke in the auto/ worktree pending |
+| P2 | code complete, integration smoke pending | 2026-09-07 | feat(refs): stable-refs P2 archive reduction (single-session commit) | this package's typecheck + test all green (340 pass); shell package packages/auto typecheck + test green (27 pass/2 skip); three-package integration smoke pending (P1 smoke made up together) |
+| P3 | code complete, integration smoke pending | 2026-09-07 | feat(refs): stable-refs P3 numbering on by default (single-session commit) | this package's typecheck + test all green (340 pass); shell package packages/auto typecheck + test green (27 pass/2 skip); init smoke confirms the default summary 「自动编号 on」 ("auto numbering on") and the phases="m" ℹ hint; structure.md default note synced |
+| P4 | code complete, integration smoke pending | 2026-09-07 | feat(refs): stable-refs P4 reference consistency in three layers (single-session commit) | this package's typecheck + test all green (351 pass); shell package packages/auto typecheck + test green (29 pass/2 skip); all three layers in place (auto-correct hooked on all unified commits, check subcommand exits 1 on hits, verify gate enters repair rounds); real-run smoke pending for the auto/ worktree integration session (P1..P3 made up together) |
 
-## 8. 遗留风险与边界
+## 8. Residual Risks and Boundaries
 
-- **行号锚漂移(2026-09-08 已由 refcheck-scope P3 落地应对)**:文件被编辑修改后,引用中的
-  `:N`/`:N-M` 所指代的行号范围随内容偏移失真——现契约:改动文件的不一致行号锚在
-  统一提交前自动追加 `@<sha>` 版本标记(保留原范围,语义 = 该范围仅对标记的历史版本
-  有效,豁免行号上限校验;已标记引用不再更新,留待人工订正),见
-  plans/0013-refcheck-scope-design.md §6。内容位移的自动追踪(如锚行内容指纹)仍不纳入。
-  用户另确认:花括号
-  展开(`{a,b}.rs`)、通配符(`*_test.rs`)与散文标识符(`.ctr` 等)非单路径引用,
-  不纳入校验契约,失效清单仅作人工分拣入口且已收录键不重复警告(迁移冲突跳过
-  同款,登记 `.auto/migrate-skips.md`)。
-- **parseLedger 旧指针行兼容**:当轮台账严格解析须容忍旧格式行(不 throw);round 归档内
-  台账的宽松解析已先行,不受影响。P2 实施核对:LEDGER_ENTRY 只约束到归档目录列,
-  新旧两种交接指针形态天然命中,零改动即兼容(2026-09-07)。
-- **auto-correct 边界**:只做 rename 配对改写;删除/语义变化产出 findings 走修复路径,
-  不自动改写历史叙述。
-- **存量 migration-kb 无 `R<N>-` 前缀**:prevRoundDigest 宽松收集归入上一轮;新产出一律
-  带前缀。
-- **k 阶段重提取规程**:existingKnowledge 改轮次守卫后(P2 实施口径见 §4.3),人工
-  重提取 = 删台账 k 行 + 删 docs/migration-kb/ 内本轮 `R<N>-` 前缀文档后重跑
-  (P2 前规程"删归档目录"随差异归档链路一并废弃;README 回退规程已同步更新)。
-- **非 git 目标目录**:renamePairs 依赖 git,auto-correct 不可用(validate 仍可跑);
-  check 对此报 note。
-- **--no-auto-number 项目**:目录化与永久性规范仍生效(路径稳定性不依赖编号唯一性;
-  编号唯一性只影响跨任务引用的可信度),模板文案不做特殊分支。
-- **migrate 壳合入 P2 的适配点(2026-09-07)**:`archivePriorKnowledge` 已从核心删除
-  (轮次前缀守卫取代轮间搬移),`existingKnowledge(dir, round)` /
-  `priorKnowledgeFile(round)` / `existingPriorKnowledge(dir, round)` 签名变更——
-  migrate 分支 merge auto-core 后需删 tool.ts 的 archivePriorKnowledge 调用并适配
-  签名(壳分支适配,核心零回流)。
-- **既有 archiveRound 中断重跑轮号漂移(P2 范围外,2026-09-07 观察注记)**:归档在
-  "建目录后、台账移动前"中断时,重跑 continue 经 currentRound 推得 N+1,剩余条目
-  会被劈进 round-(N+1)/(M 节"自然续完"的表述在此窗口不成立);该边界自 M 节实现
-  起即存在,P2 未改变其行为,如需修复应在后续单独设计(如台账在场时复用无 phases.md
-  的既有 round-N 目录)。
+- **Line-number anchor drift (already handled by refcheck-scope P3, landed 2026-09-08)**: after a file is edited, the
+  `:N`/`:N-M` line ranges cited by references drift out of truth as content shifts — current contract: inconsistent line anchors in changed files get an
+  `@<sha>` version marker auto-appended before the unified commit (the original range is kept; semantics = the range is valid only for the marked historical
+  version, exempt from the line-cap validation; marked references are no longer updated, left for manual correction), see
+  plans/0013-refcheck-scope-design.md §6. Automatic tracking of content displacement (e.g. anchor-line content fingerprints) is still out of scope.
+  The user additionally confirmed: brace
+  expansion (`{a,b}.rs`), wildcards (`*_test.rs`), and prose identifiers (`.ctr` etc.) are not single-path references,
+  excluded from the validation contract; the invalid list serves only as a manual triage entry point and recorded keys are not warned about twice (the migration-conflict skip
+  works the same way, registered in `.auto/migrate-skips.md`).
+- **parseLedger old-pointer-line compatibility**: the current round's ledger strict parsing must tolerate old-format lines (no throw); lenient parsing of ledgers inside round
+  archives already exists and is unaffected. P2 implementation check: LEDGER_ENTRY constrains only up to the archive-directory column,
+  so both old and new handover-pointer forms match naturally — compatible with zero changes (2026-09-07).
+- **auto-correct boundary**: rename-pair rewriting only; deletions/semantic changes produce findings and go through the repair path,
+  never auto-rewriting historical narrative.
+- **Legacy migration-kb without the `R<N>-` prefix**: prevRoundDigest collects them leniently into the previous round; new output always
+  carries the prefix.
+- **Phase-k re-extraction procedure**: after existingKnowledge switched to the round guard (P2 implementation wording in §4.3), manual
+  re-extraction = delete the ledger's k line + delete this round's `R<N>-`-prefixed documents in docs/migration-kb/, then re-run
+  (the pre-P2 procedure "delete the archive directory" is retired along with the differential-archive chain; the README rollback procedure is synced).
+- **Non-git target directory**: renamePairs depends on git, so auto-correct is unavailable (validate still runs);
+  check reports a note for this.
+- **--no-auto-number projects**: the directory and permanence rules still apply (path stability does not depend on number uniqueness;
+  number uniqueness only affects the trustworthiness of cross-task references); template copy gets no special branching.
+- **migrate-shell merge-into-P2 adaptation points (2026-09-07)**: `archivePriorKnowledge` is already deleted from core
+  (the round-prefix guard replaces the between-round move); the `existingKnowledge(dir, round)` /
+  `priorKnowledgeFile(round)` / `existingPriorKnowledge(dir, round)` signatures changed —
+  after the migrate branch merges auto-core, it must delete tool.ts's archivePriorKnowledge call and adapt to the
+  signatures (shell-branch adaptation, zero backflow into core).
+- **Round-number drift when re-running after an interrupted existing archiveRound (outside P2 scope, observation note 2026-09-07)**: when archiving is
+  interrupted "after the directory is created, before the ledger is moved", a re-run of continue derives N+1 via currentRound and the remaining entries
+  get split into round-(N+1) (the M section's "naturally finishes" wording does not hold in this window); this boundary has existed ever since
+  the M section was implemented; P2 did not change its behavior, and a fix, if wanted, should come as a separate later design (e.g. reuse the existing
+  round-N directory without phases.md when the ledger is present).
 
-### P1 实施期既定裁决(2026-09-06,详见 plans/0011-stable-refs-p1-plan.md §3)
+### Rulings Settled During the P1 Implementation Stage (2026-09-06, details in plans/0011-stable-refs-p1-plan.md §3)
 
-- **终审产物按产出任务锚定**:`k = final 字段任务数 + 1` 推导,同轮四阶段与跨轮各锚定
-  自己的 `docs/T-F<k>/`(§3.1 的 T-F1/ 注释为文件名示意)。
-- **--review 终审审计并入任务审计路径**:`docs/final-audit.md` → `docs/<taskId>/audit.md`;
-  旧文件迁移为 `docs/T-F1/final-audit.md`(文件名不变,纯历史归档)。
-- **knowledge.ts / resume.ts 在 P1 零改动**(R<N>- 前缀与 handovers/ 属 P2;resume 不
-  构造任务文档路径)——§4.1 消费方清单据此收窄。
-- **通用壳文案一并同步**(packages/auto 的 --handover-test 帮助文案与 README 路径表述)。
+- **Final-review artifacts anchored to the producing task**: derived as `k = final 字段任务数 + 1` ("k = the number of tasks in the final field + 1"); the same round's four phases and cross-round ones each anchor
+  their own `docs/T-F<k>/` (the T-F1/ comment in §3.1 is a filename illustration).
+- **--review final-review audit merged into the task audit path**: `docs/final-audit.md` → `docs/<taskId>/audit.md`;
+  the old file migrates to `docs/T-F1/final-audit.md` (filename unchanged, purely a historical archive).
+- **knowledge.ts / resume.ts get zero changes in P1** (the R<N>- prefix and handovers/ belong to P2; resume does not
+  construct task-document paths) — the §4.1 consumer list is narrowed accordingly.
+- **Common shell copy synced along** (packages/auto's --handover-test help text and README path wording).

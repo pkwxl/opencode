@@ -1,130 +1,130 @@
-# --track-fixme 设计偏差追踪 与 --extract-knowledge 迁移知识沉淀 — 设计说明
+# --track-fixme Design Deviation Tracking and --extract-knowledge Migration Knowledge Distillation — Design Notes
 
-> 本文档是 `--track-fixme` 与 `--extract-knowledge` 两个 CLI 能力的唯一设计基准,基于
-> 《CLI 扩展需求规范:设计偏差追踪与迁移知识沉淀》(下称"规格书")修订而来。实现任务
-> 以本文为准;与规格书冲突之处以本文为准(冲突点在 §2 映射表与 §3 决策表中逐条给出
-> 理由)。`--extract-knowledge` 已按下方 P4 修订并入 `--phases` 的 k(知识提炼)阶段
-> 实现完毕;`--track-fixme` 从未实现(census:src/test/templates/壳均 0 命中,无任何 CLI
-> 旗标曾发布),且被 `plans/0044` D1 的完成侧退役永久阻塞(0069 §3.1 裁定为硬废弃),
-> 不再留待后续会话(状态勘正 2026-10-02,`plans/0069` §4.2 A2)。
+> This document is the sole design baseline for the two CLI capabilities `--track-fixme` and
+> `--extract-knowledge`, revised from the "CLI Extension Requirements Specification: Design Deviation Tracking
+> and Migration Knowledge Distillation" (hereafter "the requirements specification"). Implementation tasks follow
+> this document; where it conflicts with the requirements specification, this document prevails (each conflict is
+> justified item by item in the §2 mapping table and the §3 decision table). `--extract-knowledge` has, per the P4
+> revision below, been merged into the k (knowledge distillation) phase of `--phases` and implemented; `--track-fixme`
+> was never implemented (census: 0 hits across src, test, templates, and the shell; no CLI flag was ever shipped) and is permanently blocked by the completion-side retirement of `plans/0044` D1 (0069 §3.1 rules it a hard deprecation), no longer left for future sessions (status correction 2026-10-02, `plans/0069` §4.2 A2).
 
-> **修订(基线变更)**:`--final-review` 的终审任务已强制跳过任务级三段式验收
-> 且不再写 verify 字段(终审不对检验再做检验,报告协议异常由路由时 brokenReport
-> 阻塞兜底)。本文与之冲突的描述随之失效——§3"audit 任务 verify"行、§4.1 的
-> "verify 结构检查扩展"、§C.3 的 appendFinalTask verify 扩展与 §C.4"报告缺
-> FIXME 行"的自愈路径不再存在;FIXME 协议行缺失/非法统一走路由时 brokenReport
-> 阻塞人工核查,P1..P4 实现时按此基线调整。
+> **Revision (baseline change)**: the `--final-review` final-review task now forcibly skips task-level three-stage
+> acceptance and no longer writes the verify field (final review does not re-verify verification; report-protocol anomalies
+> are backstopped by the routing-time brokenReport block). Conflicting descriptions in this document are void accordingly -
+> the §3 "audit task verify" row, §4.1's "verify structure-check extension", §C.3's appendFinalTask verify extension, and
+> §C.4's self-healing path for a "report missing the FIXME line" no longer exist; a missing/invalid FIXME protocol line
+> uniformly goes through the routing-time brokenReport block for manual inspection, and P1..P4 implementation adjusts to this baseline.
 
-> **修订(P4 并入阶段化流程)**:`--extract-knowledge` 已由 `--phases` 的 k(知识
-> 提炼)阶段**整体认领**并实现(plans/0006-phases-design.md D.4/J 节 P4),该 CLI 选项
-> 不再单独存在。§D 在 k 阶段的映射:
-> - 触发挂点(§D.2)→ k 阶段的 plan 路由(PLAN.md 空模板态)直接进入知识提取
->   旁路会话,不开规划会话、不向 PLAN.md 填任务;人工在 k 阶段自行向 PLAN.md 填
->   任务时走通用 execute/handover 路由,提取挂点不触发(人工接管语义);
-> - 来源清单(§D.3)改为阶段化产物:阶段台账 `docs/phases.md` 与各阶段归档目录
->   `docs/phases/<字母>-<名称>/`(handover.md 优先细读,原始产物按其产物索引
->   取用)——前序原始 docs/ 在交接时已归档,`docs/*.report.md`、`docs/final/`
->   等原位置不再存在;
-> - 章节骨架中 Design Deviations 改以 AUTO-DECISION 标注为来源(`--track-fixme`
->   未并入,Final Status 审计字段随其缺席;track-fixme 落地后可回接);
-> - 失败语义(§D.5)不变:提取失败仅 ⚠ 警告、退出码不受影响,k 阶段照常交接;
-> - "知识文档不自动提交"决策随选项废弃:知识文档作为 k 阶段产物随会话统一提交
->   与交接归档入库(统一提交收回 AI 提交权,git 历史即审计轨迹,人工甄别改为对
->   已入库文档的后续修订);`--extract-knowledge=<path>` 显式路径随之不存在,
->   默认路径 `docs/migration-kb/migration-<时间戳>.md` 不变;
-> - 恢复路径:交接前中断 → 幂等跳过已产出文档(目录内存在非空 .md 即视为已
->   提取);交接完成后重试 → 人工回退规程(删台账 k 行与归档目录后重跑)。
-> §H 分期中该能力的 P3/P4 已按上述映射完成;`--track-fixme` 不受影响,仍按
-> §H P1/P2 待实现。
+> **Revision (P4 merged into the phased pipeline)**: `--extract-knowledge` has been **wholly claimed** and implemented
+> by the k (knowledge distillation) phase of `--phases` (plans/0006-phases-design.md sections D.4/J, item P4); the CLI
+> option no longer exists separately. §D's mapping onto the k phase:
+> - Trigger hook (§D.2) → in the k phase, the plan routing (PLAN.md empty-template state) goes directly into the
+>   knowledge-extraction side session, opening no planning session and filling no tasks into PLAN.md; when a human fills
+>   tasks into PLAN.md themselves during the k phase, the generic execute/handover routing applies and the extraction hook does not trigger (manual-takeover semantics);
+> - Source list (§D.3) changed to the phased artifacts: the phase ledger `docs/phases.md` and each phase's archive
+>   directory `docs/phases/<字母>-<名称>/` (<letter>-<name>; read handover.md first and closely, consume the raw artifacts
+>   via their artifact index) - the earlier raw docs/ were archived at handover, so the original locations `docs/*.report.md`,
+>   `docs/final/` etc. no longer exist;
+> - In the section skeleton, Design Deviations now takes AUTO-DECISION annotations as its source (`--track-fixme`
+>   was not merged in, so the Final Status audit field is absent along with it; it can be wired back once track-fixme lands);
+> - Failure semantics (§D.5) unchanged: extraction failure is only a ⚠ warning, the exit code is unaffected, and the k phase hands over as usual;
+> - The "knowledge documents are not auto-committed" decision is retired along with the option: as a k-phase artifact, the
+>   knowledge document is committed with the session's unified commit and archived into the repository at handover (the
+>   unified commit takes commit authority back from the AI, git history is the audit trail, and manual vetting becomes
+>   follow-up revision of already-committed documents); the `--extract-knowledge=<path>` explicit path accordingly no longer exists, while the default path `docs/migration-kb/migration-<时间戳>.md` (timestamp) is unchanged;
+> - Recovery paths: interrupted before handover → idempotently skip the already-produced document (any non-empty .md in
+>   the directory counts as already extracted); retrying after handover completes → the manual rollback procedure (delete the ledger's k row and the archive directory, then rerun).
+> In the §H phasing, the P3/P4 parts of this capability are complete per the mapping above; `--track-fixme` is unaffected and
+> remains to be implemented per §H P1/P2.
 
-## 背景与动机
+## Background and Motivation
 
-1. **偏差显式化**:migrate 模式要求新实现与旧实现行为对等,但真实迁移中总会出现
-   "无法完全遵循既定设计/原始接口"的被迫取舍。当前它们只能散落在 `AUTO-DECISION`
-   行或报告散文里,不可扫描、不可计数、终审不聚焦。`--track-fixme` 把偏差变成
-   代码中的结构化锚点(`AUTO-FIXME`),并由 driver 在终审 audit 阶段确定性扫描、
-   由审计会话逐条验证定级,CRITICAL 偏差阻断流水线等人工复核。
-2. **知识沉淀**:一次迁移产生的 API 映射、坑点、可复用规则目前只活在会话上下文与
-   过程报告里,下一次迁移无法复用。`--extract-knowledge` 在终审闭环通过后,由旁路
-   一次性会话把**最终验证过**的迁移经验蒸馏为结构化 Markdown 知识文档;提取失败
-   不污染迁移结果本身。
+1. **Making deviations explicit**: migrate mode requires the new implementation to be behaviorally equivalent to the old,
+   but real migrations always produce forced trade-offs that "cannot fully follow the established design/original interface".
+   Today these can only scatter across `AUTO-DECISION` lines or report prose - unscannable, uncountable, and unfocused at
+   final review. `--track-fixme` turns deviations into structured anchors in the code (`AUTO-FIXME`), deterministically
+   scanned by the driver at the final-review audit stage and verified and graded item by item by the audit session, with CRITICAL deviations blocking the pipeline pending manual review.
+2. **Knowledge distillation**: the API mappings, pitfalls, and reusable rules produced by a migration currently live only in
+   session context and process reports, beyond reuse by the next migration. After the final-review loop passes,
+   `--extract-knowledge` has a one-shot side session distill the **finally verified** migration experience into a
+   structured Markdown knowledge document; extraction failure does not contaminate the migration result itself.
 
-## 1. 与现状的关系(不变量)
+## 1. Relation to the Current State (Invariants)
 
-- 两个选项均为**可选能力**,缺省完全不影响现有流水线。
-- **零新增持久化状态**:FIXME 是代码注释中的事实记录,不是状态机;审计路由复用
-  `routeFinal` 的"(带 final 标记的任务及其状态,docs/final/ 产物)"纯函数求值;
-  知识提取不写 `.auto/progress.json`(旁路一次性会话,requireArtifact 骨架)。
-- **扫描执行权在 driver**(与 verify 三段式同源):driver 本地确定性扫描产出
-  `tmp/fixme-scan.md`,审计会话只读判定/调级——不轻信自报,也不让会话跑扫描命令。
-- **全局单会话不变量保持**:FIXME 扫描是纯本地进程(不开会话),审计/门禁都挂在
-  既有串行流程上,无并行窗口,不需要 worktree。
+- Both options are **optional capabilities**; by default they do not affect the existing pipeline at all.
+- **Zero newly persisted state**: FIXME entries are factual records in code comments, not a state machine; the audit routing
+  reuses `routeFinal`'s pure-function evaluation of "(tasks tagged final and their statuses, docs/final/ artifacts)";
+  knowledge extraction writes nothing to `.auto/progress.json` (a one-shot side session, requireArtifact skeleton).
+- **Scan execution authority stays with the driver** (same origin as the verify three-stage flow): the driver's local
+  deterministic scan produces `tmp/fixme-scan.md`, and the audit session only reads it to judge/adjust grades - neither blindly trusting self-reports nor letting the session run scan commands.
+- **The global single-session invariant holds**: the FIXME scan is a purely local process (no session opened); audit/gates
+  all hang on the existing serial flow, with no parallel window and no worktree needed.
 
-## 2. 规格书 → 本仓库术语映射
+## 2. Requirements Specification → Repository Terminology Mapping
 
-| 规格书概念 | 本仓库对应 |
+| Concept in the requirements specification | Counterpart in this repository |
 | --- | --- |
-| Planning | `init -p`(renderInit)产出的 PLAN.md |
-| Implementation | runTask 执行链(auto 分解→子任务会话 / off、ondemand 整任务会话) |
-| Review | `--review` 逐任务质量审核(reviewTask,REVIEW_FILE) |
-| Audit | `--final-review` 终审闭环的 audit 任务(`T-F<k>`,`final: audit@<r>`) |
-| Final Review | `--final-review` 闭环整体(audit→remediate→validate→finalize) |
-| Migration Completed | PLAN 全部任务 done(含终审任务) |
-| Pipeline BLOCKED | `block()` 写入 PLAN.md + 退出码 2 |
-| FixmeParser/FixmeScanner | `src/fixme.ts` 纯逻辑模块(镜像 verify.ts/check.ts 形态) |
-| FixmeAudit | audit 任务的会话侧职责(renderFinalTask audit 分支)+ `routeFinal` 的 parseFixmeSummary 门禁 |
-| `.artifacts/audit/fixme.json` | `tmp/fixme-scan.md`(driver 工作目录,gitignored);持久锚点是审计报告 `docs/final/audit-r<N>.md` |
-| KnowledgeExtractor(三件套) | 单个旁路一次性会话 renderKnowledge(requireArtifact 骨架,镜像 generateFinalTask);不拆 Collector/Synthesizer/Writer 对象层 |
-| `docs/migration-kb/<task_id>.md` | `docs/migration-kb/migration-<时间戳>.md`(本包的迁移单位是整份 PLAN,非单任务;见 §3) |
+| Planning | the PLAN.md produced by `init -p` (renderInit) |
+| Implementation | the runTask execution chain (auto: decompose → subtask sessions; off, ondemand: whole-task sessions) |
+| Review | `--review` per-task quality review (reviewTask, REVIEW_FILE) |
+| Audit | the audit task of the `--final-review` final-review loop (`T-F<k>`, `final: audit@<r>`) |
+| Final Review | the `--final-review` loop as a whole (audit→remediate→validate→finalize) |
+| Migration Completed | all PLAN tasks done (including the final-review tasks) |
+| Pipeline BLOCKED | `block()` writes into PLAN.md + exit code 2 |
+| FixmeParser/FixmeScanner | `src/fixme.ts` pure-logic module (mirrors the verify.ts/check.ts shape) |
+| FixmeAudit | the session-side duty of the audit task (renderFinalTask audit branch) + the parseFixmeSummary gate in `routeFinal` |
+| `.artifacts/audit/fixme.json` | `tmp/fixme-scan.md` (driver working directory, gitignored); the persistent anchor is the audit report `docs/final/audit-r<N>.md` |
+| KnowledgeExtractor (three-piece set) | a single one-shot side session renderKnowledge (requireArtifact skeleton, mirroring generateFinalTask); no Collector/Synthesizer/Writer object layer is split out |
+| `docs/migration-kb/<task_id>.md` | `docs/migration-kb/migration-<时间戳>.md` (timestamp; this package's migration unit is the whole PLAN, not a single task; see §3) |
 
-## 3. 已确认决策
+## 3. Confirmed Decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| CLI 形态 | `--track-fixme` 布尔选项(BOOLEAN_FLAGS);`--extract-knowledge[=<path>]` 可选值,专用解析分支(镜像 `-p` 吞值规则,但下一 token 以 `-` 开头时不吞,避免误吞后续选项;`=` 形式天然支持) |
-| 依赖关系 | **两者均须搭配 `--final-review`**,否则用法错误退出码 1(镜像 `--early` 需 `--review` 的既有先例)。理由:FIXME 审计的宿主是终审 audit 任务,知识提取的通过门禁是终审闭环完成;脱离宿主的独立形态列为未来扩展(§4) |
-| FIXME 载体 | 代码注释锚点,统一四行格式(§A);不建独立状态文件/数据库/生命周期 |
-| 扫描范围 | 目标目录全量:各 git root(含嵌套仓库,复用 loop.ts 的根发现逻辑)`git ls-files --cached --others --exclude-standard`,非 git 目录回落文件系统遍历(跳过 `.git`/`node_modules`/`tmp`/`.auto`、二进制与超大文件)。**不采用"运行起点 git 基线 diff"**——`--commit subtask/task` 会在审计前清空工作区状态,基线需新增持久化文件,违背零新增状态原则;全量扫描的代价(可能带上历史遗留 FIXME)可接受:它们本就是未收口的偏差,首轮审计发现后由人工处理 |
-| 报告协议扩展 | track-fixme 开启时,audit 报告末三行固定为 `结论: <概述>`、`策略: 重构\|修补\|无`、`FIXME: CRITICAL=<n> WARN=<n> INFO=<n>`(n 为审计调整后的最终计数);driver 新增 `parseFixmeSummary` 镜像 parseStrategy 风格解析 |
-| CRITICAL 门禁(audit 后) | 报告计数 CRITICAL≥1 → `block()` 该 audit 任务、退出码 2,**不路由 remediate**——偏差是"已知且被迫"的,自动修复语义不成立,规格书要求人工复核;人工降级(改注释 Severity 后重跑)或修复偏差后继续 |
-| 二次门禁(finalize 前) | afterAudit(策略: 无)与 afterValidate(通过)两条 finalize 路由共用 `finalGate`:复扫一次,CRITICAL≥1 → 回退 `audit@<r+1>`(聚焦新 CRITICAL 清单,受 `--final-review` 审计轮上限约束,耗尽熔断)——覆盖末次 audit 之后 remediate/修复轮新引入的偏差;回退后的 audit 会话对自报定级重新验证,若仍 CRITICAL 则走上一行的门禁 |
-| malformed FIXME | 解析失败的标记(缺 Severity 行/格式坏)不阻断、不计入三档计数,单列 MALFORMED;审计按 WARN 级发现提示修正注释格式(规格书 §16) |
-| audit 任务 verify | **(随终审基线修订失效)** 终审任务已不写 verify 字段、不做任务级验收;FIXME 协议行缺失/非法统一在路由时按 brokenReport 阻塞人工核查,无修复轮自愈 |
-| 知识触发门禁 | 终审闭环完成(routeFinal complete)才提取;熔断/block/退出码 2 的路径根本不经过提取挂点 → 规格书 TC-08(SKIPPED)天然成立,无"FAIL 后跳过"分支可写错 |
-| 知识失败语义 | 会话两次未产出(requireArtifact 耗尽)→ 打印 ⚠ 警告(`knowledge_extraction_error` 记入运行日志),**退出码保持 0**;迁移成功不被文档生成失败反向污染(规格书 §16) |
-| 知识文档提交 | **不自动提交**:提取挂点放在 `--commit once` 整体提交之后,所有 commit 档位下知识文档都保持为工作区文件,由人工甄别后入库(与"知识必须经过验证"的原则一致) |
-| 默认路径 | `docs/migration-kb/migration-<时间戳>.md`,时间戳与 `.auto/logs/run-<时间戳>.log` 同款(`log.ts setLogFile` 格式);`--extract-knowledge=<path>` 显式覆盖(相对目标目录) |
-| 数据模型前向兼容 | 解析器忽略未知键(如 `Status:`)与未知 TYPE,为规格书建议的 Deviation Record(§F)演进留位;V1 不实现其语义 |
+| CLI form | `--track-fixme` boolean option (BOOLEAN_FLAGS); `--extract-knowledge[=<path>]` optional value with a dedicated parsing branch (mirrors the `-p` value-swallowing rule, but does not swallow when the next token starts with `-`, avoiding eating a following option; the `=` form is naturally supported) |
+| Dependencies | **both must be paired with `--final-review`**, otherwise a usage error with exit code 1 (mirrors the existing precedent of `--early` requiring `--review`). Rationale: the host of FIXME auditing is the final-review audit task, and the pass gate of knowledge extraction is completion of the final-review loop; standalone forms without the host are listed as future extensions (§4) |
+| FIXME carrier | anchors in code comments with a uniform four-line format (§A); no separate state file/database/lifecycle |
+| Scan scope | full scan of the target directory: each git root (including nested repos, reusing loop.ts's root-discovery logic) via `git ls-files --cached --others --exclude-standard`; non-git directories fall back to filesystem traversal (skipping `.git`/`node_modules`/`tmp`/`.auto`, binary and oversized files). **The "git baseline diff from run start" approach is not adopted** - `--commit subtask/task` clears working-tree state before the audit, a baseline would need a new persisted file, violating the zero-new-state principle; the cost of a full scan (possibly picking up historically leftover FIXMEs) is acceptable: they are unresolved deviations anyway, discovered by the first audit round and handled manually |
+| Report protocol extension | with track-fixme on, the last three lines of the audit report are fixed as `结论: <概述>` (conclusion: overview), `策略: 重构\|修补\|无` (strategy: refactor, patch, or none), and `FIXME: CRITICAL=<n> WARN=<n> INFO=<n>` (n is the final post-audit-adjustment count); the driver adds `parseFixmeSummary`, parsing in the style of parseStrategy |
+| CRITICAL gate (after audit) | report count CRITICAL≥1 → `block()` the audit task, exit code 2, **no remediate routing** - the deviation is "known and forced", automatic-repair semantics do not hold, and the requirements specification requires manual review; continue after a manual downgrade (edit the comment's Severity and rerun) or after fixing the deviation |
+| Second gate (before finalize) | the two finalize routes afterAudit (策略: 无, strategy: none) and afterValidate (passed) share `finalGate`: rescan once, CRITICAL≥1 → fall back to `audit@<r+1>` (focused on the new CRITICAL list, bounded by the `--final-review` audit-round limit, circuit-breaking when exhausted) - covering deviations newly introduced by remediate/fix rounds after the last audit; the audit session after the fallback re-verifies the self-reported grades, and if still CRITICAL it goes through the gate in the previous row |
+| malformed FIXME | markers that fail to parse (missing Severity line/broken format) do not block and are not counted in the three tiers; they are listed separately as MALFORMED; the audit reports them as WARN-level findings prompting comment-format fixes (requirements specification §16) |
+| audit task verify | **(voided by the final-review baseline revision)** final-review tasks no longer write the verify field and do no task-level acceptance; a missing/invalid FIXME protocol line is uniformly blocked at routing time as brokenReport for manual inspection, with no fix-round self-healing |
+| Knowledge trigger gate | extraction only after the final-review loop completes (routeFinal complete); the circuit-break/block/exit-code-2 paths never pass the extraction hook → the requirements specification's TC-08 (SKIPPED) holds by construction, with no "skip after FAIL" branch to get wrong |
+| Knowledge failure semantics | two failures to produce by the session (requireArtifact exhausted) → print a ⚠ warning (`knowledge_extraction_error` recorded in the run log), **exit code stays 0**; migration success is not contaminated in return by document-generation failure (requirements specification §16) |
+| Knowledge document commit | **no auto-commit**: the extraction hook sits after the `--commit once` bulk commit, so under every commit mode the knowledge document stays a working-tree file and enters the repository only after manual vetting (consistent with the principle that "knowledge must be verified") |
+| Default path | `docs/migration-kb/migration-<时间戳>.md` (timestamp), the timestamp in the same form as `.auto/logs/run-<时间戳>.log` (`log.ts setLogFile` format); `--extract-knowledge=<path>` overrides explicitly (relative to the target directory) |
+| Data-model forward compatibility | the parser ignores unknown keys (e.g. `Status:`) and unknown TYPEs, reserving room for the Deviation Record evolution suggested by the requirements specification (§F); V1 does not implement its semantics |
 
-## 4. 本期范围与未来扩展
+## 4. Scope This Round and Future Extensions
 
-### 4.1 本期实现
+### 4.1 Implemented This Round
 
-1. `src/fixme.ts`:AUTO-FIXME 解析器 + 目标目录扫描器 + 扫描报告落盘(纯逻辑,零依赖);
-2. `--track-fixme`:执行类提示词注入标记规范 → audit 任务集成(生成前扫描注入、
-   报告协议行)→ CRITICAL 门禁与 finalize 前二次门禁;
-3. `--extract-knowledge`:CLI 解析 + 终审完成后旁路提取会话 + 默认/显式路径 +
-   失败不污染退出码;
-4. 测试(§J)与 README / 包内 AGENTS.md 文档。
+1. `src/fixme.ts`: AUTO-FIXME parser + target-directory scanner + scan-report writing (pure logic, zero dependencies);
+2. `--track-fixme`: injection of the marker spec into execution prompts → audit-task integration (scan-and-inject before
+   generation, report protocol lines) → the CRITICAL gate and the second gate before finalize;
+3. `--extract-knowledge`: CLI parsing + the side extraction session after final review completes + default/explicit paths +
+   failure not contaminating the exit code;
+4. Tests (§J) and README / in-package AGENTS.md documentation.
 
-### 4.2 未来扩展(本期明确不做,含理由)
+### 4.2 Future Extensions (Explicitly Not Done This Round, with Reasons)
 
-| 项 | 理由/前置 |
+| Item | Reason/prerequisite |
 | --- | --- |
-| `--fixme-fail-on=WARN` 自定义阻断策略 | 规格书 §17 已列为非目标;协议行已带各档计数,扩展只改门禁比较 |
-| FIXME 生命周期状态机(Accepted/Fixed/Rejected 语义、独立库、Web UI、自动关闭/修复/合并) | 规格书 §17;V1 数据模型已留 `Status:` 等未知键的解析容忍(§F) |
-| `--review` 逐任务审核会话的 FIXME 感知(维度注入) | 逐任务窗口发现偏差→应转化为补标记而非差距,语义需单独设计;V1 偏差收敛统一压在终审 |
-| `--track-fixme` 脱离 `--final-review` 的独立形态(driver 扫描+打印+门禁,不经 LLM 验证) | 双路径成本;audit 会话的定级校验(误报剔除、升降级)是规格书核心价值,独立形态没有宿主 |
-| `--extract-knowledge` 脱离 `--final-review`(以"全部任务 done + 逐任务 verify 通过"为门禁) | 规格书明确要求 Final Review PASS;放松门禁需先定义"无终审时的验证充分性" |
-| 知识提取严格模式(失败改退出码)/ KB 自动提交 / 跨任务知识合并、推荐、Embedding、知识图谱 | 规格书 §17 全量列为非目标 |
-| 增量扫描(运行起点 git 基线,覆盖嵌套仓库) | 需持久化基线状态文件,违背零新增状态;全量扫描在迁移项目尺度下代价可接受 |
-| `fixme.json` 机器可读产物 | 规格书允许;内部 FixmeRecord 已结构化,tmp/fixme-scan.md 已含全部字段 |
-| ModeSpec 增 knowledge 文案段 | V1 复用 `mode.exec` 作场景背景注入,注册表面不变 |
-| AGENTS.md 增 FIXME 原则块 / check 子命令扫描违背描述 | 标记是会话侧职责(会话本来就写注释),提示词注入已覆盖每个执行会话;无需 init 下沉 |
+| `--fixme-fail-on=WARN` custom blocking policy | requirements specification §17 already lists it as a non-goal; the protocol line already carries per-tier counts, and the extension only changes the gate comparison |
+| FIXME lifecycle state machine (Accepted/Fixed/Rejected semantics, standalone store, Web UI, auto-close/fix/merge) | requirements specification §17; the V1 data model already reserves parsing tolerance for unknown keys such as `Status:` (§F) |
+| FIXME awareness (dimension injection) in `--review` per-task review sessions | deviations found in the per-task window → should convert into added markers rather than gaps, semantics need separate design; in V1 deviation convergence is uniformly pressed into final review |
+| a standalone form of `--track-fixme` without `--final-review` (driver scan + print + gate, no LLM verification) | dual-path cost; the grade verification of the audit session (false-positive removal, up/downgrading) is the requirements specification's core value, and a standalone form has no host |
+| `--extract-knowledge` without `--final-review` (gated on "all tasks done + per-task verify passed") | the requirements specification explicitly requires Final Review PASS; relaxing the gate requires first defining "verification sufficiency without final review" |
+| knowledge-extraction strict mode (failure changes the exit code) / KB auto-commit / cross-task knowledge merging, recommendation, Embedding, knowledge graph | requirements specification §17 lists all of these as non-goals |
+| incremental scan (git baseline at run start, covering nested repos) | requires a persisted baseline state file, violating zero new state; a full scan is acceptable at migration-project scale |
+| `fixme.json` machine-readable artifact | allowed by the requirements specification; the internal FixmeRecord is already structured and tmp/fixme-scan.md already contains all fields |
+| adding a knowledge copy section to ModeSpec | V1 reuses `mode.exec` as the scenario-background injection, the registration surface unchanged |
+| adding a FIXME principles block to AGENTS.md / a check subcommand scanning for violation descriptions | marking is a session-side duty (sessions write comments anyway), and prompt injection already covers every execution session; no need to push it down into init |
 
-## A. AUTO-FIXME 标记规范(提示词级契约)
+## A. AUTO-FIXME Marker Specification (Prompt-Level Contract)
 
-### A.1 格式
+### A.1 Format
 
 ```text
 // AUTO-FIXME [<TYPE>]: <偏差简述>
@@ -133,284 +133,284 @@
 // Severity: <CRITICAL | WARN | INFO>
 ```
 
-- 锚点行 `AUTO-FIXME [<TYPE>]: <简述>`;TYPE 缺失或未知 → 记为 `UNKNOWN`
-  (解析宽容,未来扩展不破坏旧代码——规格书 §3.2);
-- 后续行以 `Spec:` / `Rationale:` / `Severity:` 键行附属于最近锚点;全角冒号容忍
-  (与末行协议解析风格一致);**未知键(如 `Status:`)忽略**,前向兼容 Deviation
-  Record 演进;
-- 注释前缀宽容:剥离行首 `//`、`#`、`--`、`*`、`;`、`%`、`<!--` 后再匹配
-  (覆盖 C 系/Shell/SQL/块注释续行);
-- `Severity` 缺失或取值不在三档 → 记入 **malformed** 清单(保留可解析字段),
-  不计入三档计数、不阻断;审计按 WARN 级发现提示修正;
-- 非 "设计偏差" 不标(规格书 §4.2 全文注入提示词):普通 TODO、未到阶段的未实现、
-  编译警告、风格差异、语义等价的自主选择、普通注释。
+- Anchor line `AUTO-FIXME [<TYPE>]: <简述>` (brief deviation summary); TYPE missing or unknown → recorded as `UNKNOWN`
+  (lenient parsing, future extensions do not break old code - requirements specification §3.2);
+- Subsequent lines attach to the nearest anchor as `Spec:` / `Rationale:` / `Severity:` key lines (reference location /
+  deviation reason / severity tier); full-width colons are tolerated (consistent with the last-line protocol parsing
+  style); **unknown keys (e.g. `Status:`) are ignored**, forward-compatible with Deviation Record evolution;
+- Lenient comment prefixes: strip a leading `//`, `#`, `--`, `*`, `;`, `%`, `<!--` before matching
+  (covers C-family/Shell/SQL/block-comment continuation lines);
+- `Severity` missing or its value outside the three tiers → recorded in the **malformed** list (parseable fields kept),
+  not counted in the three tiers, no blocking; the audit reports it as a WARN-level finding prompting a fix;
+- Do not mark what is not a "design deviation" (requirements specification §4.2, injected verbatim into the prompt):
+  ordinary TODOs, unimplemented items whose phase has not arrived, compile warnings, style differences, semantically equivalent free choices, ordinary comments.
 
-### A.2 Severity 与门禁语义(规格书 §3.3 的本仓库化)
+### A.2 Severity and Gate Semantics (This Repository's Rendering of Requirements Specification §3.3)
 
-| 扫描/报告结果 | audit 任务 | 流水线 |
+| Scan/report result | audit task | pipeline |
 | --- | --- | --- |
-| 无记录(报告写全零行) | 照常按策略路由 | 继续 |
-| 仅 INFO | 通过(报告含清单) | 继续 |
-| 含 WARN | 通过(报告含清单) | 继续(策略为重构/修补时照常进 remediate 闭环,WARN 不阻断闭环) |
-| 含 CRITICAL | block(audit 任务,退出码 2) | 阻断,人工复核 |
-| malformed | 通过 | 继续(报告按 WARN 级发现提示修正) |
+| no records (the report writes the all-zero line) | routes by strategy as usual | continue |
+| INFO only | pass (report includes the list) | continue |
+| contains WARN | pass (report includes the list) | continue (with strategy refactor/patch it still enters the remediate loop as usual; WARN does not block the loop) |
+| contains CRITICAL | block (the audit task, exit code 2) | blocked, manual review |
+| malformed | pass | continue (the report prompts fixes as WARN-level findings) |
 
-### A.3 与 AUTO-DECISION 的关系(提示词中显式说明)
+### A.3 Relation to AUTO-DECISION (Stated Explicitly in the Prompt)
 
-- `AUTO-DECISION`(既有,migrate exec 文案与 QUESTION_RULE/AUTO_ANSWER):记录
-  **决策过程**——为什么选 B 不选 A,即使不存在偏差也要记;
-- `AUTO-FIXME`(本设计):**与既定设计/原实现存在已知偏差**的结构化锚点,可扫描、
-  可计数、终审可验证;
-- track-fixme 开启时,迁移取舍若构成偏差,两者都写:决策记录进文档/注释,偏差锚点
-  按四行格式落在对应代码处。
+- `AUTO-DECISION` (pre-existing; migrate exec copy and QUESTION_RULE/AUTO_ANSWER): records the
+  **decision process** - why B over A; recorded even when no deviation exists;
+- `AUTO-FIXME` (this design): a structured anchor for a **known deviation from the established design/original
+  implementation**, scannable, countable, verifiable at final review;
+- with track-fixme on, when a migration trade-off constitutes a deviation, both are written: the decision record goes
+  into docs/comments, and the deviation anchor lands at the corresponding code in the four-line format.
 
-## B. `src/fixme.ts` — 解析与扫描(纯逻辑)
+## B. `src/fixme.ts` — Parsing and Scanning (Pure Logic)
 
-镜像 verify.ts / check.ts 形态:不依赖 SDK 与 runner,可独立单测。
+Mirrors the verify.ts / check.ts shape: no dependency on the SDK or the runner, independently unit-testable.
 
 ```ts
 export type FixmeSeverity = "CRITICAL" | "WARN" | "INFO"
 export type FixmeRecord = {
-  type: string        // 未知 TYPE 保留原样;缺失记 "UNKNOWN"
-  message: string     // 锚点行简述
-  spec: string        // Spec: 行(可缺)
-  rationale: string   // Rationale: 行(可缺)
-  severity?: FixmeSeverity  // 缺失/非法 → 归入 malformed
-  file: string        // 相对目标目录
-  line: number        // 锚点行号(1 起)
+  type: string        // unknown TYPE kept as-is; missing recorded as "UNKNOWN"
+  message: string     // the anchor line's brief summary
+  spec: string        // the Spec: line (may be absent)
+  rationale: string   // the Rationale: line (may be absent)
+  severity?: FixmeSeverity  // missing/invalid → classified as malformed
+  file: string        // relative to the target directory
+  line: number        // anchor line number (1-based)
 }
 export type MalformedFixme = { file: string; line: number; text: string; reason: string }
 
-// 单文件文本 → 记录 + malformed(解析规则见 §A.1)
+// single-file text → records + malformed (parsing rules in §A.1)
 export function parseFixmes(text: string, file: string): { records: FixmeRecord[]; malformed: MalformedFixme[] }
 
-// 目标目录扫描(范围规则见 §3“扫描范围”),读取失败的文件跳过并汇总为 note
+// target-directory scan (scope rules in §3 "Scan scope"); files that fail to read are skipped and summarized as a note
 export async function scanFixmes(dir: string): Promise<{ records: FixmeRecord[]; malformed: MalformedFixme[]; scanned: number; skipped: string[] }>
 
-// 扫描结果整写 tmp/fixme-scan.md(覆盖写;审计会话与知识提取会话的直读输入)
+// write the scan result wholesale to tmp/fixme-scan.md (overwriting; direct-read input for the audit session and the knowledge-extraction session)
 export async function writeFixmeScan(dir: string, scan: Awaited<ReturnType<typeof scanFixmes>>): Promise<string>
 ```
 
-- 扫描报告 `tmp/fixme-scan.md` 结构:头部计数行(Total/CRITICAL/WARN/INFO/
-  MALFORMED)、逐条记录(`[SEVERITY] file:line` + Type/Spec/Rationale 原文)、
-  malformed 清单、skipped 说明——字段覆盖规格书 §5.1 的七字段要求;
-- 文件枚举:从 loop.ts 抽出嵌套 git root 发现逻辑为共享函数(`gitRoots`),
-  `gitChangedFiles`(verbose 监视)与 `scanFixmes` 共用;每 root 用
-  `git ls-files --cached --others --exclude-standard -- .` 列文件;目标目录不在
-  任何 git 仓库时回落文件系统遍历(跳过 §3 所列目录、>1MB 文件)。
+- Scan report `tmp/fixme-scan.md` structure: a header count line (Total/CRITICAL/WARN/INFO/
+  MALFORMED), per-record entries (`[SEVERITY] file:line` + the Type/Spec/Rationale verbatim),
+  a malformed list, skipped notes - the fields cover the seven-field requirement of requirements specification §5.1;
+- File enumeration: extract loop.ts's nested-git-root discovery logic into a shared function (`gitRoots`),
+  shared by `gitChangedFiles` (verbose watch) and `scanFixmes`; each root lists files with
+  `git ls-files --cached --others --exclude-standard -- .`; when the target directory is in no
+  git repository, fall back to filesystem traversal (skipping the directories listed in §3 and files >1MB).
 
-## C. `--track-fixme` 集成
+## C. `--track-fixme` Integration
 
 ### C.1 CLI(`src/index.ts`)
 
-- 进 BOOLEAN_FLAGS(支持 `--track-fixme false` 关闭);
-- 校验:`--track-fixme` 且 `--final-review` 未启用(值 ≤0)→ 报错退出码 1,
-  文案说明需要终审 audit 作为审计宿主;用法文本同步。
+- Goes into BOOLEAN_FLAGS (supports turning it off via `--track-fixme false`);
+- Validation: `--track-fixme` while `--final-review` is not enabled (value ≤0) → error with exit code 1, the
+  message explaining that the final-review audit is needed as the audit host; usage text updated to match.
 
-### C.2 提示词注入(`src/prompt.ts`)
+### C.2 Prompt Injection (`src/prompt.ts`)
 
-- prompt.ts 局部 `Opts` 增 `trackFixme?: boolean`(runner Opts 同步透传);
-- 新增 `FIXME_RULE` 常量(§A 全部内容:格式、TYPE/Severity 表、必须标/不应标清单、
-  与 AUTO-DECISION 的分工、修复差距消除偏差时应删除对应标记)注入三个执行类模板:
-  `renderSubtask` / `renderWhole`(含 ondemand 续跑)/ `renderFix`;
-- **不注入** renderDecompose(分解不写代码)、renderWrapup(收尾只写 docs 与提交)、
-  审核类模板(V1 逐任务审核不感知,见 §4.2);
-- remediate / finalize 终审任务经 runTask 流水线自然走上述模板,同样获得标记规范
-  ——remediate 会话新引入的被迫偏差必须落标记,这正是 finalize 前二次门禁的输入。
+- prompt.ts's local `Opts` gains `trackFixme?: boolean` (passed through in sync in the runner Opts);
+- A new `FIXME_RULE` constant (all of §A: format, TYPE/Severity tables, must-mark/must-not-mark lists, the
+  division of labor with AUTO-DECISION, and deleting the corresponding marker once a fix eliminates the deviation) is injected into the three execution templates:
+  `renderSubtask` / `renderWhole` (including ondemand resume runs) / `renderFix`;
+- **Not injected** into renderDecompose (decomposition writes no code), renderWrapup (wrap-up only writes docs and
+  commits), or the review templates (V1 per-task review is not FIXME-aware, see §4.2);
+- The remediate / finalize final-review tasks naturally go through the above templates via the runTask pipeline and
+  equally receive the marker spec - forced deviations newly introduced by a remediate session must land markers, which is exactly the input of the second gate before finalize.
 
-### C.3 audit 任务集成(`src/final.ts` + `src/loop.ts`)
+### C.3 audit Task Integration (`src/final.ts` + `src/loop.ts`)
 
 ```
 routeFinal(dir, plan, { limit, trackFixme })
-  ├─ stage=audit 生成路由且 trackFixme:
+  ├─ stage=audit generation routing and trackFixme:
   │    scanFixmes → writeFixmeScan(tmp/fixme-scan.md)
-  │    prior += 「FIXME 审计输入: 扫描报告 tmp/fixme-scan.md,计数 …,malformed …」
-  │    (扫描是纯本地进程,失败/为空不阻断——报告写全零行即可)
-  ├─ renderFinalTask(audit 分支,trackFixme):
-  │    职责段追加: 逐条核对扫描记录——验证定级恰当性(可升/降级并给理由)、
-  │    剔除误报(不计入计数)、malformed 按 WARN 级发现提示修正;
-  │    报告含「FIXME Audit Report」段(逐条 [SEVERITY] file:line / Type / Spec /
+  │    prior += 「FIXME 审计输入: 扫描报告 tmp/fixme-scan.md,计数 …,malformed …」 (FIXME audit input: scan report tmp/fixme-scan.md, counts ..., malformed ...)
+  │    (the scan is a purely local process; failure/empty does not block - the report may simply write the all-zero line)
+  ├─ renderFinalTask(audit branch, trackFixme):
+  │    duty section appended: check the scan records one by one - verify the grading is appropriate (up/downgrade with
+  │    reasons given), drop false positives (not counted), prompt fixes for malformed as WARN-level findings;
+  │    the report contains a "FIXME Audit Report" section (per record [SEVERITY] file:line / Type / Spec /
   │    Reason / Final Status: Accepted|Adjusted|FalsePositive);
-  │    stageReport(audit) 协议改为末三行: 结论 / 策略 / FIXME: CRITICAL=… WARN=… INFO=…
-  ├─ appendFinalTask(…, fixme): 不写 verify 字段(终审基线修订;fixme 参数仅注入
-  │    生成会话提示词与路由门禁)
-  ├─ afterAudit(trackFixme): parseFixmeSummary(报告末行协议)
-  │    缺失/非法 → brokenReport(终审不做任务级验收,路由时兜底阻塞人工核查)
-  │    CRITICAL≥1 → FinalRoute block: question 含计数、报告与扫描文件指针、
-  │      人工处理方式(修复偏差;或降级注释后重跑)——不路由 remediate
-  │    CRITICAL=0 → 照常按策略路由
-  └─ finalGate(afterAudit 策略:无 与 afterValidate 通过 共用):
-       trackFixme 时复扫;CRITICAL≥1 → round+1 超限 ? 熔断 block
-         : stageRoute(audit, round+1, prior=新 CRITICAL 清单+复扫计数)
-       否则 stageRoute(finalize, round, prior)
+  │    the stageReport(audit) protocol changes to the last three lines: 结论 (conclusion) / 策略 (strategy) / FIXME: CRITICAL=… WARN=… INFO=…
+  ├─ appendFinalTask(…, fixme): writes no verify field (final-review baseline revision; the fixme parameter only feeds
+  │    the generation-session prompt and the routing gate)
+  ├─ afterAudit(trackFixme): parseFixmeSummary (the report's last-line protocol)
+  │    missing/invalid → brokenReport (final review does no task-level acceptance; a backstop block at routing time for manual inspection)
+  │    CRITICAL≥1 → FinalRoute block: the question carries the counts, pointers to the report and scan files,
+  │      and the manual handling (fix the deviation; or downgrade the comment and rerun) - no remediate routing
+  │    CRITICAL=0 → routes by strategy as usual
+  └─ finalGate (shared by afterAudit with 策略:无 (strategy: none) and afterValidate (passed)):
+       with trackFixme, rescan; CRITICAL≥1 → round+1 over the limit ? circuit-break block
+         : stageRoute(audit, round+1, prior = new CRITICAL list + rescan counts)
+       otherwise stageRoute(finalize, round, prior)
 ```
 
-- 扫描时序:audit@r 的扫描在**生成会话前**(生成只读,生成到执行之间代码不变);
-  audit 任务自身修复轮只改报告结构,不触碰代码(既有 renderFix 约束);
-- `--review`/`--early` 与本机制无交互(audit 任务本就强制 review=0)。
+- Scan timing: the scan for audit@r happens **before the generation session** (generation is read-only; the code does
+  not change between generation and execution); the audit task's own fix rounds only change report structure and never touch code (the existing renderFix constraint);
+- `--review`/`--early` do not interact with this mechanism (audit tasks already force review=0).
 
-### C.4 失败语义汇总
+### C.4 Failure Semantics Summary
 
-| 情形 | 行为 |
+| Case | Behavior |
 | --- | --- |
-| 扫描器遇不可读/二进制文件 | 跳过,记入 skipped;绝不因扫描失败阻断流水线 |
-| malformed FIXME | 见 §A.2,不阻断 |
-| 报告缺 FIXME 行 | 路由时 brokenReport 阻塞人工核查(终审任务不做任务级验收,无自愈路径——终审基线修订) |
-| CRITICAL(报告计数) | block,退出码 2 |
-| CRITICAL(复扫,自报定级) | 回退 audit@r+1 重新验证(见 §3 二次门禁) |
+| scanner hits unreadable/binary files | skip, record in skipped; never block the pipeline over a scan failure |
+| malformed FIXME | see §A.2, no blocking |
+| report missing the FIXME line | routing-time brokenReport block for manual inspection (final-review tasks do no task-level acceptance, no self-healing path - final-review baseline revision) |
+| CRITICAL (report count) | block, exit code 2 |
+| CRITICAL (rescan, self-reported grade) | fall back to audit@r+1 for re-verification (see the second gate in §3) |
 
-### C.5 中断恢复
+### C.5 Interruption Recovery
 
-- 扫描是幂等纯函数、无状态,任何时刻重跑重扫;
-- audit 生成前中断 → 下次 routeFinal 重扫重注入(扫描文件覆盖写);
-- audit 任务内部中断 → 既有 recallProgress/peekProgress 机制,零新增;
-- CRITICAL block 后人工降级注释 → 重跑:blocked 任务直接续跑(既有语义)。
+- The scan is an idempotent, stateless pure function; rerunning at any moment rescans;
+- interrupted before audit generation → the next routeFinal rescans and re-injects (the scan file is overwritten);
+- interrupted inside the audit task → the existing recallProgress/peekProgress mechanism, zero additions;
+- after a CRITICAL block, a manual comment downgrade → rerun: the blocked task resumes directly (existing semantics).
 
 ## D. `--extract-knowledge`
 
 ### D.1 CLI(`src/index.ts`)
 
-- 专用解析分支:裸选项 = 启用 + 默认路径;`--extract-knowledge=<path>` 或紧跟
-  非 `-` 开头 token = 显式路径(相对目标目录 resolve);
-- 校验:未搭配 `--final-review` → 退出码 1(理由见 §3);`--dryrun` 下不触发
-  (dryrun 提前返回,天然满足)。
+- Dedicated parsing branch: bare option = enabled + default path; `--extract-knowledge=<path>` or an immediately
+  following token not starting with `-` = explicit path (resolved relative to the target directory);
+- Validation: without `--final-review` → exit code 1 (rationale in §3); not triggered under `--dryrun`
+  (dryrun returns early, satisfied by construction).
 
-### D.2 触发挂点(`src/loop.ts` runAll)
+### D.2 Trigger Hook (`src/loop.ts` runAll)
 
-位置:`next()` 为空、advanceFinal 判定终审完成、`--commit once` 整体提交**之后**、
-`return 0` 之前。该位置保证:
+Location: after `next()` is empty, advanceFinal has ruled the final review complete, and the `--commit once` bulk
+commit has happened, i.e. **after** that commit and before `return 0`. This location guarantees:
 
-- 熔断/block/任何退出码 2 路径都不经过挂点 → SKIPPED 天然成立(TC-08);
-- 知识文档不进入任何自动提交(§3);
-- 全部完成后的重跑:next() 仍为空、终审仍 complete → 只重跑知识提取(幂等覆盖,
-  显式路径时覆盖同名文件),这本身就是"提取失败后修复再试"的恢复路径。
+- The circuit-break/block/any exit-code-2 paths never pass the hook → SKIPPED holds by construction (TC-08);
+- The knowledge document enters no automatic commit (§3);
+- Rerun after everything completes: next() still empty, final review still complete → only knowledge extraction reruns
+  (idempotent overwrite; with an explicit path, the same-named file is overwritten) - this is itself the recovery path of "fix and retry after an extraction failure".
 
-### D.3 提取会话(`src/knowledge.ts` 新增 + `renderKnowledge`)
+### D.3 Extraction Session (`src/knowledge.ts` new + `renderKnowledge`)
 
-- 复用 runner 导出的 `requireArtifact` 骨架(伪任务 id `PLAN`,镜像 final.ts
-  planningTask;产物缺失带反馈重试一次,仍失败按 §D.5 收场);
-- `renderKnowledge(plan, path, opts)` 组成:
-  - **来源清单(结构化产物指针,规格书 §11 的子集)**:PLAN.md、`docs/*.report.md`、
-    `docs/*.audit.md`(`--review` 产物)、`docs/final/*`(终审各报告与提案)、
-    `tmp/fixme-scan.md`(track-fixme 联动时的过程证据,持久锚点为审计报告)、
-    git log 概览提示;
-  - **章节骨架**(规格书 §13 八章节:Migration Summary / API & Type Mappings /
+- Reuses the `requireArtifact` skeleton exported by the runner (pseudo-task id `PLAN`, mirroring final.ts
+  planningTask; retries once with feedback when the artifact is missing, and if it still fails ends per §D.5);
+- `renderKnowledge(plan, path, opts)` consists of:
+  - **Source list (structured artifact pointers, a subset of requirements specification §11)**: PLAN.md, `docs/*.report.md`,
+    `docs/*.audit.md` (`--review` artifacts), `docs/final/*` (the final-review reports and proposals),
+    `tmp/fixme-scan.md` (process evidence when track-fixme is combined; the persistent anchor is the audit report),
+    and a git log overview hint;
+  - **Section skeleton** (the eight sections of requirements specification §13: Migration Summary / API & Type Mappings /
     Implementation Patterns / Gotchas & Edge Cases / Reusable Rules / Design
-    Deviations(仅 track-fixme 时填,引用 audit 报告与 Final Status)/
+    Deviations (filled only when track-fixme is on, citing the audit report and Final Status) /
     Validation Evidence / References);
-  - **质量约束硬性要求**(规格书 §14):去重;不照抄会话对话/日志/中间推理;
-    被终审否决的方案不得记为当前方案(仅可作为明确标注"已否决"的通用教训);
-    每条重要知识附可验证锚点(文件/API/Spec/commit/test/报告);
-  - 场景背景:注入 `mode.exec` 文案(不新增 ModeSpec 字段);
-  - 约束:只读分析,唯一可写文件是输出路径;QUESTION_RULE / STATE_RULE 照用;
-    产出文件是硬性要求(信息稀少也要写出骨架并说明);
-- collect 校验从宽:文件存在且非空(章节完整性是提示词级要求,过度结构校验会制造
-  无意义重试);reset 删除旧产物。
+  - **Hard quality constraints** (requirements specification §14): deduplicate; do not copy session dialogue/logs/
+    intermediate reasoning verbatim; solutions rejected by final review must not be recorded as the current solution
+    (only as general lessons explicitly labeled "rejected"); every important piece of knowledge carries a verifiable anchor (file/API/Spec/commit/test/report);
+  - Scenario background: inject the `mode.exec` copy (no new ModeSpec field);
+  - Constraints: read-only analysis, the only writable file is the output path; QUESTION_RULE / STATE_RULE used as-is;
+    producing the file is a hard requirement (even with sparse information, write out the skeleton and explain);
+- Lenient collect validation: the file exists and is non-empty (section completeness is a prompt-level requirement;
+  excessive structural validation would create meaningless retries); reset deletes the old artifact.
 
-### D.4 输出
+### D.4 Output
 
-- 成功:打印知识文档路径;默认 `docs/migration-kb/migration-<时间戳>.md`;
-- `<task_id>` 的适配偏差(§2 表)在 README 说明:本包迁移单位是整份 PLAN。
+- Success: print the knowledge document path; default `docs/migration-kb/migration-<时间戳>.md` (timestamp);
+- The `<task_id>` adaptation deviation (§2 table) is explained in the README: this package's migration unit is the whole PLAN.
 
-### D.5 失败语义
+### D.5 Failure Semantics
 
-- 会话受阻(blocked,如隐性阻塞/权限停机)或两次未产出 →
+- The session is stuck (blocked, e.g. a silent block/permission halt) or fails to produce twice →
   `⚠ 迁移已全部成功,但知识沉淀未完成(knowledge_extraction_error),退出码不受影响;
-  可修复后重新运行(opencode-auto run … --extract-knowledge…)单独重试`;
-- 退出码保持 0;错误细节进 `.auto/logs/run-*.log`;
-- 严格模式(失败改退出码)列为未来扩展(§4.2)。
+  可修复后重新运行(opencode-auto run … --extract-knowledge…)单独重试`; (the migration has fully succeeded, but knowledge distillation did not complete (knowledge_extraction_error); the exit code is unaffected; fix it and rerun (opencode-auto run ... --extract-knowledge ...) to retry it alone)
+- The exit code stays 0; error details go to `.auto/logs/run-*.log`;
+- Strict mode (failure changes the exit code) is listed as a future extension (§4.2).
 
-## E. 组合行为矩阵
+## E. Combination Behavior Matrix
 
-| 组合 | 行为 |
+| Combination | Behavior |
 | --- | --- |
-| 无两选项 | 现状不变 |
-| `--track-fixme`(无 `--final-review`) | 用法错误,退出码 1 |
-| `--extract-knowledge`(无 `--final-review`) | 用法错误,退出码 1 |
-| `--track-fixme --final-review [n]` | 执行期标记 → audit 扫描/验证/协议行 → CRITICAL 门禁 → finalize 前复扫 → 完成 |
-| `--extract-knowledge --final-review [n]` | 终审完成 → 提交处理 → 知识提取(失败不影响退出码) |
-| 两选项 + `--final-review [n]` | 全链路;知识文档的 Design Deviations 引用审计报告与扫描证据(TC-10) |
-| + `--review` / `--early` | 正交:逐任务审核照旧,V1 不感知 FIXME(§4.2) |
-| + `--dryrun` | 两选项均不触发 |
-| + `-m migrate` | exec 文案(AUTO-DECISION 要求)与 FIXME_RULE 并存,分工见 §A.3 |
-| + `--commit once` | 整体提交保持在终审完成后、知识提取前(知识文档不入库) |
-| + `--wait-between` / `--interactive` / `--subtask off` 等 | 无交互;终审任务不做任务级验收,off 下的 verify 差距回退一途不存在(终审基线修订) |
+| neither option | status quo unchanged |
+| `--track-fixme` (no `--final-review`) | usage error, exit code 1 |
+| `--extract-knowledge` (no `--final-review`) | usage error, exit code 1 |
+| `--track-fixme --final-review [n]` | execution-time marking → audit scan/verification/protocol line → CRITICAL gate → rescan before finalize → done |
+| `--extract-knowledge --final-review [n]` | final review completes → commit handling → knowledge extraction (failure does not affect the exit code) |
+| both options + `--final-review [n]` | the full chain; the knowledge document's Design Deviations cites the audit report and scan evidence (TC-10) |
+| + `--review` / `--early` | orthogonal: per-task review proceeds as before, V1 is not FIXME-aware (§4.2) |
+| + `--dryrun` | neither option triggers |
+| + `-m migrate` | the exec copy (AUTO-DECISION requirement) and FIXME_RULE coexist; division of labor in §A.3 |
+| + `--commit once` | the bulk commit stays after final review completes and before knowledge extraction (the knowledge document is not committed) |
+| + `--wait-between` / `--interactive` / `--subtask off` etc. | no interaction; final-review tasks do no task-level acceptance, so the verify-gap fallback under off does not exist (final-review baseline revision) |
 
-## F. 数据模型与演进路径(Deviation Record)
+## F. Data Model and Evolution Path (Deviation Record)
 
-规格书附录建议把 FIXME 演进为带状态的 Design Deviation Record。V1 的留位:
+The requirements specification's appendix suggests evolving FIXME into a stateful Design Deviation Record. V1's reserved room:
 
-1. `FixmeRecord` 字段与规格书 §20 完全对齐(type/message/spec/rationale/severity/
-   file/line),`parseFixmes` 忽略未知键——未来注释格式追加 `Status: Accepted|
-   Fixed|Rejected` 行时旧扫描器不破坏,新语义(状态流转、自动关闭)另行设计;
-2. 审计报告的 Final Status 字段(Accepted/Adjusted/FalsePositive)已是最初一级的
-   "审计后状态",留在报告正文而非 PLAN.md/数据库——状态不进 driver 持久化层;
-3. 演进前置条件:独立状态存储 + `--fixme-fail-on` 策略 + 逐任务审核感知三者任何
-   一个落地前,先扩展本文档而不是代码。
+1. `FixmeRecord` fields align fully with requirements specification §20 (type/message/spec/rationale/severity/
+   file/line), and `parseFixmes` ignores unknown keys - when the comment format later appends a `Status: Accepted|
+   Fixed|Rejected` line, old scanners are not broken; the new semantics (state transitions, auto-close) are designed separately;
+2. The audit report's Final Status field (Accepted/Adjusted/FalsePositive) is already a first level of "post-audit
+  state", kept in the report body rather than PLAN.md/a database - state does not enter the driver's persistence layer;
+3. Evolution preconditions: before any of standalone state storage, the `--fixme-fail-on` policy, or per-task review
+   awareness lands, extend this document first rather than the code.
 
-## G. 验收标准映射(规格书 §18/§19 → 本仓库语义)
+## G. Acceptance Criteria Mapping (Requirements Specification §18/§19 → This Repository's Semantics)
 
-| 用例 | 本仓库验收 |
+| Use case | Acceptance in this repository |
 | --- | --- |
-| TC-01 无 FIXME | audit 报告写 `FIXME: CRITICAL=0 WARN=0 INFO=0`,策略照常路由,不阻断 |
-| TC-02 仅 INFO | 同上,通过;报告含 INFO 清单 |
-| TC-03 仅 WARN | 通过;策略为重构/修补时照常进闭环(WARN 不阻断闭环) |
-| TC-04 含 CRITICAL | driver 解析报告计数 ≥1 → block 该 audit 任务(问题写入 PLAN.md,含报告与扫描文件指针),退出码 2 |
-| TC-05 位置信息 | `tmp/fixme-scan.md` 与审计报告逐条含 file/line/type/severity/rationale/spec |
-| TC-06 默认路径 | 终审完成后生成 `docs/migration-kb/migration-<时间戳>.md` |
-| TC-07 显式路径 | `--extract-knowledge=<path>` 写入指定路径 |
-| TC-08 终审未通过 | 熔断/block 路径在提取挂点之前返回 2,从不生成(无"FAIL 后跳过"分支) |
-| TC-09 与最终实现一致 | 提示词硬性要求(最终状态优先)+ 门禁(仅终审通过后提取、来源限定最终产物)+ 不自动提交由人工甄别兜底——**driver 无法强制文档内容真实性,列为已知局限(§I)** |
-| TC-10 FIXME 联动 | 知识文档 Design Deviations 章节硬性要求引用 `docs/final/audit-r<N>.md` 与 Final Status(tmp/fixme-scan.md 作过程证据指针) |
+| TC-01 no FIXME | the audit report writes `FIXME: CRITICAL=0 WARN=0 INFO=0`, routes by strategy as usual, no blocking |
+| TC-02 INFO only | same as above, pass; the report contains the INFO list |
+| TC-03 WARN only | pass; with strategy refactor/patch it still enters the loop as usual (WARN does not block the loop) |
+| TC-04 contains CRITICAL | the driver parses a report count ≥1 → block that audit task (the issue written into PLAN.md, with pointers to the report and scan files), exit code 2 |
+| TC-05 location information | `tmp/fixme-scan.md` and the audit report contain file/line/type/severity/rationale/spec per record |
+| TC-06 default path | after final review completes, `docs/migration-kb/migration-<时间戳>.md` (timestamp) is generated |
+| TC-07 explicit path | `--extract-knowledge=<path>` writes to the specified path |
+| TC-08 final review not passed | the circuit-break/block paths return 2 before the extraction hook, never generating (no "skip after FAIL" branch) |
+| TC-09 consistent with the final implementation | hard prompt requirements (final state takes precedence) + gates (extract only after final review passes, sources limited to final artifacts) + no auto-commit backstopped by manual vetting - **the driver cannot enforce the truthfulness of document content; listed as a known limitation (§I)** |
+| TC-10 FIXME linkage | the knowledge document's Design Deviations section is hard-required to cite `docs/final/audit-r<N>.md` and Final Status (tmp/fixme-scan.md as the process-evidence pointer) |
 
-## H. 文件级改动清单与分期
+## H. File-Level Change List and Phasing
 
-| 文件 | 改动 | 分期 |
+| File | Change | Phase |
 | --- | --- | --- |
-| `src/fixme.ts`(新增) | FixmeRecord/parseFixmes/scanFixmes/writeFixmeScan;gitRoots 抽取协议 | P1 |
-| `src/loop.ts` | 抽出 gitRoots 共享;runAll opts 增 trackFixme/knowledge;advanceFinal 透传;知识提取挂点 | P1/P2/P3 |
-| `src/index.ts` | 两选项解析(track-fixme 布尔、extract-knowledge 专用分支含 `-` 守卫)、依赖校验、用法文本 | P2/P3 |
-| `src/prompt.ts` | FIXME_RULE 常量;Opts.trackFixme;三执行模板注入;renderFinalTask audit 分支(trackFixme)与 stageReport 协议;renderKnowledge | P2/P3 |
-| `src/runner.ts` | Opts.trackFixme 透传渲染 | P2 |
-| `src/final.ts` | routeFinal 增 opts;audit 生成前扫描注入;parseFixmeSummary;afterAudit CRITICAL 门禁;finalGate 二次门禁 | P2 |
-| `src/knowledge.ts`(新增) | 提取编排(requireArtifact + renderKnowledge 调用) | P3 |
-| `test/fixme.test.ts`(新增) | 解析器金样、扫描范围(gitignore 生效/嵌套仓库/非 git 回落)、报告格式 | P1 |
-| `test/final.test.ts`(增) | parseFixmeSummary;CRITICAL 门禁不路由 remediate;finalGate 回退/熔断 | P2 |
-| `test/prompt.test.ts`(增) | 注入有/无断言;renderFinalTask audit 职责段;renderKnowledge 骨架与来源指针 | P2/P3 |
-| `test/e2e.test.ts`(增) | CLI 解析:依赖校验退出码 1、路径吞值与 `-` 守卫、`=path` 形式 | P2/P3 |
-| `README.md` / 包内 `AGENTS.md` | 选项表、行为约定、结构节、与规格书的适配偏差说明 | P4 |
+| `src/fixme.ts` (new) | FixmeRecord/parseFixmes/scanFixmes/writeFixmeScan; the gitRoots extraction contract | P1 |
+| `src/loop.ts` | extract gitRoots for sharing; runAll opts gain trackFixme/knowledge; advanceFinal passes them through; the knowledge-extraction hook | P1/P2/P3 |
+| `src/index.ts` | parsing of both options (track-fixme boolean; the extract-knowledge dedicated branch with the `-` guard), dependency validation, usage text | P2/P3 |
+| `src/prompt.ts` | FIXME_RULE constant; Opts.trackFixme; injection into the three execution templates; the renderFinalTask audit branch (trackFixme) and the stageReport protocol; renderKnowledge | P2/P3 |
+| `src/runner.ts` | Opts.trackFixme pass-through rendering | P2 |
+| `src/final.ts` | routeFinal gains opts; scan-and-inject before audit generation; parseFixmeSummary; the afterAudit CRITICAL gate; the finalGate second gate | P2 |
+| `src/knowledge.ts` (new) | extraction orchestration (requireArtifact + renderKnowledge invocation) | P3 |
+| `test/fixme.test.ts` (new) | parser golden cases, scan scope (gitignore honored/nested repos/non-git fallback), report format | P1 |
+| `test/final.test.ts` (additions) | parseFixmeSummary; the CRITICAL gate does not route remediate; finalGate fallback/circuit-break | P2 |
+| `test/prompt.test.ts` (additions) | injection present/absent assertions; the renderFinalTask audit duty section; the renderKnowledge skeleton and source pointers | P2/P3 |
+| `test/e2e.test.ts` (additions) | CLI parsing: dependency-validation exit code 1, value swallowing and the `-` guard, the `=path` form | P2/P3 |
+| `README.md` / in-package `AGENTS.md` | option table, behavior conventions, structure section, notes on adaptation deviations from the requirements specification | P4 |
 
-分期边界:P1(纯逻辑,零集成)→ P2(track-fixme 端到端)→ P3(extract-knowledge)
-→ P4(文档)。各期独立可合入,合入即按本文档行为生效。
-**修订**:extract-knowledge 侧的 P3/P4(上表 `src/knowledge.ts`、
-`renderKnowledge`、README 修订各行的 P3/P4 部分)已按文首 P4 修订经 k 阶段完成;
-track-fixme 侧的 P1/P2(及共用测试行)仍按上表待实现。
+Phase boundaries: P1 (pure logic, zero integration) → P2 (track-fixme end to end) → P3 (extract-knowledge)
+→ P4 (documentation). Each phase is independently mergeable and takes effect per this document upon merge.
+**Revision**: the extract-knowledge side's P3/P4 (the P3/P4 parts of the `src/knowledge.ts`,
+`renderKnowledge`, and README-revision rows in the table above) are complete via the k phase per the P4 revision at the top;
+the track-fixme side's P1/P2 (and the shared test rows) remain to be implemented per the table above.
 
-## I. 风险、边界与已知局限
+## I. Risks, Boundaries, and Known Limitations
 
-- **知识内容真实性不可强制**:TC-09 依赖提示词约束与人工甄别(不自动提交),
-  driver 只能保证门禁(终审通过后提取)与来源限定;
-- **复扫门禁基于自报定级**:finalize 前复扫发现的 CRITICAL 未经 LLM 验证即回退
-  audit——回退本身即"交审计验证",闭环自洽;极端场景(自报 CRITICAL 实为误报)
-  代价是多一轮审计,可接受;
-- **全量扫描的噪声**:历史遗留 AUTO-FIXME(此前运行残留)会进首轮审计;视为
-  特性(未收口偏差本应被发现),人工清理后消失;
-- **finalize 任务自身新引入偏差不再复扫**(收尾以文档同步为主),列为已知残余
-  风险;需要时人工重跑 audit;
-- **audit 任务修复轮理论上可改代码**(renderFix 只约束"修差距"):实际差距为
-  报告结构问题,风险极低;
-- **空 PLAN / 空扫描**:audit 照常(全零行),知识提取照常(骨架文档),不特判;
-- **dogfood 顺序**:实现期间运行中的 driver 仍是旧版,新行为自下一次 run 生效。
+- **Truthfulness of knowledge content cannot be enforced**: TC-09 relies on prompt constraints and manual vetting (no
+  auto-commit); the driver can only guarantee the gate (extraction after final review passes) and the source restriction;
+- **The rescan gate rests on self-reported grades**: a CRITICAL found by the pre-finalize rescan falls back to audit
+  without LLM verification - the fallback itself is "submitting to audit verification", so the loop is self-consistent;
+  in the extreme case (a self-reported CRITICAL that is actually a false positive) the cost is one extra audit round, acceptable;
+- **Full-scan noise**: historically leftover AUTO-FIXMEs (residue from earlier runs) enter the first audit round; treat
+  this as a feature (unresolved deviations ought to be found) - it disappears after manual cleanup;
+- **Deviations newly introduced by the finalize task itself are not rescanned** (wrap-up is mostly document syncing);
+  listed as a known residual risk; rerun audit manually when needed;
+- **The audit task's fix rounds could in theory change code** (renderFix only constrains "fixing the gap"): the actual
+  gap is a report-structure issue, so the risk is minimal;
+- **Empty PLAN / empty scan**: audit proceeds as usual (the all-zero line), knowledge extraction proceeds as usual (a skeleton document), no special-casing;
+- **Dogfooding order**: the driver running during implementation is still the old version; the new behavior takes effect from the next run.
 
-## J. 测试与验证
+## J. Testing and Verification
 
-- `bun typecheck` + `bun test`:fixme/final/prompt 测试不依赖 opencode server 与
-  网络(解析为纯函数,报告/扫描用 fixture 文件;git 相关用例镜像 gitignore.test.ts
-  的临时仓库手法);
-- e2e(`OPENCODE_AUTO_E2E=1`,需凭据)为可选手工验证:`--final-review 1
-  --track-fixme --extract-knowledge` 跑一次含 WARN 偏差的空转闭环,观察
-  tmp/fixme-scan.md、审计报告末三行协议、T-F 任务路由与知识文档产出;
-  CRITICAL 路径用 fixture 注释单独验证 block 行为;
-- 全部完成后 `bun run build` 冒烟(templates/ 无新增,`type: "file"` 导入不受影响)。
+- `bun typecheck` + `bun test`: the fixme/final/prompt tests depend on neither the opencode server nor
+  the network (parsing is a pure function; reports/scans use fixture files; the git-related cases mirror the
+  temporary-repository technique of gitignore.test.ts);
+- e2e (`OPENCODE_AUTO_E2E=1`, requires credentials) is optional manual verification: run `--final-review 1
+  --track-fixme --extract-knowledge` once through a dry closed-loop pass containing a WARN deviation, observing
+  tmp/fixme-scan.md, the audit report's last-three-line protocol, T-F task routing, and knowledge document output;
+  the CRITICAL path is verified separately for block behavior with a fixture comment;
+- After everything completes, `bun run build` as a smoke check (no additions under templates/, `type: "file"` imports unaffected).
 
 <!-- auto: eof -->

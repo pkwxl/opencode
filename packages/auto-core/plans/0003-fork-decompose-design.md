@@ -1,139 +1,139 @@
-# 会话分叉式细粒度任务分解设计(fork-decompose)
+# Session-Fork Fine-Grained Task Decomposition Design (fork-decompose)
 
-> 跨会话实施计划见仓库根 `plans/FORK_DECOMPOSITION_PLAN.md`(步骤勾选与进度以该文件为准);本文档是机制设计基准,落地偏差须回写本文。
+> For the cross-session implementation plan, see `plans/FORK_DECOMPOSITION_PLAN.md` at the repository root (step checkboxes and progress are authoritative in that file); this document is the mechanism design baseline; landed deviations must be written back here.
 >
-> **落地状态(2026-09-05)**:步骤 1-4 已实现并提交于 auto-core 分支(`f481ba822` 分阶段分解提示词 / `8c6a18ff2` 子任务产物文件化 + 索引式 wrapup / `0e95e0dcb` 实验开关环境变量层 / `00bad6a04` fork 三段式流水线),`bun typecheck` / `bun test` 全绿(auto-core 304 例、auto 壳 27 例;新增 test/switches.test.ts 与 test/runner.test.ts 单测)。A/B 实验与默认值定型见 §11,宪法键转正待实验结论。
+> **Landed status (2026-09-05)**: steps 1-4 are implemented and committed on the auto-core branch (`f481ba822` phase-specific decompose prompts / `8c6a18ff2` subtask artifacts as files + index-style wrapup / `0e95e0dcb` experiment-switch environment-variable layer / `00bad6a04` fork three-stage pipeline); `bun typecheck` / `bun test` all green (304 cases in auto-core, 27 in the auto shell; new unit tests test/switches.test.ts and test/runner.test.ts). For the A/B experiments and the finalization of default values see §11; promotion of the constitutional keys awaits the experiment conclusions.
 
-## 1. 背景与动机
+## 1. Background and Motivation
 
-auto 模式当前的子任务流水线存在三个结构性问题:
+The current subtask pipeline in auto mode has three structural problems:
 
-1. **粒度粗化有结构性诱因**:每个子任务会话都要自行「阅读相关源码与 docs/」(decompose.md 第 1 步),粒度越细、重复探索的固定开销越大,模型与提示词因此倾向合并方面成粗粒度子任务;粗粒度会话上下文膨胀 → 慢、贵、更易触发交接。
-2. **分解提示词不分阶段**:分析、设计、实现、测试、验收、知识提炼各阶段的「一个方面」含义完全不同,单一 decompose.md 无法给出准确的切分准则。
-3. **wrapup 综合成本高**:收尾会话读全量产物重写汇总报告,Token 二次消耗且易失真。
+1. **Coarsened granularity has a structural cause**: every subtask session must on its own 「阅读相关源码与 docs/」 ("read the relevant source code and docs/", decompose.md step 1); the finer the granularity, the larger the fixed cost of repeated exploration, so the model and the prompts tend to merge aspects into coarse-grained subtasks; coarse-grained sessions bloat their context → slow, expensive, more likely to trigger handovers.
+2. **The decompose prompt is not phase-aware**: what "one aspect" means differs completely across the analysis, design, implementation, test, acceptance, and knowledge-distillation phases; a single decompose.md cannot give accurate splitting criteria.
+3. **wrapup synthesis is costly**: the closing session reads the full set of artifacts to rewrite a summary report, a second token expenditure that is prone to distortion.
 
-本轮修订补充两个动机:
+This revision adds two more motivations:
 
-4. **粒度准则缺基准**:只讲「一个方面一个子任务」仍偏任务级聚合,更适配「任务分解」而非「子任务分解」——子任务分解应以任务描述为基础、在其规定的范围内选择粒度(描述点名的文件/模块/接口/行为/场景即天然切分单元);且粒度应有标准/细粒度两档,独立开关控制,供实测对比。
-5. **机制组合需要实验闭环**:fork 是否启用、分叉基点取理解末端还是摘要会话、超限交接 steer 是否保留,都是多方案候选;需要一条不改 CLI 交互的开关通道做 A/B,定型后再转正为宪法级配置。
+4. **The granularity rule lacks a baseline**: saying only "one aspect, one subtask" still leans toward task-level aggregation; it fits "task decomposition" better than "subtask decomposition". Subtask decomposition should take the task description as its basis and choose granularity within the scope it prescribes (files/modules/interfaces/behaviors/scenarios named in the description are natural splitting units); and granularity should come in two tiers, standard and fine, controlled by an independent switch for empirical comparison.
+5. **The mechanism combination needs an experimental loop**: whether fork is enabled, whether the fork base is the end of the understand session or a digest session, and whether the over-limit handover steer is kept are all candidates among multiple options; a switch channel that changes no CLI interaction is needed for A/B testing, with promotion to constitutional-level configuration only after things are settled.
 
-opencode SDK 已内置会话分叉:`client.session.fork({ sessionID, messageID? })`(驱动器所用 `@opencode-ai/sdk/v2` 客户端的 `Session2` 类,`POST /session/{sessionID}/fork`),在指定消息点(缺省=全部)复制消息前缀为新会话。fork 前缀与 baseline system context 逐字一致,provider prompt-cache 友好——理解成本付一次,各分叉的增量输入成本远低于重读文件。auto-core 目前未使用该能力。
+The opencode SDK already has session forking built in: `client.session.fork({ sessionID, messageID? })` (the `Session2` class of the `@opencode-ai/sdk/v2` client used by the driver, `POST /session/{sessionID}/fork`), which copies the message prefix into a new session at a specified message point (default = all). The fork prefix is verbatim-identical to the baseline system context, which is friendly to the provider prompt cache: the understanding cost is paid once, and each fork's incremental input cost is far lower than re-reading files. auto-core does not currently use this capability.
 
-## 2. 目标与非目标
+## 2. Goals and Non-Goals
 
-**目标**
+**Goals**
 
-1. 「理解 → 分解 → 执行」三段式:理解会话一次性加载背景;分解与每个子任务执行会话都从**分叉基点**继承上下文免重读。
-2. 分阶段(a/d/m/t/v/k)分解提示词,粒度准则 =「以任务描述为基准 + 一个方面一个子任务 + 下限保护」,并可经开关启用细粒度档。
-3. 子任务产物独立成文件(`docs/<id>/S<NN>.md`),wrapup 只写索引,引用式整合。
-4. `fork: "off"`(或 fork 失败)时行为与现状完全一致。
-5. fork 基点双模式可选:`session`(理解会话末端,信息最全)与 `digest`(以 context.md 为输入新建基点会话,前缀最瘦、可从磁盘重建),实测对比后定默认。
-6. 实验期全部开关经 `OPENCODE_AUTO_*` 环境变量注入、核心内解析,CLI 壳零改动。
+1. A three-stage "understand → decompose → execute": the understand session loads the background once; the decompose session and every subtask execution session inherit context from the **fork base** with no re-reading.
+2. Phase-specific (a/d/m/t/v/k) decompose prompts, with granularity rule = "task description as the baseline + one aspect per subtask + floor protection", plus a fine-grained tier that can be enabled via a switch.
+3. Subtask artifacts become standalone files (`docs/<id>/S<NN>.md`); wrapup writes only an index, integrating by reference.
+4. With `fork: "off"` (or when fork fails), behavior is exactly the status quo.
+5. Two selectable fork-base modes: `session` (the end of the understand session, fullest information) and `digest` (a new base session created with context.md as input, leanest prefix, rebuildable from disk); the default is settled after empirical comparison.
+6. During the experimental period, all switches are injected via `OPENCODE_AUTO_*` environment variables and parsed inside the core, with zero changes to the CLI shell.
 
-**非目标(首期)**
+**Non-Goals (first phase)**
 
-- 子任务并行执行(依赖组 DAG、并发提交改造)——后续扩展;
-- `subtask=off/ondemand` 模式改造;
-- verify/review/judge 等独立判定会话的上下文继承(见不变量 §9);
-- 开关的宪法键转正(ProjectConfig 键 + init 固化 + run 拒绝旗标)——实验定型后另做,路径见 §4.6;
-- 混合基点(分解用 session、子任务执行用 digest)——开放问题(§11)。
+- Parallel subtask execution (dependency-group DAG, concurrent-commit rework) - a later extension;
+- Reworking the `subtask=off/ondemand` modes;
+- Context inheritance for independent-verdict sessions such as verify/review/judge (see the invariants, §9);
+- Promoting the switches to constitutional keys (ProjectConfig keys + init persistence + run rejection flag) - done separately once the experiments settle; path in §4.6;
+- Hybrid base (session for decompose, digest for subtask execution) - open question (§11).
 
-## 3. 总体流程
+## 3. Overall Flow
 
 ```
 T-001(subtask=auto, fork=on)
-  ├─ ① understand 会话(全新):预算内选读源码/docs,写摘要 docs/T-001.context.md 后结束
-  │     driver 写任务字段  - fork-base: <①的sessionID>   ← session 模式;磁盘持久,断点可再分叉
-  ├─ ①′(仅 fork-base=digest)context-base 会话(全新,driver 主导):
-  │     提示词 = context.md 全文 + 「确认理解,简短回复」;无工作区改动、不提交
-  │     driver 改写  - fork-base: <①′的sessionID>        ← 每次运行从磁盘重建的易失指针
-  ├─ ② decompose 会话 = fork(fork-base 末端):提示词 = decompose-<phase> 模板
-  │     (粒度以任务描述为基准;fine 开关启用时注入细粒度段)
-  │     写 docs/T-001.subtasks.md → driver setSubtasks 注入 PLAN.md(现机制不变)
-  └─ ③ 子任务 i(串行):会话 = fork(fork-base 末端,同一分叉点)
-        提示词 = subtask 模板 + 全量检查项列表 + "执行第 i 项" + 产出文件约定
-        会话结束 → driver 勾选 + 统一提交(不变)
-  wrapup 会话(不 fork,沿用链内复用规则):索引式报告
+  ├─ ① understand session (brand new): selectively read source/docs within budget, write the digest docs/T-001.context.md, then end
+  │     driver writes task field  - fork-base: <①'s sessionID>   ← session mode; persisted on disk, an interrupted run can fork from it again
+  ├─ ①′ (fork-base=digest only) context-base session (brand new, driver-led):
+  │     prompt = full text of context.md + 「确认理解,简短回复」 ("confirm understanding, reply briefly"); no workspace changes, no commit
+  │     driver rewrites  - fork-base: <①′'s sessionID>        ← a volatile pointer rebuilt from disk on every run
+  ├─ ② decompose session = fork(end of fork-base): prompt = decompose-<phase> template
+  │     (granularity baselined on the task description; the fine-grained section is injected when the fine switch is on)
+  │     writes docs/T-001.subtasks.md → driver setSubtasks injects into PLAN.md (existing mechanism unchanged)
+  └─ ③ subtask i (serial): session = fork(end of fork-base, the same fork point)
+        prompt = subtask template + the full checklist + "执行第 i 项" ("execute item i") + the output-file convention
+        session ends → driver checks the item off + unified commit (unchanged)
+  wrapup session (no fork, keeps the in-chain reuse rules): index-style report
 ```
 
-进入条件:auto 模式、任务体无检查项、`fork=on` → 先 ①(及 ①′)后 ②;`fork=off` → 直接走现状 `ensureDecomposed()`(不加理解会话)。已有人工检查项的任务跳过 ①②。① 幂等:`docs/<id>.context.md` 已存在(中断恢复/上一轮遗留)时跳过理解会话,仅补写缺失的 `fork-base`。`docs/<id>.subtasks.md` 已存在的中断注入路径不变(有可用 fork-base 则 ③ 照常分叉,无则冷启动)。
+Entry conditions: auto mode, no checklist in the task body, `fork=on` → run ① (and ①′) first, then ②; `fork=off` → go directly through the status-quo `ensureDecomposed()` (no understand session added). Tasks that already have a manual checklist skip ① and ②. ① is idempotent: when `docs/<id>.context.md` already exists (recovery from interruption / a leftover from a previous round), the understand session is skipped and only a missing `fork-base` is backfilled. The interrupted-injection path for an existing `docs/<id>.subtasks.md` is unchanged (if a usable fork-base exists, ③ forks as usual; otherwise cold start).
 
-## 4. 关键机制
+## 4. Key Mechanisms
 
-### 4.1 理解会话与摘要文件
+### 4.1 Understand Session and Digest File
 
-- 新模板 `understand.md`(全文见 §6):只读理解、预算内**选读**(优先任务正文点名文件与直接相关模块)、写 `docs/<id>.context.md` 四节摘要(相关文件与关键符号 / 约束与前提 / 已有决策与现状 / 风险与未知)、写完即结束。
-- 驱动侧 `ensureUnderstood()`:`requireArtifact` 同款骨架(两次重试 + 隐性阻塞),commit stage `"understand"`,成功后写任务字段 `fork-base: <sessionID>`(session 模式下即最终基点;digest 模式随后被 ①′ 覆写)。摘要文件已存在时幂等跳过,仅补写缺失的 `fork-base`(中断恰好落在摘要写盘与 setForkBase 之间的恢复路径)。
-- **摘要文件是磁盘态兜底**,三重用途:fork 失败时冷启动输入;wrapup/verify/后续任务低成本引用;人工审计(「从磁盘即可理解」哲学)。它不是 fork 的替代品——fork 省的是重复阅读的往返,摘要是降级通道与长期记忆。
-- digest 模式下它还是**基点原料**:context.md 会被逐字注入基点会话、成为全部分叉的前缀,故模板要求摘要紧凑(建议 200 行以内,见 §6 约束 4)。
+- New template `understand.md` (full text in §6): read-only understanding, **selective reading** within budget (prioritizing files named in the task body and directly related modules), writing a four-section digest to `docs/<id>.context.md` (relevant files & key symbols / constraints & preconditions / existing decisions & current state / risks & unknowns), and ending as soon as it is written.
+- Driver-side `ensureUnderstood()`: the same skeleton as `requireArtifact` (two retries + silent block), commit stage `"understand"`; on success it writes the task field `fork-base: <sessionID>` (in session mode this is the final base; in digest mode it is later overwritten by ①′). Idempotent skip when the digest file already exists, backfilling only a missing `fork-base` (the recovery path for an interruption that lands exactly between the digest being written to disk and setForkBase).
+- **The digest file is the on-disk fallback**, with three uses: cold-start input when fork fails; a low-cost reference for wrapup/verify/subsequent tasks; manual audit (the "understandable from disk alone" philosophy). It is not a replacement for fork: fork saves the round trips of repeated reading, while the digest is the degradation channel and the long-term memory.
+- In digest mode it is also the **base material**: context.md is injected verbatim into the base session and becomes the prefix of all forks, so the template requires the digest to be compact (recommended within 200 lines; see §6, constraint 4).
 
-### 4.2 fork 基点:session | digest
+### 4.2 fork base: session | digest
 
-基点 = decompose/子任务会话统一分叉的会话,持久化为 PLAN.md 任务字段 `fork-base`(两模式同名字段,语义均为「分叉基点会话」)。
+The base = the session from which the decompose/subtask sessions uniformly fork, persisted as the PLAN.md task field `fork-base` (same-named field in both modes, meaning "fork base session" in both).
 
-- **`session`**:基点 = 理解会话末端。
-  - 优点:前缀含实际读过的源码与探索过程,分解与执行的接地最全,行级细节不丢失;
-  - 缺点:前缀大小不受控(取决于探索量),逼近 `cap/2` 会触发冷启动防护;provider 缓存未命中时前缀全额计费;基点 sessionID 跨运行失效只能回退冷启动。
-- **`digest`(默认)**:理解完成后 driver 建一个**全新基点会话**——提示词 = context.md 全文 + 要求一句确认(模板见 §7),经 `runSession` 一次性链(`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`,不带 phase、不写进度记录)运行,结束后的 `chain.id` 即基点,`setForkBase` 以 `digest:` 前缀覆写字段。**(2026-09-18 修订)基点一经建立即跨运行持久**:此后每次运行(含中断恢复、子任务未全部完成时的重跑)先校验持久基点存活,存活即复用同一 sessionId 继续分叉,不再每次运行重建;仅失效(存储清理)才从 context.md 重建并覆写字段。基点会话建立后只被 fork、不再下发,前缀恒为摘要全文,复用不引入漂移(代价:运行间隙人工改 context.md 不再自动反映到基点,需删 `fork-base` 字段触发重建——原「无条件重建」语义对该场景顺带生效,属登记取舍)。
-  - 优点:前缀 = 紧凑摘要(大小可控可预估,cap 利用率最高,`cap/2` 防护基本不触发);**可从磁盘确定性重建**——基点 sessionID 失效时从 context.md 重建即恢复(context.md 未变则前缀逐字一致,provider 缓存仍命中),「基点失效」只退化一次重建开销,不构成降级;
-  - 缺点:丢失探索过程的原始细节,子任务需要具体代码时须按摘要指引回读文件(定向回读远廉于盲目探索,但多一跳);
-  - 确认 turn 无工作区改动,`commitTree` 对无改动仓库自然跳过(不产生空提交);两种模式的基点均跨运行持久(2026-09-18 起 digest 同)。
-- **回退链**:持久 digest 基点存活 → 直接复用;失效/未建立 → digest 重建;digest turn 失败(三次瞬时重试后仍会话错误)→ 回退 session 基点(本运行的理解会话仍存活)→ 再回退冷启动。
+- **`session`**: the base = the end of the understand session.
+  - Pros: the prefix contains the source actually read and the exploration process, giving decomposition and execution the fullest grounding, with no line-level detail lost;
+  - Cons: the prefix size is uncontrolled (it depends on how much was explored); approaching `cap/2` triggers the cold-start guard; on a provider cache miss the prefix is billed in full; a base sessionID that expires across runs can only fall back to cold start.
+- **`digest` (default)**: once understanding completes, the driver creates a **brand-new base session**: the prompt = the full text of context.md + a request for one sentence of confirmation (template in §7), run through `runSession` as a one-shot chain (`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`, carrying no phase and writing no progress record); the `chain.id` after it ends is the base, and `setForkBase` overwrites the field with the `digest:` prefix. **(Revised 2026-09-18) Once established, the base persists across runs**: every later run (including recovery from interruption and re-runs while subtasks are not all complete) first checks that the persisted base is alive; if alive, it reuses the same sessionId and keeps forking instead of rebuilding on every run; only when it has expired (storage cleanup) is it rebuilt from context.md and the field overwritten. Once established, the base session is only forked and never prompted again; its prefix is always the full digest text, so reuse introduces no drift (the cost: manual edits to context.md between runs are no longer reflected into the base automatically; deleting the `fork-base` field triggers a rebuild, and the original "unconditional rebuild" semantics happen to cover this scenario, a registered trade-off).
+  - Pros: the prefix = a compact digest (size controllable and predictable, highest cap utilization, the `cap/2` guard essentially never triggers); **deterministically rebuildable from disk**: when the base sessionID expires, rebuilding from context.md restores it (if context.md is unchanged the prefix is verbatim-identical and the provider cache still hits), so "base expired" only costs one rebuild and is not a degradation;
+  - Cons: the raw detail of the exploration process is lost; when a subtask needs specific code it must read files back following the digest's pointers (targeted read-back is far cheaper than blind exploration, but it is one extra hop);
+  - The confirmation turn makes no workspace changes, and `commitTree` naturally skips a repository with no changes (no empty commit is produced); in both modes the base persists across runs (digest too, since 2026-09-18).
+- **Fallback chain**: persisted digest base alive → reuse directly; expired / never established → digest rebuild; digest turn fails (still a session error after three transient retries) → fall back to the session base (the current run's understand session is still alive) → then fall back to cold start.
 
-### 4.3 fork 会话创建与回退
+### 4.3 fork Session Creation and Fallback
 
-- `forkSession(client, base, title)`:`base` 为 §4.2 选定的生效基点;封装 `client.session.fork({ sessionID: base })`;返回 `{data}` 取 `.data.id`;`{error}` 或任何异常 → log「↻ fork 失败(原因),回退全新会话」→ `undefined`。**写成可注入依赖**(fake client 可测)。外部旧版 `--server` 无此路由属预期回退场景,不是错误。分叉成功后把新会话改名为本阶段提交标题(`session.update`,与 git 历史/任务进度对齐,失败仅记明细)。
-- `SessionChain` 增加两个字段:
-  - `forkBase?: string` —— 分叉基点(生效基点会话);
-  - `pending?: string` —— 预创建会话 id,`attempt()` 在 `!reuse` 时优先消费(等效于 `session.create` 的结果),消费即清。
-- 调用时序(**先 fork 后渲染**,warm/cold 提示词才能选对):
-  0. 恢复续跑优先于分叉:链上仍有存活会话且恢复说明(note)待注入 → 不分叉,首个提示词进复用会话(`warm = true`);
-  1. 分叉前经 server 句柄 `syncAgents()`(与 create 路径同款,AGENTS.md 有更新则先重启 server 再分叉);
+- `forkSession(client, base, title)`: `base` is the effective base selected per §4.2; wraps `client.session.fork({ sessionID: base })`; on `{data}` take `.data.id`; on `{error}` or any exception → log 「↻ fork 失败(原因),回退全新会话」 ("↻ fork failed (reason), falling back to a brand-new session") → `undefined`. **Written as an injectable dependency** (testable with a fake client). An external legacy `--server` without this route is an expected fallback scenario, not an error. After a successful fork, the new session is renamed to the current phase's commit title (`session.update`, aligned with git history / task progress; a failure is only logged in detail).
+- `SessionChain` gains two fields:
+  - `forkBase?: string` - the fork base (the effective base session);
+  - `pending?: string` - a pre-created session id; `attempt()` consumes it first when `!reuse` (equivalent to the result of `session.create`), cleared once consumed.
+- Call ordering (**fork first, then render**, so that the warm/cold prompt is chosen correctly):
+  0. Resumption takes precedence over forking: the chain still has a live session and a recovery note is pending injection → do not fork; the first prompt goes into the reused session (`warm = true`);
+  1. Before forking, go through the server handle `syncAgents()` (same as the create path; if AGENTS.md has changed, restart the server first, then fork);
   2. `const forked = await forkSession(client, forkBase, title)`;
-  3. 成功 → `chain.pending = forked`、`warm = true`;失败 → 走 `session.create`、`warm = false`;
-  4. 渲染提示词(warm 条件段见 §8 的 subtask 模板);
-  5. `runExecSession(...)` → `attempt()` 消费 `pending`。
-- 瞬时错误重试(`runSession` 的三次重试)会开全新会话——`pending` 已被首次尝试消费,重试自然回落 create 路径,反馈闭环不受影响。
+  3. Success → `chain.pending = forked`, `warm = true`; failure → take the `session.create` path, `warm = false`;
+  4. Render the prompt (the warm conditional section is in the subtask template, §8);
+  5. `runExecSession(...)` → `attempt()` consumes `pending`.
+- Transient-error retries (the three retries of `runSession`) open a brand-new session: `pending` was already consumed by the first attempt, so retries naturally fall back to the create path and the feedback loop is unaffected.
 
-### 4.4 链与上下文计量
+### 4.4 Chains and Context Accounting
 
-- **每阶段/每子任务新种子链**:`{ pct: 100, used: <基点用量>, at: 0, forkBase }` —— `pct:100` 强制首次不复用(fork 优先);`used` 播种使 `watch()` 的 2×cap steer 阈值按「前缀+新增」计算。
-- 基点用量来源:同次运行取基点会话 `chain.used`(session 模式 = 理解会话跟踪值,基点恰为链上会话时直接取跟踪值;digest 模式新建当年 = 基点确认会话跟踪值,≈ 摘要大小,极小)。恢复运行经 `client.session.messages({ sessionID })` 取末条 assistant 消息 `tokens.input + tokens.cache.read` 重建(近似即可,首个 turn 的事件跟踪会自行校正;取不到按 0)——2026-09-18 起 digest 持久基点复用同此口径。
-- 同一子任务内的反馈重试仍可自然复用当次会话(复用规则不变);**跨子任务不复用**,每项重新从基点分叉。wrapup 与 verify 修复轮不 fork:wrapup 沿用链内复用规则(可能复用末个子任务会话,与现状一致)。
-- 基点用量达到 `cap/2` 时驱动侧不起 fork,直接冷启动(防前缀逼近上限;digest 模式基本不触发)。
-- **steer 开关**(`OPENCODE_AUTO_STEER=off`):`runSubtask`/`executeWhole`(ondemand)不构造 steer——2×cap 交接提示不注入;**且会话结束后的 `used < 2×cap` 交接判定一并停用**(否则自然结束但用量超限的会话会被误要求补写交接文档)。停用后会话要么自然完成,要么由 provider 侧压缩/上限错误收场(错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响)。`--handover-test` 的测试交接是独立机制,不受此开关影响;`used`/`pct` 计量始终保留(复用决策与日志依据)。
+- **New seeded chain per phase/subtask**: `{ pct: 100, used: <基点用量>, at: 0, forkBase }` (the `used` placeholder denotes the base session's usage); `pct:100` forces no reuse on the first turn (fork takes priority); seeding `used` makes `watch()`'s 2×cap steer threshold account for "prefix + new input".
+- Source of the base usage: within the same run, take the base session's `chain.used` (session mode = the understand session's tracked value, taken directly from tracking when the base happens to be a session on the chain; digest mode at creation time = the base confirmation session's tracked value, ≈ the digest size, tiny). A resumed run reconstructs it via `client.session.messages({ sessionID })` from the last assistant message's `tokens.input + tokens.cache.read` (an approximation suffices: the first turn's event tracking corrects it itself; if unavailable, use 0) - since 2026-09-18, reuse of a persisted digest base uses the same basis.
+- Feedback retries within the same subtask can still naturally reuse the current session (reuse rules unchanged); **across subtasks there is no reuse**: each item forks anew from the base. wrapup and verify repair rounds do not fork: wrapup keeps the in-chain reuse rules (it may reuse the last subtask session, same as the status quo).
+- When the base usage reaches `cap/2`, the driver does not fork and cold-starts directly (to keep the prefix from approaching the cap; essentially never triggers in digest mode).
+- **steer switch** (`OPENCODE_AUTO_STEER=off`): `runSubtask`/`executeWhole` (ondemand) build no steer, so the 2×cap handover prompt is not injected; **and the post-session `used < 2×cap` handover check is disabled along with it** (otherwise a session that ends naturally but over budget would be wrongly asked to write a supplementary handover document). Once disabled, a session either completes naturally or ends via a provider-side compaction/cap error (errors go through the existing "session error" path of retrying in a new session; on-disk progress and unified commits are unaffected). The test handover of `--handover-test` is an independent mechanism, unaffected by this switch; `used`/`pct` accounting is always kept (the basis for reuse decisions and logs).
 
-### 4.5 中断恢复
+### 4.5 Interrupted-Run Recovery
 
-- `PhaseKind` 增加 `"understand"`(persistStage/恢复路由对齐现有 decompose 处理)。
-- `.auto/progress.json` 语义不变(单 session 字段,逐会话 active);fork 基点持久在 PLAN.md 任务字段 `fork-base`(digest 基点带 `digest:` 前缀,与理解会话 id 区分),恢复运行据此重新获取基点:**digest 模式先校验持久基点存活,存活即复用、失效才从 context.md 重建**(2026-09-18 起,此前为无条件重建);session 模式校验存活,sessionID 失效(存储清理)→ 自动回退冷启动。session 模式遇 `digest:` 前缀遗留字段(运行中途切换基点模式)剥壳校验,存活的 digest 基点同样作暖前缀复用。
-- PLAN.md 字段行机制(`  - key: value` 紧跟标题且连续)自动承载新字段,解析规则零改动,`setForkBase()` 为 driver 独占写入。
+- `PhaseKind` gains `"understand"` (persistStage / recovery routing aligned with the existing decompose handling).
+- `.auto/progress.json` semantics unchanged (single session field, active per session); the fork base persists in the PLAN.md task field `fork-base` (digest bases carry the `digest:` prefix, distinguishing them from the understand session id), and a resumed run re-acquires the base accordingly: **digest mode first checks that the persisted base is alive, reusing it if alive and rebuilding from context.md only if expired** (since 2026-09-18; previously an unconditional rebuild); session mode checks liveness, and an expired sessionID (storage cleanup) → automatic fallback to cold start. If session mode encounters a leftover field with the `digest:` prefix (the base mode was switched mid-run), it strips the prefix and checks; a live digest base is likewise reused as a warm prefix.
+- The PLAN.md field-line mechanism (`  - key: value` immediately after the title and contiguous) carries the new field automatically, with zero changes to the parsing rules; `setForkBase()` is written by the driver alone.
 
-### 4.6 运行开关:环境变量层(实验期)
+### 4.6 Runtime Switches: Environment-Variable Layer (experimental period)
 
-命名沿用核心既有先例 `OPENCODE_AUTO_SERVER`(src/server.ts)。**核心内一次解析(memo)、全流水线一致,CLI 壳零改动**——实验期免改 `packages/auto` 等壳的命令行交互。
+Naming follows the core's existing precedent `OPENCODE_AUTO_SERVER` (src/server.ts). **Parsed once inside the core (memo), consistent across the whole pipeline, zero CLI-shell changes**: during the experimental period there is no need to touch the command-line interaction of shells like `packages/auto`.
 
-| 环境变量 | 值域 | 缺省 | 作用域 |
+| Env var | Value domain | Default | Scope |
 |---|---|---|---|
-| `OPENCODE_AUTO_FORK` | on\|off | on | 总开关:off = 现状流水线(无理解会话、无分叉),行为零变化 |
-| `OPENCODE_AUTO_FORK_BASE` | session\|digest | digest | 基点模式,仅 fork=on 有意义(§4.2) |
-| `OPENCODE_AUTO_DECOMPOSE_FINE` | on\|off | on | 细粒度分解:decompose-\<phase\> 模板注入细粒度准则段(§5.1) |
-| `OPENCODE_AUTO_STEER` | on\|off | off | 超限交接 steer(2×cap):off = 停用注入与会话后交接判定(§4.4) |
+| `OPENCODE_AUTO_FORK` | on\|off | on | Master switch: off = the status-quo pipeline (no understand session, no forking), zero behavior change |
+| `OPENCODE_AUTO_FORK_BASE` | session\|digest | digest | Base mode, only meaningful when fork=on (§4.2) |
+| `OPENCODE_AUTO_DECOMPOSE_FINE` | on\|off | on | Fine-grained decomposition: the decompose-\<phase\> template injects the fine-grained rule section (§5.1) |
+| `OPENCODE_AUTO_STEER` | on\|off | off | Over-limit handover steer (2×cap): off = disables injection and the post-session handover check (§4.4) |
 
-- 解析(实现独立成 `src/switches.ts`:`parseSwitches` 纯函数供单测直接构造 env 记录驱动 + `autoSwitches` memo 访问器):值为空串视同未设;非法值 throw 中文报错(含变量名与期望值域)→ CLI 退出码 1(与配置「坏文件严格失败」哲学一致)。runner 入口解析一次;`runTask` 启动日志列出**非默认**生效项(默认组合静默,verbose 可查全量)。
-- **不落盘**:环境变量覆盖不写回任何状态文件(区别于宪法键的 init 固化),实验语义 = 本次运行;同一次运行内开关恒定,会话中途不变。
-- **转正路径**:某开关实测定型后 → 升为宪法级键(如 `fork: "on" | "off"`)进 `ProjectConfig` + init 固化 + run 出现对应旗标退出码 1(仿 `--auto-number`);届时环境变量可保留为运行期覆盖通道(优先级 env > config)或退役,另议。原设计 §4.5 的宪法键方案即此路径,实验期暂缓。
+- Parsing (implemented as a standalone `src/switches.ts`: the `parseSwitches` pure function lets unit tests drive it by directly constructing env records + the `autoSwitches` memo accessor): an empty-string value counts as unset; an invalid value throws a Chinese-language error (including the variable name and the expected value domain) → CLI exit code 1 (consistent with the configuration philosophy of "failing strictly on bad files"). Parsed once at the runner entry; the `runTask` startup log lists the effective **non-default** items (the default combination stays silent; verbose can show the full set).
+- **Not persisted to disk**: environment-variable overrides are written back to no state file (unlike the init persistence of constitutional keys); the experimental semantics = this run only; switches are constant within a run and never change mid-session.
+- **Promotion path**: once a switch is settled empirically → promoted to a constitutional-level key (e.g. `fork: "on" | "off"`) into `ProjectConfig` + init persistence + run exiting 1 when the corresponding flag is present (modeled on `--auto-number`); at that point the environment variable can remain a runtime override channel (priority env > config) or be retired, to be decided separately. The constitutional-key scheme in §4.5 of the original design is exactly this path, deferred during the experimental period.
 
-### 4.7 产物文件化与索引式整合
+### 4.7 Artifacts as Files and Index-Style Integration
 
-- 子任务产出文件 driver 机械命名:`docs/<id>/S<NN>.md`(NN 两位递增),避免 slug 清洗歧义;标题写在文件首行。代码类产出即源码树,不重复落文档。
-- wrapup 报告(`docs/<id>.report.md`)改索引式(auto 模式):逐子任务一行(序号 + 一句话结论 + 产物路径),不复制产物内容;只新增整体结论/遗留问题节。off/ondemand(solo,无子任务产物可索引)保持摘要式报告。
+- Subtask artifact files are mechanically named by the driver: `docs/<id>/S<NN>.md` (NN two digits, incrementing), avoiding slug-sanitization ambiguity; the title goes on the first line of the file. Code artifacts are the source tree itself and are not duplicated into documents.
+- The wrapup report (`docs/<id>.report.md`) becomes index-style (auto mode): one line per subtask (index + one-sentence conclusion + artifact path), without copying artifact content; it only adds overall-conclusion / leftover-issues sections. off/ondemand (solo, no subtask artifacts to index) keeps the summary-style report.
 
-## 5. 分阶段分解提示词准则(decompose-\<phase\>)
+## 5. Phase-Specific Decompose Prompt Rules (decompose-\<phase\>)
 
-### 5.1 共通准则(_partials.md 新节 `decompose-rule`)
+### 5.1 Common Rules (new `_partials.md` section `decompose-rule`)
 
-前提:本流水线做的是**子任务分解**——在任务描述规定的范围内切分执行单元,不重新划定任务范围。粒度基准 = 任务描述本身:
+Premise: what this pipeline does is **subtask decomposition**: splitting execution units within the scope prescribed by the task description, not re-drawing the task's scope. The granularity baseline = the task description itself:
 
 ```
 2. 分解粒度准则(以任务描述为基准——在其规定的范围内选择粒度,不扩大、不缩小):
@@ -147,11 +147,11 @@ T-001(subtask=auto, fork=on)
    - 上限导向:每项以单个会话用较小上下文(约 {{contextBudget}} tokens 量级)可完成为宜;
 ```
 
-(`contextBudget` = `formatTokens((contextLimit ?? 64_000) / 2)`,`fine` 为开关解析出的布尔,均经 `baseCtx` 注入;模板引擎对片段内条件段与模板同级求值——`renderPartial` 以同一 ctx 递归渲染,`{{#if fine}}` 写在 `_partials.md` 节内可直接生效。细粒度段仍受各阶段下限保护条款约束,见 §5.2 m。)
+(`contextBudget` = `formatTokens((contextLimit ?? 64_000) / 2)`; `fine` is the boolean parsed from the switches; both are injected via `baseCtx`. The template engine evaluates a partial's conditional sections at the same level as templates: `renderPartial` renders recursively with the same ctx, so `{{#if fine}}` written inside a `_partials.md` section takes effect directly. The fine-grained section is still bound by each phase's floor-protection clause; see §5.2 m.)
 
-### 5.2 阶段化准则(各模板差异段)
+### 5.2 Phase-Specific Rules (per-template difference sections)
 
-- **a 分析**(`decompose-a.md`):
+- **a analysis** (`decompose-a.md`):
 
 ```
    - 按问题/疑点/子系统/风险面切分:每项回答一个明确的问题(如"模块 X 的数据流是
@@ -160,7 +160,7 @@ T-001(subtask=auto, fork=on)
    - 本阶段只产出分析与结论,禁止修改任何实现代码;
 ```
 
-- **d 设计**(`decompose-d.md`):
+- **d design** (`decompose-d.md`):
 
 ```
    - 按设计关注点切分:数据模型、API 契约、模块边界、错误处理、迁移策略等各自成项;
@@ -168,7 +168,7 @@ T-001(subtask=auto, fork=on)
    - 跨关注点一致性检查(各设计文档之间是否矛盾)必须作为独立的收尾子任务;
 ```
 
-- **m 迁移实现**(`decompose-m.md`,默认阶段):
+- **m migration implementation** (`decompose-m.md`, default phase):
 
 ```
    - 垂直薄切片优先:一条可调用路径端到端成项,不按水平层(先全部 schema 再全部
@@ -179,7 +179,7 @@ T-001(subtask=auto, fork=on)
    - 存在依赖顺序时按可执行顺序排列(依赖前项的排在后);
 ```
 
-- **t 测试**(`decompose-t.md`):
+- **t test** (`decompose-t.md`):
 
 ```
    - 按测试面/场景族切分:每项对应一个测试文件或一族紧密相关的场景;
@@ -188,7 +188,7 @@ T-001(subtask=auto, fork=on)
    - 测试执行遵守测试执行协议(启用 --test-by-driver 时脚本交 driver 执行);
 ```
 
-- **v 验收**(`decompose-v.md`):
+- **v acceptance** (`decompose-v.md`):
 
 ```
    - 按验收维度切分(功能符合度、文档完备性、环境与运行、回归等),每维度一项;
@@ -196,20 +196,20 @@ T-001(subtask=auto, fork=on)
    - 只核验与记录,不做修复(差距走既有终审闭环);
 ```
 
-- **k 知识提炼**(`decompose-k.md`):
+- **k knowledge distillation** (`decompose-k.md`):
 
 ```
    - 按知识产物切分:坑点清单、可复用模式、README/交接文档等各自成项;
    - 每项产出一份独立文档,可被后续任务直接引用;
 ```
 
-### 5.3 模板骨架与选择逻辑
+### 5.3 Template Skeletons and Selection Logic
 
-- 六份模板骨架一致:现有 decompose.md 的 head/taskBlock/blocked/mode 段 + 「你本次只做任务分解,不写实现代码。当前处于阶段 {{phaseName}}」+ `{{> decompose-rule}}` + 阶段化准则段 + 检查项格式(`- [ ]`,描述自包含、末尾注明产出)+ 现有约束段(只做分解/state-rule/question-rule/硬性要求/写完即结束)。
-- `renderDecompose` 模板名 `decompose-${opts.phase ?? "m"}`;库中无此名回退 `decompose`。目标目录覆盖按名生效(`.opencode/auto/prompts/decompose-m.md`),`PROTOCOL_MARKERS` 六份均登记 `["- [ ]"]`。
-- `baseCtx` 增加 `phase`/`phaseName`/`contextBudget`/`fine`。
+- The six templates share one skeleton: the existing decompose.md's head/taskBlock/blocked/mode sections + 「你本次只做任务分解,不写实现代码。当前处于阶段 {{phaseName}}」 ("this time you only do task decomposition and write no implementation code; the current phase is {{phaseName}}") + `{{> decompose-rule}}` + the phase-specific rule section + the checklist-item format (`- [ ]`, self-contained description, artifact noted at the end) + the existing constraint sections (decomposition only / state-rule / question-rule / hard requirements / end as soon as written).
+- `renderDecompose` uses the template name `decompose-${opts.phase ?? "m"}`; if the library has no such name it falls back to `decompose`. Target-directory overrides take effect by name (`.opencode/auto/prompts/decompose-m.md`); all six are registered in `PROTOCOL_MARKERS` as `["- [ ]"]`.
+- `baseCtx` gains `phase`/`phaseName`/`contextBudget`/`fine`.
 
-## 6. understand 模板全文
+## 6. Full understand Template Text
 
 ```
 {{> head}}
@@ -245,9 +245,9 @@ T-001(subtask=auto, fork=on)
    前缀);后续会话默认继承本会话已加载的上下文,仅缺漏时回读此文件。
 ```
 
-(marker:`["context.md"]`;渲染函数 `renderUnderstand`。)
+(marker: `["context.md"]`; render function `renderUnderstand`.)
 
-## 7. context-base 模板全文(digest 基点会话)
+## 7. Full context-base Template Text (digest base session)
 
 ```
 以下内容是任务 {{taskId}} 理解阶段产出的背景摘要(docs/{{taskId}}.context.md 全文)。
@@ -260,13 +260,13 @@ T-001(subtask=auto, fork=on)
 不要修改任何内容,确认后立即结束会话。
 ```
 
-(登记 embedded 注册表 + `with { type: "file" }` 导入;无 driver 解析协议,不登记 `PROTOCOL_MARKERS`;渲染函数 `renderContextBase(task, digest)`,`digest` = context.md 全文。)
+(Registered in the embedded registry + imported `with { type: "file" }`; no driver-parsing protocol, not registered in `PROTOCOL_MARKERS`; render function `renderContextBase(task, digest)`, where `digest` = the full text of context.md.)
 
-## 8. subtask / wrapup 模板增补
+## 8. subtask / wrapup Template Additions
 
-**subtask.md**(在现有基础上):
+**subtask.md** (on top of the existing template):
 
-- 任务列表段(替换现有单条呈现):
+- Task-list section (replacing the existing single-item presentation):
 
 ```
 本任务的完整子任务列表(按序执行,其他项由其他会话完成,不要碰):
@@ -278,7 +278,7 @@ T-001(subtask=auto, fork=on)
 - [ ] {{subtask}}
 ```
 
-- 背景段(warm/cold 单一模板条件化;warm 对 session/digest 两基点通用):
+- Background section (warm/cold conditionalized in a single template; warm applies to both the session and digest bases):
 
 ```
 {{#if warm}}本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在
@@ -286,62 +286,62 @@ T-001(subtask=auto, fork=on)
 docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)。{{/if}}
 ```
 
-- 产出约定段:
+- Output convention section:
 
 ```
 产出约定:本项若产出文档/分析/设计类内容,写入 {{outputFile}}(独立文件,标题写在
 首行,不并入其他文档);代码类产出直接落于源码树。
 ```
 
-(`outputFile` = `docs/<id>/S<NN>.md`,driver 机械命名。`subtaskList`/`outputFile` 均带条件回退:调用方未提供时 `renderSubtask` 从任务正文检查项推导 index/列表/产出文件,无列表时渲染单条呈现——旧调用不传参仍完整;`runSubtask` 现传 `index`/`warm`,列表与产出文件经推导。)
+(`outputFile` = `docs/<id>/S<NN>.md`, mechanically named by the driver. `subtaskList`/`outputFile` both carry a conditional fallback: when the caller does not provide them, `renderSubtask` derives the index/list/artifact file from the task body's checklist items, and renders the single-item presentation when there is no list, so old calls that pass no arguments remain complete; `runSubtask` currently passes `index`/`warm`, with the list and artifact file derived.)
 
-**wrapup.md**:报告改索引式——逐子任务一行(序号 + 一句话结论 + 产物路径 `docs/<id>/S<NN>.md` 或代码位置),不复制/改写子任务产物内容;仅新增整体结论与遗留问题两节(solo 模式保持摘要式,见 §4.7)。
+**wrapup.md**: the report becomes index-style: one line per subtask (index + one-sentence conclusion + artifact path `docs/<id>/S<NN>.md` or code location), without copying/rewriting subtask artifact content; only two new sections, overall conclusion and leftover issues (solo mode keeps the summary style; see §4.7).
 
-## 9. 不变量(实现不得破坏)
+## 9. Invariants (the implementation must not break them)
 
-1. **driver 独占状态写入**:PLAN.md/CURRENT.md/verified(含新字段 `fork-base`)全由 driver 写;`protect.ts` 无需改动(driver 写入已放行)。
-2. **统一提交**:逐会话 `afterSession` 提交不变;fork 只改会话创建方式,不改 git 行为(digest 基点会话无工作区改动,自然零提交)。
-3. **独立判定会话永不 fork**:verify-judge/review/review-fix/final 系会话全新创建——独立判断是完成判定的基石。
-4. **串行执行**:同一时刻至多一个会话写目标目录文件(现状注释明示的假设)。
-5. **完成判定不靠自报**:子任务仍由 driver 勾选(信任 + 任务级验收兜底);fork 不改变勾选时机。
-6. **退出码语义**不变。
-7. 运行期对 opencode server 的依赖面只新增 fork 路由,且失败自动回退——外部 `--server` 兼容性不降级。
-8. **实验开关只读环境**:环境变量层不写任何状态文件;解析一次、全流水线一致;宪法键转正前不进 `ProjectConfig`。
-9. **基点会话 driver 主导**:context-base 会话由 driver 建立、提示词 driver 拼装,AI 仅确认不产出;`fork-base` 字段始终 driver 独占写入。
-10. **steer=off 不改判定与提交语义**:仅停用 2×cap 交接注入与交接判定;勾选、验收、统一提交照旧。
+1. **Driver-exclusive state writes**: PLAN.md/CURRENT.md/verified (including the new field `fork-base`) are all written by the driver; `protect.ts` needs no change (driver writes are already allowed through).
+2. **Unified commits**: the per-session `afterSession` commit is unchanged; fork only changes how sessions are created, not git behavior (the digest base session makes no workspace changes, so naturally zero commits).
+3. **Independent-verdict sessions never fork**: the verify-judge/review/review-fix/final family of sessions are created brand new: independent judgment is the cornerstone of completion determination.
+4. **Serial execution**: at most one session writes target-directory files at any moment (the assumption stated explicitly in the current comments).
+5. **Completion determination does not rely on self-reporting**: subtasks are still checked off by the driver (trust + task-level acceptance as the backstop); fork does not change when check-offs happen.
+6. **Exit-code semantics** unchanged.
+7. The runtime dependency surface on the opencode server only adds the fork route, with automatic fallback on failure: external `--server` compatibility does not degrade.
+8. **Experimental switches only read the environment**: the environment-variable layer writes no state files; parsed once, consistent across the whole pipeline; nothing enters `ProjectConfig` before promotion to constitutional keys.
+9. **The base session is driver-led**: the context-base session is created by the driver and its prompt is assembled by the driver; the AI only confirms and produces nothing; the `fork-base` field is always written by the driver alone.
+10. **steer=off changes no determination or commit semantics**: it only disables 2×cap handover injection and the handover check; check-offs, acceptance, and unified commits proceed as before.
 
-## 10. 回退矩阵
+## 10. Fallback Matrix
 
-| 场景 | 行为 |
+| Scenario | Behavior |
 |---|---|
-| fork=off | 现状流程,零变化(无理解会话) |
-| fork 调用返回 error / 抛错(旧路由、基点被清理) | log 后全新会话 + 冷启动提示词 |
-| 基点用量 > cap/2 | 驱动侧不起 fork,直接冷启动(digest 基点极小,基本不触发) |
-| 恢复运行基点 sessionID 失效 | session 模式:回退冷启动;digest 模式:从 context.md 重建基点(2026-09-18 起为失效时重建——存活则直接复用持久基点,不再每次运行重建) |
-| digest 基点会话建立失败(会话错误×3) | 回退 session 基点(本运行理解会话)→ 再回退冷启动 |
-| understand 两次未产出 context.md | 隐性阻塞(现有 requireArtifact 语义) |
-| context.md 缺失 + 冷启动 | 提示词已兜底(「不存在则按需自行阅读源码」) |
-| steer=off 且会话撞 provider 上限 | 会话错误 → 既有换新会话重试(RETRIES=3),磁盘进度不丢 |
+| fork=off | Status-quo flow, zero change (no understand session) |
+| fork call returns error / throws (legacy route, base cleaned up) | log, then a brand-new session + cold-start prompt |
+| Base usage > cap/2 | The driver does not fork; cold start directly (digest bases are tiny, essentially never triggers) |
+| A resumed run finds the base sessionID expired | session mode: fall back to cold start; digest mode: rebuild the base from context.md (since 2026-09-18, rebuilt only on expiry: if alive, the persisted base is reused directly instead of rebuilding on every run) |
+| digest base session fails to be established (session error ×3) | Fall back to the session base (the current run's understand session) → then to cold start |
+| understand produces no context.md in two tries | Silent block (existing requireArtifact semantics) |
+| context.md missing + cold start | The prompt already covers it (「不存在则按需自行阅读源码」, "if absent, read the source code on your own as needed") |
+| steer=off and the session hits the provider cap | Session error → the existing retry in a new session (RETRIES=3); on-disk progress is not lost |
 
-## 11. 风险与开放问题
+## 11. Risks and Open Questions
 
-- provider 缓存未命中时 fork 前缀全额计费:冷启动路径 + `fork=off` 兜底;日志同时输出基点用量供人工判断。
-- fork 会话 SDK 返回形状(已落地):`{ data }` 取 `.data.id`、`{error}` 与调用异常三分支在 `forkSession` 统一处理(与 `session.create` 同构),fake client 单测覆盖(test/session-api.test.ts)。
-- **A/B 实验矩阵**(定型默认值与转正范围的依据):{fork on\|off} × {fork-base session\|digest} × {fine on\|off} × {steer on\|off};指标:任务墙钟时间、总 tokens(input / cache.read 分计,取自 chain.used 跟踪与日志)、交接与重试次数、子任务数与子任务均上下文、verify/review 通过率。注意 fine=on 且 fork=off 会重现「细粒度 × 重复探索」的旧成本结构,仅作对照组,不建议日常使用。
-- digest 模式摘要失真:摘要缺细节时子任务须按指引回读文件;session 模式与冷启动提示词兜底;**混合基点**(分解用 session 保接地、执行用 digest 保瘦前缀)为候选改进,首期不做。
-- digest 确认 turn 依赖模型自律(应只回一句):fork 的 `messageID` 语义已在源码确认(见 §11.1 末条),但据此去掉确认 turn 会让分叉末条停在 user 消息,provider 是否接受连续两条 user 消息需实测,故暂不改实现。
-- 摘要超长(model 无视紧凑建议)时 digest 前缀优势收窄:`cap/2` 防护与 understand 模板的行数建议兜底。
-- steer=off 下长会话可能触发 provider 侧压缩(compaction)而非交接:对比「压缩续命」与「交接换新」的质量差异正是实验目的之一;机制上两者都不破坏磁盘进度与统一提交。
-- 后续扩展(非本期):依赖组声明与只读子任务组并行;`subtaskList` 中标注依赖序的协议。
+- When the provider cache misses, the fork prefix is billed in full: the cold-start path + `fork=off` are the fallback; the log also prints the base usage for human judgment.
+- The SDK's return shape for fork sessions (landed): take `.data.id` from `{ data }`; the three branches, `{error}` and call exceptions included, are handled uniformly in `forkSession` (isomorphic with `session.create`), covered by fake-client unit tests (test/session-api.test.ts).
+- **A/B experiment matrix** (the basis for settling defaults and the promotion scope): {fork on\|off} × {fork-base session\|digest} × {fine on\|off} × {steer on\|off}; metrics: task wall-clock time, total tokens (input / cache.read counted separately, taken from chain.used tracking and logs), handover and retry counts, number of subtasks and average per-subtask context, verify/review pass rate. Note that fine=on together with fork=off reproduces the old cost structure of "fine granularity × repeated exploration"; it is a control group only, not recommended for daily use.
+- Digest distortion in digest mode: when the digest lacks detail, subtasks must read files back following its pointers; session mode and the cold-start prompt are the fallbacks; **hybrid base** (session for decompose to keep grounding, digest for execution to keep a lean prefix) is a candidate improvement, not in the first phase.
+- The digest confirmation turn relies on model self-discipline (it should reply with a single sentence): the semantics of fork's `messageID` have been confirmed in the source (see the last item of §11.1), but removing the confirmation turn on that basis would leave the fork's last message a user message; whether providers accept two consecutive user messages needs real testing, so the implementation is left unchanged for now.
+- When the digest runs overlong (the model ignores the compactness advice), the digest prefix's advantage narrows: the `cap/2` guard and the understand template's line-count advice are the backstops.
+- With steer=off, long sessions may trigger provider-side compaction instead of a handover: comparing the quality difference between "compaction to stay alive" and "handover to a new session" is exactly one of the experiment's goals; mechanically, neither breaks on-disk progress or unified commits.
+- Later extensions (not this phase): dependency-group declarations and parallel read-only subtask groups; a protocol for annotating dependency order in `subtaskList`.
 
-### 11.1 已否决:以「极简开局会话」作为全局分叉基点
+### 11.1 Rejected: using a "minimal opening session" as the global fork base
 
 `AUTO-DECISION: 不引入任务无关的「开局基点」会话(先用极简输入如 hi 建一个会话完成 system 组装与缓存预热,此后全流水线会话都从它分叉)——opencode 的 fork 语义决定这条路没有净增益。已否决,记录如下备查。`
 
-- **fork 只搬消息**:`Session.fork`(`packages/opencode/src/session/session.ts:693`)逐条克隆消息 info 与 parts(含工具输出),不复制 agent / model / permission,不设 `parentID`,**不复制任何 system 上下文**。
-- **system 每 turn 现场重建**:`session/prompt.ts` 每步重新求值 `SystemPrompt.environment` / `Instruction.system()`(读 AGENTS.md、CLAUDE.md、`config.instructions`,见 `session/instruction.ts`)/ `SystemPrompt.skills` / `SystemPrompt.mcp`,再由 `session/llm/request.ts` 与 agent 契约拼成 system,工具集按 agent/permission 重算;auto 侧每次 `client.session.prompt` 都显式带 `agent`(`src/runner.ts` 的 `attempt`)。故分叉会话与全新会话拿到的 system 与工具**完全一致**——AGENTS.md 与工具上下文对全新会话本就无条件生效,不需要靠 fork 传递。
-- **缓存前缀不增加**:两条路径的 `system + tools` 前缀逐字相同,开局会话不扩大可复用前缀,反而给每个分叉多加一对 user/assistant 消息(纯文本基点与「把同一段文本注入每个首轮提示词」token 等价,且多一次 assistant 回合)。
-- **缓存预热无收益**:本次运行的第一个真实会话即完成预热;专设开局会话只是把预热提前一个回合,多付一次推理往返。
-- **「AGENTS.md 变更后须重建基点」的顾虑不成立**:AGENTS.md 每 turn 现场重读,分叉会话不会带着旧内容;既有 `syncAgents()`(`src/server.ts`,指纹变化即重启 server)已覆盖新建会话与分叉两条路径。
-- **结论边界**:fork 唯一独有的传递物是**消息历史(含工具输出)**。所以 §4.2 的 digest / session 基点这类「已读过文件、已形成理解」的基点依然成立;任务无关的开局基点没有可传递物。将来若只想让更多会话共享一段固定文本,直接做成 `_partials.md` 公共片段注入各首轮提示词即可。
-- **(开放问题闭环)`messageID` 语义**:`msgs.slice(0, target)`,`target` = 该消息下标——复制到指定消息**之前**为止,不含该条。以 digest 确认 turn 的 assistant 消息 id 分叉即可得到「只含摘要 user 消息」的确定性前缀;但这样分叉出的会话末条是 user 消息,再下发提示词会形成连续两条 user 消息,provider 是否接受**需实测**,故本次只记录语义,不改 `ensureForkBase`。
+- **fork only carries messages**: `Session.fork` (`packages/opencode/src/session/session.ts:693`) clones each message's info and parts (including tool outputs) one by one; it does not copy agent / model / permission, does not set `parentID`, and **copies no system context whatsoever**.
+- **The system is rebuilt on the spot every turn**: `session/prompt.ts` re-evaluates `SystemPrompt.environment` / `Instruction.system()` (reads AGENTS.md, CLAUDE.md, `config.instructions`; see `session/instruction.ts`) / `SystemPrompt.skills` / `SystemPrompt.mcp` at every step, then `session/llm/request.ts` assembles the system together with the agent contract, and the tool set is recomputed per agent/permission; on the auto side, every `client.session.prompt` explicitly carries `agent` (`attempt` in `src/runner.ts`). So forked sessions and brand-new sessions receive **exactly identical** systems and tools: AGENTS.md and tool context apply unconditionally to brand-new sessions anyway and need no fork to carry them over.
+- **The cacheable prefix does not grow**: the `system + tools` prefix is verbatim-identical on both paths; an opening session does not enlarge the reusable prefix, and on the contrary adds one extra user/assistant message pair to every fork (a plain-text base is token-equivalent to "injecting the same piece of text into every first-turn prompt", plus one extra assistant turn).
+- **Cache warm-up yields no gain**: the first real session of this run completes the warm-up; a dedicated opening session merely moves the warm-up one turn earlier and pays one extra inference round trip.
+- **The concern that "the base must be rebuilt once AGENTS.md changes" does not hold**: AGENTS.md is re-read on the spot every turn, so forked sessions never carry stale content; the existing `syncAgents()` (`src/server.ts`, restarts the server on a fingerprint change) already covers both paths, creating a new session and forking.
+- **Scope of the conclusion**: the only thing fork alone carries over is **message history (including tool outputs)**. That is why bases like §4.2's digest / session bases, ones that "have already read the files and formed an understanding", still stand; a task-agnostic opening base has nothing to carry over. In the future, if the goal is merely for more sessions to share a fixed piece of text, simply make it a common `_partials.md` partial injected into every first-turn prompt.
+- **(Open question closed) `messageID` semantics**: `msgs.slice(0, target)`, where `target` = that message's index: it copies up to just **before** the specified message, excluding it. Forking at the digest confirmation turn's assistant message id yields a deterministic prefix that "contains only the digest user message"; but the session forked that way ends on a user message, and issuing another prompt would form two consecutive user messages: whether providers accept that **needs real testing**, so this time only the semantics are recorded and `ensureForkBase` is not changed.

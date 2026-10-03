@@ -148,7 +148,7 @@ The person's hypothesis — early one-sided explorations lingering as dead weigh
 | # | artifact:line | defect → correction |
 |---|---|---|
 | A1 | `plans/0035:9` | consumption-list pointer to 0028 → drop/fold into 0035's banner, same commit as the deletion |
-| A2–A8 | `plans/{0002,0005,0009,0011,0053,0066,0067}` headers | stale status banners (never-landed→blocked; 唯一设计基准→retired-by-0044; 未实施→landed-then-superseded; awaiting-rulings→landed; 实施延后→landed; 未立项→chartered+landed T-086–T-098) |
+| A2–A8 | `plans/{0002,0005,0009,0011,0053,0066,0067}` headers | stale status banners (never-landed→blocked; sole-design-baseline→retired-by-0044; not-implemented→landed-then-superseded; awaiting-rulings→landed; implementation-deferred→landed; not-chartered→chartered+landed T-086–T-098) |
 | A9 | `AGENTS.md:51` | protocol-string line says "still Chinese until the owning batch flips" — the flip program **closed 2026-09-28** (6 CJK lines remain in src, all comments; zero in templates/goldens); 0035's own retirement condition is met → rewrite the line; 0035 kept as registry record |
 | A10 | `docs/structure.md:72` | "14 never-rejecting calls" → 13 |
 | A11 | `plans/0064:27,38` | "the 14-call AgentClient seam" → 13 (live-reference doc; keeping current is sanctioned) |
@@ -207,9 +207,9 @@ Verdict key: **live** = live-reference (keep, keep current) · **keep** = histor
 | 0006 | keep | --phases + migration params; superseded by 0047/0052; unique k-phase record (superseded) |
 | 0007 | keep | verbatim PLAN.md archive T-001..T-024; founding record (landed-then-retired) |
 | 0008 | keep | precise-resume handover; design truth moved to 0009/0015/0018 (superseded) |
-| 0009 | fix (A4) | verify 三段式 + --review; retired by 0044 (landed-then-retired) |
+| 0009 | fix (A4) | verify three-stage pass + --review; retired by 0044 (landed-then-retired) |
 | 0010 | keep | stable-refs storage + checking; checking half retired 0061 A3/A5, storage half live (landed-then-retired) |
-| 0011 | fix (A5) | stable-refs P1 spec; header "未实施" is false — landed then superseded (superseded) |
+| 0011 | fix (A5) | stable-refs P1 spec; header "not implemented" is false — landed then superseded (superseded) |
 | 0012 | live | step mode; OPENCODE_AUTO_STEP live (landed-live) |
 | 0013 | keep | refcheck scope + recovery; mechanism deleted 0061 A3, banner correct (landed-then-retired) |
 | 0014 | live | /exit graceful exit; the control service (landed-live) |
@@ -264,8 +264,8 @@ Verdict key: **live** = live-reference (keep, keep current) · **keep** = histor
 | 0063 | live | Rust reimplementation analysis; standing decision, T-3 half-fired (analysis) |
 | 0064 | live | positioning alignment — the vision baseline; fix A11 (14→13) (analysis) |
 | 0065 | live | artifact-declaration pitfalls; F1–F4 live defects, fix unit due (unlanded-partial) |
-| 0066 | fix (A7) | quota module plan; "实施延后" stale — landed 2026-10-01 (landed-live) |
-| 0067 | fix (A8) | headless service evolution; "未立项" false — chartered + landed T-086–T-098 (draft) |
+| 0066 | fix (A7) | quota module plan; "implementation deferred" stale — landed 2026-10-01 (landed-live) |
+| 0067 | fix (A8) | headless service evolution; "not chartered" false — chartered + landed T-086–T-098 (draft) |
 | 0068 | live | parallel execution lanes; S1–S6 landed T-099–T-104 (landed-live) |
 
 <!-- auto: eof -->

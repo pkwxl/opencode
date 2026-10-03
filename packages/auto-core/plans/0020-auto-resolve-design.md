@@ -1,254 +1,254 @@
-# 自主决策(AUTO-DECISION)与代答决策(AUTO-RESOLVE)分离设计
+# Design: separating autonomous decisions (AUTO-DECISION) from auto-resolved decisions (AUTO-RESOLVE)
 
-状态: **已实施**(2026-09-12;T-001..T-008 全部落地,`bun typecheck` 通过、
-`bun test` 616 pass)。计划文件 `plans/AUTO_RESOLVE_PLAN.md`(含动机、已确认口径与
-八任务拆分)。本文承担两件事: ① 把口径/判据/schema/挂点/报文固定为实施的唯一依据;
-② 记录 T-001 对计划所引全部代码位置的核实结果与**四处修正**(§J)。设计基准行号以
-auto-core 分支 `bf745fa94`(改造前)为准,§G 表末另附实施后的实际落点(T-008 回填)。
+Status: **Implemented** (2026-09-12; T-001..T-008 all landed, `bun typecheck` passes,
+`bun test` 616 pass). Plan file `plans/AUTO_RESOLVE_PLAN.md` (contains the motivation, the confirmed stances, and the
+eight-task breakdown). This document does two things: ① fix the stances/criteria/schema/hooks/report messages as the single basis for implementation;
+② record T-001's verification of every code location cited by the plan, plus **four corrections** (§J). Design-baseline line numbers follow the
+auto-core branch `bf745fa94` (before the changes); the end of the §G table appends the actual post-implementation landing points (backfilled in T-008).
 
-体例仿 `plans/0019-stats-timing-design.md`。台账与报文机制常态启用、零开关,持久化在目标
-目录 `.auto/resolves.json`(gitignore 内、driver 独占写、不进 protect 名单);**唯一
-新增开关 `OPENCODE_AUTO_ASK` 管的是提问策略**,不是日志级别。
+Style follows `plans/0019-stats-timing-design.md`. The ledger and report mechanisms are always on with zero switches, persisted in the target
+directory's `.auto/resolves.json` (inside gitignore, driver-exclusive writes, not on the protect list); **the sole
+new switch `OPENCODE_AUTO_ASK` governs question strategy**, not log level.
 
-## A. 动机
+## A. Motivation
 
-现状只有一个标记 `AUTO-DECISION`,同时承载两种性质完全不同的事:
+Today a single marker `AUTO-DECISION` carries two things of completely different natures:
 
-1. **纯工程裁量** —— AI 在多个合理实现方案中自行取舍(算法、内部结构、命名、文件
-   组织、测试写法)。本就该由 AI 做,记录只为留档。
-2. **被压制的提问** —— `templates/prompts/_partials.md:14` 的 `question-rule` 明确
-   要求:除权限类问题外,"需求歧义、多种合理方案、数据异常、环境缺失"一律**不要
-   调用 question 工具**。这类分歧点本应由用户拍板,是无人值守流水线为了不停机而让
-   AI 代替用户闭环的。
+1. **Pure engineering discretion** — the AI picks among several reasonable implementation options on its own (algorithms, internal structure, naming, file
+   organization, test style). This was always the AI's to make; the record exists only for archiving.
+2. **Suppressed questions** — the `question-rule` at `templates/prompts/_partials.md:14` explicitly
+   requires that, apart from permission-related problems, "需求歧义、多种合理方案、数据异常、环境缺失" (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) all **must not
+   call the question tool**. These divergence points should have been decided by the user; the unattended pipeline has the AI close the loop
+   in the user's place so as not to stop.
 
-两者混在同一标记里,第 2 类被第 1 类淹没:一个任务十几条 `AUTO-DECISION`,用户无从
-分辨哪几条其实是"系统替我做了主"。
+With both mixed into one marker, category 2 drowns in category 1: a task produces a dozen-plus `AUTO-DECISION` lines and the user has no way to
+tell which ones are actually "the system decided on my behalf".
 
-driver 侧对这两类**完全无感知**:`src/runner.ts:74` 的 `autoAnswer` 把非权限提问
-自动答复掉,`src/runner.ts:2620` 打一行 `→ 自动答复: …` 就过去了;这一行淹没在会话
-日志里,任务结束报文(`src/loop.ts:1006` taskEndLines)不提、阶段收口
-(`src/loop.ts:1028`)不提、轮次完成(`src/loop.ts:1048`)不提。跑完一轮 24 个任务,
-不翻日志就不知道系统替人做了多少主。
+The driver side is **completely blind** to both categories: `autoAnswer` at `src/runner.ts:74` auto-answers non-permission questions,
+`src/runner.ts:2620` prints a `→ 自动答复: …` (auto-answer) line and moves on; that line drowns in the session
+log — the task-end report (`src/loop.ts:1006` taskEndLines) does not mention it, the phase close
+(`src/loop.ts:1028`) does not, the round completion (`src/loop.ts:1048`) does not. After a 24-task round,
+you cannot know how often the system decided for humans without digging through the logs.
 
-两条规则是**因果绑定**的:正因为 `question-rule` 压制提问,决策才不可见;正因为不
-可见,才必须强制记录。既有设计把这条因果链固化成唯一形态,于是「计划已足够完备、
-AI 本无须裁量」的场景也被迫产出大量 AUTO-DECISION 留痕。
+The two rules are **causally bound**: precisely because `question-rule` suppresses questions, the decisions are invisible; precisely because they are
+invisible, forced recording becomes necessary. The existing design persists this causal chain as the only form, so even scenarios where "the plan is already complete enough that
+the AI needs no discretion" are forced to produce large amounts of AUTO-DECISION traces.
 
-目标: 把"代答决策"从"自主决策"里拆出来,给它独立标记 `AUTO-RESOLVE`、独立台账、
-独立的高亮报文通道;并把那条因果链**做成可切换的两种提问策略**,让记录量与场景匹配。
+Goal: split "proxy decisions" out of "autonomous decisions", giving them the separate marker `AUTO-RESOLVE`, a separate ledger,
+and a separate highlight report channel; and turn that causal chain into **two switchable question strategies** so the amount of recording matches the scenario.
 
-## B. 口径(已确认决策)
+## B. Stances (confirmed decisions)
 
-- **`AUTO-DECISION`** = AI 思考过程中的自主决策,凭工程与架构能力在多个合理技术
-  方案中自行裁量。归常规工程日志,**不上终端高亮**。
-- **`AUTO-RESOLVE`** = 本应询问用户、但被自动放行或代答的决策。存在一个待决的交互
-  分歧点,AI 代替用户将其闭环(Resolve)。任务结束时**高亮置顶**。
-- **提问策略与 AUTO-DECISION 记录义务同进同退**,由单一开关切换(§E)。绑在一起
-  是因果使然:压制提问 → 决策不可见 → 必须记录;允许提问 → 决策以提问形式浮出水面
-  → 无须另行留痕。拆成两个独立布尔量会造出「压制提问且不记录」这种既无可见性又无
-  留痕的组合,不提供。
-- **`AUTO-DECISION` 在 ask 档下不是「降低门槛」而是「不要求」**。要留痕走缺省
-  suppress 档,要轻量走 ask 档、由提问本身承担可见性。不设"按架构敏感度自适应"这类
-  需 AI 自评的中间档 —— 那是在归属判据之外再叠一道模糊阈值,两道软判据串联只会比
-  一道更不可控。
-- **仅回落自动答复才计入 AUTO-RESOLVE**。`--wait-answer` 下人工真答了的提问不计
-  (`src/watch.ts:317` 的 `if (human)` 分支)—— 那是真人做的决定。
-- **dryrun 预检会话不计**。预检只探查权限(`src/watch.ts:301` 的
-  `opts.dryrun ? false : …`),不产生工程决策。
-- **展示分级复用既有 `vlog` 通道,不为「显示多少」新造开关**。`src/log.ts:11-34` 已
-  提供三档:`--verbose` 终端+文件、`--interactive` 仅文件、外壳 `audit` 画像下
-  `vlog` 恒写日志文件。AUTO-DECISION 的计数走 `vlog` 即"缺省不打扰、需要时可追溯"。
-- **`AUTO-DECISION` 不进台账**。`collectAgentResolves` 对它只回计数、不落
-  `.auto/resolves.json` —— 台账的存在理由是驱动高亮,AUTO-DECISION 不参与高亮就不
-  需要行级持久化,它的持久轨迹本来就是进 git 的标记行本身。
-- **独立文件,不并入 `stats.json`** —— stats 有 30s 心跳高频写(`src/stats.ts` 的
-  增量落盘),塞进一个会增长的问题文本数组会让每次心跳重写全量文本。
-- 持久审计轨迹靠进 git 的两样东西:代码/文档里的 `AUTO-RESOLVE:` 标记行本身,与
-  `docs/T-NNN/report.md` 的「自动代答问题」节。`.auto/resolves.json` 只是 driver 的
-  计数与高亮依据,丢了不影响正确性。
-- 台账写失败**全静默**,永不影响流程与退出码(照搬 stats 的健壮性口径)。
+- **`AUTO-DECISION`** = an autonomous decision made in the AI's thinking process, exercising its own judgment among several reasonable technical
+  options on engineering and architectural merit. It belongs to regular engineering logs, **no terminal highlight**.
+- **`AUTO-RESOLVE`** = a decision that should have been asked of the user but was automatically waved through or answered in their place. A pending interactive
+  divergence point exists, and the AI closes it (Resolve) for the user. **Highlighted and pinned** at task end.
+- **The question strategy and the AUTO-DECISION recording obligation advance and retreat together**, switched by a single switch (§E). Binding them
+  is dictated by causality: suppress questions -> decisions invisible -> must record; allow questions -> decisions surface as questions
+  -> no separate trace needed. Splitting them into two independent booleans would create a "suppress questions and don't record" combination with neither visibility nor
+  trace; not offered.
+- **Under the ask mode `AUTO-DECISION` is not "a lowered bar" but "not required"**. For traces, use the default
+  suppress mode; for lightweight, use the ask mode and let the questions themselves carry visibility. No "adapt by architectural sensitivity" style
+  middle tier that requires AI self-assessment — that would stack a fuzzy threshold on top of the ownership criteria; two soft criteria in series are only less
+  controllable than one.
+- **Only fallback auto-answers count as AUTO-RESOLVE**. Questions genuinely answered by a human under `--wait-answer` do not count
+  (the `if (human)` branch at `src/watch.ts:317`) — that is a real person's decision.
+- **Dryrun pre-check sessions do not count**. The pre-check only probes permissions (the
+  `opts.dryrun ? false : …` at `src/watch.ts:301`) and produces no engineering decisions.
+- **Display tiering reuses the existing `vlog` channel; no new switch for "how much to show"**. `src/log.ts:11-34` already
+  provides three tiers: `--verbose` terminal+file, `--interactive` file only, and under the shell `audit` profile
+  `vlog` always writes the log file. Routing the AUTO-DECISION count through `vlog` means "quiet by default, traceable when needed".
+- **`AUTO-DECISION` does not enter the ledger**. `collectAgentResolves` returns only a count for it and does not persist to
+  `.auto/resolves.json` — the ledger's reason to exist is driving the highlight; since AUTO-DECISION does not participate in the highlight it needs no
+  line-level persistence, and its persistent trace is anyway the marker lines themselves, which go into git.
+- **A separate file, not merged into `stats.json`** — stats has high-frequency 30s heartbeat writes (incremental persistence in `src/stats.ts`);
+  stuffing in a growing array of question texts would make every heartbeat rewrite the full text.
+- The persistent audit trail rests on two things that enter git: the `AUTO-RESOLVE:` marker lines themselves in code/docs, and
+  the 「自动代答问题」 (auto-resolved questions) section of `docs/T-NNN/report.md`. `.auto/resolves.json` is only the driver's
+  basis for counting and highlighting; losing it does not affect correctness.
+- Ledger write failures are **fully silent** and never affect flow or exit codes (copying stats' robustness stance).
 
-## C. 判别硬判据(规则文本的核心,必须写死)
+## C. Hard discrimination criteria (the core of the rule text, must be nailed down)
 
-问的是**分歧点的决定权本应属于谁**,不是问决策有多重要。
+What it asks is **who the decision right over a divergence point should originally belong to**, not how important the decision is.
 
-- 属于**用户** → `AUTO-RESOLVE`:需求意图与范围取舍(做不做、做到哪)、对外可见行为
-  与接口契约的变更、验收口径、事实确认类问题(数据异常、环境缺失、与文档不符的
-  现状)、触碰任务描述边界(超出/收窄计划字面范围)。**提示词里“验收口径”落地为
-  “「什么算做完」的判定标准”** —— `config.verify === false` 时提示词不得出现“验收”
-  字样,理由见 §M。
-- 属于**AI** → `AUTO-DECISION`:实现手段的选择,且任一选项都不改变用户可见行为
-  (算法、内部结构、命名、文件组织、注入方式、测试写法)。
-- 同一决策不重复标注两次;**拿不准时标 `AUTO-RESOLVE`** —— 宁可多提醒一次,漏报才
-  是本机制的真实损失。
+- Belongs to the **user** -> `AUTO-RESOLVE`: requirement intent and scope trade-offs (whether to do it, how far), externally visible behavior
+  and interface-contract changes, acceptance criteria, fact-confirmation questions (anomalous data, missing environment, state contradicting the
+  docs), touching the task-description boundary (exceeding/narrowing the plan's literal scope). **In the prompt, “验收口径” (acceptance criteria) is rendered as
+  “「什么算做完」的判定标准” (the standard for judging "what counts as done")** — when `config.verify === false` the prompt must not contain the word “验收”
+  (acceptance); see §M for the reason.
+- Belongs to the **AI** -> `AUTO-DECISION`: choice of implementation means where no option changes user-visible behavior
+  (algorithms, internal structure, naming, file organization, injection approach, test style).
+- The same decision is not marked twice; **when unsure, mark `AUTO-RESOLVE`** — better to over-remind once; under-reporting is
+  this mechanism's real loss.
 
-正反例(写进规则文案):
-- 范围取舍 → AUTO-RESOLVE:"是否把 `prompt.ts` 的第三份 `formatTokens` 一并收口"
-  (改变了任务范围,本应问用户)。
-- 命名取舍 → AUTO-DECISION:"新字段叫 `matched` 还是 `paired`"(任一选项都不改变
-  用户可见行为)。
+Positive and negative examples (written into the rule copy):
+- Scope trade-off -> AUTO-RESOLVE: "whether to also close out the third copy of `formatTokens` in `prompt.ts`"
+  (changes task scope; the user should have been asked).
+- Naming trade-off -> AUTO-DECISION: "call the new field `matched` or `paired`" (neither option changes
+  user-visible behavior).
 
-## D. 标记语法与解析
+## D. Marker syntax and parsing
 
 ```
 AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)
 AUTO-DECISION: <决策> (<理由>)
 ```
 
-`AUTO-DECISION` 的现有写法 `AUTO-DECISION: <决策与理由>` 保持兼容 —— 括号段可选,
-存量文档零改动(`src/stats.ts:239` 等既有标记行不受影响)。
+The existing `AUTO-DECISION` form `AUTO-DECISION: <决策与理由>` stays compatible — the parenthesized segment is optional,
+so existing documents need zero changes (`src/stats.ts:239` and other existing marker lines are unaffected). (Placeholders in the two blocks above read: original question, chosen option, reason; decision and reason.)
 
-`parseResolveLine`(纯函数)的解析口径:
+`parseResolveLine` (pure function) parsing rules:
 
-- 分隔符接受 `->` / `→` / `=>`;理由段接受 `(…)` / `(…)`;
-- **单行为界,不跨行**;代码注释内与 markdown 正文内同等有效(注释是合法标注位,
-  `src/stats.ts:239` 即先例);
-- 行内前缀允许(`// AUTO-RESOLVE: …`、`- AUTO-RESOLVE: …`);
-- **容错优先**:无箭头时整行作 `question`、`option`/`reason` 留空,**仍然计数**,
-  报文标 `⚠ 格式不规范` —— 少报一条代答比格式洁癖代价大得多。
+- Separators accepted: `->` / `→` / `=>`; reason segments accepted: `(…)` / `(…)`;
+- **One line is the boundary, never spanning lines**; equally valid inside code comments and in markdown body text (comments are legitimate marking spots;
+  `src/stats.ts:239` is the precedent);
+- Inline prefixes allowed (`// AUTO-RESOLVE: …`, `- AUTO-RESOLVE: …`);
+- **Fault tolerance first**: with no arrow the whole line becomes `question`, `option`/`reason` left empty, **still counted**,
+  and the report flags `⚠ 格式不规范` (malformed format) — under-reporting one auto-resolve costs far more than format fastidiousness.
 
-## E. 提问策略开关 `OPENCODE_AUTO_ASK`
+## E. Question-strategy switch `OPENCODE_AUTO_ASK`
 
-本次唯一新增开关,进 `src/switches.ts:12` 的 `SWITCH_ENV` 注册表(实验语义 = 本次
-运行、不落盘;定型后再议宪法键转正 —— 该文件头注释写明的既定路径)。值域两档,
-`onOff` 式解析(`src/switches.ts:204`),缺省 `off` 即**逐字节等价现状**:
+The only new switch this time, registered in the `SWITCH_ENV` registry at `src/switches.ts:12` (experimental semantics = this run only,
+nothing persisted; promotion to a constitutional key is discussed once things settle — the established path written in that file's header comment). Two values,
+parsed `onOff`-style (`src/switches.ts:204`); the default `off` is **byte-for-byte equivalent to the status quo**:
 
-| 值 | 提问策略 | AUTO-DECISION | AUTO-RESOLVE 的主来源 |
+| Value | Question strategy | AUTO-DECISION | Primary source of AUTO-RESOLVE |
 |---|---|---|---|
-| `off`(缺省) | 压制:非权限问题一律不问,自主决策 | **要求标注**(现状) | agent 自觉标注,driver 观测为辅 |
-| `on` | 允许:归属于用户的分歧点**主动发问** | **不要求**,不标不罚 | **driver 观测**,权威且完备 |
+| `off` (default) | Suppress: never ask non-permission questions, decide autonomously | **Marking required** (status quo) | Voluntary agent marking, driver observation as a supplement |
+| `on` | Allow: divergence points that belong to the user get **actively asked** | **Not required**, no penalty for not marking | **Driver observation**, authoritative and complete |
 
-`on` 档把归属判据从「事后标什么」前移到「要不要问」:决定权属于用户的分歧点
-**调 question 工具问**;纯实现手段自主决定,无须留痕。这一档下 driver 侧**不需要
-任何新逻辑**就能拿到完备记录:AI 提问 → `question.asked` 事件 → 有人工答复记为人工
-决策(不计)、无人值守则 `AUTO_ANSWER` 回落并落账。§G 的 H1 挂点原样服务两档。
+The `on` mode moves the ownership criterion from "what to mark afterwards" up front to "whether to ask": divergence points whose decision right belongs to the user
+**are asked via the question tool**; pure implementation means are decided autonomously with no trace needed. Under this mode the driver side needs **no
+new logic at all** to obtain a complete record: the AI asks -> `question.asked` event -> a human answer is recorded as a human
+decision (not counted); unattended, `AUTO_ANSWER` falls back and lands in the ledger. The §G H1 hook serves both modes unchanged.
 
-**为什么 `on` 比缺省档更强**:缺省档下 driver 只能看见"AI 违背规则仍然发问"的少数
-情形,绝大多数代答靠 AI 自觉,漏标不可检测(§K)。`on` 档把观测面从少数派变成全集
-—— 提问是流经 driver 的事件,AI 想漏也漏不掉。代价是每个问题一次会话往返。
+**Why `on` is stronger than the default mode**: under the default the driver sees only the few cases of "the AI broke the rule and asked anyway";
+the vast majority of auto-resolves rely on AI diligence, and missing marks are undetectable (§K). The `on` mode turns the observation surface from a minority into the full set
+— questions are events flowing through the driver, so the AI cannot slip one past even if it wants to. The cost is one session round-trip per question.
 
-**副产品:提问数即计划完备度指标**。计划完备 → 提问寥寥 → 台账近空;提问密集 →
-高亮块很吵 → 说明计划有洞。无须额外机制。
+**Byproduct: the question count is a plan-completeness metric**. A complete plan -> few questions -> a nearly empty ledger; dense questioning ->
+a noisy highlight block -> the plan has holes. No extra mechanism needed.
 
-**先例对齐**:`OPENCODE_AUTO_DECOMPOSE_FINE`(`src/switches.ts:15`,解析
-`:233`)就是一个改提示词渲染的 `onOff` 开关,其 `{{#if fine}}` 条件段写在
-`_partials.md:29` 的 `decompose-rule` 片段内 —— 本开关与它同构,连挂点文件都相同。
+**Precedent alignment**: `OPENCODE_AUTO_DECOMPOSE_FINE` (`src/switches.ts:15`, parsed at
+`:233`) is exactly an `onOff` switch that changes prompt rendering; its `{{#if fine}}` conditional section lives inside
+the `decompose-rule` partial at `_partials.md:29` — this switch is isomorphic to it, down to the same hook file.
 
-接线面(T-002 逐一覆盖,**五处**,见 §J-4):`SWITCH_ENV`、`Switches` 类型、
-`SWITCH_DEFAULTS`、`parseSwitches`、`nonDefaultSwitches` 与 `formatSwitches`。
+Wiring surface (covered one by one in T-002, **five places**, see §J-4): `SWITCH_ENV`, the `Switches` type,
+`SWITCH_DEFAULTS`, `parseSwitches`, `nonDefaultSwitches` and `formatSwitches`.
 
-**渲染侧注入取「出口统一」而非「逐函数透传」**(T-002 实施决策):`fine` 的先例是
-逐 render 函数透传 `opts.fine`,因为它只服务 `decompose-<phase>` 一族,透传面可控;
-`question-rule` 被 23 份模板引用、横跨 `src/prompt.ts` 的 25 个渲染出口与
-runner/loop/final/implement/knowledge/numbering 六个调用方,逐函数透传会在新增模板
-时静默漏档。故在 `src/prompt.ts` 新增模块私有 `renderPrompt(name, ctx)` 作为本层
-唯一渲染出口,统一注入 `ask: autoSwitches().ask`,全部 25 处 `renderTemplate(` 改调
-它;ctx 显式给出的 `ask` 优先(镜像 `src/step.ts:41` 的 `opts.x ?? autoSwitches().x`
-口径,供单测直驱两档)。代价是 `prompt.ts` 从纯数据组装层变为读开关——但
-`check.ts` / `step.ts` / `runner.ts` 已是同一读法,不引入新机制。
+**Render-side injection takes "unified exit" rather than "per-function pass-through"** (T-002 implementation decision): the `fine` precedent
+passes `opts.fine` through render functions one by one because it serves only the `decompose-<phase>` family, where the pass-through surface is controllable;
+`question-rule` is referenced by 23 templates, spanning 25 render exits in `src/prompt.ts` and
+six callers across runner/loop/final/implement/knowledge/numbering; per-function pass-through would silently miss newly added templates.
+Hence `src/prompt.ts` gains a module-private `renderPrompt(name, ctx)` as this layer's
+single render exit, uniformly injecting `ask: autoSwitches().ask`; all 25 `renderTemplate(` call sites switch to it;
+an `ask` given explicitly in ctx wins (mirroring the `src/step.ts:41` rule at `opts.x ?? autoSwitches().x`,
+so unit tests can drive both modes directly). The cost is that `prompt.ts` goes from a pure data-assembly layer to reading switches — but
+`check.ts` / `step.ts` / `runner.ts` already read them the same way; no new mechanism is introduced.
 
-## F. 持久化 schema(`.auto/resolves.json`,compact JSON,v:1)
+## F. Persistence schema (`.auto/resolves.json`, compact JSON, v:1)
 
 ```ts
 export type ResolveSource = "driver" | "agent"
 
 export type ResolveItem = {
   at: number
-  task: string          // T-NNN;旁路会话为伪任务 PLAN/AUTO(pseudoTask,src/runner.ts:570)
-  phase: string         // 阶段字母,未知为 ""
+  task: string          // T-NNN; bypass sessions use the pseudo-task PLAN/AUTO (pseudoTask, src/runner.ts:570)
+  phase: string         // phase letter, "" when unknown
   round: number
-  session?: string      // driver 源携带会话 id
+  session?: string      // driver source carries the session id
   source: ResolveSource
-  question: string      // driver 源 = 提问原文;agent 源 = 标记的 <原问题> 段
-  option?: string       // agent 源解析所得 <所选方案>
-  reason?: string       // agent 源解析所得 <理由>
-  file?: string         // agent 源:标记所在 `路径:行号`
-  malformed?: boolean   // agent 源:标记缺箭头/理由段
-  matched?: boolean     // driver 源:已找到配对的 agent 标记
+  question: string      // driver source = the raw question text; agent source = the marker's <原问题> (original question) segment
+  option?: string       // parsed from the agent source's <所选方案> (chosen option)
+  reason?: string       // parsed from the agent source's <理由> (reason)
+  file?: string         // agent source: the marker's `路径:行号` (path:line)
+  malformed?: boolean   // agent source: marker missing arrow/reason segment
+  matched?: boolean     // driver source: a matching agent marker has been found
 }
 
-// decisions: 逐任务 AUTO-DECISION 计数(T-006 补,只存整数、不存行级明细)
+// decisions: per-task AUTO-DECISION counts (added in T-006; integers only, no line-level detail)
 export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string, number> }
 ```
 
-**为什么 AUTO-DECISION 仍要持久化一个计数**(T-006 决策,与"AUTO-DECISION 不进台账"
-不矛盾):不落的是**行级明细**,落的是每个任务一个整数。§H-④ 要求把该计数折进高亮块
-末行,而扫描发生在 runner 的会话收尾、展示发生在 loop 的任务收口,中间隔着多个会话
-与可能的进程重启,内存传不过去;备选"把计数挂上 `Outcome` 一路传回 loop"要穿透三个
-结局分支且进程重启即丢,否决。键数上限同样 **512**,FIFO 淘汰最早写入的任务。
+**Why AUTO-DECISION still persists a count** (T-006 decision; not in contradiction with "AUTO-DECISION does not enter the ledger":
+what is not persisted is **line-level detail**, what is persisted is one integer per task). §H-④ requires folding that count into the highlight block's
+last line, but the scan happens at the runner's session wrap-up while the display happens at the loop's task close, separated by multiple sessions
+and possible process restarts — memory cannot carry it across; the alternative "hang the count on `Outcome` and pass it back to loop" would pierce three
+outcome branches and be lost on process restart; rejected. The key-count cap is likewise **512**, FIFO-evicting the earliest-written task.
 
-公共 API(首参一律 `dir: string | undefined`,undefined = 空转,与 `src/stats.ts`
-同构):
+Public API (the first parameter is always `dir: string | undefined`; undefined = no-op,
+isomorphic to `src/stats.ts`):
 
-- `recordResolves(dir, items)` —— 追加落账;按 `source + task + 归一化 question`
-  去重;总量上限 **512** 条 FIFO 淘汰(上限内不会触及:一轮 24 任务 × 每任务个位数)。
-- `collectAgentResolves(dir, ctx)` —— 扫描本次会话的工作区变更文件,提取
-  `AUTO-RESOLVE:` 与 `AUTO-DECISION:` 两类标记;前者落账,后者累加逐任务计数(与
-  标记落账合并为同一次读-改-写)。返回 `{ resolves: number; decisions: number }`。
-- `parseResolveLine(text)` —— §D 的纯函数,单测直驱。
-- `recordDecisions(dir, task, n)` / `decisionsOf(dir, task)` —— 计数的累加与读回。
-- `resolvesOf(dir, scope, id)` —— `scope ∈ task | phase | round`,按桶身份过滤读回。
-- `resolveHighlight(items, opts)` —— 纯函数构造高亮报文行(§H),单测直驱。
-- `sameIssue(a, b)` —— **从 `src/runner.ts:2889` 上收到本模块并导出**,runner 改
-  import(收口先例:`src/log.ts` 的 formatter 收口)。既供 runner 判重复提问,也供
-  台账去重与 driver↔agent 配对。
+- `recordResolves(dir, items)` — appends to the ledger; dedupes by `source + task + 归一化 question`
+  (normalized question); total cap **512** entries with FIFO eviction (never reached in practice: a 24-task round x single digits per task).
+- `collectAgentResolves(dir, ctx)` — scans this session's changed workspace files and extracts
+  both `AUTO-RESOLVE:` and `AUTO-DECISION:` markers; the former go to the ledger, the latter accumulate into per-task counts (merged with
+  marker persistence as a single read-modify-write). Returns `{ resolves: number; decisions: number }`.
+- `parseResolveLine(text)` — the §D pure function, driven directly by unit tests.
+- `recordDecisions(dir, task, n)` / `decisionsOf(dir, task)` — accumulate and read back the counts.
+- `resolvesOf(dir, scope, id)` — `scope ∈ task | phase | round`; reads back filtered by bucket identity.
+- `resolveHighlight(items, opts)` — pure function building the highlight report lines (§H), driven directly by unit tests.
+- `sameIssue(a, b)` — **hoisted from `src/runner.ts:2889` into this module and exported**, with runner switched to
+  import it (precedent for such consolidation: the formatter consolidation in `src/log.ts`). Serves runner's duplicate-question detection as well as
+  ledger dedup and driver<->agent pairing.
 
-**健壮性**照抄 `src/stats.ts` 既有手法:原子写(`.tmp → rename` + 写队列串行化,
-`src/stats.ts:296`)、逐字段宽容解析(坏 = 缺失不 throw,镜像 `resume.ts`
-`parseProgress`)、所有写失败 `catch` 静默。
+**Robustness** copies the existing `src/stats.ts` techniques: atomic writes (`.tmp → rename` + write-queue serialization,
+`src/stats.ts:296`), per-field lenient parsing (bad = missing without a throw, mirroring `resume.ts`
+`parseProgress`), all write failures silently swallowed by `catch`.
 
-**扫描范围与成本**:取未提交变更文件,**经 `repoRoots` 逐仓库遍历**(嵌套子仓库是
-本项目的常态,见 §J-2);跳过二进制与超过 2MB 的文件;逐行正则。与既有
-`autoCorrectRefs`(`src/refcheck.ts:609`)同量级,同一挂点、同一次会话收尾内完成。
-非 git 目录返回空,机制自然空转。
+**Scan scope and cost**: takes uncommitted changed files, **traversing repository by repository via `repoRoots`** (nested sub-repositories are
+the norm in this project, see §J-2); skips binaries and files over 2MB; line-by-line regex. Same order of magnitude as the existing
+`autoCorrectRefs` (`src/refcheck.ts:609`), same hook, completed within the same session wrap-up.
+Non-git directories return empty and the mechanism naturally no-ops.
 
-## G. 挂点表(行号以 `bf745fa94` 为准)
+## G. Hook table (line numbers per `bf745fa94`)
 
-| # | 位置 | 动作 |
+| # | Location | Action |
 |---|---|---|
-| H1 | `src/runner.ts:2614-2624` question.asked 自动答复分支 | 仅 `human === undefined` 且非 dryrun 时 push 进回合内 `resolves[]`;`:2620` 日志行改高亮式。**两档共用,`on` 档下这里就是主来源** |
-| H2 | `src/runner.ts:208` `Watch` 类型 + `:2421` `snapshot()` | 增 `resolves?: ResolveEvent[]`,**7 个** `return snapshot` 出口统一带出(与 `usage` 完全同构,STATS_PLAN P3 先例;数目见 §J-1) |
-| H3 | `src/runner.ts:2271` 附近 `attempt` `await watching` 之后 | 与 `statsSessionEnd` 同处 `recordResolves(opts.dir, …)`,补 task/phase/round/session |
-| H4 | `src/runner.ts:106` `afterSession` 开头 | `collectAgentResolves(dir, …)`,**提到 `:112` 的 `opts.commit === false \|\| opts.dryrun` 提前 return 之前** —— 采集是审计,不该受提交开关影响。`on` 档下降级为兜底(AI 仍可自愿标注),不跳过:标了就收 |
-| H5 | `src/loop.ts:413` / `:426` / `:437` 任务三态行 | 高亮块打在 `✓/⏸` 结论行(`taskEndLines`,`:1006`)**之前**(置顶) |
-| H6 | `src/loop.ts:687` 阶段收口(`phaseCloseLines`,`:1028`)/ `:369`+`:719` 轮次完成(`roundCompleteLines`,`:1048`) | 汇总计数行,同样置顶于 `■` 行之前 |
-| H7 | `src/prompt.ts:184` `renderWrapup` + `templates/prompts/wrapup.md` | 注入 driver 观测到的代答清单,要求 report.md 写「自动代答问题」节 |
+| H1 | `src/runner.ts:2614-2624` question.asked auto-reply branch | Push into the turn's `resolves[]` only when `human === undefined` and not dryrun; the `:2620` log line becomes highlight-style. **Shared by both modes; under `on` this is the primary source** |
+| H2 | `src/runner.ts:208` `Watch` type + `:2421` `snapshot()` | Add `resolves?: ResolveEvent[]`, carried out uniformly by **7** `return snapshot` exits (fully isomorphic to `usage`, STATS_PLAN P3 precedent; count see §J-1) |
+| H3 | `src/runner.ts:2271` vicinity, after `attempt`'s `await watching` | `statsSessionEnd` alongside `recordResolves(opts.dir, …)`, adding task/phase/round/session |
+| H4 | `src/runner.ts:106` start of `afterSession` | `collectAgentResolves(dir, …)`, **hoisted before the early return for `opts.commit === false \|\| opts.dryrun` at `:112`** — collection is auditing and must not be gated by the commit switch. Under `on` it degrades to a backstop (the AI may still voluntarily mark), not skipped: if marked, it is collected |
+| H5 | `src/loop.ts:413` / `:426` / `:437` task three-state lines | The highlight block prints **before** (pinned above) the `✓/⏸` conclusion line (`taskEndLines`, `:1006`) |
+| H6 | `src/loop.ts:687` phase close (`phaseCloseLines`, `:1028`) / `:369`+`:719` round completion (`roundCompleteLines`, `:1048`) | Summary count line, likewise pinned above the `■` line |
+| H7 | `src/prompt.ts:184` `renderWrapup` + `templates/prompts/wrapup.md` | Inject the driver-observed auto-resolve list; require report.md to write the 「自动代答问题」 (auto-resolved questions) section |
 
-**实施后落点(T-008 回填,行号以 2026-09-16 大文件拆分后的 auto-core 工作树为准)**:
+**Post-implementation landing points (backfilled in T-008; line numbers per the auto-core worktree after the large-file split of 2026-09-16)**:
 
-| # | 落点 | 备注 |
+| # | Landing point | Notes |
 |---|---|---|
-| H1 | `src/watch.ts:317-323` | 仅 `human === undefined` 且非 dryrun 时 `resolves.push({ at, question, session })`,随即打 `⚑ 自动代答(AUTO-RESOLVE)第 N 个: …`;原 `→ 自动答复: <长文案>` 降为 `vlog` |
-| H2 | `src/chain.ts:49`(`Watch.resolves`)+ `src/watch.ts:63` `snapshot()` | **7 个** `return snapshot` 出口(`:238` / `:290` / `:332` / `:394` / `:449` / `:474`·`:477` / `:500`)统一带出 |
-| H3 | `src/attempt.ts:231` | `attempt` 在 `await watching` 后调模块私有 `recordDriverResolves`(`:32`),无观测时零 IO;轮号现场取 `currentRound` |
-| H4 | `src/unit-commit.ts:101`(`afterSession` 内,`:55` 起) | `collectAgentResolves` 在 `opts.commit === false \|\| opts.dryrun` 提前 return **之前** |
-| H5 | `src/loop-task.ts:196` / `:215` / `:228` | 三态行前置 `taskResolveLines`(`src/conclusion.ts:34`),块体经 `resolveHighlight`,AUTO-DECISION 计数经 `decisionsOf` 折进末行 |
-| H6 | `src/loop-phase.ts:301`(阶段)/ `src/loop-task.ts:125`+`src/loop-phase.ts:341`(轮次) | `phaseResolveLines`(`src/conclusion.ts:42`)/ `roundResolveLines`(`src/conclusion.ts:50`),只给计数行 |
-| H7 | `src/prompt.ts:199` `renderWrapup` + 私有 `resolveList`(`:212`)+ `templates/prompts/wrapup.md` 第 4 项 | 两处调用点 `src/runner.ts:488` 与 `src/review.ts:92` 先经 `wrapupResolves`(`src/unit-commit.ts:115`)读台账 |
+| H1 | `src/watch.ts:317-323` | When `human === undefined` and not dryrun, `resolves.push({ at, question, session })`, then immediately prints `⚑ 自动代答(AUTO-RESOLVE)第 N 个: …` (proxy answer #N); the original `→ 自动答复: <长文案>` (long auto-answer text) demoted to `vlog` |
+| H2 | `src/chain.ts:49` (`Watch.resolves`) + `src/watch.ts:63` `snapshot()` | Carried out uniformly by **7** `return snapshot` exits (`:238` / `:290` / `:332` / `:394` / `:449` / `:474`·`:477` / `:500`) |
+| H3 | `src/attempt.ts:231` | After `await watching`, `attempt` calls module-private `recordDriverResolves` (`:32`), zero IO with nothing observed; the round number is taken on the spot from `currentRound` |
+| H4 | `src/unit-commit.ts:101` (inside `afterSession`, from `:55`) | `collectAgentResolves` **before** the early return for `opts.commit === false \|\| opts.dryrun` |
+| H5 | `src/loop-task.ts:196` / `:215` / `:228` | The three-state lines are preceded by `taskResolveLines` (`src/conclusion.ts:34`); block body via `resolveHighlight`; the AUTO-DECISION count folded into the last line via `decisionsOf` |
+| H6 | `src/loop-phase.ts:301` (phase) / `src/loop-task.ts:125`+`src/loop-phase.ts:341` (round) | `phaseResolveLines` (`src/conclusion.ts:42`) / `roundResolveLines` (`src/conclusion.ts:50`), count lines only |
+| H7 | `src/prompt.ts:199` `renderWrapup` + private `resolveList` (`:212`) + item 4 of `templates/prompts/wrapup.md` | The two call sites `src/runner.ts:488` and `src/review.ts:92` first read the ledger via `wrapupResolves` (`src/unit-commit.ts:115`) |
 
-规则文本挂点:`templates/prompts/_partials.md:14-21` 的 `question-rule` 片段,被
-**23 份**模板经 `{{> question-rule}}` 引用(清单见 §J-3),改这一处即全量生效 ——
-这是选择改片段而非改各模板的理由。**片段名保持 `question-rule` 不变**(目标目录
-`.opencode/auto/prompts/_partials.md` 的覆盖按节名匹配,改名会让存量覆盖在渲染时
-报错)。`_partials.md` 不在 `PROTOCOL_MARKERS`(`src/template.ts:98`)内;**本次不新增**
-`question-rule` 的协议标记 —— 协议标记的语义是"driver 解析会话产出的依据",而
-AUTO-RESOLVE 的解析对象是散落在文档与代码里的标记行,不是模板产出物。
+Rule-text hook: the `question-rule` partial at `templates/prompts/_partials.md:14-21`, referenced by
+**23** templates via `{{> question-rule}}` (list in §J-3); changing this one spot takes effect for all of them —
+that is why the partial is changed rather than each template. **The partial name stays `question-rule`** (overrides in the target
+directory's `.opencode/auto/prompts/_partials.md` match by section name; renaming would make existing overrides fail at render
+time). `_partials.md` is not in `PROTOCOL_MARKERS` (`src/template.ts:98`); **this change adds no**
+protocol marker for `question-rule` — a protocol marker means "a basis the driver parses out of session output", whereas
+AUTO-RESOLVE's parse targets are marker lines scattered through documents and code, not template outputs.
 
-同步改 `src/runner.ts:69-98` 的自动答复文案(`AUTO_ANSWER` 常量已改为 `autoAnswer(ask)` 函数):点明"**这是一个被代答的
-提问**";`off` 档追加"请以 `AUTO-RESOLVE:` 标注,不要记成 `AUTO-DECISION`";`on`
-档不要求标注(driver 已在事件侧完整落账),只告知自主决策继续。调用点 `src/runner.ts:2618` 一次取值,同时供 reply 与日志行。`src/agents-block.ts:33` 的 `MAINT_RULE` 第 4
-条提到 `AUTO-DECISION`,顺带补一句两类标记的区分指引(英文,与该块其余文案同语种)。
+Also update the auto-reply copy at `src/runner.ts:69-98` (the `AUTO_ANSWER` constant has become an `autoAnswer(ask)` function): it states
+"**这是一个被代答的提问**" (this is a proxy-answered question); `off` mode appends "请以 `AUTO-RESOLVE:` 标注,不要记成 `AUTO-DECISION`" (mark with AUTO-RESOLVE:, do not record as AUTO-DECISION); `on`
+mode requires no marking (the driver has already fully recorded on the event side) and only says to continue deciding autonomously. The call site `src/runner.ts:2618` reads the value once, serving both the reply and the log line. Item 4 of `MAINT_RULE` at `src/agents-block.ts:33`
+mentions `AUTO-DECISION`; add one sentence distinguishing the two marker types (in English, same language as the rest of that block's copy).
 
-## H. 报文(草案文案)
+## H. Report messages (draft copy)
 
-**① 会话内即时**(H1,替换 `src/runner.ts:2620` 现有 `→ 自动答复: …`):
+**① In-session, immediate** (H1; replaces the existing `→ 自动答复: …` (auto-answer) line at `src/runner.ts:2620`; draft below kept verbatim in the original Chinese):
 
 ```
 ⚑ 自动代答(AUTO-RESOLVE)第 2 个:是否把 prompt.ts 的第三份 formatTokens 一并收口?
   → 已代答,要求会话以 AUTO-RESOLVE 标注决策
 ```
 
-**② 任务结束置顶块**(H5,`items` 非空才打):
+**② Task-end pinned block** (H5; printed only when `items` is non-empty; draft below kept verbatim in the original Chinese):
 
 ```
 ⚑ 本任务自动代答了 3 个本应由你确认的问题,请重点确认:
@@ -262,322 +262,322 @@ AUTO-RESOLVE 的解析对象是散落在文档与代码里的标记行,不是模
   tokens 入 1.2k / 出 340 / …
 ```
 
-超过 **8 条**时只列前 8 条,末行 `…另有 N 条,全部见 docs/T-NNN/report.md`。
+Beyond **8 entries**, only the first 8 are listed, with a final line `…另有 N 条,全部见 docs/T-NNN/report.md` (...N more, all in docs/T-NNN/report.md).
 
-**③ 阶段收口 / 轮次完成**(H6):
+**③ Phase close / round completion** (H6; draft below kept verbatim in the original Chinese):
 
 ```
 ⚑ 阶段 m 共自动代答 7 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告
 ■ 阶段 m 迁移实现 收口: 总用时 52 分…
 ```
 
-**④ AUTO-DECISION 折叠为计数**(H4 回计数),永不与 AUTO-RESOLVE 争版面:
+**④ AUTO-DECISION collapsed into a count** (H4 returns the count), never competing with AUTO-RESOLVE for layout space:
 
-- 本任务有 AUTO-RESOLVE 时,计数折进高亮块末行:
-  `  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)`;
-- 没有 AUTO-RESOLVE 时,只 `vlog` 一行 `ℹ T-001 记录 AUTO-DECISION 5 条`,不上终端
-  —— 常见情形下零新增终端行;
-- 阶段/轮次汇总**完全不展示** AUTO-DECISION:跨任务累加出的"127 条决策"对任何人都
-  不构成可行动信息。
+- When the task has AUTO-RESOLVE entries, the count folds into the highlight block's last line:
+  `  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)`; (also recorded: AUTO-DECISION 5 entries, collapsed; see the task report)
+- Without AUTO-RESOLVE, only one `vlog` line `ℹ T-001 记录 AUTO-DECISION 5 条` (info: T-001 recorded 5 AUTO-DECISION entries), never the terminal
+  — zero new terminal lines in the common case;
+- Phase/round summaries **never display** AUTO-DECISION at all: a cross-task accumulated "127 decisions" is not actionable
+  information for anyone.
 
-计数本身仍有用:它是扫描确实跑过的证据,也是标注门槛是否失控的体感指标(每任务
-稳定在两位数 = 门槛没被遵守,该收紧 §C 的规则文案)。
+The count itself is still useful: it is evidence that the scan actually ran, and a gut-feel indicator of whether the marking threshold has run away (a stable
+double-digit count per task = the threshold is not being obeyed; tighten the §C rule copy).
 
-措辞体系与既有六处结论行(`plans/0019-stats-timing-design.md` §F)一致:`✓/⏸/■/⏳/↻/◉`
-各有归属,高亮块用**新前缀 `⚑`** 且只占置顶位,不侵占既有符号语义。
+The wording system matches the six existing conclusion lines (`plans/0019-stats-timing-design.md` §F): each of `✓/⏸/■/⏳/↻/◉`
+has its own role; the highlight block uses **the new prefix `⚑`** and occupies only the pinned top position, without encroaching on existing symbol semantics.
 
-## I. 收尾闭环(H7)
+## I. Wrap-up closed loop (H7)
 
-driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标记**的)注入收尾提示
-词,`templates/prompts/wrapup.md` 新增条件段:
+The driver injects the auto-resolve list observed for this task (listing first the ones **with no matching agent marker found**) into the wrap-up
+prompt; `templates/prompts/wrapup.md` gains a new conditional section (the draft below, quoted verbatim in the original Chinese, requires every listed proxy answer to appear in the report):
 
 > 本任务执行期间 driver 自动代答了以下本应询问用户的问题:…
 > 请在 `docs/{{taskId}}/report.md` 中单列「自动代答问题」一节,逐条写
 > `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)`;上面列出的每一条都必须出现,
 > 你自主识别到的其他代答决策一并列入。
 
-`renderWrapup` 是同步纯函数(`src/prompt.ts` 只做数据组装,见 AGENTS.md),所以清单
-由两处调用点(`runTask` 的收尾与 `verifyTask` 修复轮后的收尾)先经模块私有
-`wrapupResolves(dir, task.id)`(`resolvesOf` + `catch` 吞空)读出、再作为
-`opts.resolves` 传入。
+`renderWrapup` is a synchronous pure function (`src/prompt.ts` only does data assembly, see AGENTS.md), so the list
+is read out by the two call sites (`runTask`'s wrap-up and `verifyTask`'s wrap-up after the fix rounds) via the module-private
+`wrapupResolves(dir, task.id)` (`resolvesOf` + `catch` swallowing to empty) and then passed in as
+`opts.resolves`.
 
-**已实施(T-007)**:
+**Implemented (T-007)**:
 
-- 条件段是收尾提示词的**第 4 项**(前三项是文档更新 / report.md / 验收归属),受同一
-  句"以上全部完成前不要结束会话"统辖;`{{#if resolveList}}` 整段消失时逐字节等价改造
-  前的形态。
-- 清单**只列 driver 源**:agent 源是会话自己已经标注过的,再报一遍徒增噪声;**未配对
-  `matched` 的排在前**(§I 的"优先列未找到配对的"),它们正是最可能在报告里缺席的。
-- **不截断条数、不截断正文**:提示词要求"上面每一条都必须出现",丢条目会与该要求
-  自相矛盾;只把提问原文的换行与连续空白压成单行(多行提问会把清单结构冲散),空
-  问题不占位。
-- 预拼接在 `src/prompt.ts` 私有 `resolveList()`(模板语法刻意不做循环,清单类数据由
-  调用方拼成字符串,见 `src/template.ts` 头注释),不复用 `resolveHighlight`/
-  `compactText`:终端高亮要 80 字截断,提示词要全文,两者口径相反。
+- The conditional section is the wrap-up prompt's **item 4** (the first three are documentation updates / report.md / acceptance ownership), governed by the same
+  sentence "以上全部完成前不要结束会话" (do not end the session before all of the above is complete); when the whole `{{#if resolveList}}` section disappears, the result is byte-for-byte equivalent to
+  the pre-change form.
+- The list **contains driver-source entries only**: agent-source entries are ones the session has already marked itself, and reporting them again is pure noise; **unmatched
+  (`matched` unset) ones come first** (§I's "list first the ones with no match found") — they are exactly the ones most likely to be missing from the report.
+- **No count cap, no body truncation**: the prompt demands "every one listed above must appear", and dropping entries would contradict that demand;
+  only the raw question's newlines and runs of whitespace are squeezed into a single line (a multi-line question would wreck the list structure), and empty
+  questions take no slot.
+- Pre-concatenation lives in `src/prompt.ts` private `resolveList()` (the template syntax deliberately has no loops; list-like data is
+  concatenated into a string by the caller, see the `src/template.ts` header comment), not reusing `resolveHighlight`/
+  `compactText`: the terminal highlight wants 80-character truncation while the prompt wants full text — the two requirements run in opposite directions.
 
-这条闭环让持久记录不依赖 AI 自觉:driver 观测到的那部分被强制写进 git。
+This closed loop frees persistent recording from relying on AI diligence: the part the driver observed is forcibly written into git.
 
-## J. 现状勘测结果(T-001 对计划引用的核实)
+## J. Survey results (T-001's verification of the plan's references)
 
-计划所引位置**逐一核对通过**,以下四处需修正或补充,后续任务以本节为准。
+The locations cited by the plan **check out one by one**; the following four places need correction or supplementation, and later tasks defer to this section.
 
-1. **`watch()` 的 return 出口是 7 个,不是 8 个**(计划 §5 H2 写"8 个")。逐一清点
-   `return snapshot(...)`:`src/runner.ts` 的 2530 / 2581 / 2610 / 2672 / 2727 /
-   2752 / 2767,共 7 个(`handleIdleTest` 内的 `return { type: … }` 是另一类型,不
-   经 snapshot)。STATS_PLAN 犯过同一处错并已在 `plans/0019-stats-timing-design.md` §G
-   记录;本计划沿用了那个旧数字。**不硬凑数字,逐一清点为准**。
-2. **变更文件扫描必须走 `repoRoots`,不能用单次 `git -C dir status`**(计划 §3 写
-   `git -C dir status --porcelain` + `git diff --name-only HEAD`)。本项目的目标
-   目录常含嵌套 git 子仓库,既有代码一律逐仓库遍历:`gitChangedFiles`
-   (`src/loop.ts:910`,module-private)经 `repoRoots(directory)` 分发到
-   `gitStatusFiles`(`:919`,`--porcelain -z --no-renames -uall`,并跳过折叠输出的
-   嵌套仓库目录以免重复);`autoCorrectRefs` 侧同理(`src/refcheck.ts:461` 的
-   `git diff HEAD --name-only -z` 按 root 执行)。T-004 应把 `gitChangedFiles`
-   导出复用,或镜像其嵌套遍历,**不要新写一份扁平扫描**。
-3. **"23 份模板引用 `question-rule`" 属实,计划列出的清单与实际完全一致**:
-   `decompose.md` 与 `decompose-a/d/k/m/t/v.md`(七份)、`whole` `subtask` `fix`
+1. **`watch()` has 7 return exits, not 8** (plan §5 H2 says "8"). Counting
+   `return snapshot(...)` one by one: 2530 / 2581 / 2610 / 2672 / 2727 /
+   2752 / 2767 in `src/runner.ts`, 7 in total (the `return { type: … }` inside `handleIdleTest` is another type and does not
+   go through snapshot). STATS_PLAN made the same mistake and already recorded it in `plans/0019-stats-timing-design.md` §G;
+   this plan carried over that stale number. **No forcing numbers to fit — the one-by-one count is authoritative**.
+2. **The changed-file scan must go through `repoRoots`, not a single `git -C dir status`** (plan §3 writes
+   `git -C dir status --porcelain` + `git diff --name-only HEAD`). This project's target directories often contain nested
+   git sub-repositories, and the existing code always traverses repository by repository: `gitChangedFiles`
+   (`src/loop.ts:910`, module-private) dispatches through `repoRoots(directory)` to
+   `gitStatusFiles` (`:919`, `--porcelain -z --no-renames -uall`, also skipping nested-repository directories folded into the output to avoid
+   duplicates); the `autoCorrectRefs` side does the same (the `src/refcheck.ts:461`
+   `git diff HEAD --name-only -z` runs per root). T-004 should export `gitChangedFiles`
+   for reuse, or mirror its nested traversal — **do not write a new flat scan**.
+3. **"23 templates reference `question-rule`" is accurate; the list in the plan matches reality exactly**:
+   `decompose.md` and `decompose-a/d/k/m/t/v.md` (seven), `whole` `subtask` `fix`
    `review` `review-fix` `verify-judge` `verify-script-gen` `phase-plan`
    `phase-handover` `knowledge` `prior-knowledge` `understand` `implement-plan`
-   `infer-source` `final-task` `number-recovery`。`_partials.md` 自身定义该节(`:14`)
-   不计入。
-4. **T-002 的开关接线面是四处,计划只列了三处**:除 `SWITCH_ENV`
-   (`src/switches.ts:12`)、`SWITCH_DEFAULTS`、`parseSwitches`(`:233` 一带)、
-   `nonDefaultSwitches`(`:245`)外,还有 **`formatSwitches`(`:267`)** —— 全量开关
-   描述的 verbose 日志同样逐项枚举,漏改会让 `ask` 在全量日志里缺席。
-5. 伪任务先例的准确出处是 `pseudoTask()`(`src/runner.ts:850`)与其调用
-   `runner.ts:847`(`AUTO`),`PLAN` 见 `src/loop.ts:539`/`:630`、
+   `infer-source` `final-task` `number-recovery`. `_partials.md` itself defines the section (`:14`)
+   and is not counted.
+4. **T-002's switch wiring surface is four places; the plan lists only three**: besides `SWITCH_ENV`
+   (`src/switches.ts:12`), `SWITCH_DEFAULTS`, `parseSwitches` (around `:233`),
+   `nonDefaultSwitches` (`:245`), there is also **`formatSwitches` (`:267`)** — the verbose log describing the full set of
+   switches enumerates them item by item too; missing it would leave `ask` absent from the full log.
+5. The accurate sources of the pseudo-task precedent are `pseudoTask()` (`src/runner.ts:850`) and its call at
+   `runner.ts:847` (`AUTO`); `PLAN` appears at `src/loop.ts:539`/`:630`,
    `src/numbering.ts:115`、`src/final.ts:262`、`src/implement.ts:46`、
-   `src/knowledge.ts:63`/`:183`;计划引的 `resume.ts:89` 只是 `Progress.task` 字段
-   声明,不是伪任务构造点。
+   `src/knowledge.ts:63`/`:183`; the plan's cited `resume.ts:89` is only the `Progress.task` field
+   declaration, not a pseudo-task construction point.
 
-核对通过、无需修正的位置(行号为 T-003 改造**之前**的 `bf745fa94`):`runner.ts:70`
-(AUTO_ANSWER)、`:89`(afterSession,`:94` 为 commit/dryrun 提前 return)、`:2418`(`autoAnswered` 局部量)、`:2593`
-(重复提问判定)、`:2597-2606`(自动答复分支)、`:2871`(`sameIssue`,确为归一化后
-子串包含)、`:679`/`:1424`(renderWrapup 调用点);`loop.ts:413`/`:426`/`:437`、
-`:687`、`:369`/`:719`、`:1006`/`:1028`/`:1048`;`prompt.ts:184`、`:501`(第三份私有
-`formatTokens`,与 §H 示例文案所指一致);`switches.ts:15`/`:233`;
+Locations that check out and need no correction (line numbers per `bf745fa94`, **before** the T-003 changes): `runner.ts:70`
+(AUTO_ANSWER), `:89` (afterSession; `:94` is the commit/dryrun early return), `:2418` (`autoAnswered` local), `:2593`
+(duplicate-question detection), `:2597-2606` (auto-reply branch), `:2871` (`sameIssue`, indeed normalized substring
+containment), `:679`/`:1424` (renderWrapup call sites); `loop.ts:413`/`:426`/`:437`,
+`:687`, `:369`/`:719`, `:1006`/`:1028`/`:1048`; `prompt.ts:184`, `:501` (the third private
+`formatTokens`, matching what the §H sample copy points at); `switches.ts:15`/`:233`;
 `agents-block.ts:33`;`template.ts:98`;`log.ts:11-34`;`behavior.md:205-208`;
-`test/loop-conclusion.test.ts` 存在(T-006 扩展点)。
+`test/loop-conclusion.test.ts` exists (T-006 extension point).
 
-## K. 风险与边界
+## K. Risks and boundaries
 
-1. **漏标是缺省 `off` 档的根本局限,`on` 档基本消解**。`off` 档的 `question-rule`
-   劝阻 AI 调用 question 工具,driver 的观测面只覆盖"AI 仍然调了工具、被回落自动
-   答复"的少数情形,绝大多数 AUTO-RESOLVE 靠自觉标注,漏标不可检测;缓解是 wrapup
-   强制自查 + 判据写死 + 拿不准时标 AUTO-RESOLVE。"未标注"计数**只对 driver 观测到
-   的那部分有意义**,不能解读为全量漏标率。**需要可审计的代答记录时应当用 `on`
-   档** —— 这条建议必须同时写进 README,否则用户会以为缺省档的计数是完备的。
-2. **`on` 档新增两项成本**。① 每个问题一次会话往返(token 与时长);② 提问变多后
-`src/watch.ts:302` 的重复提问判定更易触发 —— `sameIssue` 用的是归一化后**子串
-包含**(`x.includes(y) || y.includes(x)`,`src/resolve.ts:142`),短问题被长问题包含即判为同一
-问题,命中即 abort 会话并阻塞退出 2。缓解在于 `autoAnswered` 是 `watch()` 内的
-局部量(`src/watch.ts:76`),作用域仅当前回合而非整个任务,误判半径有限;但 `on` 档冒烟必须
-   专门验这条,若出现误阻塞则**收紧 `sameIssue`(改为全等 + 长度比阈值)而非放弃
-   重复检测** —— 重复提问停机是防 AI 空转的安全网,不能拆。
-3. **误标风险(反向)**:AI 可能为求稳把纯工程取舍也标成 AUTO-RESOLVE,高亮块噪声化
-   后用户就不看了。缓解:判据给正反例、报文截断到 8 条、阶段/轮次只给计数。若冒烟
-   发现噪声化,**收紧判据文案而非加开关**。
-4. **两档文案互相污染**:`off` 档教「少问、多标」,`on` 档教「该问就问、不必标」,
-   同处一个片段内。条件段若写得不干净(比如把标注要求写在 `{{#if}}` 外),`on` 档会
-   渲染出「不要问但要标」的自相矛盾文本。T-003 后按 §L 的逐字节比对与 `on` 档无
-   `AUTO-DECISION` 字样两条断言把关,并人工复读两档渲染结果各一遍。
-5. **档位选择是人的判断,程序不代劳**:计划是否完备只有写计划的人知道,不做"自动
-   识别计划完备度再切档"。缺省保持 `off`(现状语义、零行为变化),`on` 是使用者对
-   自己计划质量的显式声明。
-6. 台账在 `.auto/` 内不进 git(`ensureGitignore` 保证,`src/loop.ts`);换机或清
-   `.auto/` 后计数从当下重开(与 stats 同一性质:本机运行足迹,非事实来源)。持久
-   轨迹在标记行与 report.md 节,二者都进 git。
-7. **同目录并发两个 run 不支持**(后写覆盖),与 `stats.json` 同一已接受边界。
-8. **人工回退重跑同一任务与中断续跑不可区分** → 人工规程:重跑前
-   `rm .auto/resolves.json`(与 stats 同款规程)。
-9. 扫描按会话触发、只看未提交变更:若某会话未产生任何文件改动,该会话内的 agent
-   标记不会被采集 —— 但没有文件改动就没有标记可采,不构成漏洞。
-10. **`--commit false` 下 AUTO-DECISION 计数偏大**(T-006 记):累加口径成立的前提是
-    "每次扫描只看得见本次会话的未提交改动"(afterSession 扫描完即统一提交)。不提交
-    时改动跨会话堆积,同一批标记被反复看见 —— AUTO-RESOLVE 侧由去重键吸收,计数侧
-    因不存行级明细吸收不了。已接受边界:该计数是"标注门槛是否失控"的体感指标而非
-    事实来源,且 `--commit false` 本身就已破坏该前提(整个 H4 扫描都建立其上)。
-11. **核心不变量零破坏**:退出码不变(`on` 档的重复提问阻塞走既有退出码 2 通道);
-    driver 独占写状态文件不变(`.auto/resolves.json` 是运行时状态,不进 protect
-    名单);统一提交不变;独立判定会话不 fork 不变;新增的 `OPENCODE_AUTO_ASK` 只读
-    环境、不落盘,符合"实验语义 = 本次运行"。
+1. **Missing marks are the default `off` mode's fundamental limitation; `on` largely dissolves it**. Under `off`, `question-rule`
+   discourages the AI from calling the question tool, and the driver's observation surface covers only the few cases of "the AI called the tool anyway and got the fallback
+   auto-answer"; the vast majority of AUTO-RESOLVE relies on voluntary marking, and missing marks are undetectable; the mitigations are the wrapup
+   forced self-check + hard-coded criteria + mark AUTO-RESOLVE when unsure. The "unmarked" count **is meaningful only for the part the driver
+   observed** and must not be read as the overall miss rate. **Use the `on`
+   mode when auditable auto-resolve records are needed** — this advice must also go into the README, otherwise users will assume the default mode's count is complete.
+2. **The `on` mode adds two costs**. ① One session round-trip per question (tokens and wall time); ② with more questions, the duplicate-question
+detection at `src/watch.ts:302` triggers more easily — `sameIssue` uses normalized **substring
+containment** (`x.includes(y) || y.includes(x)`, `src/resolve.ts:142`): a short question contained by a long one is judged the same
+question, and a hit aborts the session and blocks with exit code 2. The mitigation is that `autoAnswered` is a local inside `watch()`
+(`src/watch.ts:76`), scoped to the current turn rather than the whole task, so the misjudgment radius is limited; but the `on`-mode smoke test must
+   specifically verify this; if false blocks appear, **tighten `sameIssue` (switch to equality + a length-ratio threshold) rather than abandon
+   duplicate detection** — the duplicate-question stop is a safety net against AI spinning; it must not be dismantled.
+3. **Mis-marking risk (the reverse direction)**: the AI may, playing it safe, mark pure engineering trade-offs as AUTO-RESOLVE too; once the highlight block turns to noise,
+   users stop reading it. Mitigations: criteria with positive/negative examples, reports truncated to 8 entries, phase/round counts only. If smoke testing
+   shows noisification, **tighten the criteria copy rather than add a switch**.
+4. **Cross-contamination of the two modes' copy**: `off` teaches "ask little, mark much", `on` teaches "ask when you should, no need to mark",
+   within the same partial. If the conditional sections are written sloppily (say the marking requirement left outside `{{#if}}`), the `on` mode would
+   render self-contradictory text like "do not ask but do mark". After T-003 this is gated by the two §L assertions — the byte-for-byte comparison, and no
+   `AUTO-DECISION` wording — plus one manual re-read of each mode's rendered output.
+5. **Mode choice is a human judgment; the program does not make it for them**: only the plan's author knows whether the plan is complete; there is no "auto-detect
+   plan completeness then switch modes". The default stays `off` (status-quo semantics, zero behavior change); `on` is the user's explicit
+   declaration about their own plan's quality.
+6. The ledger lives in `.auto/` and never enters git (guaranteed by `ensureGitignore`, `src/loop.ts`); after switching machines or clearing
+   `.auto/`, counting restarts from the present (same nature as stats: a local-machine run footprint, not a source of truth). The persistent
+   trace lives in the marker lines and the report.md section, both of which enter git.
+7. **Two concurrent runs in the same directory are unsupported** (later writes overwrite) — the same accepted boundary as `stats.json`.
+8. **A manual rollback-and-rerun of the same task is indistinguishable from an interrupted resume** -> manual procedure:
+   `rm .auto/resolves.json` before rerunning (same procedure as stats).
+9. The scan is session-triggered and only looks at uncommitted changes: if a session produced no file changes, agent markers from that session are
+   not collected — but with no file changes there are no markers to collect, so this is not a hole.
+10. **Under `--commit false` the AUTO-DECISION count runs large** (T-006 note): the accumulation rule holds on the premise that
+    "each scan sees only this session's uncommitted changes" (afterSession commits everything right after scanning). Without commits,
+    changes pile up across sessions and the same batch of markers is seen repeatedly — the AUTO-RESOLVE side absorbs this via the dedup key, the count side
+    cannot, since it stores no line-level detail. Accepted boundary: that count is a gut-feel indicator of "has the marking threshold run away", not a
+    source of truth — and `--commit false` itself already breaks the premise (the whole H4 scan is built on it).
+11. **Zero breakage of core invariants**: exit codes unchanged (the `on`-mode duplicate-question block goes through the existing exit-code-2 channel);
+    the driver's exclusive write of state files unchanged (`.auto/resolves.json` is runtime state, not on the protect
+    list); unified commits unchanged; independent-judgment sessions not forking unchanged; the new `OPENCODE_AUTO_ASK` only reads the
+    environment and persists nothing, per "experimental semantics = this run only".
 
-## L. 实施步骤与测试(勾选表)
+## L. Implementation steps and tests (checklist)
 
-| 步 | 内容 | 落点 | 状态 |
+| Step | Content | Landing point | Status |
 |---|---|---|---|
-| T-001 | 本设计文档 + 现状勘测(§J) | 无代码改动 | ✅ 本任务 |
-| T-002 | `OPENCODE_AUTO_ASK` 开关五处接线 + 渲染出口统一注入 `ask`,**不改文案** | `switches.ts` / `prompt.ts` | ✅ 563 pass |
-| T-003 | `question-rule` 两档重写 + `autoAnswer` 改函数 + `MAINT_RULE` 补句 + `whole`/`subtask` 条款条件化 | `_partials.md` / `runner.ts:69` / `agents-block.ts:33` / 两份模板 | ✅ 567 pass |
-| T-004 | `src/resolve.ts` 全量 + `sameIssue` 上收 + `changedFiles` 上收 git.ts + `test/resolve.test.ts` | 新模块 | ✅ 593 pass |
-| T-005 | driver 采集接线 H1..H4 + `test/runner.test.ts` 七例 | `runner.ts` | ✅ 600 pass |
-| T-006 | 报文输出 H5/H6(三处置顶块构造函数 + 五处调用点)+ 逐任务 AUTO-DECISION 计数 | `loop.ts` / `resolve.ts` | ✅ 612 pass |
-| T-007 | 收尾闭环 H7(`renderWrapup` 增 `resolves` 入参 + `wrapup.md` 条件段 + 两处调用点读台账) | `prompt.ts` / `wrapup.md` / `runner.ts` | ✅ 616 pass |
-| T-008 | 文档同步(本文回填 §G 实施落点 + 状态 + §Q、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ✅ 616 pass |
+| T-001 | This design document + the §J survey | No code changes | ✅ this task |
+| T-002 | `OPENCODE_AUTO_ASK` switch wired in five places + unified injection of `ask` at the render exit, **no copy changes** | `switches.ts` / `prompt.ts` | ✅ 563 pass |
+| T-003 | `question-rule` rewritten for both modes + `autoAnswer` turned into a function + the `MAINT_RULE` extra sentence + the `whole`/`subtask` clauses made conditional | `_partials.md` / `runner.ts:69` / `agents-block.ts:33` / two templates | ✅ 567 pass |
+| T-004 | all of `src/resolve.ts` + `sameIssue` hoisted up + `changedFiles` hoisted into git.ts + `test/resolve.test.ts` | New module | ✅ 593 pass |
+| T-005 | driver collection wiring H1..H4 + seven cases in `test/runner.test.ts` | `runner.ts` | ✅ 600 pass |
+| T-006 | report output H5/H6 (three pinned-block constructor functions + five call sites) + per-task AUTO-DECISION counts | `loop.ts` / `resolve.ts` | ✅ 612 pass |
+| T-007 | wrap-up closed loop H7 (`renderWrapup` gains a `resolves` parameter + the `wrapup.md` conditional section + two call sites reading the ledger) | `prompt.ts` / `wrapup.md` / `runner.ts` | ✅ 616 pass |
+| T-008 | documentation sync (this file backfills §G landing points + status + §Q, structure.md, behavior.md, README, AGENTS.md navigation) | Docs | ✅ 616 pass |
 
-**单测**(`test/resolve.test.ts`,mkdtemp 风格照 `test/stats.test.ts`):
-`parseResolveLine` 六态(完整三段 / `→` 与 `=>` 变体 / 中文括号 / 无箭头 malformed
-但计数 / 无理由段 / 行内前缀);台账往返、坏文件宽容、去重、512 上限 FIFO、并发写无
-`.tmp` 残留;`collectAgentResolves`(非 git 目录空转、二进制与超大文件跳过、
-AUTO-DECISION 只计数不落账、driver↔agent 经 `sameIssue` 配对置 `matched`、**嵌套子
-仓库变更被采集**);`resolveHighlight`(空列表返回空、超 8 条截断、malformed 带 ⚠、
-未标注项文案);`resolvesOf` 三 scope 过滤与桶身份守卫。
+**Unit tests** (`test/resolve.test.ts`, mkdtemp style following `test/stats.test.ts`):
+`parseResolveLine` six states (full three segments / `→` and `=>` variants / Chinese parentheses / no-arrow malformed
+but counted / no reason segment / inline prefix); ledger round-trip, lenient handling of corrupt files, dedup, the 512-cap FIFO, concurrent writes leaving no
+`.tmp` residue; `collectAgentResolves` (no-op in non-git directories, binaries and oversized files skipped,
+AUTO-DECISION counted but not persisted, driver<->agent pairing via `sameIssue` setting `matched`, **nested sub-repository
+changes collected**); `resolveHighlight` (empty list returns empty, truncation past 8 entries, malformed carries ⚠,
+wording of unmarked items); `resolvesOf` filtering across the three scopes with bucket-identity guards.
 
-**runner 测**(`test/runner.test.ts`):`Watch.resolves` = 自动答复次数;人工答复
-(`--wait-answer` 命中)不计;dryrun 不计;blocked 出口 resolves 不丢;`AUTO_ANSWER`
-两档文案分别命中。
+**Runner tests** (`test/runner.test.ts`): `Watch.resolves` = number of auto-answers; a human answer
+(`--wait-answer` hit) not counted; dryrun not counted; the blocked exit does not lose resolves; `AUTO_ANSWER`
+copy of both modes hit respectively.
 
-**开关测**(`test/switches.test.ts`):`ask` 缺省 `off`、`on`/`off` 解析、空串视同
-未设、非法值 throw 含变量名与值域、`nonDefaultSwitches` 与 `formatSwitches` 在 `on`
-时均列出。
+**Switch tests** (`test/switches.test.ts`): `ask` defaults to `off`; `on`/`off` parsing; empty string treated as
+unset; illegal values throw including the variable name and the value domain; `nonDefaultSwitches` and `formatSwitches` both list it when set to
+that mode.
 
-**prompt 测**(`test/prompt.test.ts`):23 份模板在两档下全部渲染通过;**`off` 档
-渲染结果与改造前逐字节比对**(T-002 只接线不改文案这一承诺的证据);`on` 档不含
-`AUTO-DECISION` 字样;`wrapup` 在有/无 resolves 两态的条件段。
+**Prompt tests** (`test/prompt.test.ts`): all 23 templates render under both modes; **the `off`-mode
+render is compared byte-for-byte against the pre-change output** (evidence for T-002's "wiring only, no copy changes" promise); the `on` render contains no
+`AUTO-DECISION` wording; the `wrapup` conditional section in both the with/without-resolves states.
 
-**手工冒烟**(有凭证环境,`auto/` 集成分支):跑一个会真提问的任务 → 看 ⚑ 即时行与
-任务结束置顶块;人工在 `--wait-answer` 内答复 → 确认不计入;中途 `kill -9` 后重跑 →
-台账续接、条目不丢不重;`rm .auto/resolves.json` → 照常跑;**`on` 档专项验 §K-2 的
-重复提问误阻塞**。
+**Manual smoke test** (credentialed environment, the `auto/` integration branch): run a task that will really ask a question -> see the ⚑ immediate line and
+the task-end pinned block; answer manually within `--wait-answer` -> confirm it is not counted; `kill -9` mid-run then rerun ->
+the ledger resumes with entries neither lost nor duplicated; `rm .auto/resolves.json` -> runs as usual; **under `on`, specifically verify the §K-2
+duplicate-question false block**.
 
-## M. 决策记录(T-003 规则文本改造)
+## M. Decision record (T-003 rule-text changes)
 
-- **AUTO-RESOLVE: 是否把 `whole.md` / `subtask.md` 的 AUTO-DECISION 条款一并按档条件
-  化 -> 一并条件化(计划 §4 的文件清单只列 `_partials.md`、`runner.ts`、
-  `agents-block.ts`,本项超出其字面范围;但两份模板的"若必须修改按 AUTO-DECISION
-  记入相关文档"是无条件文本,不改则 `on` 档一边说"无须留痕"一边仍在教会话留痕,正是
-  §K-4 要防的两档污染)**。改法:`(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}
-  记入相关文档)` —— `off` 档逐字保留现状口径,`on` 档只剩"记入相关文档"。
-- **AUTO-DECISION: 归属判据中的"验收口径"改写为"「什么算做完」的判定标准"**
-  (`templates/prompts/_partials.md`)。`config.verify === false` 时提示词不得出现
-  "验收/verify" 字样(`src/prompt.ts:14` 注释的既定口径),`test/prompt-exec.test.ts` /
-  `test/prompt-phase.test.ts` 各有 `not.toContain("验收")` 守卫该不变量;判据列表被 23 份模板无条件引用,内嵌
-  `{{#if verify}}` 会把一个与验收开关无关的判据切成两半,换词更干净且语义不减。
-- **AUTO-DECISION: 两档条件段的开闭标签与内容同行相接**(`…{{/if}}{{#if ask}}…`)。
-  `src/template.ts:277` 的 standalone 判定使独占一行的块标签整行连同换行被吞掉,但两
-  个分支之间残留的换行会落在分支外**无条件输出**,让片段末尾多出空行、与调用处的
-  "3." 行粘连。该约束已写进 `_partials.md` 抬头供后续维护者参照。
-- **AUTO-DECISION: `on` 档"不含 AUTO-DECISION 字样"的断言范围排除 `knowledge.md` /
-  `prior-knowledge.md` / `phase-handover.md`**。这三份要求会话汇总既有文档里
-  AUTO-DECISION 标记的决策,读的是 git 里恒存的历史标记,与"本次运行是否留痕"正交,
-  两档下都应保留。
-- **AUTO-RESOLVE: `autoAnswer` 两档文案是否都点明"这是一个被代答的提问" -> 都点明**
-  (计划 §4 只要求 `off` 档追加标注指引)。让会话认清自己正在替用户做主是该文案的
-  首要作用,与是否要求标注无关;`on` 档省掉这句会使自动答复读起来像一次普通的
-  "你自己看着办"。
-- **AUTO-DECISION: `AUTO_ANSWER` 常量改为 `autoAnswer(ask)` 函数而非两个常量**
-  (`src/runner.ts:74`)。两档共享的开头段只写一次,调用点
-  (`src/runner.ts:2618`)一次取值同时供 reply 与日志行,避免两处各取一次导致
-  日志与实际答复不一致。
+- **AUTO-RESOLVE: whether to also make the AUTO-DECISION clauses of `whole.md` / `subtask.md` conditional by mode
+  -> make them conditional too (the plan §4 file list names only `_partials.md`, `runner.ts`,
+  `agents-block.ts`, so this item exceeds its literal scope; but the two templates' "若必须修改按 AUTO-DECISION 记入相关文档"
+  (if you must modify something, record it into the relevant documents as AUTO-DECISION) is unconditional text — left unchanged, the `on` mode would be saying "no trace needed" while still teaching the session to leave traces, exactly
+  the two-mode contamination §K-4 guards against)**. The change: `(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}记入相关文档)` (if you must modify something, {{^ask}}mark as AUTO-DECISION and{{/if}} record into the relevant documents) —
+  the `off` mode keeps the current wording verbatim, and the `on` mode is left with only "记入相关文档" (record into the relevant documents).
+- **AUTO-DECISION: the ownership criterion "验收口径" (acceptance criteria) is rewritten as "「什么算做完」的判定标准" (the standard for judging "what counts as done")**
+  (`templates/prompts/_partials.md`). When `config.verify === false` the prompt must not contain the
+  "验收 (acceptance)/verify" wording (the standing rule in the `src/prompt.ts:14` comment); `test/prompt-exec.test.ts` /
+  `test/prompt-phase.test.ts` each guard that invariant with `not.toContain("验收")`; the criteria list is referenced unconditionally by 23 templates, and embedding
+  `{{#if verify}}` would cut in half a criterion unrelated to the verify switch — rewording is cleaner with no loss of meaning.
+- **AUTO-DECISION: the two modes' conditional sections join their opening/closing tags to the content on the same line** (`…{{/if}}{{#if ask}}…`).
+  `src/template.ts:277`'s standalone detection makes a block tag alone on its line swallow the whole line together with its newline, but the
+  newline left between the two branches falls outside the branches and is **emitted unconditionally**, leaving an extra blank line at the end of the partial that glues onto the caller's
+  "3." line. This constraint is written into the `_partials.md` header for later maintainers.
+- **AUTO-DECISION: the `on`-mode "contains no AUTO-DECISION wording" assertion excludes `knowledge.md` /
+  `prior-knowledge.md` / `phase-handover.md`** from its scope. These three require the session to summarize the decisions marked AUTO-DECISION in existing documents;
+  what they read are historical markers that always live in git, orthogonal to "whether this run leaves traces",
+  so both modes keep them.
+- **AUTO-RESOLVE: whether both modes' `autoAnswer` copy states "这是一个被代答的提问"
+  (this is a proxy-answered question) -> both state it** (plan §4 only requires the `off` mode to append marking guidance). Making the session recognize that it is deciding in the user's place is that copy's
+  primary function, independent of whether marking is required; dropping the sentence under `on` would make the auto-answer read like an ordinary
+  "do whatever you think".
+- **AUTO-DECISION: the `AUTO_ANSWER` constant becomes an `autoAnswer(ask)` function rather than two constants**
+  (`src/runner.ts:74`). The opening segment shared by both modes is written once; the call site
+  (`src/runner.ts:2618`) reads the value once, serving both the reply and the log line, avoiding two separate reads that could leave
+  the log inconsistent with the actual reply.
 
-## N. 决策记录(T-004 `src/resolve.ts`)
+## N. Decision record (T-004 `src/resolve.ts`)
 
-- **AUTO-RESOLVE: 变更文件扫描如何复用 `gitChangedFiles` 的嵌套遍历 -> 把
-  `gitChangedFiles`/`gitStatusFiles` 从 `src/loop.ts` 上收进 `src/git.ts` 并以
-  `changedFiles(dir)` 导出(§F 只写"导出复用或镜像遍历",两条路都有硬伤;本项改动了
-  T-004 的字面文件范围,属本应问用户的范围取舍)**。从 `loop.ts` 导出会造成
-  loop → runner → resolve → loop 的循环依赖(resolve 由 runner 与 loop 两侧消费);
-  在 resolve.ts 镜像一份则留下两份必须同步演进的仓库遍历。`git.ts` 是叶子模块(只
-  依赖 log.ts)且已持有 `repoRoots` 与同款 porcelain 解析,两个消费方各自单向引用,
-  与 `log.ts` 的 formatter 收口同一手法。`loop.ts` 侧只剩一行 import 改动。
-- **AUTO-RESOLVE: 语法说明行(`AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)`)是否
-  采集 -> 不采集(问题段整体为 `<…>` 占位即跳过)**。本设计文档、`wrapup.md`(T-007)
-  与 `src/resolve.ts` 自身都写有格式样例,不跳过则任何改动这些文件的任务都会采到一
-  条假代答,恰是 §K-3 要防的噪声化。判据取"问题段整体是尖括号占位",不做更宽的模式
-  匹配,避免误伤真问题里的尖括号。
-- **AUTO-DECISION: 报文只展示 driver↔agent 合并后的结果**(`resolveHighlight` 丢弃
-  `matched` 的 driver 项)。同一次代答两源各留一条台账(来源不同、去重键不同,审计
-  两侧都要留),但展示时 agent 项信息更全(所选方案/理由/标记位置),driver 项配对后
-  再列一遍即重复占版面;未配对的 driver 项保留并以 ⚠ 点名"会话未按要求标注"——§H 的
-  报文草案正是这个形态。
-- **AUTO-DECISION: 缺理由段与缺箭头同样置 `malformed`**(§F schema 注释的口径"缺箭头
-  /理由段")。两者在报文里共用 `⚠ 格式不规范`,差别只在缺箭头时整行落进问题段。
-- **AUTO-DECISION: `collectAgentResolves` 的返回计数是"本次扫描看见的标记条数",不是
-  "台账新增条数"**。它回答的是"扫描确实跑过、看见了多少标记"(§H-④ 计数的用途:
-  扫描跑过的证据与标注门槛的体感指标),中断续跑重扫同一批文件时计数应稳定,而台账
-  新增数会因去重归零。
-- **AUTO-DECISION: 读-改-写整体串行化**(`update` 的 per-dir 写队列),而非 stats.ts
-  的"内存单写点 + 写队列"。本模块无常驻内存文档(条目按会话零散追加,无需 30s 心跳),
-  每次落账都要先读回现有条目做去重与 `matched` 回配,故串行化的单位是整个读-改-写。
-- **AUTO-DECISION: 报文单条文本压成单行并截断到 80 字**。driver 源的 `question` 是提
-  问原文,可能多行、可能很长,整段贴进结论行会把高亮块淹掉;完整原文在台账与任务报告
-  里,截断只影响终端一瞥。
+- **AUTO-RESOLVE: how the changed-file scan reuses `gitChangedFiles`' nested traversal -> hoist
+  `gitChangedFiles`/`gitStatusFiles` from `src/loop.ts` up into `src/git.ts` and export as
+  `changedFiles(dir)` (§F only says "export for reuse or mirror the traversal", and both paths have real flaws; this item changed
+  T-004's literal file scope — a scope trade-off that should have been asked of the user)**. Exporting from `loop.ts` would create a
+  loop -> runner -> resolve -> loop circular dependency (resolve is consumed by both runner and loop);
+  mirroring a copy in resolve.ts would leave two repository traversals that must evolve in lockstep. `git.ts` is a leaf module (depending only on
+  log.ts) that already holds `repoRoots` and the same porcelain parsing; the two consumers each reference it one-way,
+  the same technique as the `log.ts` formatter consolidation. On the `loop.ts` side only a one-line import changes.
+- **AUTO-RESOLVE: whether the syntax-explanation line (`AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)`; original question -> chosen option (reason)) is
+  collected -> not collected (skipped when the question segment is entirely a `<…>` placeholder)**. This design document, `wrapup.md` (T-007)
+  and `src/resolve.ts` itself all contain format samples; without the skip, any task touching these files would collect a
+  fake auto-resolve — exactly the noisification §K-3 guards against. The criterion is "the question segment is entirely an angle-bracket placeholder"; no wider pattern
+  matching, to avoid hitting angle brackets in real questions.
+- **AUTO-DECISION: the report shows only the driver<->agent merged result** (`resolveHighlight` drops the
+  driver entries with `matched` set). One auto-resolve leaves one ledger entry per source (different sources, different dedup keys — the audit
+  needs both sides), but at display time the agent entry carries more information (chosen option/reason/marker location), and listing the paired driver entry again
+  would waste layout; unpaired driver entries are kept and named with ⚠ as "会话未按要求标注" (the session did not mark as required) — the
+  §H draft report is exactly this shape.
+- **AUTO-DECISION: a missing reason segment sets `malformed` just like a missing arrow** (the §F schema comment's wording "缺箭头/理由段"
+  (missing arrow/reason segment)). Both share `⚠ 格式不规范` (malformed format) in the report; the only difference is that with a missing arrow the whole line falls into the question segment.
+- **AUTO-DECISION: `collectAgentResolves`' return count is "the number of markers seen by this scan", not
+  "the number of new ledger entries"**. It answers "did the scan actually run, and how many markers did it see" (the use of the §H-④ count:
+  evidence the scan ran and a gut-feel indicator of the marking threshold); on an interrupted resume that rescans the same files the count should be stable, whereas
+  new ledger entries would zero out through dedup.
+- **AUTO-DECISION: the read-modify-write is serialized as a whole** (a per-dir write queue in `update`), rather than stats.ts's
+  "in-memory single writer + write queue". This module has no resident in-memory document (entries are appended sporadically per session; no 30s heartbeat needed),
+  and every persistence must first read the existing entries back for dedup and `matched` re-pairing, so the unit of serialization is the whole read-modify-write.
+- **AUTO-DECISION: each report entry's text is squeezed to one line and truncated at 80 characters**. The driver source's `question` is the
+  raw question, possibly multi-line and possibly very long; pasting it whole into the conclusion line would drown the highlight block; the full original text lives in the ledger and the task report,
+  and truncation only affects the terminal glance.
 
-## O. 决策记录(T-005 driver 侧采集接线)
+## O. Decision record (T-005 driver-side collection wiring)
 
-- **AUTO-RESOLVE: 权限提问在 `--wait-answer` 超时后的回落是否计入代答 -> 计入
-  (§B 只写"仅回落自动答复才计入",未就权限/非权限分流,归属判据下这是本应问用户
-  的取舍)**。权限提问回落同样是 driver 替用户拍板(`ask-*` 三档的超时回落各有语义,
-  但"人没答、driver 定了"这件事一致);漏掉它会让最该被看见的一类代答缺席。代价是
-  权限类条目混进台账,可由 `question` 原文自然区分。
-- **AUTO-RESOLVE: AUTO-DECISION 的任务级计数(§H-④ 折进高亮块末行的那个数)是否在
-  本任务实现 -> 不实现,留给 T-006(超出 H1..H4 的字面范围)**。H4 每会话回一次
-  "本次扫描看见的标记条数",任务级聚合口径由报文侧决定: `--commit true`(缺省)下
-  每会话只扫自己的变更,逐会话求和即对;`--commit false` 下后一次扫描会重看前一次的
-  标记,求和即重复计数。这个取舍属 T-006 的报文决策,本任务只把每次扫描的计数落进
-  `vlog` 明细日志(§H-④ 的"扫描确实跑过的证据"),不造跨会话累加器。
-- **AUTO-DECISION: `compact` 上收为导出的 `compactText`**(`src/resolve.ts`)。会话内
-  即时行(§H-①)与高亮块展示同一份提问文本,单行化与 80 字截断口径不该各写一份。
-- **AUTO-DECISION: `afterSession` 与 `autoAnswer` 导出供单测**(与 `gatedAutoCorrectRefs`
-  /`askHuman` 同款"内部接线的可测出口")。H4 的"采集在 commit 开关的提前 return 之前"
-  与两档答复文案都无其他可达路径,不导出则这两条只能靠人工复读。
-- **AUTO-DECISION: H3 落账抽成模块私有 `recordDriverResolves`,无观测时零 IO**。回合
-  无提问是常态,此时既不读轮号也不碰台账文件;轮号只在确有代答时现场取。
-- **AUTO-DECISION: 轮号取 `currentRound(dir)` 现场推导,不从 stats 的内存 handle 读**。
-  `currentRound` 是既有推导式真源(一次 readdir),stats 未导出轮号读口;为此新开读口
-  会让两个模块共享同一份缓存状态,不值当。
-- **AUTO-DECISION: 会话内即时行的第二行按档取文案**(`off` = "要求会话以 AUTO-RESOLVE
-  标注决策",`on` = "driver 已完整记录,本档不要求会话另行标注"),与 `autoAnswer`
-  同一次 `autoSwitches().ask` 取值——日志与实际答复永不打架(§M 已就 `autoAnswer`
-  立过同样的口径)。原 `→ 自动答复: <长文案>` 降为 `vlog`: 答复全文每次都一样,占着
-  终端两三行却不携带本次信息;dryrun 预检不计代答,仍走原行。
+- **AUTO-RESOLVE: whether a permission question's fallback after the `--wait-answer` timeout counts as an auto-resolve -> it counts
+  (§B only says "only fallback auto-answers count", without splitting permission/non-permission; under the ownership criteria this is a trade-off that should have been asked
+  of the user)**. A permission question's fallback is equally the driver deciding in the user's place (the `ask-*` three-tier timeout fallbacks each have their own semantics,
+  but "no human answered, the driver decided" is the same fact); omitting it would leave absent exactly the category of auto-resolve most worth seeing. The cost is that
+  permission-type entries mix into the ledger, naturally distinguishable by the raw `question` text.
+- **AUTO-RESOLVE: whether AUTO-DECISION's task-level count (the number §H-④ folds into the highlight block's last line) is
+  implemented in this task -> not implemented, left to T-006 (beyond H1..H4's literal scope)**. H4 returns once per session the
+  "number of markers seen by this scan"; the task-level aggregation rule is decided by the report side: under `--commit true` (the default)
+  each session scans only its own changes, so summing per session is correct; under `--commit false` a later scan re-sees the previous one's
+  markers, so summing double-counts. This trade-off belongs to T-006's report decisions; this task only logs each scan's count into the
+  `vlog` detail log (§H-④'s "evidence the scan actually ran") and builds no cross-session accumulator.
+- **AUTO-DECISION: `compact` is hoisted up into the exported `compactText`** (`src/resolve.ts`). The in-session
+  immediate line (§H-①) and the highlight block display the same question text; single-lining and the 80-character truncation rule should not each be written once.
+- **AUTO-DECISION: `afterSession` and `autoAnswer` are exported for unit tests** (the same "testable exits of internal wiring" pattern as `gatedAutoCorrectRefs`/
+  `askHuman`). H4's "collection before the commit switch's early return" and the two modes' reply copy
+  have no other reachable path; unexported, both could only be checked by manual re-reading.
+- **AUTO-DECISION: H3's persistence is factored out into module-private `recordDriverResolves`, zero IO with nothing observed**. A turn
+  without questions is the norm; in that case neither the round number is read nor the ledger file touched — the round number is taken on the spot only when an auto-resolve actually happened.
+- **AUTO-DECISION: the round number is derived on the spot via `currentRound(dir)`, not read from stats' in-memory handle**.
+  `currentRound` is the existing derived source of truth (one readdir); stats exports no round-number read port, and opening one just for this
+  would make the two modules share the same cached state — not worth it.
+- **AUTO-DECISION: the in-session immediate line's second line takes copy by mode** (`off` = "要求会话以 AUTO-RESOLVE 标注决策"
+  (require the session to mark the decision as AUTO-RESOLVE), `on` = "driver 已完整记录,本档不要求会话另行标注" (the driver has already recorded it in full; this mode does not ask the session to mark separately)), taking the same single
+  `autoSwitches().ask` read as `autoAnswer` — log and actual reply never disagree (§M already set the same rule for `autoAnswer`).
+  The original `→ 自动答复: <长文案>` (long auto-answer text) is demoted to `vlog`: the full reply text is identical every time, occupying two or
+  three terminal lines while carrying nothing about this run; dryrun pre-checks do not count as auto-resolves and still go through the original line.
 
-## P. 决策记录(T-007 收尾闭环)
+## P. Decision record (T-007 wrap-up closed loop)
 
-- **AUTO-RESOLVE: 注入清单含不含 agent 源条目 -> 只列 driver 源(§I 只写"driver 观测
-  到的代答清单",没说清 agent 项去留;这改变了收尾提示词的可见内容,属本应问用户的
-  范围取舍)**。agent 项是会话自己已经写进文档/代码的标记,再在提示词里报一遍既无新
-  信息,又容易诱导它把同一条按两个措辞写进报告;而"强制写进 git"这条闭环要防的恰恰是
-  会话**没**标注的那部分,那部分只在 driver 源里。
-- **AUTO-RESOLVE: 清单是否设条数上限或正文截断 -> 都不设(§I 未定;上限会让提示词的
-  "每一条都必须出现"与实际给出的清单自相矛盾,是对外可见行为的取舍)**。终端高亮块有
-  8 条上限与 80 字截断,因为终端版面有限且完整记录在报告里;提示词是那份报告的唯一
-  输入,截掉即永久丢失。条数由会话实际提问数封顶(每任务个位数,§F),不构成风险。
-- **AUTO-DECISION: 预拼接落 `src/prompt.ts` 私有 `resolveList()`,不复用
-  `resolveHighlight`**。模板语法刻意不做循环(清单类数据由调用方拼成字符串,见
-  `src/template.ts` 头注释),而两处展示口径相反:终端要截断、提示词要全文。
-- **AUTO-DECISION: 条件段做成收尾的第 4 个编号项,不另起独立段落**。收尾提示词的三项
-  要求由末句"以上全部完成前不要结束会话"统辖,独立段落会脱出该统辖,变成可做可不做的
-  附注。
-- **AUTO-DECISION: 两处调用点经模块私有 `wrapupResolves` 而非各自内联 `resolvesOf`**。
-  台账读失败一律吞成空这一条(审计永不影响流程与退出码)只该写一次,与 `loop.ts` 三处
-  置顶块的同款 `catch` 口径一致。
+- **AUTO-RESOLVE: does the injected list contain agent-source entries -> driver-source only (§I only says "the driver-observed
+  auto-resolve list" without settling the agent entries' fate; this changed the wrap-up prompt's visible content — a scope trade-off that should have been asked
+  of the user)**. Agent entries are markers the session itself already wrote into docs/code; reporting them again in the prompt adds no new
+  information and easily induces it to write the same item into the report twice in two wordings; whereas what the "forcibly written into git" closed loop guards against is precisely
+  the part the session did **not** mark — and that part exists only in the driver source.
+- **AUTO-RESOLVE: does the list get a count cap or body truncation -> neither (§I left it open; a cap would make the prompt's
+  "every one must appear" contradict the list actually given — a trade-off of externally visible behavior)**. The terminal highlight block has an
+  8-entry cap and 80-character truncation because terminal space is limited and the full record lives in the report; the prompt is that report's sole
+  input — truncated means lost forever. The entry count is capped by the session's actual question count (single digits per task, §F), so it poses no risk.
+- **AUTO-DECISION: pre-concatenation lands in `src/prompt.ts` private `resolveList()`, not reusing
+  `resolveHighlight`**. The template syntax deliberately has no loops (list-like data is concatenated into a string by the caller, see
+  the `src/template.ts` header comment), and the two display sites run in opposite directions: the terminal wants truncation, the prompt wants full text.
+- **AUTO-DECISION: the conditional section becomes the wrap-up's 4th numbered item, not a separate standalone paragraph**. The wrap-up prompt's three
+  requirements are governed by the final sentence "以上全部完成前不要结束会话" (do not end the session before all of the above is complete); a standalone paragraph would escape that governance and become an optional
+  side note.
+- **AUTO-DECISION: the two call sites go through module-private `wrapupResolves` rather than each inlining `resolvesOf`**.
+  "Ledger read failures are always swallowed to empty" (auditing never affects flow or exit codes) should be written only once, in line with the three pinned
+  blocks in `loop.ts` that use the same `catch` stance.
 
-## Q. 决策记录(T-008 文档同步收尾)
+## Q. Decision record (T-008 documentation sync wrap-up)
 
-- **AUTO-RESOLVE: `docs/structure.md` 的 `src/switches.ts` 条目里,`OPENCODE_AUTO_MODEL`
-  / `_FALLBACK` 的序号是否为 `ask` 让位 -> 让位,由「第十/十一变量」改为「第十一/十二
-  变量」(计划 §文档更新对 structure.md 只写"`src/resolve.ts` 新行 + runner/loop/prompt
-  条目补挂点 + 设计文档索引行",改写既有开关条目的序号超出该字面范围)**。`SWITCH_ENV`
-  注册表里 `ask` 排在 `model` 之前,不让位则文档序号与注册表顺序不符,且下一个新增开关
-  会沿着错位继续排;让位是一次性的两字改动,不让位是持续累积的偏差。
-- **AUTO-RESOLVE: `packages/auto/README.md` 用整节还是在既有段落补句 -> 新开顶级节
-  「提问策略与代答审计(AUTO-RESOLVE)」(计划只写"提问自动答复相关段落同步 +
-  `OPENCODE_AUTO_ASK` 两档的选用建议",未定形态;新开顶级节改变了对外文档的结构)**。
-  §K-1 要求"需要可审计的代答记录时应当用 `on` 档"必须显眼——否则用户会把缺省档的计数
-  当成完备值,这正是该风险条要防的;一句话塞进既有段落达不到,而判据表、报文样例与两档
-  对比表也放不进去。体例照「死循环检测」节(同为无人值守期间的 driver 自主行为,同样
-  需要先讲清"为什么要有"再给开关)。既有段落改为一句话概述 + 锚链接,不重复展开。
-- **AUTO-DECISION: §G 在表末追加「实施后落点」表,不原地改写挂点表的行号**。挂点表的
-  行号以改造前的 `bf745fa94` 为准,是 T-001 勘测的事实基线,§J 的四处修正正以它为锚;
-  原地覆盖会同时丢掉基线与"设计落点 → 实际落点"的对照关系,而这正是回读设计文档时最
-  想看的一列。
-- **AUTO-DECISION: `.auto/resolves.json` 的契约并进 `docs/behavior.md` 里
-  `.auto/stats.json` 那一段,不另起 bullet**。两者同族同契约(driver 独占写、gitignore
-  内、不进 protect 名单、不参与任何恢复判定、损坏或缺失只是从当下重开、清零 = 人工
-  `rm`),分开写会让读者以为是两套规则;差异只有"为什么独立成文件"一句,就近对照最省
-  读者的力气。
-- **AUTO-DECISION: `AGENTS.md` 只加一行导航,把提问策略与代答台账合并表述**。该文件的
-  维护规则写明"新机制只在此加一行导航或不变量,细节写入 `docs/` 下对应文档";拆成
-  "开关"与"审计"两行会与 stats/stuck/model-routing 等既有条目的粒度不一致,而这两件事
-  本就是同一条因果链的两端(§B:压制提问 → 决策不可见 → 必须记录)。
+- **AUTO-RESOLVE: in the `src/switches.ts` entry of `docs/structure.md`, does `OPENCODE_AUTO_MODEL`
+  / `_FALLBACK`'s numbering yield to `ask` -> they yield, changing from 「第十/十一变量」 (tenth/eleventh variables) to 「第十一/十二变量」 (eleventh/twelfth variables) (the plan's §documentation-update for structure.md only says "
+  `src/resolve.ts` new line + runner/loop/prompt
+  entries gain hooks + a design-document index line", so renumbering existing switch entries exceeds that literal scope)**. `SWITCH_ENV`
+  registry `ask` sorts before `model`; without yielding, the document numbering would disagree with the registry order, and the next new switch
+  would keep numbering along the misalignment; yielding is a one-time two-character change, not yielding is a steadily accumulating skew.
+- **AUTO-RESOLVE: does `packages/auto/README.md` get a whole section or an added sentence in an existing paragraph -> a new top-level section
+  「提问策略与代答审计(AUTO-RESOLVE)」 (question strategy and auto-resolve auditing) (the plan only says "sync the question auto-answer paragraphs +
+  advice on choosing between the two `OPENCODE_AUTO_ASK` modes", without fixing the form; a new top-level section changes the outward documentation's structure)**.
+  §K-1 requires that "use the `on` mode when auditable auto-resolve records are needed" be prominent — otherwise users will take the default mode's count
+  as complete, exactly what that risk item guards against; one sentence squeezed into an existing paragraph cannot achieve it, and the criteria table, report samples, and the two-mode
+  comparison table would not fit either. The style follows the 「死循环检测」 (infinite-loop detection) section (likewise driver-autonomous behavior during unattended
+  periods, likewise needing "why it exists" explained before the switch). The existing paragraph becomes a one-sentence summary + anchor link, without repeating the detail.
+- **AUTO-DECISION: §G appends a "post-implementation landing points" table at the end rather than rewriting the hook table's line numbers in place**. The hook table's
+  line numbers follow the pre-change `bf745fa94` — the factual baseline of the T-001 survey, and the anchor for §J's four corrections;
+  overwriting in place would lose both the baseline and the "designed landing point -> actual landing point" mapping — exactly the column most wanted when
+  rereading a design document.
+- **AUTO-DECISION: `.auto/resolves.json`'s contract is merged into the `docs/behavior.md`
+  `.auto/stats.json` paragraph, not a separate bullet**. The two are the same family with the same contract (driver-exclusive writes, inside gitignore,
+  not on the protect list, participating in no recovery decisions, corrupt-or-missing just restarts from the present, zeroing = a manual
+  `rm`); writing them separately would make readers think there are two rule sets; the only difference is the one sentence "why it is a separate file", and side-by-side comparison saves the
+  reader the effort.
+- **AUTO-DECISION: `AGENTS.md` gains only one navigation line, phrasing question strategy and the auto-resolve ledger together**. That file's
+  maintenance rule says "a new mechanism only adds one navigation line or invariant here; details go into the corresponding document under `docs/`"; splitting it into
+  a "switch" line and an "audit" line would break the granularity of existing entries like stats/stuck/model-routing, and these two things
+  are the two ends of one causal chain (§B: suppress questions -> decisions invisible -> must record).

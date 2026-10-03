@@ -1,93 +1,93 @@
-# /exit 优雅退出与恢复设计
+# /exit Graceful Exit and Resume Design
 
-状态: 已实施(2026-09-09)。
+Status: implemented (2026-09-09).
 
-## 1. 动机
+## 1. Motivation
 
-`--interactive` 常驻输入行目前把任意非空回车行都当作发往当前活动会话的用户
-消息(steer 语义)。长时间挂机运行时,人工希望能安全地叫停程序——不是任由它
-跑到下一个阻塞/完成点,也不是粗暴 kill(容易正好打在一次工具调用、文件写入
-或统一提交中途,留下脏现场)。`/exit` 提供"预约式"退出:立即确认收到,但真正
-的暂停延迟到下一个既有的安全边界,随后照常保存进度;下次运行凭已持久化的
-状态精确恢复——与任何一次真实 crash/kill 中断的恢复路径完全同构,不引入新的
-恢复机制。
+The `--interactive` resident input line currently treats any non-empty entered line as a user
+message bound for the currently active session (steer semantics). During long unattended runs, the human wants a safe way to stop the program — not letting it
+run on to the next blocking/completion point, and not a crude kill either (which easily lands in the middle of a tool call, file write,
+or unified commit, leaving a dirty scene behind). `/exit` offers a "scheduled" exit: receipt is acknowledged immediately, but the actual
+pause is deferred to the next existing safe boundary, after which progress is saved as usual; the next run resumes precisely from the
+already-persisted state — fully isomorphic to the recovery path of any real crash/kill interruption, introducing no new
+recovery mechanism.
 
-## 2. 触发
+## 2. Trigger
 
-仅 `--interactive` 常驻输入行识别:一行 trim 后**完全等于** `/exit`(大小写
-敏感,不做归一化)。识别位置在空行判断之后、会话转发之前——不发往会话。
-`pending`(正在等待 ask 或步进硬暂停的回答)状态下不特判,输入原样作答——
-/exit 只在"发消息"语境下承诺退出,避免在"回答别的问题"语境下产生歧义。
-无活动会话(`sessionID` 未 attach)时同样置位——与消息转发"无活动会话则丢弃"
-的语义不同,/exit 的意图与是否已连上会话无关。
+Only the `--interactive` resident input line recognizes it: a line that, after trim, is **exactly equal to** `/exit` (case-
+sensitive, no normalization). Recognition happens after the empty-line check and before session forwarding — it is not sent to the session.
+In the `pending` state (waiting for an answer to an ask or a step hard-pause) there is no special-casing: input is answered as-is —
+/exit promises exit only in the "send a message" context, avoiding ambiguity in the "answering something else" context.
+With no active session (`sessionID` not attached) the flag is still set — unlike message forwarding's "drop when no active session"
+semantics, /exit's intent has nothing to do with whether a session is attached.
 
-置位是单进程一次性标记,无撤销入口:重复输入 /exit 无副作用;真要立刻强退,
-双击 Ctrl+C(退出码 130)仍是最快通道,两者不冲突,互不影响。
+Setting the flag is a one-time, per-process mark with no undo entry: repeated /exit input has no side effects; for a truly immediate force-quit,
+a double Ctrl+C (exit code 130) remains the fastest route; the two do not conflict and do not affect each other.
 
-## 3. 落点(与 step.ts 的三级边界完全复用)
+## 3. Hook Points (fully reusing step.ts's three boundary levels)
 
-| 边界 | 位置 | 时机 |
+| Boundary | Location | Timing |
 |---|---|---|
-| subtask | `src/runner.ts` pipeline 子任务循环 | 检查项勾选与统一提交完成后、下一检查项前 |
-| task | `src/loop.ts` runTaskLoop | 任务终态提交后、终审路由与下一任务前 |
-| phase | `src/loop.ts` runPhaseLoop(handoverWithStep) | 阶段交接(归档+台账+提交)完成后、下一轮路由前 |
+| subtask | `src/runner.ts` pipeline subtask loop | after checklist ticking and the unified commit complete, before the next checklist item |
+| task | `src/loop.ts` runTaskLoop | after the task's final-state commit, before final-review routing and the next task |
+| phase | `src/loop.ts` runPhaseLoop (handoverWithStep) | after the phase handover (archive + ledger + commit) completes, before the next round's routing |
 
-三处各自紧邻既有 `stepPause` 调用之后插入 `maybeExit(boundary, label)`——该处
-的 PLAN.md/CURRENT.md/`.auto/progress.json` 已经是这个边界的正常收尾结果,
-`maybeExit` 只是"提前停在这里",不做任何额外的保存动作。边界覆盖范围与
-plans/0012-step-mode-design.md §5 的边界情况完全一致(--subtask off/ondemand 无 subtask
-落点、单阶段 `m` 模式无 phase 落点等)。
+Each of the three sites inserts `maybeExit(boundary, label)` immediately after the existing `stepPause` call — at that point
+PLAN.md/CURRENT.md/`.auto/progress.json` are already this boundary's normal wrap-up result,
+`maybeExit` merely "stops here early" and does no extra saving. Boundary coverage exactly matches
+the boundary cases of plans/0012-step-mode-design.md §5 (--subtask off/ondemand has no subtask
+hook point, single-phase `m` mode has no phase hook point, etc.).
 
-## 4. 传播与退出码
+## 4. Propagation and Exit Code
 
-`maybeExit` 命中时抛出 `ExitRequested`(普通异常,携带 boundary/label),**不**
-占用 `Outcome` 的 `blocked`/`incomplete` 通道——那两个通道的语义是"需要人工
-介入"(阻塞原因写 PLAN.md、任务回退 pending),/exit 不是,重新运行不需要人工
-填任何字段。异常沿调用栈一路上抛,跳过 `runTask` 的非完成结局收尾(那段逻辑
-专为真正的阻塞/pending 准备:改会话标题为 blocked/pending、写 CURRENT.md 中断
-备注),避免误标状态。`src/loop.ts` 的 `runAll` 顶层统一捕获,转换为退出码 `3`
-(新增,区别于 `2` 的"阻塞/pending 需人工"),既有 `finally` 中的
-`repl?.close()`/`server?.close()`/`unprotect(directory)` 照常执行。
+When `maybeExit` hits it throws `ExitRequested` (an ordinary exception carrying boundary/label) and does **not**
+occupy `Outcome`'s `blocked`/`incomplete` channels — those two channels mean "needs human
+intervention" (block reason written to PLAN.md, task reverted to pending); /exit is not that, and re-running needs no human
+to fill in any field. The exception propagates up the call stack, skipping `runTask`'s non-completion wrap-up (that logic
+exists for genuine blocking/pending: retitling the session to blocked/pending, writing the CURRENT.md interruption
+note), avoiding mis-marked state. `src/loop.ts`'s `runAll` catches it uniformly at top level and converts it to exit code `3`
+(new, distinct from `2`'s "blocked/pending needs a human"); the existing `finally`'s
+`repl?.close()`/`server?.close()`/`unprotect(directory)` still execute as usual.
 
-## 5. 恢复
+## 5. Resume
 
-不引入新的恢复路径——退出发生的位置本身就是三处既有边界之一,恢复完全复用
-`resume.ts` 已有的语义(`recallProgress` 按 active/会话存活判定复用会话或开新
-会话、按 `phase` 精确重入流水线),与该边界处发生真实 crash/kill 时的恢复路径
-逐字节相同,详见 `src/resume.ts` 顶部注释与 `runTask` 中断恢复段。
+No new recovery path is introduced — the point where the exit happens is itself one of the three existing boundaries, and resume fully reuses
+`resume.ts`'s existing semantics (`recallProgress` deciding by active/session liveness whether to reuse the session or open a new
+session, re-entering the pipeline precisely by `phase`) — byte-for-byte identical to the recovery path when a real crash/kill happens at that boundary,
+see the top comment of `src/resume.ts` and the `runTask` interruption-recovery section.
 
-## 6. 边界情况
+## 6. Edge Cases
 
-- 非 `--interactive` 运行:无常驻输入行,/exit 无从触发,零行为。
-- 单阶段 `m` 模式(`--phases` 缺省):无 phase 边界,task/subtask 边界照常。
-- `--subtask off/ondemand`:无 subtask 边界,task/phase 边界照常——一次 /exit
-  最长等到当前任务完成(与该模式下 `OPENCODE_AUTO_STEP=task` 的粒度上限一致)。
-- 与步进模式(`OPENCODE_AUTO_STEP`)独立共存:同一边界先 `stepPause` 硬等待
-  人工放行,放行后再判定 `exitRequested`,顺序不影响语义,可同时生效。
-- `--dryrun`/`init`/`check`/`status` 无这三处落点,天然不受影响(与步进模式
-  同口径)。
+- Non-`--interactive` runs: no resident input line, /exit has no way to trigger, zero behavior.
+- Single-phase `m` mode (`--phases` default): no phase boundary; task/subtask boundaries as usual.
+- `--subtask off/ondemand`: no subtask boundary; task/phase boundaries as usual — one /exit
+  waits at most until the current task completes (matching that mode's `OPENCODE_AUTO_STEP=task` granularity ceiling).
+- Coexists independently with step mode (`OPENCODE_AUTO_STEP`): at the same boundary `stepPause` first hard-waits
+  for the human's release, then `exitRequested` is checked after release; the order does not affect semantics and both can take effect together.
+- `--dryrun`/`init`/`check`/`status` have none of the three hook points and are naturally unaffected (the
+  same treatment as step mode).
 
-## 7. 实现
+## 7. Implementation
 
 - `src/exit.ts`:`requestExit`/`exitRequested`/`maybeExit(boundary, label)`/
-  `ExitRequested`,模块级单进程一次性标记(`resetExitRequest` 供单测复位)。
-- `src/interactive.ts`:`rl.on("line")` 新增 /exit 分支(pending 与空行判断
-  之后、会话转发之前拦截,不转发,不要求已 attach 会话)。
-- `src/loop.ts`:task/phase 两处 `stepPause` 之后各调用一次 `maybeExit`;
-  `runAll` 顶层 `try`/`finally` 之间新增 `catch (ExitRequested)` → log + 退出码 3。
-- `src/runner.ts`:subtask 循环的 `stepPause` 之后调用 `maybeExit`。
-- `docs/behavior.md`:退出码表新增 `3`,`--interactive` 一条补充 /exit 行为。
+  `ExitRequested`, a module-level one-time per-process flag (`resetExitRequest` for test resets).
+- `src/interactive.ts`: `rl.on("line")` gains a /exit branch (intercepted after the pending and empty-line
+  checks, before session forwarding; not forwarded, no attached session required).
+- `src/loop.ts`: one `maybeExit` call after each of the task/phase `stepPause` sites;
+  `runAll` adds `catch (ExitRequested)` between the top-level `try`/`finally` → log + exit code 3.
+- `src/runner.ts`: calls `maybeExit` after the subtask loop's `stepPause`.
+- `docs/behavior.md`: the exit-code table gains `3`, and the `--interactive` entry gains /exit behavior.
 
-## 8. 测试
+## 8. Tests
 
-- `test/exit.test.ts`:`maybeExit` 命中/不命中、`requestExit` 幂等、异常携带
-  正确的 boundary/label。
-- `test/interactive.test.ts`:/exit 不发往会话且置位 `exitRequested`(含无活动
-  会话场景),置位后输入行继续可用、后续消息照常转发。
+- `test/exit.test.ts`: `maybeExit` hit/miss, `requestExit` idempotence, the exception carrying
+  the correct boundary/label.
+- `test/interactive.test.ts`: /exit is not sent to the session and sets `exitRequested` (incl. the no-active-
+  session scenario); after the flag is set the input line stays usable and later messages forward as usual.
 
-## 9. 未覆盖范围(有意从简)
+## 9. Out of Scope (deliberately kept simple)
 
-- ask/步进暂停等待中输入 /exit 不特判——仍按原语义作答。如需扩展为"任意场景
-  下输入 /exit 都优先生效",需要在 `pending` 分支内也做一次 /exit 识别并回落
-  该次等待(`settle(undefined)`),另议。
-- 未提供"取消已置位的退出请求"的交互;单次运行内 /exit 是单向操作。
+- /exit typed while waiting in an ask/step pause is not special-cased — it still answers per the original semantics. Extending it to "/exit takes priority in any
+  scenario" would require doing /exit recognition inside the `pending` branch too and settling
+  that wait (`settle(undefined)`); a separate discussion.
+- No interaction to "cancel an already-set exit request" is provided; within a single run /exit is one-way.

@@ -1,83 +1,83 @@
-# 死循环检测(Stuck Loop)设计
+# Stuck Loop Detection Design
 
-状态: 已实施(2026-09-09)。检测在 driver 侧、提示经 steer 注入会话,缺省开启,
-经环境变量可关,CLI 壳零改动。
+Status: implemented (2026-09-09). Detection runs on the driver side and hints are steered into the session; it is on by default,
+can be turned off via an environment variable, with zero changes to the CLI shell.
 
-## 1. 动机
+## 1. Motivation
 
-能力较弱的模型有一类稳定的失败形态: 同一个动作反复做、反复失败,自己走不出来。
-典型现场有三种——
+Weaker models show a stable class of failure: doing the same action over and over, failing each time, unable to walk out
+of it on their own. Three typical scenes:
 
-- 同一个 edit 反复报 "String not found"(没意识到文件内容与它以为的不一致);
-- 参数微调后重试(多一个空格、换一种转义),报错一字不差;
-- 反复读同一个文件、反复跑同一条只读命令,输出完全相同,却当作新信息继续推理。
+- the same edit repeatedly reports "String not found" (unaware that the file content differs from what it assumes);
+- retrying after micro-tuning the parameters (one extra space, a different escaping), with the error message verbatim identical;
+- repeatedly reading the same file, repeatedly running the same read-only command, the output completely identical, yet treated as new information for further reasoning.
 
-三种都不会自愈: 上下文里堆的是同一段失败,模型下一轮更倾向照抄上一轮。driver
-是唯一能从外部看见"你已经这样干了三次"的角色,因此由 driver 识别并主动提示。
+None of the three self-heals: the context piles up the same failure, and the model's next round is more inclined to copy
+the previous one. The driver is the only party that can see from outside that "you have already done this three times", so the driver detects it and proactively hints.
 
-既有机制都不覆盖这一形态: `--idle-time` 看门狗只管**无输出**(死循环里输出很热闹),
-上下文交接 steer 只管**用量超限**(死循环往往在半程就发生),隐性阻塞检测只在会话
-**结束后**判定(死循环的会话不结束)。
+No existing mechanism covers this shape: the `--idle-time` watchdog only handles **no output** (a stuck loop produces
+lively output), the context-handover steer only handles **usage-limit overrun** (a stuck loop often happens midway), and
+silent-block detection rules only **after the session ends** (a stuck-loop session does not end).
 
-## 2. 判据
+## 2. Criteria
 
-以**会话**为范围,观察每个工具调用的终态(completed / error),两条判据:
+Scoped to the **session**, observe the terminal state (completed / error) of every tool call; two criteria:
 
-| 判据 | 签名 | 阈值 |
+| Criterion | Signature | Threshold |
 |---|---|---|
-| `error` 同报错重复 | 工具名 + 报错文本(**不含参数**) | 3 次 |
-| `repeat` 同参同果重复 | 工具名 + 参数 + 输出文本 | 4 次 |
+| `error` same-error repeat | tool name + error text (**parameters excluded**) | 3 times |
+| `repeat` same-args-same-result repeat | tool name + parameters + output text | 4 times |
 
-- **报错判据不看参数**: 参数微调仍撞同一个坑,是弱模型最典型的形态,不能因为
-  参数变了就当作新尝试。
-- **同参同果判据要求完全相同**: 参数与输出都一字不差,这次调用没带来任何新信息。
-  阈值比报错高一档——正常会话里偶尔重读同一文件是合理的。
-- **结果有变化一律视为有进展**: 报错不同、输出不同都不计数,不去猜哪种变化才算
-  "真进展"(猜错的代价是误判)。
-- **不要求连续**: `A,B,A,B,A` 这类交替重试同样是死循环,按签名累计即可识别;
-  签名归一化(空白折叠 + 小写)吸收排版差异。
-- 参数按键名排序序列化,与书写顺序无关;长文本压成短哈希键,长会话不涨内存。
+- **The error criterion ignores parameters**: micro-tuned parameters still hitting the same pit is the most typical shape
+  of a weak model, and a changed parameter must not be treated as a new attempt.
+- **The same-args-same-result criterion requires exact sameness**: parameters and output both verbatim identical, so the
+  call brought no new information. The threshold is one notch above the error criterion - occasionally re-reading the same file in a normal session is legitimate.
+- **Any change in the result counts as progress**: a different error or different output is not counted, without guessing
+  which changes qualify as "real progress" (the cost of guessing wrong is misjudgment).
+- **Consecutiveness is not required**: alternating retries like `A,B,A,B,A` are equally stuck loops, recognizable simply
+  by accumulating by signature; signature normalization (whitespace folding + lowercasing) absorbs formatting differences.
+- Parameters are serialized sorted by key name, independent of writing order; long texts are compressed into short hash keys, so long sessions do not grow memory.
 
-阈值与上限是 `src/stuck.ts` 的导出常量(`STUCK_ERROR_REPEAT` /
-`STUCK_SAME_REPEAT` / `STUCK_MAX_HINTS`),可注入供单测。
+The thresholds and caps are exported constants of `src/stuck.ts` (`STUCK_ERROR_REPEAT` /
+`STUCK_SAME_REPEAT` / `STUCK_MAX_HINTS`), injectable for unit tests.
 
-## 3. 提示
+## 3. Hints
 
-命中即经 `session.promptAsync` 向该会话 steer 一条提示(v2 prompt 默认 steer,
-在下一个 provider turn 边界进入会话——正好是模型要决定"下一步做什么"的时刻),
-文案在 `templates/prompts/stuck-hint.md`,逐级升级:
+On a hit, a hint is steered into that session via `session.promptAsync` (v2 prompts steer by default; it enters the
+session at the next provider-turn boundary - exactly the moment the model is deciding "what to do next"); the copy
+lives in `templates/prompts/stuck-hint.md` and escalates level by level:
 
-| 级 | 内容 |
+| Level | Content |
 |---|---|
-| 1 | 摆出证据(工具/参数/报错原文)+ 核对前提 + 换一种手段 |
-| 2 | 要求先写清"目标 / 已试过什么、各自失败在哪 / 下一步换什么",写完再动手 |
-| 3 | 停止重试: 以 `AUTO-FIXME: <原因与计划>` 标注遗留、交代进度后结束会话 |
+| 1 | lay out the evidence (tool/parameters/error verbatim) + re-check the premises + switch to a different approach |
+| 2 | require first writing out "the goal / what has been tried and where each attempt failed / what to switch to next", only then acting |
+| 3 | stop retrying: mark the leftovers with `AUTO-FIXME: <原因与计划>` (reason and plan), report progress, then end the session |
 
-每会话至多 3 次(`STUCK_MAX_HINTS`),命中后该签名计数清零——再犯满一轮才会再
-提示,避免一旦触发就每次调用都打扰。达上限后继续检测但静默。
+At most 3 per session (`STUCK_MAX_HINTS`); on a hit that signature's count resets to zero - the hint fires again only
+after another full round of hits, avoiding pestering every call once triggered. After the cap is reached, detection continues but stays silent.
 
-## 4. 只提示,不停机
+## 4. Hint Only, No Shutdown
 
-检测**不中止会话、不改判定、不写任何状态文件**。判据再稳妥也可能误判(有的任务
-就是要反复跑同一条命令等外部状态变化),而停机的代价远高于一条多余的提示;第 3
-级提示把"收尾"的决定权交回模型,它写出 AUTO-FIXME 与进度后自然结束会话,后续由
-既有流水线(验收/审核/回退 pending)接管。steer 投递失败只记日志,不按阻塞处理。
+Detection **does not abort the session, change verdicts, or write any state file**. However sound, the criteria can still
+misjudge (some tasks genuinely require repeatedly running the same command to wait for external state to change), and
+the cost of a shutdown far exceeds one superfluous hint; the level-3 hint hands the "wrap-up" decision back to the
+model, which writes out AUTO-FIXME and progress and then naturally ends the session, the existing pipeline (acceptance/review/fallback to pending) taking over. A failed steer delivery is only logged, not treated as a block.
 
-## 5. 挂点与开关
+## 5. Hooks and Switches
 
-- 检测器: `src/stuck.ts`(纯逻辑,不依赖 SDK 类型,`createStuckTracker` 每会话一个实例)。
-- 观察点: `src/runner.ts` 的 `watch`——`message.part.updated` 事件中工具 part 的
-  终态,与既有明细日志同一去重口径(按 part.id,一个调用只喂一次)。
-- 提示词: `renderStuckHint`(`src/prompt.ts`,只做数据组装)+ `stuck-hint` 模板。
-- 开关: `OPENCODE_AUTO_STUCK`(on|off,**缺省 on**),注册于 `src/switches.ts`
-  的 OPENCODE_AUTO_* 注册表(一次解析、全流水线一致、不落盘)。
-- **dryrun 预检会话恒不检测**(与开关无关): 它本就靠反复被拒来探查权限边界,
-  重复报错是其正常形态。
+- Detector: `src/stuck.ts` (pure logic, no dependency on SDK types; one `createStuckTracker` instance per session).
+- Observation point: `watch` in `src/runner.ts` - the terminal state of tool parts in `message.part.updated`
+  events, with the same deduplication basis as the existing detail logs (by part.id, one call fed exactly once).
+- Prompt: `renderStuckHint` (`src/prompt.ts`, data assembly only) + the `stuck-hint` template.
+- Switch: `OPENCODE_AUTO_STUCK` (on|off, **default on**), registered in the OPENCODE_AUTO_* registry in
+  `src/switches.ts` (parsed once, consistent across the whole pipeline, not persisted).
+- **dryrun preflight sessions are never checked** (regardless of the switch): they probe the permission boundary by
+  being repeatedly denied in the first place, so repeated errors are their normal shape.
 
-## 6. 与既有机制的关系
+## 6. Relation to Existing Mechanisms
 
-- 与上下文交接 steer(`OPENCODE_AUTO_STEER`)相互独立,各自计数、可同现。
-- 与 `--test-by-driver` 的测试执行协议正交: 后者管的是 driver 代跑脚本,前者管的
-  是会话内工具调用的重复形态;测试反复失败但脚本内容在变,不会命中本机制。
-- 与 `--handover-test` 的"连续交接超 10 次"提醒(跨会话、任务级)互补: 本机制是
-  会话内、动作级。
+- Independent of the context-handover steer (`OPENCODE_AUTO_STEER`): each counts on its own, and both can occur together.
+- Orthogonal to the `--test-by-driver` test-execution protocol: the latter is about the driver running scripts on behalf
+  of the session, the former is about repeated shapes of in-session tool calls; tests repeatedly failing while the script content changes will not hit this mechanism.
+- Complementary to the `--handover-test` "more than 10 consecutive handovers" reminder (cross-session, task-level):
+  this mechanism is in-session and action-level.

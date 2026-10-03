@@ -1,74 +1,74 @@
-# 步进模式(Step Mode)设计
+# Step Mode Design
 
-状态: 已实施(2026-09-07)。实验期经环境变量控制,CLI 壳零改动。
+Status: implemented (2026-09-07). During the experimental period it is controlled via environment variables, with zero CLI-shell changes.
 
-## 1. 动机
+## 1. Motivation
 
-调试与观摩流水线时,需要在关键边界停下来人工检查产物(git log、docs/、PLAN.md)
-后再手动放行。既有的 `--wait-between` 是任务间的**带超时**暂停(超时自动继续),
-不适合"必须人工看过才继续"的步进场景;步进模式提供**硬暂停**(无限期等待回车)。
+When debugging or observing the pipeline, you need to stop at key boundaries and inspect the artifacts by hand (git log, docs/, PLAN.md)
+before releasing it manually. The existing `--wait-between` is a **time-limited** pause between tasks (auto-continues on timeout),
+which does not fit the stepping scenario of "continue only after a human has looked"; step mode provides a **hard pause** (an indefinite wait for Enter).
 
-## 2. 开关
+## 2. Switch
 
-| 环境变量 | 值域 | 缺省 |
+| Env var | Value domain | Default |
 |---|---|---|
 | `OPENCODE_AUTO_STEP` | off\|phase\|task\|subtask | off |
 
-注册于 `src/switches.ts` 的 OPENCODE_AUTO_* 注册表:核心内一次解析(memo)、
-全流水线一致、不落盘(实验语义 = 本次运行)、非法值 throw 中文报错(含变量名
-与期望值域)→ CLI 退出码 1。非默认生效项进入启动日志,与既有开关同口径。
+Registered in the OPENCODE_AUTO_* registry in `src/switches.ts`: parsed once inside the core (memo),
+consistent across the whole pipeline, not persisted to disk (experimental semantics = this run only); an invalid value throws a Chinese-language error (including the variable name
+and the expected value domain) → CLI exit code 1. Non-default effective items go into the startup log, same treatment as the existing switches.
 
-## 3. 语义
+## 3. Semantics
 
-### 3.1 包含式粒度
+### 3.1 Inclusive Granularity
 
-phase < task < subtask 三级细度,**边界序 ≤ 档位序即暂停**:
+Three levels of fineness, phase < task < subtask; **pause whenever boundary order ≤ tier order**:
 
-| 档位 | 暂停边界 |
+| Tier | Pause boundaries |
 |---|---|
-| off | 无(缺省,零行为) |
-| phase | 阶段交接完成 |
-| task | 任务完成 + 阶段交接完成 |
-| subtask | 子任务完成 + 任务完成 + 阶段交接完成 |
+| off | None (default, zero behavior) |
+| phase | Phase handover completed |
+| task | Task completed + phase handover completed |
+| subtask | Subtask completed + task completed + phase handover completed |
 
-### 3.2 硬暂停
+### 3.2 Hard Pause
 
-- 等待一行人工输入,任意行(含空回车)放行,不解释内容,**无超时自动继续**
-  (区别于 `--wait-between`)。
-- `--interactive` 下经常驻输入行接收(`Interactive.question` 的无超时形态),
-  免两个 readline 争抢 stdin;stdin 关闭(管道结束)回落自动放行。
-- 暂停等待期间 ^C 转发进程级处理器:单次提示、连续两次强退 130
-  (与 askHuman / waitBetweenTasks 一致)。
+- Waits for one line of human input; any line (including an empty Enter) releases it, the content is not interpreted, and there is **no timeout auto-continue**
+  (unlike `--wait-between`).
+- Under `--interactive` it is received through the resident input line (the no-timeout form of `Interactive.question`),
+  sparing two readlines from fighting over stdin; when stdin closes (pipe ended) it falls back to auto-release.
+- During a pause-wait, ^C is forwarded to the process-level handler: one press gives a prompt, two consecutive presses force-exit with 130
+  (consistent with askHuman / waitBetweenTasks).
 
-## 4. 挂点
+## 4. Hook Points
 
-| 边界 | 位置 | 时机 |
+| Boundary | Location | Timing |
 |---|---|---|
-| phase | `src/loop.ts` runPhaseLoop(handoverWithStep 包装) | 阶段交接(归档+台账+提交)完成后、下一轮路由前;最后一个阶段暂停后回车即"全部阶段已完成"退出 |
-| task | `src/loop.ts` runTaskLoop | 任务 done 终态提交后、终审路由与下一任务前(终审追加的 T-F 任务同暂停) |
-| subtask | `src/runner.ts` pipeline 子任务循环 | 检查项勾选与统一提交完成后、下一检查项前(review 注入的 fix 检查项同循环,一并覆盖) |
+| phase | `src/loop.ts` runPhaseLoop (handoverWithStep wrapping) | After the phase handover (archive + ledger + commit) completes and before the next round's routing; after the last phase's pause, pressing Enter exits as "all phases completed" |
+| task | `src/loop.ts` runTaskLoop | After the task's done final-state commit, before final-review routing and the next task (T-F tasks appended by final review pause the same way) |
+| subtask | `src/runner.ts` pipeline subtask loop | After the checklist check-off and the unified commit complete, before the next checklist item (fix checklist items injected by review run in the same loop and are covered too) |
 
-## 5. 边界情况
+## 5. Edge Cases
 
-- 单阶段 `m` 模式(`--phases` 缺省):无 handover 边界 → `step=phase` 无暂停点;
-  task/subtask 暂停照常生效。
-- `--subtask off/ondemand`:无检查项循环 → 无 subtask 暂停点;task/phase 照常。
-- 与 `--wait-between` 相互独立(一个硬暂停一个带超时),同时设置则各自生效。
-- `--dryrun` / `init` / `check` / `status` 无暂停点,天然不受影响。
-- 任务的最后一个检查项完成后紧跟 task 暂停,phase 的最后一个任务完成后紧跟
-  phase 暂停——包含式语义下连续两暂停属预期。
+- Single-phase `m` mode (`--phases` default): no handover boundary → `step=phase` has no pause point;
+  task/subtask pauses still take effect as usual.
+- `--subtask off/ondemand`: no checklist loop → no subtask pause point; task/phase as usual.
+- Independent of `--wait-between` (one is a hard pause, the other is time-limited); if both are set, each takes effect.
+- `--dryrun` / `init` / `check` / `status` have no pause points and are naturally unaffected.
+- After a task's last checklist item completes, the task pause follows immediately; after a phase's last task completes, the phase pause
+  follows immediately - two consecutive pauses are expected under the inclusive semantics.
 
-## 6. 实现与测试
+## 6. Implementation and Tests
 
-- `src/step.ts`:`stepApplies(step, boundary)` 纯函数(细度序判定,单测直测);
-  `stepPause(boundary, label, opts)` 暂停 IO(interactive 常驻行 / readline 硬等待,
-  io 注入供单测;opts.step 显式覆盖档位,缺省取 OPENCODE_AUTO_STEP 解析值)。
-- `src/interactive.ts`:`question(promptText, minutes?)` 的 minutes 缺省 = 无超时
-  (close 仍回落 undefined),askHuman / waitBetweenTasks 调用点不变。
-- 测试:`test/switches.test.ts`(值域/缺省/非法值/日志)+ `test/step.test.ts`
-  (包含式矩阵、回车放行、stdin 关闭回落、interactive 透传)。
+- `src/step.ts`: the `stepApplies(step, boundary)` pure function (fineness-order judgment, directly unit-tested);
+  `stepPause(boundary, label, opts)` pause IO (resident line under interactive / hard readline wait,
+  io injected for unit tests; opts.step explicitly overrides the tier, defaulting to the parsed OPENCODE_AUTO_STEP value).
+- `src/interactive.ts`: in `question(promptText, minutes?)`, minutes defaults to no timeout
+  (close still falls back to undefined); the askHuman / waitBetweenTasks call sites are unchanged.
+- Tests: `test/switches.test.ts` (value domain / defaults / invalid values / logging) + `test/step.test.ts`
+  (inclusive matrix, Enter release, stdin-closed fallback, interactive passthrough).
 
-## 7. 转正路径
+## 7. Promotion Path
 
-实验定型后升为 CLI 旗标 `--step=phase|task|subtask`(或宪法键固化,另议),
-路径同 plans/0003-fork-decompose-design.md §4.6:环境变量可保留为运行期覆盖通道或退役。
+After the experiment settles, it is promoted to the CLI flag `--step=phase|task|subtask` (or persisted as a constitutional key, to be decided separately),
+following the same path as plans/0003-fork-decompose-design.md §4.6: the environment variable may remain as a runtime override channel or be retired.

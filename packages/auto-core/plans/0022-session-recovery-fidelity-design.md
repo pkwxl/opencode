@@ -1,270 +1,270 @@
-# 会话恢复保真设计:可恢复 session id 标准、极简续跑与 stash 回滚
+# Session Recovery Fidelity Design: Resumable-session-id Criteria, Minimal-Continuation Resume, and stash Rollback
 
-> 状态: 2026-09-14 立项,设计定稿;**2026-09-15 实施完成(S1/S2/S3 全部落地,
-> 开关 OPENCODE_AUTO_STRICT_RESUME 缺省 off 灰度中,见 §4 勾选表)**
-> (plans/0021-commit-boundary-design.md 决策 D6)。
-> 2026-09-15 依据双目标目录现场日志审计(kernel-spi-nor / kernel-dm,
-> 2026-09-10..15 约 23MB run 日志)实证修订:复用判据补 model 一致性(3.1 ④)、
-> R3 交接边界写核(3.3 新触发)、fork 基点独立性显性化(3.4)、相邻机制修正建议
-> (3.5 登记给属主)。实证明细与日志出处见仓库根 docs/session-interruption-field-audit-20260915.md。
-> 用户需求原文(2026-09-14):AI 会话启动时若执行进度正常,记录其
-> session id 供中断恢复;恢复时必须严格确保 session id 对应当前过程中断时的会话,
-> 且**最多附加一句 `continue` prompt**,避免过多 prompt 干扰;记录可恢复 session id
-> 的标准极高——恢复后的工作须与未中断状态高度一致(含 AI 经 tool 完成的本地修改);
-> 若无法保证,应经 `git stash` 将状态恢复至过程启动时的初始状态,开新会话继续。
-> 回滚锚点 = plans/0021-commit-boundary-design.md 落地的单元 clean 基线(单元启动时工作区
-> 恒干净、HEAD 即基线)。
+> Status: initiated 2026-09-14, design finalized; **implementation completed 2026-09-15 (S1/S2/S3 all landed,
+> the OPENCODE_AUTO_STRICT_RESUME switch defaults to off and is in gradual rollout; see the §4 checklist)**
+> (plans/0021-commit-boundary-design.md decision D6).
+> 2026-09-15, evidence-based revision per a field-log audit of the two target directories (kernel-spi-nor / kernel-dm,
+> about 23MB of run logs, 2026-09-10..15): the reuse criteria gain a model-consistency check (3.1 ④),
+> R3 gains a handover-boundary write verification (new trigger in 3.3), fork base-point independence is made explicit (3.4), and correction suggestions for adjacent mechanisms
+> (3.5, registered with their owners) are recorded. Evidence details and log sources: docs/session-interruption-field-audit-20260915.md at the repository root.
+> Original user requirement (2026-09-14): when an AI session starts with normal execution progress, record its
+> session id for interruption recovery; on recovery it must be strictly ensured that the session id corresponds to the session that was live when the current run was interrupted,
+> and **append at most one `continue` prompt** to avoid interference from excessive prompts; the bar for recording a resumable session id
+> is extremely high -- post-recovery work must closely match the uninterrupted state (including local modifications the AI made via tools);
+> if that cannot be guaranteed, restore the state to the initial state at run start via `git stash` and continue in a new session.
+> Rollback anchor = the per-unit clean baseline landed by plans/0021-commit-boundary-design.md (worktree always clean at unit start,
+> HEAD is the baseline).
 
-## 1. 目标
+## 1. Goals
 
-1. **保真标准**:只有当"恢复后行为 ≈ 未中断的延续"可被严格论证时,才允许复用
-   session id;任何不确定性 → 不复用,回滚到单元基线重跑。
-2. **极简续跑**:恢复提示词收敛为一句 continue(现 resumeNote 含按阶段的多行指引)。
-3. **确定性回退**:不可保真时,把工作区恢复到单元启动态(git stash 保全现场 +
-   reset 到基线),新会话从干净基线重做本单元——以浪费的部分工作换取确定性
-   (用户明确选择)。
+1. **Fidelity bar**: reuse of a session id is allowed only when "post-recovery behavior ≈ an uninterrupted continuation" can be argued rigorously;
+   any uncertainty → no reuse; roll back to the unit baseline and rerun.
+2. **Minimal-continuation resume**: the recovery prompt collapses to a single continue (the current resumeNote carries multi-line per-phase guidance).
+3. **Deterministic fallback**: when fidelity cannot be guaranteed, restore the worktree to the unit-start state (git stash preserves the scene +
+   reset to the baseline), and a new session redoes this unit from the clean baseline -- trading some wasted work for determinism
+   (explicit user choice).
 
-## 2. 现状审计:六条恢复路径的连贯性
+## 2. Current-State Audit: Coherence of the Six Recovery Paths
 
-| # | 路径 | 现状 | 连贯性缺口 |
+| # | Path | Current state | Coherence gap |
 |---|---|---|---|
-| R1 | 执行链会话复用(active 记录 + 会话存活 → attempt 的 resumed) | 复用原会话 + resumeNote(多行阶段指引) | 提示词超量(需求: 一句 continue);复用判据已较严(存活 + 归属门禁 unitReruns + 非报错桩) |
-| R2 | requireArtifact step 续跑(phase-plan/phase-handover,openStep) | 复用原会话、保留产物现场(resumedSession) | 保留半途产物 = 恢复后状态与"从未中断"一致(可接受);提示词同 R1 偏重 |
-| R3 | 交接续跑(handoff.md `状态: 继续`,新会话凭文档) | 上下文由文档承载,新会话读文档续跑 | 连贯性靠文档质量,非会话保真——属"渐进降级",保真标准下应明确为**不保证**,文档缺失/低质即应回滚重跑(现状是带反馈重试一次再隐性阻塞) |
-| R4 | 降级环 / 重试环 fork(failback、最值钱会话分叉) | session.fork 搬消息续跑,上下文随迁 | fork 保真度最高(消息级复制);但换模型后行为漂移未量化——按"模型变更即用户可见变更"论,不属本设计的回滚范围 |
-| R5 | 会话死亡(active 记录在、会话不在) | 新会话 + resumeNote(总结态),**保留半途工作区脏区继续** | **主要缺口**:半途的 tool 修改留在工作区,新会话面对"不是自己做的"现场——保真不成立;本设计改为回滚重跑 |
-| R6 | 优雅退出(阻塞/pending,总结态记录) | 人工介入后重跑,新会话凭 CURRENT.md 中断备注 | 人工可能已改环境,不复用旧会话(现状正确);半途改动已被 interrupted 提交清扫,基线干净 |
+| R1 | Execution-chain session reuse (active record + session alive → attempt's resumed) | Reuses the original session + resumeNote (multi-line per-phase guidance) | Prompt overload (requirement: a single continue); reuse criteria already fairly strict (alive + the unitReruns ownership gate + not an error stub) |
+| R2 | requireArtifact step resume (phase-plan/phase-handover, openStep) | Reuses the original session, keeps the artifact scene (resumedSession) | Keeping in-flight artifacts = post-recovery state consistent with "never interrupted" (acceptable); prompt as heavy as R1 |
+| R3 | Handover resume (handoff.md `状态: 继续` (status: continue), new session relies on the document) | Context is carried by the document; the new session reads it and continues | Coherence rests on document quality, not session fidelity -- this is "progressive degradation"; under the fidelity bar it should be explicitly **not guaranteed**, and a missing/low-quality document should trigger rollback and rerun (current behavior: one retry with feedback, then a silent block) |
+| R4 | Fallback ring / retry ring fork (failback, forking the most valuable session) | session.fork carries the messages over and continues; context migrates along | fork has the highest fidelity (message-level copy); but behavioral drift after a model switch is unquantified -- under the "a model change is a user-visible change" doctrine it is outside this design's rollback scope |
+| R5 | Session death (active record present, session gone) | New session + resumeNote (summary state), **keeps the mid-flight dirty worktree and continues** | **Main gap**: mid-flight tool modifications stay in the worktree and the new session faces a scene "it did not make itself" -- fidelity does not hold; this design changes it to rollback and rerun |
+| R6 | Graceful exit (blocked/pending, summary-state record) | Rerun after manual intervention; the new session relies on the CURRENT.md interruption note | A human may have changed the environment, so the old session is not reused (current behavior is correct); mid-flight changes were already swept by the interrupted commit, baseline clean |
 
-结论:R1/R2/R4 保真度达标(仅需提示词瘦身);R5 需要回滚;R3 降级为"尽力而为"
-(文档有效即续,无效即回滚,不再反复索要文档)。
+Conclusion: R1/R2/R4 meet the fidelity bar (they only need prompt slimming); R5 needs rollback; R3 is demoted to "best effort"
+(continue when the document is valid, roll back when it is not, and no more repeatedly demanding documents).
 
-### 2.1 现场实证注记(2026-09-15 审计,出处见根 docs/session-interruption-field-audit-20260915.md)
+### 2.1 Field-Evidence Notes (2026-09-15 audit; source: docs/session-interruption-field-audit-20260915.md at the repository root)
 
-- **R1 实证可行**:跨 run 复用 4 例(T-013@148.3k / T-014@223.8k / T-019@201.8k /
-  T-054@22.3k 上下文),全部成功续作。恢复会话的自我定位动作高度固化(读 CURRENT.md →
-  git status/log → PLAN.md 首个未勾选项 → 产物存在性),印证 3.2 可行——会话本就靠盘面
-  自定位,恢复提示词只需"继续"信号。
-- **R1 恢复序的隐性优点**:恢复时 driver 先刷新 digest 分叉基点,原会话只收尾当前子任务,
-  下游子任务一律从新基点分叉——复用失败的爆炸半径被限制在单个子任务(3.4 显性保持)。
-- **会话存活必须探测**:现场一例 ECONNRESET(服务端重启)令全链会话蒸发,active 记录在、
-  会话不在;存活判定不能凭记录假设(R5 路径的真实入口)。
-- **R5 实证**:dm T-010(08-22)新会话对前会话未提交半成品做"法证式"重建(git status/diff +
-  编译测试推断),实测侥幸成功但完全依赖模型推理质量——验证本设计"回滚优于脏区续跑"取向。
-- **R3 实证失效**:T-019/S07 会话声称已写 testhandoff.md,实测文件从未存在(git 全历史零记录),
-  直到 S09 验收子任务才兜底发现;另有一次交接会话违反"勿在本会话修复"指令自行 chmod。
-  结论:**"完成判定不靠 agent 自报"必须同样适用于交接文档**——写核提前到交接边界(3.3)。
-- **上下文超限暴露**:交接仅在"测试失败 × 达上限"双条件触发,现场会话普遍冲到上限 2–4 倍
-  (64k/80k 上限 vs 实测 72.7k–264.3k);上下文越大,会话死亡(R1→R5)的损失面越大(3.5 ①)。
-- **配额类错误换新会话重试结构性无效**:账户级限制,现场 2 次重试 1 秒内同错返回(3.5 ②)。
-- **服务商切换跨 run 天然安全**(盘面台账架构,现场 4 次换模工作连续),但 model 一致性
-  必须进复用判据(3.1 ④);两个目标目录 opencode.json 均残留 4 个重复 model 键
-  (JSON last-wins),配置漂移是真实发生过的现场事实。
+- **R1 proven feasible in the field**: 4 cross-run reuse cases (T-013@148.3k / T-014@223.8k / T-019@201.8k /
+  T-054@22.3k context), all resumed work successfully. The recovered session's self-orientation routine is highly persistent (read CURRENT.md →
+  git status/log → first unchecked item in PLAN.md → artifact existence), confirming 3.2's feasibility -- the session already orients itself from the on-disk
+  state, so the recovery prompt only needs the "continue" signal.
+- **A hidden strength of the R1 recovery order**: on recovery the driver first refreshes the digest fork base point and the original session only finishes the current subtask;
+  all downstream subtasks fork from the new base point -- the blast radius of a reuse failure is limited to a single subtask (kept explicit in 3.4).
+- **Session liveness must be probed**: in the field one ECONNRESET (server-side restart) evaporated an entire chain's sessions -- the active record was present,
+  the sessions were not; liveness must not be assumed from records (this is the real entry point of the R5 path).
+- **R5 field evidence**: for dm T-010 (08-22) the new session did a "forensic" reconstruction of the previous session's uncommitted work-in-progress (git status/diff +
+  inference from compile/test runs); it happened to succeed in practice but depended entirely on the model's reasoning quality -- validating this design's "rollback over dirty-area continuation" orientation.
+- **R3 failed in the field**: the T-019/S07 session claimed it had written testhandoff.md, but the file never existed (zero records across the full git history),
+  and it was only caught by the S09 acceptance subtask; on another occasion a handover session violated the "do not fix in this session" instruction and ran chmod on its own.
+  Conclusion: **"completion is not judged by the agent's self-report" must apply equally to handover documents** -- write verification moves up to the handover boundary (3.3).
+- **Context-overflow exposure**: handover currently triggers only on the dual condition "test failure × limit reached"; field sessions routinely ran to 2–4x the limit
+  (64k/80k limits vs measured 72.7k–264.3k); the larger the context, the larger the loss surface of session death (R1→R5) (3.5 ①).
+- **Retrying quota-class errors in a new session is structurally futile**: the limit is account-level; in the field, 2 retries returned the same error within 1 second (3.5 ②).
+- **Provider switches are naturally safe across runs** (on-disk ledger architecture; 4 in-field model switches with continuous work), but model consistency
+  must enter the reuse criteria (3.1 ④); both target directories' opencode.json files still carry 4 duplicate model keys
+  (JSON last-wins) -- configuration drift is a field fact that has actually happened.
 
-## 3. 设计
+## 3. Design
 
-### 3.1 可恢复 session id 的记录标准(收紧)
+### 3.1 Recording Criteria for a Resumable session id (Tightened)
 
-同时满足才记录为"可恢复":
+Record as "resumable" only when all of the following hold:
 
-1. 提示词下发成功且回合正常进行(现状: 下发即写 active 记录,已满足);
-2. 记录携带单元归属(phase + index,单元归属门禁已有);
-3. **单元基线在册**:记录里补 `baseline`(逐仓库 HEAD SHA,commit-boundary 已有
-   unitBaseline)——恢复时核对当前各仓库 HEAD:HEAD == baseline 或
-   baseline..HEAD 全部带 Auto-Stage trailer(即期间只有 driver 提交),否则外部
-   提交已混入,会话上下文对现状的认知失真 → 不复用,回滚。
-4. **model 一致性**(2026-09-15 补):记录补 `model`(生效 provider/model 串)——
-   恢复时与当前配置解析出的模型不一致 → 不复用。会话在异模型上续跑 = 行为漂移,
-   属用户可见变更(与 R4 同一法理);顺带拦截目标目录 opencode.json 重复 model 键
-   last-wins 一类的配置漂移(现场两个目标目录均残留 4 个重复键,生效模型未必是本意)。
+1. The prompt was dispatched successfully and the round is proceeding normally (current state: the active record is written on dispatch, already satisfied);
+2. The record carries unit ownership (phase + index; the unit-ownership gate already has this);
+3. **Unit baseline on record**: add `baseline` to the record (per-repository HEAD SHA; commit-boundary already has
+   unitBaseline) -- on recovery, verify each repository's current HEAD: HEAD == baseline, or
+   every commit in baseline..HEAD carries the Auto-Stage trailer (i.e. only the driver committed in between); otherwise foreign
+   commits have mixed in and the session context's view of the present is distorted → no reuse, roll back.
+4. **model consistency** (added 2026-09-15): add `model` to the record (the effective provider/model string) --
+   on recovery, a mismatch against the model resolved from the current configuration → no reuse. Continuing a session on a different model = behavioral drift,
+   a user-visible change (same doctrine as R4); this also intercepts target-directory opencode.json configuration drift of the duplicate-model-key
+   last-wins kind (both target directories still carry 4 duplicate keys in the field; the effective model may not be the intended one).
 
-Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 → 视为不可恢复,
-走回滚路径;灰度期可用环境变量 `OPENCODE_AUTO_STRICT_RESUME` 控制新旧行为,缺省沿用
-现状,实验定型后转正——与 fork 开关同一模式)。
+The Progress structure gains optional `baseline` and `model` fields (old records lacking either field → treated as non-resumable,
+taking the rollback path; during gradual rollout the environment variable `OPENCODE_AUTO_STRICT_RESUME` controls old vs new behavior, defaulting to the current
+behavior and promoted once the experiment is finalized -- the same pattern as the fork switch).
 
-### 3.2 极简续跑(一句 continue)
+### 3.2 Minimal-Continuation Resume (a Single continue)
 
-- R1/R2 的 resumeNote 收敛为单句,如:`[driver] 会话曾中断,请继续当前工作直至本单元完成。`
-- 阶段指引信息本就冗余:会话上下文里已有任务提示词与进度,恢复时真正需要的只有
-  "继续"信号与"到什么程度算完"(原提示词已含)。逐步骤的下一步指引保留在
-  **交接文档/状态文件**里,不进恢复提示词。
-- 文案改动集中在 runner.ts resumeNote + 各模板不动;prompt.test.ts 同步。
-- **2026-09-17 补**:一句 continue 追加半句提交语义澄清(「中断前落盘的修改若已
-  不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做」)。起因是
-  恢复会话以 git 核对盘面时,「工作区干净 / git log 出现陌生提交」会被误读为修改
-  丢失而重做:中断前的修改可能仍在工作区待提交(单元中途被打断),也可能已由
-  driver 统一提交(定版/交接/单元收口)或经人工处置提交(中断后重跑的 clean 门禁
-  要求人工处置脏区)。非一句 continue 的恢复路径(resumeNote 多行指引)与测试交接
-  的 fork 恢复插话(exec-session)同步带上同一句(共用 `COMMIT_CLARIFY` 常量,
+- R1/R2's resumeNote collapses to a single sentence, e.g. `[driver] 会话曾中断,请继续当前工作直至本单元完成。` ("the session was interrupted; please continue the current work until this unit is complete.")
+- The per-phase guidance is redundant anyway: the session context already contains the task prompt and progress; what recovery truly needs is only
+  the "continue" signal and "what counts as done" (already in the original prompt). Per-step next-step guidance stays in
+  the **handover document / status files**, not in the recovery prompt.
+- Copy changes concentrate on the runner.ts resumeNote + the templates are untouched; prompt.test.ts is updated in step.
+- **Added 2026-09-17**: the single continue gains a half-sentence clarification of commit semantics (「中断前落盘的修改若已
+  不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做」 -- "modifications landed before the interruption that are no longer in the worktree have already been committed into Git by the driver as a whole; verify with git log, do not redo them"). The trigger:
+  when a recovered session cross-checks the on-disk state with git, "clean worktree / unfamiliar commits in git log" gets misread as modifications
+  lost and redone: pre-interruption modifications may still sit uncommitted in the worktree (interrupted mid-unit), or may already have been
+  committed by the driver as a whole (finalization/handover/unit close-out) or committed via manual disposal (the clean gate of a post-interruption rerun
+  requires a human to dispose of the dirty area). Recovery paths that are not the single continue (multi-line resumeNote guidance) and the fork-recovery
+  interjection for test handover (exec-session) carry the same sentence in step (sharing the `COMMIT_CLARIFY` constant,
   resume-gate.ts)。
 
-### 3.3 回滚协议(不可保真时)
+### 3.3 Rollback Protocol (When Fidelity Cannot Be Guaranteed)
 
-触发条件(满足其一):
+Trigger conditions (any one suffices):
 
-- active 记录的会话不可复用(死亡/报错桩/--new-session)且单元基线在册;
-- 基线核对失败(外部提交混入);
-- model 不一致(3.1 ④);
-- 交接续跑文档缺失/无效(R3 收紧)——**含交接边界写核**(2026-09-15 补):交接会话
-  结束后 driver 立即核验交接文档在盘且以 `状态: 继续` 收尾,缺失即触发回滚,不在
-  下一会话读取时才发现。实证:S07 会话声称已写 testhandoff.md,文件从未存在
-  (git 全历史零记录),验收期才兜底——"完成判定不靠 agent 自报"同样适用于交接
-  文档,发现时机必须从验收期提前到交接边界。
+- The active record's session is not reusable (dead/error stub/--new-session) and the unit baseline is on record;
+- Baseline verification failed (foreign commits mixed in);
+- model mismatch (3.1 ④);
+- Handover-resume document missing/invalid (R3 tightened) -- **including handover-boundary write verification** (added 2026-09-15): after the handover session
+  ends, the driver immediately verifies the handover document is on disk and ends with `状态: 继续` (status: continue); a miss triggers rollback immediately, rather than being
+  discovered when the next session reads it. Field evidence: the S07 session claimed it had written testhandoff.md; the file never existed
+  (zero records across the full git history) and was only caught at acceptance time -- "completion is not judged by the agent's self-report" applies equally to handover
+  documents; the moment of detection must move up from the acceptance period to the handover boundary.
 
-动作(逐仓库,深度优先,镜像 commitTree 的遍历):
+Actions (per repository, depth-first, mirroring commitTree's traversal):
 
-1. `git stash push -u -m "auto-rollback <task> <unit> <timestamp>"`(保全现场,
-   未提交改动可人工找回;`.auto/`、`tmp/` 已被 gitignore,天然不参与);
-2. 若 baseline..HEAD 间存在本单元的 driver 提交(子任务中间交接提交等):
-   `git reset --soft <baseline>` 后再 stash——把本单元已落账的部分工作一并收回
-   stash,分支回到基线(已推送/被人引用的提交不适用——目标目录为 driver 专政
-   仓库,默认不推送,若检测到 upstream 则跳过 reset 只 stash 并告警);
-3. 进度记录转总结态(active=false,baseline 清除),CURRENT.md 写回滚备注;
-4. 新会话从干净基线重做本单元(冷启动提示词,不附 resumeNote)。
+1. `git stash push -u -m "auto-rollback <task> <unit> <timestamp>"` (preserve the scene;
+   uncommitted changes remain manually recoverable; `.auto/` and `tmp/` are already gitignored and naturally stay out);
+2. If driver commits of this unit exist within baseline..HEAD (interim subtask handover commits and the like):
+   `git reset --soft <baseline>` then stash -- pulling this unit's already-booked partial work back
+   into the stash, returning the branch to the baseline (not applicable to pushed/referenced commits -- target directories are repositories under the driver's
+   exclusive control, not pushed by default; if an upstream is detected, skip the reset, stash only, and warn);
+3. The progress record switches to summary state (active=false, baseline cleared) and CURRENT.md gets a rollback note;
+4. A new session redoes this unit from the clean baseline (cold-start prompt, no resumeNote attached).
 
-不做的事:不 stash 嵌套仓库之外的任何东西;不动人工提交(检测到外部提交时
-**不回滚**,直接 dirty 阻塞交人工——回滚只回收 driver 自己的单元内改动)。
+Things not done: nothing outside the nested repositories is stashed; human commits are untouched (when foreign commits are detected,
+**no rollback** -- go straight to a dirty block and hand it to a human -- rollback reclaims only the driver's own in-unit changes).
 
-### 3.4 与既有机制的关系
+### 3.4 Relationship to Existing Mechanisms
 
-- **单元提交边界(commit-boundary)**:本设计消费其基线与 trailer 校验;回滚后
-  单元以 clean 重新启动,门禁自然通过。
-- **单元归属门禁(unitReruns)**:不变——回滚只影响"会话与现场",不影响"哪个
-  单元将重跑"的路由。
-- **统一提交**:回滚产生的 stash 不属提交轨迹;新会话重做的单元照常逐会话提交。
-- **统计**:被回滚单元的已记账会话时长保留(真实消耗),重做部分增量入账。
-- **降级环(failback)**:fork 续跑(R4)不触发回滚——fork 是消息级复制,保真度
-  高于文档交接;仅当 fork 也失败才落回滚。
-- **fork 分解**(2026-09-15 显性化):R1 恢复时先刷新 digest 分叉基点、原会话仅收尾
-  当前子任务,下游子任务一律从新基点分叉——被复用会话的失败爆炸半径 = 单个子任务。
-  该结构为现场实证的隐性优点,实施时必须保持(回滚协议不改变 fork 节奏)。
+- **Unit commit boundary (commit-boundary)**: this design consumes its baseline and trailer verification; after rollback,
+  the unit restarts clean and the gate passes naturally.
+- **Unit ownership gate (unitReruns)**: unchanged -- rollback affects only "sessions and scene", not the routing of
+  "which unit will be rerun".
+- **Unified commits**: the stash produced by rollback is not part of the commit trajectory; the unit redone by the new session still commits per session as usual.
+- **Stats**: session durations already booked for the rolled-back unit are kept (real consumption); the redone portion is booked incrementally.
+- **Fallback ring (failback)**: fork continuation (R4) does not trigger rollback -- fork is message-level copy, fidelity
+  higher than document handover; rollback is reached only when fork also fails.
+- **fork decomposition** (made explicit 2026-09-15): on R1 recovery the digest fork base point is refreshed first and the original session only finishes
+  the current subtask; all downstream subtasks fork from the new base point -- the failure blast radius of a reused session = a single subtask.
+  This structure is a field-proven hidden strength and must be preserved in implementation (the rollback protocol does not change the fork cadence).
 
-### 3.5 相邻机制的实证修正建议(2026-09-15 登记,不属本设计实施范围)
+### 3.5 Evidence-Based Correction Suggestions for Adjacent Mechanisms (registered 2026-09-15; outside this design's implementation scope)
 
-以下两条由现场审计得出(出处见根 docs/session-interruption-field-audit-20260915.md),
-登记给属主设计,避免散失:
+The following two items come from the field audit (source: docs/session-interruption-field-audit-20260915.md at the repository root);
+they are registered for their owning designs, to avoid getting lost:
 
-1. **交接触发解耦**(**已实施 2026-09-15**,见 plans/0023-test-handover-early-design.md):现状
-   交接仅在"测试失败 × 上下文达上限"双条件触发,现场会话普遍冲到上限 2–4 倍
-   (64k/80k 上限 vs 实测 72.7k–264.3k)——测试连绿时会话无限增长,会话死亡时损失面
-   随之放大,与恢复保真直接耦合。建议:上下文达上限单条件(在子任务安全边界)即交接。
-   属主: runner.ts 交接判定(fork-decompose / commit-boundary 体系)。
-   **落地取的安全边界是"AI 发起测试的那一刻"**(tmp/test.sh 出现时): 发起测试通常
-   意味着相关工作已做完、正要验证,是唯一天然干净的分割点;判据随之解耦为
-   `used ≥ contextLimit` 单条件。配套 D3「一次交接两次提交」使交接点工作区变干净,
-   同时消解 §6 登记的"交接续跑脏区豁免"在这条路径上的局限。
-2. **配额类错误免烧新会话重试**:配额是账户级限制,换新会话重试结构性无效(现场 2 次
-   重试 1 秒内同错返回)。classifySessionError 已归 quota 类,重试环应跳过新会话重试,
-   直接进降级环(未配置候选则阻塞)。属主: plans/0015-session-error-retry-plan.md /
+1. **Handover-trigger decoupling** (**implemented 2026-09-15**, see plans/0023-test-handover-early-design.md): currently
+   handover triggers only on the dual condition "test failure × context limit reached"; field sessions routinely ran to 2–4x the limit
+   (64k/80k limits vs measured 72.7k–264.3k) -- while tests stay green the session grows without bound, and the loss surface of session death
+   grows with it, directly coupled to recovery fidelity. Suggestion: hand over on the single condition of the context reaching its limit (at a subtask safety boundary).
+   Owner: the runner.ts handover decision (fork-decompose / commit-boundary system).
+   **The safety boundary actually landed on is "the moment the AI initiates the tests"** (when tmp/test.sh appears): initiating tests usually
+   means the related work is finished and about to be verified -- the only naturally clean split point; the criterion is accordingly decoupled to
+   the single condition `used ≥ contextLimit`. The companion D3 "one handover, two commits" makes the worktree clean at the handover point,
+   and dissolves the limitation of the "handover-resume dirty-area exemption" registered in §6 on this path.
+2. **Quota-class errors must not burn new-session retries**: quota is an account-level limit; retrying in a new session is structurally futile (in the field, 2
+   retries returned the same error within 1 second). classifySessionError already classifies quota; the retry ring should skip the new-session retry
+   and go straight to the fallback ring (block if no candidates are configured). Owners: plans/0015-session-error-retry-plan.md /
    plans/0017-model-routing-design.md。
 
-## 4. 分期实施(2026-09-15 全部完成)
+## 4. Phased Implementation (all completed 2026-09-15)
 
-落点速览(2026-09-15 会话 1 已改文件): `src/switches.ts`、`src/resume.ts`、
-`src/git.ts`、`src/runner.ts`、`test/switches.test.ts`;typecheck 干净、全量
-`bun test` 706 绿(注入化改造最后一笔之前的一次全量,其后仅 typecheck 复验)。
+Landing spots at a glance (files changed in 2026-09-15 session 1): `src/switches.ts`, `src/resume.ts`,
+`src/git.ts`, `src/runner.ts`, `test/switches.test.ts`; typecheck clean and a full
+`bun test` at 706 green (the last full run before the final stroke of the injectability refactor; only typecheck re-verification after that).
 
-- [x] **S1-a 开关**(S3 前置): `OPENCODE_AUTO_STRICT_RESUME`(off|on,缺省 off)
-  全套登记(switches.ts 的 SWITCH_ENV/Switches/DEFAULTS/parse/nonDefault/format);
-  test/switches.test.ts 已同步(十六变量、非法值、非默认项)。
-- [x] **S1-b 字段**: resume.ts Progress 加 `baseline?: UnitBaseline`(type-import 自
-  git.ts,无环)+ `model?: string`,parseProgress 往返(baseline 数组逐项校验)。
-- [x] **S1-c 核对**: git.ts 抽出共享 `foreignCommits(root, sha)`(unitViolations 同步
-  改用);新增 `baselineIntact(dir, baseline)`——只查 HEAD==基线或区间全 Auto-Stage,
-  **不查未提交改动**(半途脏区正是恢复对象)。
-- [x] **S1-d 记录**: runner.ts attempt 的 remember() 在 strictResumeActive 时写
-  `baseline: chain.baseline ?? unitBaseline(dir)` 与 `model: promptModel`(target
-  求值后回填的外层 let);链上基线置点: runTask 入口、persistStage(阶段边界刷新,
-  回滚半径收窄)、runSubtask(子任务门禁后)、requireArtifact(unitStart 链)。
-- [x] **S1-e resumeNote 瘦身**: `reused && strictResume` → 单句
-  `[driver] 会话曾中断,请继续当前工作直至本单元完成。`;非复用路径(优雅退出
-  总结态)保持既有按阶段指引;resumeNote 已 export。
-- [x] **S2-a rollbackUnit(dir, baseline, info)**(git.ts): 逐仓库镜像 commitTree
-  深度优先;外部提交 → 该仓库不动、计 failures(整体 ok=false → 调用方 dirty);
-  `stash push -u -m "auto-rollback …" -- .`(pathspec 限定子树);有 upstream → 跳过
-  reset 只 stash 告警;基线为空仓库/仓库不在基线 → 仅 stash;reset --soft 后二次
-  stash 收回已落账提交;返回 RollbackResult{ok,failures,stashes,resets,skipped}。
-- [x] **S2-b R5 接线**(runTask 恢复块): strict 分支——基线核对失败 → `dirty` 出口;
-  会话死亡/报错桩/--new-session/model 不一致 → `rollbackUnitState`(runner 侧编排:
-  rollbackUnit + 记录转总结态清基线/模型 + CURRENT.md 回滚备注)→ `recalled.active
-  = false`(pipeline 走非恢复续跑语义)、不设 chain.note(冷启动);`rolledBack`
-  备注随后并入任务镜像 writeCurrent。旧记录无基线(legacyRecord)→ alive 强制
-  false → 走既有新会话路径(文案注明)。
-- [x] **S2-c R3 收紧 + 交接边界写核**: executeWhole/runSubtask——handoverDue 后文档
-  无效一次即 `rollbackRedo()`(回滚 + continuation/feedback/retried 与链状态复位
-  + 冷启动重做,runSubtask 另从基点重新 seedForkSession),`rolled` 一次为限,再
-  失败按既有隐性阻塞上抛;watch 的 handleIdleTest 在 strict 下文档缺失/为空直接
-  `{type:"invalid"}`(不再 steer 补写重试)→ idle 处折成 blocked +
-  `Watch.testHandoverInvalid` → attempt 折成 `SessionResult.rollback` 标记 → 单元
-  所有者回滚重做;**作用域**: fixRound 无基线上下文,忽略该标记维持现状(阻塞),
-  回滚重做只落在 executeWhole/runSubtask 两处(决策: 修复轮回滚锚点不属本设计的
-  单元范畴)。恢复时交接文档在场但无状态行(handoffInvalid,需基线在册)→ 回滚
-  而非凭文档续跑;`handoffStatus()` 统一状态行判据。
-- [x] **S2-d requireArtifact step 续跑严格化**: sameStep 且基线在册 → baselineIntact
-  失败 dirty;model 不一致/记录无 model/死亡 → rollbackUnitState 后按全新步骤重做;
-  旧记录无基线 → 不复用、走既有"开新会话重做本步骤"。
-- [x] **S1/S2 测试**:
-  - test/resume.test.ts: baseline/model 往返、缺字段记录兼容;
-  - test/git.test.ts: baselineIntact(HEAD==基线/driver 区间通过/外部提交检出/空基线)
-    与 rollbackUnit(脏区+driver 提交 → stash×2+reset 回基线、stash list 含
-    auto-rollback、工作区净;外部提交 → ok=false 且仓库原样;upstream → 只 stash;
-    空基线 → 只 stash;嵌套仓库各自回滚);
-  - test/runner.test.ts: resumeNote 两态(需注入,见下);requireArtifact strict
-    路径(注入 switches: 记录带 baseline+model 匹配 → 复用;model 不一致/会话死 →
-    回滚后重开——git init 临时仓 + saveProgress 构造记录,断言 HEAD 复位与
-    stash 存在)。
-- [x] **S3 收尾**:
-  - 可注入化补完(已做): ① requireArtifact 内部 strictResumeActive 传 switches;
-    ② watch 加 switches 形参(attempt 调用点透传),handleIdleTest 用之;③ resumeNote
-    加第三参 `strictResume = autoSwitches().strictResume`,runTask/requireArtifact 三个
-    调用点传**门禁值** `strict`(§4.1 ⑥,非裸开关);④ attempt 的 remember 里
-    strictResumeActive 传 switches(runTask 入口的门禁调用一并透传)。
-    executeWhole/runSubtask 的 strictResumeActive(opts) 不在单测面上,保持现状;
-  - 文档同步: docs/behavior.md(严格恢复行为段: 记录标准/核对/回滚/未配路由时
-    一律不复用的口径)、docs/structure.md(switches 第十六变量 + git.ts
-    baselineIntact/rollbackUnit + runner.ts 增补)、包 AGENTS.md 导航行、根
-    /workspace/aseo/AGENTS.md「进行中的方案」段(改为已实施 + 开关缺省 off 灰度)、
-    本文件状态行转"已实施(灰度)";
-  - 终验: 包目录 `bun typecheck` + `bun test` 全绿。
+- [x] **S1-a switch** (prerequisite for S3): `OPENCODE_AUTO_STRICT_RESUME` (off|on, default off)
+  fully registered (SWITCH_ENV/Switches/DEFAULTS/parse/nonDefault/format in switches.ts);
+  test/switches.test.ts updated in step (sixteen variables, illegal values, non-default items).
+- [x] **S1-b fields**: resume.ts Progress gains `baseline?: UnitBaseline` (type-import from
+  git.ts, no cycle) + `model?: string`; parseProgress round-trips (per-item validation of the baseline array).
+- [x] **S1-c verification**: git.ts extracts the shared `foreignCommits(root, sha)` (unitViolations switched to it in
+  step); adds `baselineIntact(dir, baseline)` -- checks only HEAD==baseline or an all-Auto-Stage range,
+  **not uncommitted changes** (the mid-flight dirty area is precisely the recovery target).
+- [x] **S1-d records**: runner.ts attempt's remember() writes, when strictResumeActive,
+  `baseline: chain.baseline ?? unitBaseline(dir)` and `model: promptModel` (promptModel is an outer
+  let backfilled after the target is evaluated); baseline placement points on the chain: runTask entry, persistStage (refreshed at phase boundaries,
+  narrowing the rollback radius), runSubtask (after the subtask gate), requireArtifact (unitStart chain).
+- [x] **S1-e resumeNote slimming**: `reused && strictResume` → the single sentence
+  `[driver] 会话曾中断,请继续当前工作直至本单元完成。` (glossed in §3.2); non-reuse paths (graceful-exit
+  summary state) keep the existing per-phase guidance; resumeNote is now exported.
+- [x] **S2-a rollbackUnit(dir, baseline, info)** (git.ts): per repository, mirroring commitTree's
+  depth-first; foreign commits → that repository is left untouched and counted in failures (overall ok=false → the caller goes dirty);
+  `stash push -u -m "auto-rollback …" -- .` (pathspec limits the subtree); with an upstream → skip the
+  reset, stash only, and warn; baseline on an empty repository / repository not on the baseline → stash only; after reset --soft a second
+  stash reclaims the already-booked commits; returns RollbackResult{ok,failures,stashes,resets,skipped}.
+- [x] **S2-b R5 wiring** (runTask recovery block): strict branch -- baseline verification failed → `dirty` exit;
+  session death/error stub/--new-session/model mismatch → `rollbackUnitState` (runner-side orchestration:
+  rollbackUnit + record to summary state clearing baseline/model + CURRENT.md rollback note) → `recalled.active
+  = false` (the pipeline takes non-recovery continuation semantics), no chain.note set (cold start); the `rolledBack`
+  note is subsequently merged into the task-mirror writeCurrent. Old records without a baseline (legacyRecord) → alive forced
+  false → the existing new-session path (noted in the copy).
+- [x] **S2-c R3 tightening + handover-boundary write verification**: executeWhole/runSubtask -- after handoverDue, an invalid document
+  once triggers `rollbackRedo()` (rollback + resetting continuation/feedback/retried and the chain state
+  + a cold-start redo; runSubtask additionally re-seeds seedForkSession from the base point), `rolled` limited to once; on a further
+  failure it escalates per the existing silent block; watch's handleIdleTest, under strict, treats a missing/empty document directly as
+  `{type:"invalid"}` (no more steer-to-rewrite retry) → folded at idle into blocked +
+  `Watch.testHandoverInvalid` → attempt folds it into the `SessionResult.rollback` marker → the unit's
+  owner rolls back and redoes; **scope**: fixRound has no baseline context and ignores the marker, keeping current behavior (block);
+  rollback-redo lands only at the two executeWhole/runSubtask sites (decision: a fix-round rollback anchor is outside this design's
+  unit scope). On recovery, a handover document present but without a status line (handoffInvalid, requires the baseline on record) → rollback
+  rather than document-based continuation; `handoffStatus()` unifies the status-line criterion.
+- [x] **S2-d requireArtifact step resume made strict**: sameStep with the baseline on record → baselineIntact
+  failure means dirty; model mismatch/record without model/death → after rollbackUnitState, redo as a brand-new step;
+  old records without a baseline → no reuse, taking the existing "open a new session and redo this step".
+- [x] **S1/S2 tests**:
+  - test/resume.test.ts: baseline/model round-trip, compatibility for records missing the fields;
+  - test/git.test.ts: baselineIntact (HEAD==baseline / driver-range pass / foreign-commit detection / empty baseline)
+    and rollbackUnit (dirty area + driver commits → stash×2 + reset back to baseline, stash list containing
+    auto-rollback, clean worktree; foreign commits → ok=false with the repository untouched; upstream → stash only;
+    empty baseline → stash only; nested repositories each roll back their own);
+  - test/runner.test.ts: resumeNote's two states (injection needed, see below); the requireArtifact strict
+    path (switches injected: record with baseline + matching model → reuse; model mismatch/session death →
+    reopen after rollback -- records built with a git init temp repository + saveProgress, asserting the HEAD reset and the
+    stash's existence).
+- [x] **S3 close-out**:
+  - Injectability completed (done): ① strictResumeActive inside requireArtifact takes switches;
+    ② watch gains a switches parameter (passed through at attempt's call sites) and handleIdleTest uses it; ③ resumeNote
+    gains a third parameter `strictResume = autoSwitches().strictResume`; the three runTask/requireArtifact
+    call sites pass the **gate value** `strict` (§4.1 ⑥, not the bare switch); ④ inside attempt's remember,
+    strictResumeActive takes switches (the gate call at the runTask entry passes it through as well).
+    executeWhole/runSubtask's strictResumeActive(opts) is not on the unit-test surface and stays as is;
+  - Docs synced: docs/behavior.md (strict-resume behavior section: recording criteria/verification/rollback/the rule that without a configured route
+    nothing is ever reused), docs/structure.md (the sixteenth switches variable + git.ts
+    baselineIntact/rollbackUnit + runner.ts additions), the package AGENTS.md navigation line, and the root
+    /workspace/aseo/AGENTS.md in-progress-plans section (changed to implemented + the switch default off in gradual rollout),
+    this file's status line switched to "implemented (gradual rollout)";
+  - Final verification: `bun typecheck` + `bun test` in the package directory all green.
 
-落定(2026-09-15 会话 2): 注入化四处全部补完(requireArtifact 的 strictResumeActive
-传 switches、watch 加 switches 形参经 attempt 透传、resumeNote 第三参由调用点传门禁值、
-attempt 的 remember 传 switches;runTask 入口的门禁调用一并透传)。新增测试 20 例——
-test/resume.test.ts 2(baseline/model 往返与坏值容错)、test/git.test.ts 8
-(baselineIntact 三例 + rollbackUnit 五例,含 upstream 自引用构造与嵌套仓库)、
-test/runner.test.ts 9(resumeNote 三态 + requireArtifact 严格路径六态,含开关 off 的
-等价现状回归);反向核对已做——把注入的 strictResume 改 off,四条严格用例应声而倒。
-auto-core `bun typecheck` 干净、`bun test` 726 全绿(前 706);auto 壳 typecheck 干净、
-e2e 52 通过(新增 --commit false 退役一例)。
+Finalized (2026-09-15 session 2): all four injectability points are complete (requireArtifact's strictResumeActive
+takes switches, watch gains a switches parameter passed through via attempt, resumeNote's third parameter receives the gate value from call sites,
+and attempt's remember takes switches; the gate call at the runTask entry passes through as well). 20 new tests --
+test/resume.test.ts 2 (baseline/model round-trip and bad-value tolerance), test/git.test.ts 8
+(three baselineIntact cases + five rollbackUnit cases, including an upstream self-reference construction and nested repositories),
+test/runner.test.ts 9 (three resumeNote states + six requireArtifact strict-path states, including the switch-off
+equivalent-current-behavior regression); a reverse check was done -- flipping the injected strictResume to off makes all four strict cases fall immediately.
+auto-core `bun typecheck` clean, `bun test` 726 all green (previously 706); the auto shell's typecheck clean,
+e2e 52 passing (one new --commit false retirement case).
 
-### 4.1 实施期决策记录(设计文本之外的落定口径)
+### 4.1 Implementation-Period Decision Log (settled positions beyond the design text)
 
-1. **门禁联动**: 严格机制整体 gated 于 `strictResumeActive = 开关 on 且
-   --commit true 且非 dryrun`;off(缺省)记录不带新字段、核对与回滚逐字节等价现状。
-2. **无路由即不复用**(§5 字面口径): 未配 OPENCODE_AUTO_MODEL 时记录无 model 可写,
-   严格恢复下视同不匹配 → 回滚;需会话复用须配置路由(behavior.md 要写明)。
-3. **基线锚点分级**: 任务入口基线(runTask,与 loop beginUnit 同 HEAD)被子任务/
-   阶段边界基线覆盖收窄;更近基线与更远基线在"区间全 driver 提交"下核对等价,
-   回滚半径更小。
-4. **外部提交 ≠ 回滚**: 一律 dirty 交人工(3.3「不做的事」),包括恢复核对与
-   rollbackUnit 双侧。
-5. **中途回滚重做的界**: executeWhole/runSubtask 各一次(`rolled`),再失败走既有
-   隐性阻塞;现场已保全在 stash。
-6. **resumeNote 的门禁口径**(2026-09-15 会话 2 落定): 第三参由调用点传**门禁值**
-   `strictResumeActive(opts, switches)`,不是裸开关——门禁不在位时没有单元基线也没有
-   回滚兜底,"一句 continue"赖以成立的前提(不可保真即回滚重跑)不存在,故维持既有
-   多行阶段指引。与 §4.1 ① 同一法理。
-7. **`--commit false` 退役**(2026-09-15 用户决策,plans/0021-commit-boundary-design.md D7):
-   提交关闭档与本设计(及提交边界)冲突——门禁关闭时严格恢复整体空转,却要求每个
-   新机制都挂一条空转分支。已做入口层软退役: CLI `--commit false`/`none` 与配置
-   `commit: false` 出现即用法错误/严格失败;`strictResumeActive` 的 `opts.commit !== false`
-   项随之恒真,门禁实际只剩"开关 on 且非 dryrun"。代码侧门禁分支暂留,清理另立任务。
+1. **Gate linkage**: the strict mechanism as a whole is gated on `strictResumeActive = 开关 on 且
+   --commit true 且非 dryrun` (switch on, --commit true, and not a dryrun); off (the default) means records carry no new fields and verification and rollback are byte-for-byte equivalent to the status quo.
+2. **No routing, no reuse** (§5 literal reading): when OPENCODE_AUTO_MODEL is not configured the record has no model to write,
+   which under strict resume counts as a mismatch → rollback; session reuse requires a configured route (behavior.md must state this).
+3. **Baseline-anchor tiering**: the task-entry baseline (runTask, same HEAD as loop's beginUnit) is narrowed by the subtask/
+   phase-boundary baselines that override it; a nearer baseline and a farther baseline verify equivalently under "all commits in the range are driver commits",
+   with a smaller rollback radius.
+4. **Foreign commits ≠ rollback**: always dirty and handed to a human (3.3, "Things not done"), covering both the recovery check and
+   both sides of rollbackUnit.
+5. **Mid-flight rollback-redo bound**: once each for executeWhole/runSubtask (`rolled`); a further failure takes the existing
+   silent block; the scene is already preserved in the stash.
+6. **resumeNote's gate reading** (settled 2026-09-15 session 2): the third parameter is passed the **gate value**
+   `strictResumeActive(opts, switches)` by the call sites, not the bare switch -- when the gate is not in place there is neither a unit baseline nor a
+   rollback backstop; the premise the "single continue" rests on (roll back and rerun whenever fidelity is unprovable) does not exist, so the existing
+   multi-line per-phase guidance stays. Same doctrine as §4.1 ①.
+7. **`--commit false` retirement** (user decision 2026-09-15, plans/0021-commit-boundary-design.md D7):
+   the commit-off mode conflicts with this design (and with commit boundaries) -- with the gate off, strict resume spins idle as a whole, yet it would require every
+   new mechanism to carry an idle branch. Entrance-layer soft retirement is done: a CLI `--commit false`/`none` or a config
+   `commit: false` occurrence is a usage error/strict failure; the `opts.commit !== false`
+   term of `strictResumeActive` is thus always true, leaving the gate effectively "switch on and not dryrun". The code-side gate branch stays for now; its cleanup is a separate task.
 
-## 5. 风险
+## 5. Risks
 
-- **工作浪费**:回滚丢弃半途工作(stash 可找回);对比现状"脏区续跑"的隐性风险,
-  用户已拍板取确定性。
-- **reset 的可见性**:soft reset 改分支历史;仅限无 upstream 的 driver 仓库,
-  有 upstream 即降级为 stash-only + 告警。
-- **旧记录兼容**:无 baseline/model 字段的存量 active 记录一律视为不可恢复(新会话/
-  回滚二选一由 S1 开关控制),避免半吊子核对。model 一致性核对只判"记录在册且不匹配"
-  → 不复用;记录缺失视同不匹配,与 baseline 同口径。
+- **Wasted work**: rollback discards mid-flight work (recoverable from the stash); against the current state's hidden risk of "dirty-area continuation",
+  the user has decided for determinism.
+- **Visibility of reset**: soft reset rewrites branch history; limited to driver repositories without an upstream,
+  with an upstream it degrades to stash-only + a warning.
+- **Old-record compatibility**: existing active records without baseline/model fields are uniformly treated as non-resumable (new session/
+  rollback, the choice controlled by the S1 switch), avoiding half-hearted verification. The model-consistency check judges only "on record and mismatched"
+  → no reuse; a missing record counts as a mismatch, the same reading as baseline.

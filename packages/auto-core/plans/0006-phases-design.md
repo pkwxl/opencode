@@ -1,146 +1,146 @@
-# 阶段化流程(--phases)与迁移参数固化 — 设计说明
+# Phased Flow (--phases) and Migration Parameter Persistence — Design Note
 
-> 本文档是 `--phases` 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 →
-> k 知识提炼)与迁移参数(`--source-dir`/`--source-path`/`--dest-dir`)固化、init 去 AI 化
-> (`-p` 落 brief.md)、续轮迁移(`continue` 子命令,M 节)的唯一设计基准:实现任务以本文为准。
-> **实现按 J 节分期(P1..P4)完成;M 节(continue 续轮)已实现。**
+> This document is the sole design baseline for the `--phases` phased flow (a analysis → d design → m migration implementation → t testing → v acceptance →
+> k knowledge distillation), persistence of the migration parameters (`--source-dir`/`--source-path`/`--dest-dir`), the AI-freeing of init
+> (`-p` lands in brief.md), and continued-round migration (the `continue` subcommand, section M): implementation tasks defer to this document.
+> **Implementation is complete in stages per section J (P1..P4); section M (continue for continued rounds) is already implemented.**
 
-## 背景与动机
+## Background and motivation
 
-1. **长流程的上下文污染**:迁移类项目天然分阶段(先摸清源系统,再设计,再实现,
-   再测试验收)。单一 PLAN.md 从头到尾驱动,后期阶段的会话被迫拖着前期全部
-   产物,AGENTS.md 与 docs/ 只增不减,上下文质量随流程推进持续劣化。需要
-   driver 强制的阶段边界:每阶段完成后归档、重置、蒸馏,下一阶段在精简场景
-   下继续。
-2. **init -p 的结构性缺陷**:init 时一次性生成 PLAN.md 无法感知各阶段产物
-   (分析结论、设计文档尚不存在),规划质量注定低下。阶段化流程要求"每阶段
-   开始前才规划该阶段任务",规划会话必须从 init 挪到 run 的阶段边界。
-3. **迁移参数的结构化**:源系统位置与源模块路径目前只能写在提示词自然语言里,
-   不可校验、不可复用。它们是项目属性(改它需改契约表述),应与其他宪法级
-   选项一样在 init 固化。
+1. **Context pollution in long flows**: migration projects are naturally phased (survey the source system first, then design, then implement,
+   then test and accept). Driving from a single PLAN.md start to finish forces later-phase sessions to drag along all earlier
+   artifacts; AGENTS.md and docs/ only ever grow, and context quality degrades steadily as the flow advances. What is needed is
+   driver-enforced phase boundaries: after each phase completes — archive, reset, distill — so the next phase continues
+   in a lean context.
+2. **The structural flaw of init -p**: generating PLAN.md in one shot at init cannot see each phase's artifacts
+   (analysis conclusions and design documents do not exist yet), so planning quality is inevitably low. The phased flow demands that "tasks for a phase are planned
+   only right before that phase begins", so planning sessions must move from init to the phase boundaries inside run.
+3. **Structuring the migration parameters**: the source system's location and the source module paths can today only live in prompt natural language,
+   unverifiable and unrepeatable. They are project attributes (changing one requires changing the contract wording) and, like the other constitutional-level
+   options, should be persisted at init.
 
-## 已确认决策
+## Confirmed decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| phases 取值 | `admtvk` 的**子序列且必须含 m**(如 `m`、`amt`、`dmvk` 合法;`tma`、`adk`、重复字母、空串非法)。顺序是语义的一部分,自由排列只产生无意义组合;一行校验消除一整类误用 |
-| 阶段注册表 | 固定六字母内置注册表(src/phases.ts)+ `phaseText()` 中文名,**不开放自定义**(阶段有 driver 侧语义:产物约定、v 的验收豁免、终审挂接点,非纯提示词文案;不搞 `.opencode/auto/phases/` 覆盖目录) |
-| CLI 形态(迁移参数) | `init <工作目录> --source-dir <dir> --source-path <相对路径> [--dest-dir <相对路径>]`。位置参数是 driver 工作目录(流程文件 PLAN.md/docs/ 所在);**布局约定**: 迁移源在 `<工作目录>/<source-dir>`(source-path 为其下模块相对路径)、迁移目标在 `<工作目录>/<dest-dir>`——driver 工作目录与迁移目标经 dest-dir 隔离。**拒绝 `<src-dir>/<src-path>` 拼接形式**(目录边界歧义无法自解释,"最长现存前缀"猜测是隐式魔法);source 两参数只给其一时报错(必须成对),`--dest-dir` 独立固化/修订;三者均须为不含 `..` 的相对路径(会话 cwd 即工作目录,相对路径直接可用,配置随仓库共享可移植) |
-| 阶段状态载体 | **推导式,零新增易腐状态**:阶段台账(轮次专用目录方案起 = 轮内 `docs/R-NN/phases.md`,旧布局 = 根 `docs/phases.md`,读回落;版本化、随仓库提交、人工可编辑)记录已完成阶段与产物指针;当前阶段 = phases 串中第一个未在台账出现的字母。与 final-review 的 routeFinal 同一范式 |
-| 跨阶段回退 | **V1 线性,不做自动回退路由**。人工回退 = 编辑台账(删末行)+ 删除对应归档目录后重跑 run——回退能力是推导式设计的副产品,无需专门代码;t/v 阶段内差距走既有 appendSubtasks/fix 轮,v 残余差距仿终审熔断 block(退出码 2) |
-| v 与 config.verify | **正交**。v 是流程阶段(其任务本身即检验,强制跳过任务级三段式验收与逐任务审核,复用终审任务的 final 豁免路径);config.verify 是任务级验收机制(m 等阶段任务照常)。`--phases` 含 v 而 verify=false 时 init/run 打 note 提示,不强制 |
-| --final-review 挂接 | **仅 m 阶段**:终审闭环为代码改动设计,a/d 产物是文档,t/v 自身即检验。run 时对 m 阶段启用,其余阶段忽略并打 note |
-| init 去 AI 化 | init **不再启动任何 AI 会话**(删除 manage/runOnce 路径);`-p` 文本写入 `.opencode/auto/brief.md`(版本化、人工可编辑、amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费 |
-| brief 注入范围 | brief.md 注入**每个**阶段的规划会话(不止下一个)——它是项目级意图,a 阶段定下的基调 k 阶段同样需要 |
-| 跨阶段记忆通道 | **handover.md 是唯一通道,且由 driver 控制注入**:阶段规划会话输入 = brief.md + 各前序 handover.md + AGENTS.md + source/destDir 规范 + mode.init;**不注入前序阶段原始 docs/**。"精简场景"靠 driver 从输入侧掐断,不靠交接会话自觉 |
-| 交接重构形态 | **归档 + 重置 + 蒸馏**:driver 机械执行(docs 归档进轮次目录 `docs/R-NN/<letter>-<name>/`、PLAN.md 归档后重置模板、台账追加、统一提交);AI 只做一件事——旁路会话蒸馏产出 handover.md。AI 不改写契约文件,符合 driver 独占状态写入与维护规则块 |
-| PLAN.md 审计轨迹 | 交接时本阶段 PLAN.md 归档为 `docs/R-NN/<letter>-<name>/PLAN.md`(含 attempts/verified/阻塞问答)再重置;翻旧账不依赖 git 操作,与 docs/final/ 产物约定同构 |
-| k 阶段与 --extract-knowledge | k 阶段**整体认领** plans/0002-fixme-knowledge-design.md 的 `--extract-knowledge` 设计(产出 docs/migration-kb/、提取失败不污染退出码),该选项不再单独存在;`--track-fixme` 不并入,保持独立演进 |
-| init 修订 phases 的护栏 | 台账非空时改 `--phases`,校验台账已有字母构成新串的前缀,否则报错并指引人工修订台账——防止 amend 把流程状态打成不可推导 |
-| phases 缺省值 | `"m"`(无阶段声明 = 单次运行,行为与现状完全一致;向后兼容的关键) |
-| status 增强 | 配置摘要后打印阶段进度行(derive 自台账,零成本):`阶段: a✓ d✓ m▶ t v k` |
+| phases values | a **subsequence of `admtvk` that must contain m** (e.g. `m`, `amt`, `dmvk` are legal; `tma`, `adk`, repeated letters, and the empty string are illegal). Order is part of the semantics — free permutation only produces meaningless combinations; a one-line validation eliminates a whole class of misuse |
+| Phase registry | a fixed six-letter built-in registry (src/phases.ts) + `phaseText()` Chinese display names, **not open to customization** (phases carry driver-side semantics — artifact conventions, v's acceptance exemption, the final-review hook point — not mere prompt copy; no `.opencode/auto/phases/` override directory) |
+| CLI shape (migration parameters) | `init <工作目录> --source-dir <dir> --source-path <相对路径> [--dest-dir <相对路径>]` (where <工作目录> = the working directory and <相对路径> = a relative path). The positional argument is the driver working directory (where the flow files PLAN.md/docs/ live); **layout convention**: the migration source sits at `<工作目录>/<source-dir>` (source-path is the module's relative path under it) and the migration target at `<工作目录>/<dest-dir>` — the driver working directory and the migration target are kept apart via dest-dir. **The `<src-dir>/<src-path>` concatenation form is rejected** (the directory-boundary ambiguity cannot be made self-explanatory; "longest existing prefix" guessing is implicit magic); giving only one of the two source parameters errors (they must come as a pair), while `--dest-dir` is persisted/revised independently; all three must be relative paths without `..` (the session cwd is the working directory, so relative paths work directly, and the config shared with the repo stays portable) |
+| Phase state carrier | **derived, with zero new rot-prone state**: the phase ledger (from the per-round directory scheme onward = the in-round `docs/R-NN/phases.md`; legacy layout = the root `docs/phases.md`, read fallback; versioned, committed with the repo, human-editable) records completed phases and artifact pointers; the current phase = the first letter in the phases string that does not appear in the ledger. The same paradigm as final-review's routeFinal |
+| Cross-phase rollback | **V1 is linear; no automatic rollback routing**. Manual rollback = edit the ledger (drop the last line) + delete the corresponding archive directory, then re-run run — the rollback capability is a byproduct of the derived design and needs no dedicated code; gaps within the t/v phases go through the existing appendSubtasks/fix rounds, and v's residual gaps mimic the final-review circuit-breaker block (exit code 2) |
+| v vs config.verify | **orthogonal**. v is a flow phase (its tasks are themselves the verification: task-level three-stage acceptance and per-task review are forcibly skipped, reusing the final-exemption path of final-review tasks); config.verify is the task-level acceptance mechanism (tasks in m and the other phases proceed as usual). When `--phases` contains v but verify=false, init/run print a note; it is not enforced |
+| --final-review hookup | **m phase only**: the final-review loop is designed for code changes, a/d artifacts are documents, and t/v are themselves verification. run enables it for the m phase and ignores it for the other phases with a note |
+| AI-free init | init **no longer starts any AI session** (the manage/runOnce paths are deleted); the `-p` text is written to `.opencode/auto/brief.md` (versioned, human-editable, amend semantics — repeated init -p overwrites and rewrites it) and is consumed by every phase's planning session |
+| brief injection scope | brief.md is injected into **every** phase's planning session (not just the next one) — it is project-level intent, and the tone set in phase a is just as needed in phase k |
+| Cross-phase memory channel | **handover.md is the only channel, and the driver controls the injection**: a phase-planning session's input = brief.md + each preceding handover.md + AGENTS.md + the source/destDir specs + mode.init; **the raw docs/ of preceding phases is not injected**. The "lean context" is achieved by the driver cutting things off on the input side, not by the handover session behaving itself |
+| Handover restructuring | **archive + reset + distill**: the driver executes the mechanics (docs archived into the round directory `docs/R-NN/<letter>-<name>/`, PLAN.md archived then reset to the template, ledger append, unified commit); the AI does exactly one thing — a bypass session distills out handover.md. The AI does not rewrite contract files, in line with the driver's exclusive state writes and the maintenance rules block |
+| PLAN.md audit trail | at handover, this phase's PLAN.md is archived as `docs/R-NN/<letter>-<name>/PLAN.md` (including attempts/verified/blocking Q&A) and then reset; digging through history does not depend on git operations, isomorphic to the docs/final/ artifact convention |
+| k phase and --extract-knowledge | the k phase **wholesale-claims** the `--extract-knowledge` design of plans/0002-fixme-knowledge-design.md (produces docs/migration-kb/; extraction failure does not pollute the exit code); that option no longer exists on its own; `--track-fixme` is not folded in and keeps evolving independently |
+| Guardrail for init amending phases | amending `--phases` while the ledger is non-empty validates that the letters already in the ledger form a prefix of the new string; otherwise it errors and points at manually revising the ledger — preventing amend from knocking the flow state underivable |
+| phases default | `"m"` (no phase declaration = a single run, behavior exactly as today; the key to backward compatibility) |
+| status enhancement | print a phase progress line after the config summary (derived from the ledger, zero cost): `阶段: a✓ d✓ m▶ t v k` ("Phase: ..." — ✓ = recorded in the ledger, ▶ = current) |
 
-## A. 概念与配置
+## A. Concepts and configuration
 
-### A.1 阶段注册表(src/phases.ts)
+### A.1 Phase registry (src/phases.ts)
 
 ```ts
 export type Phase = "a" | "d" | "m" | "t" | "v" | "k"
-export const PHASE_ORDER = "admtvk"  // 唯一合法顺序;校验与推导共用
+export const PHASE_ORDER = "admtvk"  // the only legal order; shared by validation and derivation
 export function phaseText(phase: Phase): string
-// a=分析 d=设计 m=迁移实现 t=测试 v=验收 k=知识提炼
+// a=analysis d=design m=migration implementation t=testing v=acceptance k=knowledge distillation
 ```
 
-- 校验 `parsePhases(raw)`:非空、字母 ∈ admtvk、不重复、含 m、为 `admtvk` 的
-  子序列;非法返回 null(CLI 转退出码 1,报文给出合法形式说明)。
-- 各阶段职责与产物约定(规划提示词按此注入,见 E 节)。**2026-09-07 修订
-  (stable-refs P2,D2 产物目录折叠)**:下表"主要产物"列的阶段专属产物目录约定
-  (docs/analysis/ 等)已删除——a/d/t/v 阶段产物与终审产物一律任务锚定
-  `docs/T-NNN/`(终审 `docs/T-F<k>/`);k 知识文档为轮内固定名
-  `docs/R-NN/migration-kb.md` 永久路径(旧布局存量 `docs/migration-kb/R<N>-…`
-  原地保留为读回落);m 产物为源码改动与 `docs/T-NNN/` 任务报告:
+- Validation `parsePhases(raw)`: non-empty, letters ∈ admtvk, no repeats, contains m, and a subsequence of
+  `admtvk`; invalid returns null (the CLI turns it into exit code 1, with the message explaining the legal forms).
+- Per-phase responsibilities and artifact conventions (planning prompts are injected accordingly — see section E). **Revision of 2026-09-07
+  (stable-refs P2, D2 artifact-directory folding)**: the phase-specific artifact directory convention in the "Primary artifacts" column of the table below
+  (docs/analysis/ etc.) has been removed — a/d/t/v phase artifacts and final-review artifacts are uniformly task-anchored at
+  `docs/T-NNN/` (final review `docs/T-F<k>/`); the k knowledge document is the fixed in-round name
+  `docs/R-NN/migration-kb.md`, a permanent path (legacy-layout stock `docs/migration-kb/R<N>-…`
+  stays in place as read fallback); m's artifacts are the source-code changes and the `docs/T-NNN/` task report:
 
-| 阶段 | 职责 | 主要产物(P2 后口径) |
+| Phase | Responsibility | Primary artifacts (post-P2 wording) |
 | --- | --- | --- |
-| a 分析 | 摸清源系统与源模块的外部行为、依赖与边界 | docs/T-NNN/(任务锚定,行为基线、依赖清单) |
-| d 设计 | 目标系统侧的模块设计(接口、数据结构、适配点) | docs/T-NNN/(任务锚定) |
-| m 迁移实现 | 代码迁移与改造(必经阶段) | 源码 + docs/T-NNN/ 任务报告(终审 docs/T-F<k>/) |
-| t 测试 | 测试体系迁移/补齐,对基线行为的回归覆盖 | 测试代码 + docs/T-NNN/(任务锚定) |
-| v 验收 | 整体验收(对照基线与需求) | docs/T-NNN/(任务锚定,验收结论) |
-| k 知识提炼 | 迁移知识沉淀 | docs/R-NN/migration-kb.md(轮内固定名、永久路径,认领 --extract-knowledge 设计) |
+| a analysis | map out the source system's and source module's external behavior, dependencies, and boundaries | docs/T-NNN/ (task-anchored; behavior baseline, dependency inventory) |
+| d design | module design on the target-system side (interfaces, data structures, adaptation points) | docs/T-NNN/ (task-anchored) |
+| m migration implementation | code migration and rework (mandatory phase) | source code + docs/T-NNN/ task report (final review docs/T-F<k>/) |
+| t testing | migrate/fill out the test system; regression coverage of baseline behavior | test code + docs/T-NNN/ (task-anchored) |
+| v acceptance | overall acceptance (against baseline and requirements) | docs/T-NNN/ (task-anchored; acceptance conclusion) |
+| k knowledge distillation | distilling migration knowledge | docs/R-NN/migration-kb.md (fixed in-round name, permanent path; claims the --extract-knowledge design) |
 
-### A.2 配置键(src/config.ts)
+### A.2 Config keys (src/config.ts)
 
 ```jsonc
 {
-  "phases": "admtvk",                          // 缺省 "m"
-  "source": { "dir": "...", "path": "..." },   // 可选;缺省 undefined(非迁移场景)
-  "destDir": "..."                             // 可选;缺省 undefined(迁移产出直接落在工作目录)
+  "phases": "admtvk",                          // default "m"
+  "source": { "dir": "...", "path": "..." },   // optional; default undefined (non-migration scenarios)
+  "destDir": "..."                             // optional; default undefined (migration output lands directly in the working directory)
 }
 ```
 
-- `phases`:validateProjectConfig 复用 parsePhases 同源校验;非法 → throw
-  (中文报错含键名与期望),run/init 均退出码 1。
-- `source`:缺省 undefined;存在时 dir 须为相对工作目录的不含 `..` 相对路径、
-  path 须为相对 dir 的非空相对路径(不含 `..`);**init 时**校验 `<工作目录>/dir`
-  为现存目录且 `dir/path` 存在(环境错误,退出码 1)——存在性校验经 stat 跟随
-  软链接,**dir 可为指向工作目录外的软链**(源系统大树不必复制进工作目录,以
-  链接接入即可;断链按不存在拒绝);run 时不再校验存在性
-  (源系统可能已下线,台账与 docs/ 已归档所需)。
-- `destDir`:缺省 undefined(迁移产出直接落在工作目录);存在时须为相对工作目录的
-  不含 `..` 相对路径,driver 工作目录的流程文件与迁移产出经它隔离。不校验存在性
-  (目标目录常由迁移过程创建)。
-- run 拒绝清单扩展:`phases`、`source-dir`、`source-path`、`dest-dir` 出现即用法
-  错误退出码 1,报文给 `init --phases <值>` / `init --source-dir <dir>
-  --source-path <path>` / `init --dest-dir <相对路径>` 指引。
+- `phases`: validateProjectConfig reuses the same-source parsePhases validation; invalid → throws
+  (a Chinese error naming the key and the expectation); both run and init exit with code 1.
+- `source`: defaults to undefined; when present, dir must be a relative path without `..`, relative to the working directory,
+  and path must be a non-empty relative path (no `..`) relative to dir; **at init** it checks that `<工作目录>/dir` (<工作目录> = the working directory)
+  is an existing directory and that `dir/path` exists (environment error, exit code 1) — the existence check goes through stat, following
+  symlinks, so **dir may be a symlink pointing outside the working directory** (the source system's large tree need not be copied into the working directory;
+  wiring it in via a link is enough; a broken link is rejected as non-existent); at run time existence is no longer checked
+  (the source system may already be offline — the ledger and docs/ already hold what is needed).
+- `destDir`: defaults to undefined (migration output lands directly in the working directory); when present it must be, relative to the working directory, a
+  relative path without `..`, through which the driver working directory's flow files are isolated from the migration output. Existence is not checked
+  (the target directory is usually created by the migration process).
+- run rejection-list extension: `phases`, `source-dir`, `source-path`, or `dest-dir` appearing at all is a usage
+  error with exit code 1; the message gives `init --phases <值>` (<值> = value) / `init --source-dir <dir>
+  --source-path <path>` / `init --dest-dir <相对路径>` (<相对路径> = a relative path) guidance.
 
 ### A.3 brief.md(`.opencode/auto/brief.md`)
 
-- `-p` 的载体:版本化、随仓库共享、人工可编辑;init -p 整写覆盖(amend 语义)。
-- 无 -p 且 brief.md 已存在 → 保留;无 -p 且不存在 → 不创建(规划会话按无 brief
-  渲染,模板含 `{{^brief}}` 条件段提示"未提供项目意图,请人工补充或按 source
-  规范推进")。
-- run 期间**不置只读**(它不是状态文件;protect.ts 不动它)。
+- The carrier for `-p`: versioned, shared with the repo, human-editable; init -p writes the whole file over it (amend semantics).
+- No -p and brief.md already exists → kept; no -p and it does not exist → not created (the planning session renders as brief-less,
+  with the template containing a `{{^brief}}` conditional block prompting "未提供项目意图,请人工补充或按 source
+  规范推进" — "no project intent provided; add it manually or proceed per the source spec").
+- **Not set read-only** during run (it is not a state file; protect.ts leaves it alone).
 
-## B. CLI 面(src/index.ts)
+## B. CLI surface (src/index.ts)
 
 ### B.1 init
 
 ```
-opencode-auto init <工作目录> [--phases <admtvk 子序列含 m>]
-                              [--source-dir <dir> --source-path <相对路径>]
-                              [--dest-dir <相对路径>]
-                              [-p|--prompt <prompt-text>] [既有宪法选项...]
+opencode-auto init <working-dir> [--phases <admtvk subsequence containing m>]
+                              [--source-dir <dir> --source-path <relative-path>]
+                              [--dest-dir <relative-path>]
+                              [-p|--prompt <prompt-text>] [existing constitutional options...]
 ```
 
-- `--phases`/`--source-dir`/`--source-path`/`--dest-dir` 进 VALUE_FLAGS;仅 init 接受,
-  走 mergeProjectConfig 的"仅显式键覆盖"(source 两键成对,任一给出即整体覆盖;
-  dest-dir 独立固化/修订)。
-- 台账非空时改 `--phases` 的前缀护栏(见已确认决策);`source` 修订无护栏
-  (纯提示词输入,改它不破坏状态推导)。
-- `-p`:删除 manage/runOnce 调用,改为写 brief.md;init 成为纯环境配置,
-  结束语按 phases 分两态:`phases ≠ "m"` → "brief 已记录,运行 run 开始
-  a(分析)阶段规划";`phases = "m"` → "brief 已记录,运行 run 开始任务规划"。
-- PLAN.md 模板策略:`phases ≠ "m"` 时保持空模板(规划会话填充),不再提示
-  "编辑 PLAN.md 填入任务";`phases = "m"` 维持现状。
-- v 含而 verify=false 的 note 在此打印一次。
+- `--phases`/`--source-dir`/`--source-path`/`--dest-dir` go into VALUE_FLAGS; accepted by init only,
+  going through mergeProjectConfig's "explicit-keys-only override" (the two source keys come as a pair — supplying either one replaces the whole object;
+  dest-dir is persisted/revised independently).
+- The prefix guardrail for amending `--phases` while the ledger is non-empty (see Confirmed decisions); amending `source` has no guardrail
+  (pure prompt input — changing it does not break state derivation).
+- `-p`: drop the manage/runOnce calls and write brief.md instead; init becomes pure environment configuration,
+  with the closing message in two states by phases: `phases ≠ "m"` → "brief 已记录,运行 run 开始
+  a(分析)阶段规划" ("brief recorded; run run to start a (analysis) phase planning"); `phases = "m"` → "brief 已记录,运行 run 开始任务规划" ("brief recorded; run run to start task planning").
+- PLAN.md template strategy: when `phases ≠ "m"`, keep the empty template (filled by the planning session) and no longer prompt
+  "编辑 PLAN.md 填入任务" ("edit PLAN.md and fill in the tasks"); `phases = "m"` keeps the status quo.
+- The note for v present with verify=false is printed here once.
 
 ### B.2 run
 
-- 拒绝清单加 `phases`/`source-dir`/`source-path`/`dest-dir`(报文给修订指引,同既有固化选项)。
-- run 启动横幅:配置摘要后加 `阶段: <进度行>`(与 status 共用 formatPhases)。
-- `--final-review` 与 phases 组合:仅 m 阶段挂接终审闭环;其他阶段完成时不进入
-  routeFinal,打 note"终审闭环仅作用于 m(迁移实现)阶段"。
-- `--dryrun` 不触发任何阶段动作(维持现状:仅权限预检)。
+- The rejection list gains `phases`/`source-dir`/`source-path`/`dest-dir` (the message gives revision guidance, same as the existing persisted options).
+- run startup banner: add `阶段: <进度行>` ("Phase: <progress line>") after the config summary (shares formatPhases with status).
+- `--final-review` combined with phases: the final-review loop is hooked into the m phase only; when other phases complete it does not enter
+  routeFinal, printing the note "终审闭环仅作用于 m(迁移实现)阶段" ("the final-review loop applies only to the m (migration implementation) phase").
+- `--dryrun` triggers no phase action (status quo: permission precheck only).
 
 ### B.3 status
 
-- 配置摘要后打印阶段进度行:`阶段: a✓ d✓ m▶ t v k`(✓=台账已记录,▶=当前,
-  其余=未开始);台账缺失/非法仅提示不阻塞(与配置非法同等待遇)。
+- Print the phase progress line after the config summary: `阶段: a✓ d✓ m▶ t v k` (✓ = recorded in the ledger, ▶ = current,
+  the rest = not started); a missing/invalid ledger only warns, it does not block (the same treatment as invalid config).
 
-## C. 阶段状态推导(阶段台账: 新布局轮内 docs/R-NN/phases.md,旧布局根 docs/phases.md)
+## C. Phase-state derivation (phase ledger: new layout in-round docs/R-NN/phases.md, legacy layout root docs/phases.md)
 
-### C.1 台账格式(版本化、人工可编辑)
+### C.1 Ledger format (versioned, human-editable)
 
 ```markdown
 # 阶段台账(opencode-auto 维护;人工修订见设计文档 C.3)
@@ -149,279 +149,279 @@ opencode-auto init <工作目录> [--phases <admtvk 子序列含 m>]
 - [done] d 设计 → docs/R-01/d-design/(交接: docs/phases/d-design/handover.md)
 ```
 
-- 每行一个已完成阶段,顺序与完成顺序一致;driver 追加写在交接完成后、统一提交前。
-- 解析:容忍空行与注释;行协议 `- [done] <letter> <名称> → <归档目录>(交接: <handover>)`,
-  driver 只读字母一列,其余为人工可读信息;交接指针为可选列——第二行为 P2 前旧行
-  形态(交接在归档目录内),同样容忍(轮次专用目录方案起新产出恒为轮内
-  handovers/ 路径;旧布局 docs/handovers/R<N>-… 与 P2 前形态原地保留为读回落)。
+- One completed phase per line, in completion order; the driver appends the line after the handover finishes and before the unified commit.
+- Parsing: tolerates blank lines and comments; the line protocol is `- [done] <letter> <名称> → <归档目录>(交接: <handover>)` (done marker, phase letter, Chinese name, → archive directory, and an optional handover pointer),
+  with the driver reading only the letter column — everything else is human-readable information; the handover pointer is an optional column — the second example line above is the pre-P2 legacy
+  form (handover inside the archive directory), equally tolerated (from the per-round directory scheme onward, new output is always the in-round
+  handovers/ path; legacy-layout docs/handovers/R<N>-… and the pre-P2 form stay in place as read fallback).
 
-### C.2 推导规则
-
-```
-currentPhase = phases 串中第一个未出现在台账字母集合中的字母
-全部出现 → 流程完成(run 退出 0,打"全部阶段已完成")
-台账含 phases 外字母/重复字母 → 环境错误退出 1(指引人工修订台账)
-```
-
-中断恢复零新增状态:run 启动重新求值;阶段内中断走既有 recallProgress/
-peekProgress;阶段边界中断(归档完成但台账未写)由交接动作的幂等性兜底
-(归档目录存在即跳过移动,台账查重后追加)。
-
-**会话恢复优先于文件推导路由**(2026-09-10,plans/0018-session-resume-precedence-design.md):
-routePhase 的(台账, PLAN.md)推导仍是缺省路由,但对**阶段级旁路步骤**(规划/交接
-蒸馏)增加一层 driver 状态优先——这些会话经 requireArtifact 的 spec.step 在提示词
-下发时写 `.auto/progress.json` 的 step 恢复点(phase.kind="step"),driver 收口后
-经 closeStep 删除。runPhaseLoop 消费路由前先查 openStep:存在未收口、归属阶段 ==
-当前路由阶段且未入台账的恢复点 → 重入该步骤续跑(复用中断的会话),即使 PLAN.md
-已有任务/交接文档已存在。理由:PLAN.md 任务与交接文档是 AI 写的(或会话中断后
-driver 才补的),其存在不能证明会话已收口;唯有 driver 恢复点被删除才算收口。人工
-回退(改台账)与字母不一致的陈旧记录仍让文件路由优先(告警),回退规程不变。
-
-### C.3 人工回退规程(写入 README 与台账头部注释)
-
-回退到某阶段 = ① 从台账删除该阶段及其后的全部行;② 删除对应
-`docs/R-NN/<letter>-*/` 归档目录(或把其中 PLAN.md 拷回轮内 PLAN.md 续跑;旧布局
-为 `docs/phases/<letter>-*/`);③ 重跑 run。
-推导式状态使回退无需任何 driver 代码支持。
-
-## D. run 生命周期与路由(src/phases.ts)
-
-### D.1 单次 run 的阶段循环
+### C.2 Derivation rules
 
 ```
-run 启动
- ├─ 装载 config(phases/source/brief 指针)
- ├─ phases == "m" 且无 --final-review 之外的阶段语义 → 走现状路径(零改动)
- ├─ 推导 currentPhase(C.2);全部完成 → 退出 0
- └─ 循环:
-     ├─ PLAN.md 无未完成任务且无本阶段任务 → 阶段规划会话(E 节,旁路
-     │   requireArtifact 骨架,产物=填充后的 PLAN.md)
-     ├─ 主循环 runAll 照常(子任务/verify/review/统一提交/进度恢复零改动)
-     ├─ currentPhase == "m" 且 finalReview > 0 → 既有 routeFinal 终审闭环
-     ├─ 全部 done → 阶段交接(F 节)→ 台账追加 → 统一提交(Auto-Stage:
+currentPhase = the first letter of the phases string not present in the ledger's letter set
+all present → flow complete (run exits 0, printing "全部阶段已完成" ["all phases completed"])
+ledger contains letters outside phases / repeated letters → environment error, exit 1 (pointing at manual ledger revision)
+```
+
+Interrupt recovery adds zero new state: run re-evaluates at startup; an interruption inside a phase goes through the existing recallProgress/
+peekProgress; an interruption at a phase boundary (archiving done but the ledger line not yet written) is backstopped by the idempotency of the handover actions
+(if the archive directory already exists, the move is skipped; the ledger line is appended after a duplicate check).
+
+**Session recovery takes precedence over file-derivation routing** (2026-09-10, plans/0018-session-resume-precedence-design.md):
+routePhase's (ledger, PLAN.md) derivation remains the default routing, but for **phase-level bypass steps** (planning / handover
+distillation) an extra driver-state-first layer is added — these sessions, through requireArtifact's spec.step, write a step
+recovery point into `.auto/progress.json` (phase.kind="step") when the prompt goes down; the driver deletes it via
+closeStep after wrapping up. Before consuming the route, runPhaseLoop checks openStep: an unclosed recovery point exists whose owning phase ==
+the currently routed phase and which is not yet in the ledger → re-enter that step and resume (reusing the interrupted session), even if PLAN.md
+already has tasks / the handover document already exists. Rationale: PLAN.md tasks and handover documents are written by the AI (or backfilled by the driver
+only after the session broke off), so their existence does not prove the session was wrapped up; only the driver recovery point being deleted counts as wrapped up. Manual
+rollback (editing the ledger) and stale records whose letters disagree still let file routing win (with a warning); the rollback procedure is unchanged.
+
+### C.3 Manual rollback procedure (written into README and the ledger header comment)
+
+Rolling back to a phase = ① delete that phase and every line after it from the ledger; ② delete the corresponding
+`docs/R-NN/<letter>-*/` archive directory (or copy its PLAN.md back to the in-round PLAN.md and resume; the legacy layout
+uses `docs/phases/<letter>-*/`); ③ re-run run.
+Derived state means rollback needs no driver code support.
+
+## D. run lifecycle and routing (src/phases.ts)
+
+### D.1 The phase loop of a single run
+
+```
+run starts
+ ├─ load config (phases/source/brief pointers)
+ ├─ phases == "m" and no phase semantics beyond --final-review → take the current path (zero changes)
+ ├─ derive currentPhase (C.2); all complete → exit 0
+ └─ loop:
+     ├─ PLAN.md has no unfinished tasks and no tasks for this phase → phase-planning session (section E; bypass
+     │   requireArtifact skeleton, artifact = the filled-in PLAN.md)
+     ├─ the main loop runAll runs as usual (subtasks/verify/review/unified commit/progress recovery unchanged)
+     ├─ currentPhase == "m" and finalReview > 0 → the existing routeFinal final-review loop
+     ├─ all done → phase handover (section F) → ledger append → unified commit (Auto-Stage:
      │   phase-transition)
-     └─ 推导下一阶段;无 → 退出 0
+     └─ derive the next phase; none → exit 0
 ```
 
-### D.2 routePhase 伪代码(纯路由函数,镜像 routeFinal 风格)
+### D.2 routePhase pseudocode (a pure routing function, mirroring routeFinal's style)
 
 ```ts
 export type PhaseRoute =
-  | { type: "complete" }                          // 全部阶段完成
-  | { type: "plan"; phase: Phase }                // 开规划会话
-  | { type: "execute"; phase: Phase }             // 主循环有任务可跑
-  | { type: "handover"; phase: Phase }            // 任务全 done,进入交接
-  | { type: "blocked"; reason: string }           // 台账非法等,退出码 1/2
+  | { type: "complete" }                          // all phases complete
+  | { type: "plan"; phase: Phase }                // open a planning session
+  | { type: "execute"; phase: Phase }             // the main loop has tasks to run
+  | { type: "handover"; phase: Phase }            // all tasks done; enter handover
+  | { type: "blocked"; reason: string }           // invalid ledger etc.; exit code 1/2
 
 export async function routePhase(dir, plan, config): Promise<PhaseRoute> {
-  const ledger = await readLedger(dir)            // C.1;非法 → blocked
+  const ledger = await readLedger(dir)            // C.1; invalid → blocked
   const phase = PHASE_ORDER.filter(p => config.phases.includes(p))
     .find(p => !ledger.done.includes(p))
   if (!phase) return { type: "complete" }
   if (plan.tasks.some(t => t.status !== "done")) return { type: "execute", phase }
-  if (plan.tasks.length) return { type: "handover", phase }  // 本阶段任务全 done
-  return { type: "plan", phase }                  // PLAN.md 空(模板态/已重置)
+  if (plan.tasks.length) return { type: "handover", phase }  // this phase's tasks are all done
+  return { type: "plan", phase }                  // PLAN.md empty (template state / reset)
 }
 ```
 
-幂等性:plan 路由在 PLAN.md 已有任务后不再触发;handover 路由在台账追加后
-自然消失;全部路由由(台账, PLAN.md)两文件推导,无隐藏状态。**k 阶段例外
-(P4/D.4)**:plan 路由不开规划会话,直接进入知识提取旁路会话后交接——
-routePhase 本身不变,k 分支在 run 的阶段循环内。
+Idempotency: the plan route no longer fires once PLAN.md has tasks; the handover route naturally
+disappears after the ledger append; every route is derived from the two files (ledger, PLAN.md), with no hidden state. **k-phase exception
+(P4/D.4)**: the plan route does not open a planning session — it goes straight into the knowledge-extraction bypass session and then handover;
+routePhase itself is unchanged; the k branch lives in run's phase loop.
 
-### D.3 v 阶段任务的验收豁免
+### D.3 Acceptance exemption for v-phase tasks
 
-v 阶段任务本身即检验:runTask 依 `config.phases` 含 v 且 currentPhase == "v"
-强制 review=0、跳过任务级三段式验收(收尾后直接 markDone)——与终审任务的
-final 豁免共用同一代码路径(内部标记,不写 final 字段、不污染 PLAN.md 协议)。
-残余差距:v 阶段任务全 done 即交接,不熔断;验收报告的差距结论由 k/人工消费
-(V1 线性决策)。**修订备选**:若后续需要 v 差距熔断,仿 afterValidate 在
-handover 路由前解析验收报告末行 `结论: 通过|差距`,本文预留该挂点。
+v-phase tasks are themselves the verification: runTask, seeing `config.phases` contain v and currentPhase == "v",
+forces review=0 and skips task-level three-stage acceptance (markDone directly after wrap-up) — sharing the same code path as the final-review tasks
+final exemption (an internal flag: it writes no final field and does not pollute the PLAN.md protocol).
+Residual gaps: once the v-phase tasks are all done, handover happens — no circuit breaker; the gap conclusions in the acceptance report are consumed by k/humans
+(the V1 linear decision). **Revision option**: if a v gap circuit breaker is needed later, mimic afterValidate by parsing
+the acceptance report's last line `结论: 通过|差距` ("conclusion: pass|gap") before the handover route; this document reserves that hook point.
 
-### D.4 k 阶段:整体认领 --extract-knowledge(P4 已实现)
+### D.4 k phase: wholesale claim of --extract-knowledge (implemented in P4)
 
-k(知识提炼)阶段整体认领 plans/0002-fixme-knowledge-design.md 的 `--extract-knowledge`
-设计(该文档文首"P4 并入阶段化流程"修订节给出两设计的逐条映射),`--track-fixme`
-不并入、保持独立演进。k 阶段与通用阶段循环的关键差异:
+The k (knowledge distillation) phase wholesale-claims the `--extract-knowledge` design of plans/0002-fixme-knowledge-design.md
+(the revision section "P4 并入阶段化流程" ("P4 merged into the phased flow") at the head of that document gives a point-by-point mapping of the two designs); `--track-fixme`
+is not folded in and keeps evolving independently. The key differences between the k phase and the generic phase loop:
 
-- **不开规划会话、不向 PLAN.md 填任务**:plan 路由(PLAN.md 空模板态)直接进入
-  知识提取旁路一次性会话(src/knowledge.ts,复用 requireArtifact 骨架,伪任务
-  PLAN),产物 = 轮内固定名 `docs/R-NN/migration-kb.md`(永久路径;旧布局存量项目
-  无轮目录时为 `docs/migration-kb/R<N>-migration-<时间戳>.md`)。会话输入为本轮阶段
-  台账与本轮各阶段交接文档(轮内 docs/R-NN/ 优先,原始产物按产物索引取用),章节
-  骨架/质量约束/mode.exec 注入见 templates/prompts/knowledge.md;
-- **提取失败不污染退出码**:会话受阻或两次未产出 → ⚠ 警告(knowledge_extraction_error,
-  细节进运行日志)后照常交接,退出码语义不变——迁移成功不被文档生成失败反向污染;
-- **幂等与恢复**:本轮知识文档已存在(新布局轮内 migration-kb.md 非空;旧布局
-  本轮 `R<N>-` 前缀非空 .md)→ 跳过重提取(前几轮文档不算本轮已提取;旧布局第 1
-  轮无前缀存量按读回落视为本轮产物);交接中断走既有台账幂等补写;交接完成后重试
-  提取 = 人工回退规程(删台账 k 行与本轮知识文档后重跑);
-- **知识文档入库**:随会话统一提交(stage=knowledge),永久路径落定不移动
-  (fixme 设计的"不自动提交"决策随独立选项一并废弃;P2 前曾作为
-  阶段产物归档进 docs/phases/k-knowledge/);
-- 人工在 k 阶段自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点
-  不触发(人工接管语义);提取会话唯一可写文件是输出路径,其余约束(状态文件
-  只读、不提交)与全部旁路会话一致。
+- **No planning session, no tasks filled into PLAN.md**: the plan route (PLAN.md in empty-template state) goes straight into
+  the one-shot knowledge-extraction bypass session (src/knowledge.ts, reusing the requireArtifact skeleton, a pseudo-task
+  PLAN); the artifact = the fixed in-round name `docs/R-NN/migration-kb.md` (a permanent path; a legacy-layout stock project
+  without a round directory uses `docs/migration-kb/R<N>-migration-<时间戳>.md` (<时间戳> = a timestamp)). The session input is this round's phase
+  ledger and this round's per-phase handover documents (in-round docs/R-NN/ first; raw artifacts are consulted via the artifact index); the section
+  skeleton / quality constraints / mode.exec injections are in templates/prompts/knowledge.md;
+- **Extraction failure does not pollute the exit code**: session blocked, or twice without output → ⚠ warning (knowledge_extraction_error,
+  details to the run log), then handover proceeds as usual and the exit-code semantics are unchanged — migration success is not polluted in reverse by a document-generation failure;
+- **Idempotency and recovery**: this round's knowledge document already exists (new layout: in-round migration-kb.md non-empty; legacy layout:
+  this round's non-empty `R<N>-`-prefixed .md) → skip re-extraction (earlier rounds' documents do not count as this round's extraction; in the legacy layout, round 1's
+  prefixless stock is treated as this round's artifact via read fallback); an interrupted handover goes through the existing idempotent ledger backfill; retrying the extraction after the handover
+  completes = the manual rollback procedure (delete the ledger's k line and this round's knowledge document, then re-run);
+- **Knowledge document committed to the repo**: committed with the session (stage=knowledge); once landed, the permanent path never moves
+  (the fixme design's "no auto-commit" decision is retired along with the standalone option; before P2 it was once archived
+  as a phase artifact into docs/phases/k-knowledge/);
+- When a human fills tasks into PLAN.md themselves during the k phase, the generic execute/handover routes apply and the extraction hook
+  does not fire (manual-takeover semantics); the extraction session's only writable file is the output path, and the remaining constraints (state files
+  read-only, no commits) match all other bypass sessions.
 
-## E. 阶段规划会话
+## E. Phase-planning session
 
-- 形态:旁路一次性会话,复用 runner 的 requireArtifact 骨架(产物缺失带反馈
-  重试一次,仍失败按隐性阻塞退出码 2);伪任务 PLAN 不进任务链、不写进度记录。
-- 模板 `templates/prompts/phase-plan.md`(协议敏感,覆盖校验:PLAN.md 填充
-  要求与任务格式协议必备);变量:
+- Shape: a one-shot bypass session reusing runner's requireArtifact skeleton (missing artifact → one retry with feedback;
+  still failing → silent block with exit code 2); the pseudo-task PLAN does not enter the task chain and writes no progress record.
+- Template `templates/prompts/phase-plan.md` (protocol-sensitive, override-checked: the PLAN.md fill-in
+  requirements and the task-format protocol are mandatory); variables:
 
 ```ts
 renderPhasePlan({
-  phase, phaseName,             // 当前阶段字母与中文名
-  brief,                        // brief.md 原文(可空)
-  sourceDir, sourcePath,        // config.source(可空)
-  destDir,                      // config.destDir(可空): 迁移目标目录注入,代码任务指向它
-  handovers,                    // 各前序交接文档预拼接字符串(调用方组装;读本轮轮内 handovers/,旧布局 docs/handovers/,P2 前自归档目录读回落)
-  modeName, modeInit,           // mode 正交注入(经 modeText 渲染)
-  verify,                       // config.verify(verify 字段描述条件段)
-  finalReview,                  // m 阶段且启用时提示任务排布预留终审空间
+  phase, phaseName,             // the current phase's letter and Chinese name
+  brief,                        // the brief.md verbatim text (may be empty)
+  sourceDir, sourcePath,        // config.source (may be empty)
+  destDir,                      // config.destDir (may be empty): the migration target directory injected; code tasks point at it
+  handovers,                    // pre-joined string of every preceding handover document (assembled by the caller; reads this round's in-round handovers/, legacy-layout docs/handovers/, pre-P2 read fallback from the archive directory)
+  modeName, modeInit,           // orthogonal mode injection (rendered via modeText)
+  verify,                       // config.verify (the conditional block describing the verify field)
+  finalReview,                  // when in the m phase and enabled, prompts the task layout to reserve room for the final review
 })
 ```
 
-- 产物要求(写入模板协议):直接编辑填充 PLAN.md(driver 临时 allowWrite,
-  结束后 checkPlanEdit 校验——任务格式合法、不改写标记块);每个任务自包含,
-  产物约定遵循 A.1 表;首阶段(a)额外要求把对源系统的勘察计划排为首批任务。
-- **注入纪律**(已确认决策):不注入前序原始 docs/;handovers 由 driver 读取
-  拼接,缺 handover 的阶段在清单中标注"(无交接文档)"。
+- Artifact requirements (written into the template protocol): edit PLAN.md directly and fill it in (the driver temporarily allows writes,
+  then checkPlanEdit validates afterwards — legal task format, no rewriting of marker blocks); each task is self-contained,
+  artifact conventions follow the A.1 table; the first phase (a) additionally requires scheduling the source-system survey plan as the first batch of tasks.
+- **Injection discipline** (confirmed decision): preceding raw docs/ is not injected; handovers are read and joined by the driver,
+  and a phase missing a handover is marked "(无交接文档)" ("(no handover document)") in the list.
 
-## F. 阶段交接(归档 + 重置 + 蒸馏)
+## F. Phase handover (archive + reset + distill)
 
-> **2026-09-07 修订(stable-refs P2,docs 永不移动)**:交接蒸馏产物改为永久路径
-> `docs/handovers/R<N>-<字母>-<slug>.md`(落定不移动);本节原"按 docs/ 快照把
-> 本阶段新增/改动移入归档目录"的差异归档链路(snapshotDocs/archivePhaseDocs/
-> `.auto/phase-snapshot.json`)已删除——阶段产物文档(docs/T-*/ 等)永久留在
-> 原位;归档目录 `docs/phases/<letter>-<slug>/` 现只收阶段 PLAN.md 快照;轮次
-> 差异经 `R<N>-` 前缀与台账推导表达。台账行协议增加交接指针(见 C.1)。
+> **Revision of 2026-09-07 (stable-refs P2, docs never move)**: the handover distillation artifact switches to the permanent path
+> `docs/handovers/R<N>-<字母>-<slug>.md` (<字母> = the phase letter; landed, never moved); this section's original delta-archive chain of "diff against the docs/ snapshot and
+> move this phase's additions/changes into the archive directory" (snapshotDocs/archivePhaseDocs/
+> `.auto/phase-snapshot.json`) has been deleted — phase artifact documents (docs/T-*/ etc.) stay permanently in
+> place; the archive directory `docs/phases/<letter>-<slug>/` now only holds the phase PLAN.md snapshot; round-to-round
+> differences are expressed via the `R<N>-` prefix and ledger derivation. The ledger line protocol gained a handover pointer (see C.1).
 
-任务全 done 后,按序执行:
+Once all tasks are done, execute in order:
 
-1. **蒸馏会话**(AI 唯一职责):旁路一次性,模板
-   `templates/prompts/phase-handover.md`(协议敏感),通读本阶段 PLAN.md 与
-   docs/ 产物,产出本轮轮内 `docs/R-NN/handovers/<字母>-<slug>.md`(driver 先建
-   目录;旧布局存量轮为 `docs/handovers/R<N>-<字母>-<slug>.md`)。
-   协议要求必备小节:关键决策、约束与坑、下一阶段必读清单、产物索引;
-   requireArtifact 校验小节齐备。k 阶段无下一阶段,仍写 handover(供后续查阅)。
-   模板对无任务清单阶段(k)含兜底表述(2026-09-08): 空 PLAN.md/CURRENT.md 缺失
-   属预期、蒸馏以本轮 migration-kb.md 产物为准;"下一阶段"措辞不假设其开规划会话
-   (k 的读者是知识提取旁路会话)——否则蒸馏会话会因提示词矛盾空转勘察。
-2. **driver 机械归档**:PLAN.md 拷贝为归档目录内 PLAN.md 后重置为模板(含
-   verify 条件渲染);本阶段 docs/ 产物文档不动(永久路径);AGENTS.md 不改写,
-   仅校验 ≤150 行,超限在交接提交信息与终端 note 中提示人工精简。
-3. **台账追加** C.1 行;4. **统一提交**:标题 `阶段交接: <letter> <名称> →
-   <下一字母> <名称>`,trailer `Auto-Stage: phase-transition`。
+1. **Distillation session** (the AI's only duty): one-shot bypass, template
+   `templates/prompts/phase-handover.md` (protocol-sensitive); read through this phase's PLAN.md and
+   docs/ artifacts and produce this round's in-round `docs/R-NN/handovers/<字母>-<slug>.md` (<字母> = the phase letter; the driver creates the
+   directory first; a legacy-layout stock round uses `docs/handovers/R<N>-<字母>-<slug>.md`).
+   The protocol requires these subsections: key decisions, constraints and pitfalls, the must-read list for the next phase, and the artifact index;
+   requireArtifact checks the subsections are all present. The k phase has no next phase but still writes a handover (for later reference).
+   The template carries fallback wording for a phase with no task list (k), added 2026-09-08: an empty PLAN.md / a missing CURRENT.md
+   is expected, and distillation takes this round's migration-kb.md artifact as its basis; the "下一阶段" ("next phase") wording does not assume it opens a planning session
+   (k's reader is the knowledge-extraction bypass session) — otherwise the distillation session would idle away on a survey because of contradictory prompts.
+2. **Driver mechanical archiving**: PLAN.md is copied to the PLAN.md inside the archive directory, then reset to the template (including
+   the conditional verify rendering); this phase's docs/ artifact documents are untouched (permanent paths); AGENTS.md is not rewritten —
+   only checked against ≤150 lines; over the limit, the handover commit message and a terminal note prompt manual trimming.
+3. **Ledger append** of the C.1 line; 4. **unified commit**: title `阶段交接: <letter> <名称> →
+   <下一字母> <名称>` ("phase handover: <letter> <name> → <next letter> <name>"), trailer `Auto-Stage: phase-transition`.
 
-## G. 与既有机制的交互
+## G. Interaction with the existing mechanisms
 
-| 机制 | 交互 |
+| Mechanism | Interaction |
 | --- | --- |
-| 任务级 verify | 各阶段任务照常(config.verify 门控);v 阶段任务豁免(D.3) |
-| --review/--early-review | 各阶段任务照常;v 阶段豁免(D.3) |
-| --final-review | 仅 m 阶段挂接(已确认决策) |
-| subtask 三档 | 不感知阶段,全阶段一致 |
-| 进度恢复 | 阶段内 = 既有 recallProgress/peekProgress;阶段边界 = 推导式幂等(C.2) |
-| 统一提交 | 阶段内会话照旧;交接一次提交(F.4) |
-| protect.ts | 不变(brief.md 不置只读;规划会话期间 PLAN.md 临时放行 + 校验) |
-| --dryrun | 不触发阶段动作 |
-| --interactive | 规划/蒸馏会话同样接收旁路输入(attach 由 runner 既有挂点覆盖) |
-| mode | 与 phases 正交:init 导语进规划会话,exec 注记进执行会话,final 侧重进 m 阶段终审 |
-| check | 不变(扫描 AGENTS.md/PLAN.md,与阶段无关) |
-| k 与 fixme 设计 | k 认领 --extract-knowledge;--track-fixme 独立演进 |
+| Task-level verify | tasks in every phase as usual (gated by config.verify); v-phase tasks exempt (D.3) |
+| --review/--early-review | tasks in every phase as usual; v phase exempt (D.3) |
+| --final-review | hooked into the m phase only (confirmed decision) |
+| subtask three tiers | phase-unaware; uniform across phases |
+| Progress recovery | inside a phase = the existing recallProgress/peekProgress; at phase boundaries = derived idempotency (C.2) |
+| Unified commit | in-phase sessions as before; the handover is a single commit (F.4) |
+| protect.ts | unchanged (brief.md not set read-only; PLAN.md temporarily allowed + validated during planning sessions) |
+| --dryrun | triggers no phase action |
+| --interactive | planning/distillation sessions likewise receive bypass input (attach is covered by runner's existing hooks) |
+| mode | orthogonal to phases: the init preamble goes into planning sessions, exec annotations into execution sessions, and the final emphasis into the m-phase final review |
+| check | unchanged (scans AGENTS.md/PLAN.md; phase-agnostic) |
+| k and the fixme design | k claims --extract-knowledge; --track-fixme evolves independently |
 
-## H. 退出码与异常
+## H. Exit codes and exceptions
 
-- 配置非法(phases/source):1(严格失败优于静默回落)。
-- 台账非法(含 phases 外字母/重复/协议行无法解析):1,报文给人工修订指引。
-- 规划会话/蒸馏会话隐性阻塞:2(既有 requireArtifact 语义)。
-- 阶段内任务阻塞:2(既有语义,台账不受影响,重跑续当前阶段)。
-- 全部阶段完成:0。
+- Invalid config (phases/source): 1 (strict failure over silent fallback).
+- Invalid ledger (letters outside phases / duplicates / unparseable protocol lines): 1, with the message giving manual-revision guidance.
+- Planning/distillation session silent block: 2 (existing requireArtifact semantics).
+- Task blocked inside a phase: 2 (existing semantics; the ledger is unaffected — a re-run resumes the current phase).
+- All phases complete: 0.
 
-## J. 分期实现
+## J. Staged implementation
 
-- **P1(配置与 CLI 面)**:config 加 `phases`/`source` 键与校验;init 去 AI 化
-  (-p 落 brief.md、删除 manage/runOnce 路径);run 拒绝清单扩展;`phases:"m"`
-  兼容路径(run 行为不变);init 前缀护栏;测试:config/CLI 解析、brief 写入。
-- **P2(阶段骨架)**:src/phases.ts(注册表/parsePhases/台账读写/routePhase);
-  run 阶段循环接线;阶段规划会话(phase-plan.md);交接的机械部分(归档+重置+
-  台账+提交);status 阶段行。蒸馏会话此期以模板占位(直接写最小 handover)。
-- **P3(蒸馏与注入)**:phase-handover.md 蒸馏会话;handovers 注入规划会话;
-  v 阶段豁免接线;--final-review 仅 m 挂接的 note。
-- **P4(k 阶段,已实现)**:认领 plans/0002-fixme-knowledge-design.md 的 --extract-knowledge
-  (docs/migration-kb/ 产出、失败不污染退出码,行为规格见 D.4);该文档文首已并入
-  修订标注。
+- **P1 (config and CLI surface)**: config gains the `phases`/`source` keys and validation; the AI-freeing of init
+  (-p lands in brief.md; the manage/runOnce paths deleted); run rejection-list extension; the `phases:"m"`
+  compatibility path (run behavior unchanged); the init prefix guardrail; tests: config/CLI parsing, brief writing.
+- **P2 (phase skeleton)**: src/phases.ts (registry/parsePhases/ledger read-write/routePhase);
+  wiring run's phase loop; the phase-planning session (phase-plan.md); the mechanical part of handover (archive + reset +
+  ledger + commit); the status phase line. In this stage the distillation session is a template placeholder (writes a minimal handover directly).
+- **P3 (distillation and injection)**: the phase-handover.md distillation session; handovers injected into planning sessions;
+  v-phase exemption wiring; the note that --final-review hooks into m only.
+- **P4 (k phase, implemented)**: claims --extract-knowledge from plans/0002-fixme-knowledge-design.md
+  (docs/migration-kb/ output, failure does not pollute the exit code; the behavior spec is in D.4); that document's head already carries the merged
+  revision note.
 
-## K. 文件级改动清单
+## K. File-level change list
 
-| 文件 | 改动 |
+| File | Change |
 | --- | --- |
-| src/phases.ts | **新增**:Phase 注册表、parsePhases、phaseText、台账读写(readLedger/appendLedger)、routePhase、formatPhases(status/run 共用) |
-| src/config.ts | ProjectConfig 加 `phases: string`、`source?: {dir, path}`、`destDir?: string`;CONFIG_DEFAULTS.phases="m";validate 各键;formatProjectConfig 追加 phases 摘要 |
-| src/index.ts | VALUE_FLAGS 加四键;init 侧 parse 与 merge、前缀护栏、-p 落 brief.md(删 manage/runOnce)、v+verify=false note、结束语分两态;run 拒绝清单扩展、阶段进度行;status 阶段行;用法文本 |
-| src/loop.ts | runAll 入口推导 currentPhase 与阶段循环(D.1);交接编排(F 节);终审闭环挂接按阶段门控 |
-| src/runner.ts | v 阶段豁免内部标记(D.3,与 final 豁免共路径);规划/蒸馏会话的 PLAN.md 临时放行与 checkPlanEdit 复用 |
-| src/prompt.ts | renderPhasePlan/renderPhaseHandover 组装;FinalStage 不受影响 |
-| src/knowledge.ts | **新增**(P4/D.4): 知识提取编排——默认路径 knowledgeFile、幂等检查 existingKnowledge、extractKnowledge(requireArtifact + renderKnowledge 调用) |
-| templates/prompts/knowledge.md | **新增**(P4/D.4): 知识提取会话模板;登记 src/template.ts embedded 注册表(collect 从宽,不进协议敏感清单) |
-| templates/prompts/phase-plan.md、phase-handover.md | **新增**;登记 src/template.ts embedded 注册表与协议敏感校验清单 |
-| src/protect.ts | 无改动(brief.md 不保护;确认清单) |
-| src/loop.ts(P4 增量) | runPhaseLoop 的 plan 路由接 k 分支: 提取(失败仅 ⚠)→ handoverPhase("k") → 台账推导 complete |
-| plans/0002-fixme-knowledge-design.md | P4 修订标注已并入(文首"P4 并入阶段化流程"节):--extract-knowledge 并入 phases 设计 k 阶段 |
-| README.md | 用法、--phases/source 选项、brief.md、人工回退规程(C.3) |
-| test/ | config/CLI 解析、台账推导与 routePhase 幂等、模板协议防漂移(prompt.test.ts 扩展) |
+| src/phases.ts | **added**: the Phase registry, parsePhases, phaseText, ledger read/write (readLedger/appendLedger), routePhase, formatPhases (shared by status/run) |
+| src/config.ts | ProjectConfig gains `phases: string`, `source?: {dir, path}`, `destDir?: string`; CONFIG_DEFAULTS.phases="m"; validates each key; formatProjectConfig appends the phases summary |
+| src/index.ts | VALUE_FLAGS gains the four keys; init-side parse and merge, the prefix guardrail, -p landing in brief.md (delete manage/runOnce), the v+verify=false note, the closing message in two states; run rejection-list extension and phase progress line; the status phase line; usage text |
+| src/loop.ts | the runAll entry derives currentPhase and the phase loop (D.1); handover orchestration (section F); the final-review loop hookup gated by phase |
+| src/runner.ts | the internal flag for the v-phase exemption (D.3, sharing the path with the final exemption); the temporary PLAN.md allowance for planning/distillation sessions and reuse of checkPlanEdit |
+| src/prompt.ts | assembles renderPhasePlan/renderPhaseHandover; FinalStage unaffected |
+| src/knowledge.ts | **added** (P4/D.4): knowledge-extraction orchestration — default path knowledgeFile, idempotency check existingKnowledge, extractKnowledge (requireArtifact + renderKnowledge call) |
+| templates/prompts/knowledge.md | **added** (P4/D.4): the knowledge-extraction session template; registered in the src/template.ts embedded registry (collect is lenient; not in the protocol-sensitive list) |
+| templates/prompts/phase-plan.md, phase-handover.md | **added**; registered in the src/template.ts embedded registry and the protocol-sensitive validation list |
+| src/protect.ts | no changes (brief.md not protected; confirmed against the checklist) |
+| src/loop.ts (P4 delta) | the plan route of runPhaseLoop gains the k branch: extraction (failure only ⚠) → handoverPhase("k") → the ledger derives complete |
+| plans/0002-fixme-knowledge-design.md | the P4 revision note has been merged in (the "P4 并入阶段化流程" ("P4 merged into the phased flow") section at the document head): --extract-knowledge is folded into the phases design as the k phase |
+| README.md | usage, the --phases/source options, brief.md, the manual rollback procedure (C.3) |
+| test/ | config/CLI parsing, ledger derivation and routePhase idempotency, template-protocol drift protection (prompt.test.ts extension) |
 
-## L. 不做的事(范围外)
+## L. Things not done (out of scope)
 
-- 跨阶段自动回退路由(t/v 差距自动退回 m 重新规划)——人工台账回退已覆盖。
-- 自定义阶段与阶段覆盖目录——阶段有 driver 语义,非纯文案。
-- 阶段内子阶段/嵌套 phases——YAGNI。
-- init 当场生成 PLAN.md——被阶段规划会话取代,init 纯配置。
-- v 阶段差距自动熔断——预留挂点(D.3 修订备选),V1 不实现。
+- Automatic cross-phase rollback routing (t/v gaps automatically rolling back to m for replanning) — manual ledger rollback already covers it.
+- Custom phases and a phase override directory — phases carry driver semantics; they are not mere copy.
+- Sub-phases inside a phase / nested phases — YAGNI.
+- Generating PLAN.md on the spot at init — superseded by the phase-planning session; init is pure configuration.
+- An automatic circuit breaker on v-phase gaps — the hook point is reserved (the D.3 revision option); not implemented in V1.
 
-## M. 续轮迁移(continue 子命令,已实现)
+## M. Continued-round migration (the continue subcommand, implemented)
 
-> **2026-09-08 修订(轮次专用目录方案,plans/ROUND_WORKDIR_PLAN.md)**:每轮一个
-> 轮次专用目录 `docs/R-NN/`(R 后两位零填充,自然进位;与 `docs/T-NNN/` 并列构成
-> docs/ 下两类顶级命名空间),**轮首即建、其中一切落盘即永久**(不改名、不改路径、
-> 不删除),取代"共用目录 + 文件名前缀 + 轮末搬移归档"(archiveRound 已删除)。
-> 轮内布局: `PLAN.md`(本轮任务台账,根 PLAN.md 是指向它的相对符号链接——单一
-> 事实源、零漂移,会话与 runner/protect 的 "PLAN.md" 路径认知零改动,写经链接落
-> 轮内;链接创建失败的环境兜底为副本)、`phases.md`(本轮阶段台账,根
-> `docs/phases.md` 在新布局消亡)、`AGENTS.md.bak`(轮首 AGENTS.md 快照,.bak
-> 后缀避免被当指令自动加载)、`<字母>-<slug>/`(阶段归档)、`handovers/<字母>-
-> <slug>.md`(阶段交接,文件名去 R<N>- 前缀)、`phase-docs/<字母>-<slug>/`、
-> `migration-kb.md` 与 `prior-kb.md`(轮内固定名,原时间戳名取消)。
-> 存量兼容 = **只读回落,绝不搬移旧文件**: 旧平铺 `docs/handovers/R<N>-*.md`、
-> `docs/prior-kb|migration-kb/` 平铺、`docs/phases/round-N/` 旧归档与根
-> `docs/phases.md` 旧台账原地保留为读回落源;写只写新布局。
-> `phases = "m"` 纯人工模式(无轮次): 不建轮目录,根 PLAN.md 维持普通文件。
+> **Revision of 2026-09-08 (per-round directory scheme, plans/ROUND_WORKDIR_PLAN.md)**: each round gets one
+> dedicated round directory `docs/R-NN/` (two zero-padded digits after R, carrying over naturally; alongside `docs/T-NNN/` it forms
+> the two top-level namespaces under docs/), **created at round start, with everything written inside permanent the moment it lands** (no renaming, no path changes,
+> no deletion), replacing "shared directory + filename prefix + end-of-round move-to-archive" (archiveRound is deleted).
+> In-round layout: `PLAN.md` (this round's task ledger; the root PLAN.md is a relative symlink pointing to it — a single
+> source of truth, zero drift, zero change to how sessions and runner/protect perceive the "PLAN.md" path; writes land inside the round via the link
+> (the environment fallback when link creation fails is a copy)), `phases.md` (this round's phase ledger; the root
+> `docs/phases.md` dies out in the new layout), `AGENTS.md.bak` (an AGENTS.md snapshot at round start; the .bak
+> suffix keeps it from being auto-loaded as instructions), `<字母>-<slug>/` (<字母> = the phase letter; phase archive), `handovers/<字母>-
+> <slug>.md` (phase handover; the filename drops the R<N>- prefix), `phase-docs/<字母>-<slug>/`,
+> `migration-kb.md` and `prior-kb.md` (fixed in-round names; the old timestamped names are dropped).
+> Stock compatibility = **read fallback only, never move old files**: the old flat `docs/handovers/R<N>-*.md`,
+> flat `docs/prior-kb|migration-kb/`, the old `docs/phases/round-N/` archives, and the root
+> `docs/phases.md` old ledger stay in place as read-fallback sources; writes go only to the new layout.
+> `phases = "m"` pure-manual mode (no rounds): no round directory is created; the root PLAN.md stays a regular file.
 >
-> <details><summary>2026-09-07 修订(stable-refs P2,历史)</summary>
+> <details><summary>Revision of 2026-09-07 (stable-refs P2, historical)</summary>
 >
-> 归档布局增根 AGENTS.md 每轮快照(拷贝),不再搬移 `docs/migration-kb/`(知识文档
-> 改为永久路径 + `R<N>-` 前缀守卫,新一轮重新提取);`.auto/phase-snapshot.json` 随
-> 快照链路删除,状态重置只剩台账消失 + PLAN.md 重建;结论注入 ②③ 改读永久路径。
+> The archive layout gains a per-round snapshot of the root AGENTS.md (a copy) and no longer moves `docs/migration-kb/` (knowledge documents
+> switch to permanent paths + an `R<N>-` prefix guard, re-extracted each new round); `.auto/phase-snapshot.json` goes away with
+> the snapshot chain's deletion, so a state reset reduces to the ledger vanishing + PLAN.md being rebuilt; conclusion injection ②③ reads the permanent paths instead.
 > </details>
 
-一轮阶段化迁移全部完成后,继续迁移(补齐遗漏、对齐源系统)以"新一轮"进行: 轮首
-建立新轮目录、状态天然隔离(新轮目录恒空),上一轮结论注入新一轮首个规划会话——
-目标是**让迁移结果与源更加完整、一致**,不重做已完成的工作。
+After one round of phased migration fully completes, continued migration (filling omissions, aligning with the source system) proceeds as a "new round": at round start
+the new round directory is established and state is naturally isolated (the new round directory is always empty); the previous round's conclusions are injected into the new round's first planning session —
+the goal is to **make the migration result more complete and more consistent with the source**, not to redo finished work.
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| CLI 形态 | 独立子命令 `continue [dir] [--phases <新值>] [-p <brief>] [其余可修订选项]`(不用 init 选项: 它是动作而非属性);`--continue` 不是选项,init/run 出现即报错指向子命令;`init --continue` 语义 = continue 子命令 |
-| 与 init 的关系 | continue = init 的 amend 机制 + 轮首建立新轮: 复用同一分支(parse*/merge/模板循环/ensurePointer/ensureGitignore/-p),以 cont 门控差异;宪法选项仍单一入口语义(config.json 只经 init/continue 写) |
-| 前置条件 | 既有 phases ≠ "m" 且台账覆盖既有 phases 全部字母(按**既有**配置判定,不看向新 --phases);非阶段化/台账为空/缺阶段/含外字母/新 --phases 为 "m" → 退出码 1 并给"先跑 run 完成本轮"或人工回退指引 |
-| 轮首建立 | `establishRound`(src/phases.ts): 建 `docs/R-NN/`(N = nextRound)+ 轮内 PLAN.md 初值(缺省空模板;模式互切 m → 阶段化时根既有普通 PLAN.md 内容拷贝为 R-01 初值)+ 重建根 PLAN.md 相对符号链接 + 写 `AGENTS.md.bak` 快照;幂等(轮目录已存在不重写既有内容)。新轮目录恒空,**无现场可清**——旧机制的现场清理(needsSceneCleanup/archiveRound/PLAN 重置)随轮末搬移一并删除 |
-| 状态重置 | 不需要: 台账/PLAN/交接/知识全部轮内自包含,新轮目录恒空即"已重置";run 侧零改动(routePhase 对空台账 + 空模板自然回到 plan 路由) |
-| 轮次推导 | `currentRound`: 存在 `docs/R-NN/` → R 系目录最大号(**无 +1**,轮首即建);无 R 系目录回落旧语义(`docs/phases/round-<N>` 最大号 + 1)——混合项目(旧 round-1..4 + 新 R-05)自然续号。`nextRound`: 当前轮已被占用(R-NN 已建或旧布局根台账已在)→ +1,否则当前推导值。零新增持久化状态;run/status 阶段进度行带 `第 N 轮` 标注(round > 1 时) |
-| 参数锁定矩阵 | **跨轮固定**(迁移同一性,显式给出即退出码 1): -m/--mode、--source-dir、--source-path、--dest-dir——换源/换目标/换模式不是"同一迁移的继续",如需更换在新目录 init 新项目;**可按轮修订**: --phases(不受前缀护栏——台账随轮次目录天然重置,任何合法值可改,如第 2 轮改跑 mtvk)、-p(brief 换新轮意图)、--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit |
-| 结论注入 | 新一轮台账为空时的**首个**阶段规划会话注入 `prevRoundDigest`(src/phases.ts): ① 各阶段归档目录索引;② 最终完成阶段交接文档全文(新布局读轮内 `docs/R-NN/handovers/<字母>-<slug>.md`;旧布局读 `docs/handovers/R<N>-…` 永久路径,P2 前轮次自归档目录读回落);③ 迁移知识文档全文(新布局轮内 `migration-kb.md`;旧布局 `docs/migration-kb/` 的 `R<N>-` 前缀文件,无前缀存量宽松归入上一轮,P2 前归档内 migration-kb/ 读回落收集;宽松解析,坏行不中断)。注入纪律与轮内一致——蒸馏产物是唯一通道,原始产物不注入、按索引可达(轮目录就在工作目录内);后续阶段照常走本轮 handover 蒸馏链,不重复注入。phase-plan.md 的 `{{#if prevRound}}` 条件块承载续轮目标文案(排查遗漏与差距、不重做) |
-| 幂等与恢复 | 轮首建立各步幂等(目录/文件已存在不重写,链接重建);重复 continue 在新一轮未完成时被前置条件拒绝(本轮台账为空 → 尚缺全部字母) |
-| 退出码 | 同 init: 0 成功(轮首建立+配置修订完成),1 用法/环境错误;run 侧无感知(看到空台账 + 空模板即正常开规划会话) |
-| 人工回退轮次 | 回退续轮 = 删除新轮 `docs/R-NN/` 目录(或人工清空其 phases.md 台账)后重跑 run;轮次推导随目录消失自然回退 |
+| CLI shape | a standalone subcommand `continue [dir] [--phases <新值>] [-p <brief>] [其余可修订选项]` (<新值> = the new value, 其余可修订选项 = the other revisable options; init's options are not reused: it is an action, not an attribute); `--continue` is not an option — appearing on init/run errors and points to the subcommand; `init --continue` semantics = the continue subcommand |
+| Relation to init | continue = init's amend machinery + establishing a new round at round start: it reuses the same branches (parse*/merge/template loop/ensurePointer/ensureGitignore/-p), with the differences gated by cont; constitutional options keep single-entry semantics (config.json is written only via init/continue) |
+| Preconditions | the existing phases ≠ "m" and the ledger covers every letter of the existing phases (judged by the **existing** config, not the new --phases); non-phased / empty ledger / missing phases / letters outside / new --phases being "m" → exit code 1, with "先跑 run 完成本轮" ("finish this round by running run first") or manual-rollback guidance |
+| Round-start establishment | `establishRound` (src/phases.ts): create `docs/R-NN/` (N = nextRound) + the in-round PLAN.md initial value (default empty template; when switching modes m → phased, the existing regular root PLAN.md's content is copied as R-01's initial value) + rebuild the root PLAN.md relative symlink + write the `AGENTS.md.bak` snapshot; idempotent (an existing round directory's contents are not rewritten). The new round directory is always empty — **there is no scene to clean up** — and the old mechanism's scene cleanup (needsSceneCleanup/archiveRound/PLAN reset) was deleted together with the end-of-round move |
+| State reset | not needed: ledger/PLAN/handover/knowledge are all self-contained within the round, and an always-empty new round directory is "already reset"; zero change on the run side (routePhase naturally returns to the plan route for an empty ledger + empty template) |
+| Round derivation | `currentRound`: `docs/R-NN/` exists → the highest R-series directory number (**no +1**; created at round start); with no R-series directory, fall back to the old semantics (highest `docs/phases/round-<N>` + 1) — mixed projects (old round-1..4 + new R-05) continue the numbering naturally. `nextRound`: the current round already taken (R-NN created, or the legacy-layout root ledger present) → +1, otherwise the currently derived value. Zero new persisted state; the run/status phase progress line carries a `第 N 轮` ("Round N") annotation (when round > 1) |
+| Parameter lock matrix | **fixed across rounds** (migration identity; supplying them explicitly is exit code 1): -m/--mode, --source-dir, --source-path, --dest-dir — switching source/target/mode is not "continuing the same migration"; to switch, init a new project in a new directory; **revisable per round**: --phases (not subject to the prefix guardrail — the ledger naturally resets with the round directory, so any legal value may be set, e.g. running mtvk in round 2), -p (the brief switches to the new round's intent), --agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit |
+| Conclusion injection | the **first** phase-planning session when the new round's ledger is empty injects `prevRoundDigest` (src/phases.ts): ① an index of every phase's archive directory; ② the full text of the final completed phase's handover document (new layout: read the in-round `docs/R-NN/handovers/<字母>-<slug>.md`; legacy layout: read the permanent path `docs/handovers/R<N>-…`, pre-P2 rounds read-fallback from the archive directory); ③ the full text of the migration knowledge document (new layout: in-round `migration-kb.md`; legacy layout: the `R<N>-`-prefixed file in `docs/migration-kb/`, with prefixless stock leniently attributed to the previous round and pre-P2 stock collected by read fallback from the in-archive migration-kb/; lenient parsing — bad lines do not abort). Injection discipline matches the in-round one — distilled artifacts are the only channel; raw artifacts are not injected but reachable via the index (the round directory sits inside the working directory); later phases go through this round's handover distillation chain as usual, with no repeated injection. The `{{#if prevRound}}` conditional block of phase-plan.md carries the continued-round goal copy (hunt down omissions and gaps; don't redo) |
+| Idempotency and recovery | every round-start establishment step is idempotent (existing directories/files are not rewritten; symlinks are rebuilt); a repeated continue while the new round is unfinished is rejected by the preconditions (the current round's ledger is empty → all letters still missing) |
+| Exit codes | same as init: 0 success (round-start establishment + config revision complete), 1 usage/environment error; the run side notices nothing (an empty ledger + empty template just opens a planning session normally) |
+| Manual round rollback | rolling back a continued round = delete the new round's `docs/R-NN/` directory (or manually empty its phases.md ledger) and re-run run; round derivation falls back naturally as the directory disappears |
 
-文件级改动(2026-09-08 轮次专用目录方案): src/phases.ts(currentRound 新推导/nextRound/roundRoot/establishRound + 台账路径 ledgerPath + phaseArchive/handoverDoc/phaseDocsDir 布局感知 + prevRoundDigest 双布局;archiveRound 删除)、src/docpaths.ts(roundDir/roundDirName + knowledgeDoc/priorKnowledgeDoc 轮内固定名 + legacyKnowledgeDoc/legacyPriorKnowledgeDoc 读回落常量化)、src/knowledge.ts(knowledgeFile/priorKnowledgeFile 布局感知、existing* 新布局+旧平铺回落、existingDistilledDocs/priorKnowledgeDigest 双布局)、src/plan.ts(writeTarget: rename 落链接目标,根符号链接存活)、src/numbering.ts(编号扫描增 docs/R-*/**/PLAN.md)、src/loop.ts(交接/归档路径异步化)、src/prompt.ts + templates/prompts(路径类文案)、test/(phases/knowledge/numbering/docpaths/prompt/protect)。
+File-level changes (2026-09-08 per-round directory scheme): src/phases.ts (new currentRound derivation/nextRound/roundRoot/establishRound + ledger path ledgerPath + layout-aware phaseArchive/handoverDoc/phaseDocsDir + dual-layout prevRoundDigest; archiveRound deleted), src/docpaths.ts (roundDir/roundDirName + the fixed in-round names knowledgeDoc/priorKnowledgeDoc + legacyKnowledgeDoc/legacyPriorKnowledgeDoc turned into read-fallback constants), src/knowledge.ts (layout-aware knowledgeFile/priorKnowledgeFile, existing* new layout + old-flat fallback, dual-layout existingDistilledDocs/priorKnowledgeDigest), src/plan.ts (writeTarget: rename lands on the symlink target, the root symlink survives), src/numbering.ts (the numbering scan gains docs/R-*/**/PLAN.md), src/loop.ts (handover/archive paths made async), src/prompt.ts + templates/prompts (path-related copy), test/ (phases/knowledge/numbering/docpaths/prompt/protect).

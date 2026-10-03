@@ -1,163 +1,163 @@
-# 会话恢复优先于流程恢复(设计 + 实施记录)
+# Session recovery takes precedence over process recovery (design + implementation record)
 
-> 状态:**已实施**(2026-09-10,`packages/auto-core`,分支 `auto-core`)。
-> `bun typecheck && bun test` 全绿(451→459 pass,+8 用例)。
-> 本文件是设计真相;`plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md`
-> 为前序工作,本文修订其中两处现状(见文末「与前序文档的关系」)。
+> Status: **implemented** (2026-09-10, `packages/auto-core`, branch `auto-core`).
+> `bun typecheck && bun test` all green (451→459 pass, +8 cases).
+> This file is the design truth; `plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md`
+> are prior work, and this document revises two of their statements of current behavior (see "Relationship to prior documents" at the end of this file).
 
-## 需求原文(用户)
+## Original requirement (user)
 
-> 会话中断后再次运行时,子任务会话仍未被真正复用;尽管我们已经修复了会话的
-> 有效断点,但这次遇到配额限制时,直接跳过了恢复,这说明恢复机制至少在本次
-> PLAN 阶段是不成功的。我们的流程恢复机制应与会话恢复机制相配合:若存在会话
-> 恢复点,应优先于流程恢复点生效;因为流程无法感知会话内的详细状态,仅凭外部
-> 文件是否存在,就会直接跳过尚未完全结束的处理环节。我们不能将 AI 生成的文件
-> 作为流程控制的依据,必须以 driver 切实保存的状态进行控制。
+> When running again after a session interruption, the subtask session still has not been truly reused; although we have already fixed the session's
+> effective checkpoint, this time, upon hitting the quota limit, recovery was skipped outright — which shows that the recovery mechanism was, at least for this
+> PLAN phase, unsuccessful. Our process-recovery mechanism should cooperate with the session-recovery mechanism: if a session
+> recovery point exists, it should take effect ahead of the process recovery point; because the process cannot sense the detailed state inside the session, going purely by whether the external
+> files exist, it will directly skip processing steps that have not fully finished. We cannot take AI-generated files
+> as the basis for flow control; control must be based on the state the driver has actually persisted.
 
-两条原则:
+Two principles:
 
-1. **会话恢复点优先于流程恢复点**:存在未收口的会话恢复点时,流程必须重入该
-   会话所属步骤续跑,而不是让"文件推导路由"前进。
-2. **流程控制不得以 AI 生成的文件为依据**:PLAN.md 任务、交接文档等是 AI 写的
-   (或会话中断后 driver 才补的),它们的存在不能证明"会话已收口";只有 driver
-   切实保存(并在收口时清除)的状态才能作为流程推进依据。
+1. **Session recovery points take precedence over process recovery points**: when an unclosed session recovery point exists, the flow must re-enter the step
+   that session belongs to and resume it, rather than letting "file-derived routing" advance.
+2. **Flow control must not be based on AI-generated files**: PLAN.md tasks, handover documents, and the like are written by the AI
+   (or backfilled by the driver only after a session interruption); their existence cannot prove "the session has been closed out"; only state the
+   driver actually persists (and clears at close-out) can serve as the basis for advancing the flow.
 
-## 问题现场(`/workspace/kernel-dm-stripe`,auto-migrate 用户任务)
+## Incident scenes (`/workspace/kernel-dm-stripe`, an auto-migrate user task)
 
-### 现场一:阶段规划会话被静默跳过(原则 1/2 直接命中)
+### Scene 1: the phase-planning session was silently skipped (principles 1/2 hit directly)
 
-1. `run-2026-09-09_22-26-31.log`:第 5 轮 m(迁移实现)阶段规划会话
-   `ses_f773ba946ffeWbMA0w0SEPRyta`(标题 `PLAN plan m 迁移实现`)于 `00:39`–
-   `00:47` 工作,`00:47:47` 写出 PLAN.md(T-065..T-068 四个任务)后立刻撞上
-   Kimi 周配额(`isRetryable:false`)。driver 按
-   `plans/0015-session-error-retry-plan.md` 第 1–3 点正确处置:`⛔ PLAN 遇到不可重试的会话
-   错误,直接阻塞`,不 fork、不换白板会话,`chain.id` 留在该会话上。该会话累计
-   **196.8k tokens**(DB `session` 表实测),是真正干了活的会话。
-2. 但规划会话是**旁路一次性会话**(`requireArtifact` 骨架,伪任务 `PLAN`),
-   `attempt()` 的 `remember()` 当时以 `task.id.startsWith("T-") && chain.phase`
-   为门控,而旁路链**不携带 phase**——于是该会话从未写入 `.auto/progress.json`,
-   driver 侧没有任何"规划步骤进行中"的恢复点。
-3. `run-2026-09-10_00-51-49.log`:下一次运行,`routePhase` 纯从(台账, PLAN.md)
-   推导——PLAN.md 已有四个未 done 任务 → 路由 `execute` → 直接 `▶ T-065 开始执行`。
-   规划会话被静默丢弃:它 196.8k 的上下文、以及 driver 侧本应在规划收口时做的
-   记账(`advanceNextTask` 推进编号、`PLAN plan m` 统一提交)全部丢失。`.auto/next-task`
-   仍停在 `65`(T-065..068 已占用 65–68),正是规划未收口的痕迹。
+1. `run-2026-09-09_22-26-31.log`: in round 5, the m (migration implementation) phase-planning session
+   `ses_f773ba946ffeWbMA0w0SEPRyta` (title `PLAN plan m 迁移实现`, "migration implementation") ran `00:39`–
+   `00:47`; at `00:47:47`, right after writing PLAN.md (the four tasks T-065..T-068), it immediately hit the
+   Kimi weekly quota (`isRetryable:false`). The driver, per
+   `plans/0015-session-error-retry-plan.md` points 1–3, handled it correctly: `⛔ PLAN 遇到不可重试的会话
+   错误,直接阻塞` (PLAN hit a non-retryable session error, blocking directly) — no fork, no switch to a fresh-board session, `chain.id` stayed on that session. That session totaled
+   **196.8k tokens** (measured in the DB `session` table) and was a session that did real work.
+2. But the planning session is a **one-shot bypass session** (`requireArtifact` skeleton, pseudo-task `PLAN`),
+   and `attempt()`'s `remember()` was at the time gated on `task.id.startsWith("T-") && chain.phase`,
+   while a bypass chain **carries no phase** — so that session was never written into `.auto/progress.json`,
+   leaving no "planning step in progress" recovery point on the driver side.
+3. `run-2026-09-10_00-51-49.log`: on the next run, `routePhase` derived purely from (the ledger, PLAN.md)
+   — PLAN.md already had four non-done tasks → routed to `execute` → straight to `▶ T-065 开始执行` ("start executing T-065").
+   The planning session was silently discarded: its 196.8k context, plus the driver-side bookkeeping that should have happened at planning close-out
+   (`advanceNextTask` advancing the task number, the unified `PLAN plan m` commit), was lost entirely. `.auto/next-task`
+   still sat at `65` (T-065..068 had already taken 65–68) — precisely the trace of the unclosed planning.
 
-### 现场二:回合进行中被 kill,在跑的子任务会话无人认领
+### Scene 2: killed mid-turn, the in-flight subtask session left unclaimed
 
-1. 同一次运行 `00:56:10`,T-065 的分解会话从 digest 基点分叉出
-   `ses_f772f5aa6ffed3GThypRRhTEAb`(标题 `T-065 decompose …`),读了 batch1 设计
-   文档、累计 **29.4k tokens**;`00:56:19`/`00:56:20` 用户连续 Ctrl+C 强退(130)。
-2. `.auto/progress.json` 当时是 `{task:T-065, session: ses_f7733502effe…(理解会话),
-   active:false, phase:{kind:"decompose"}}`——`at` 比 decompose 会话的创建时刻还早
-   8ms。即:记录停在**上一阶段边界**(理解会话结束、`persistStage(decompose)` 写
-   `active:false`),真正在跑的分解会话既没被记为 `session`、也没被记为 `active`。
-3. 根因是 `plans/0015-session-error-retry-plan.md` 第 4 点把 `remember()` 从"sessionID 刚确定
-   (下发前)"挪到了"回合结束后":该改动修掉了"可重试中间失败态顶替真实会话"
-   (T-062),却顺手取走了"回合进行中被 kill 时对在跑会话的认领"。下一次运行
-   `active:false` → 不复用 → 分解从零重做。这就是用户说的"子任务会话仍未被真正
-   复用"。
+1. In the same run at `00:56:10`, T-065's decompose session forked from the digest base into
+   `ses_f772f5aa6ffed3GThypRRhTEAb` (title `T-065 decompose …`), read the batch1 design
+   document, and totaled **29.4k tokens**; at `00:56:19`/`00:56:20` the user pressed Ctrl+C in succession to force-exit (130).
+2. `.auto/progress.json` was at that point `{task:T-065, session: ses_f7733502effe…(the understand session),
+   active:false, phase:{kind:"decompose"}}` — `at` was 8ms earlier than the decompose session's creation
+   moment. That is: the record was stuck at the **previous phase boundary** (the understand session had ended, `persistStage(decompose)` wrote
+   `active:false`), so the decompose session actually running was recorded neither as `session` nor as `active`.
+3. The root cause is that point 4 of `plans/0015-session-error-retry-plan.md` moved `remember()` from "sessionID just determined
+   (before dispatch)" to "after the turn ends": that change fixed "a retryable intermediate failure state substituting for the real session"
+   (T-062) but incidentally took away "claiming the in-flight session when killed mid-turn". On the next run,
+   `active:false` → no reuse → decompose redone from zero. This is what the user meant by "the subtask session still has not been truly
+   reused".
 
-## 根因
+## Root causes
 
-| # | 根因 | 违反的原则 |
+| # | Root cause | Principle violated |
 | --- | --- | --- |
-| A | 阶段级旁路会话(规划/交接)不写 driver 侧恢复点;流程仅凭 AI 写的文件(PLAN.md/交接文档)推导路由,把未收口的会话静默跳过 | 原则 1 + 2 |
-| B | 执行链会话的 `active` 记录只在**回合结束后**写;回合进行中被 kill 时记录停在上一阶段边界(`active:false`、指向上一会话),在跑的会话无人认领 | 原则 1(会话恢复点不存在,谈不上优先) |
+| A | Phase-level bypass sessions (planning/handover) write no driver-side recovery point; the flow derives routing purely from AI-written files (PLAN.md/handover documents) and silently skips unclosed sessions | Principles 1 + 2 |
+| B | The execution chain's `active` record is written only **after the turn ends**; when killed mid-turn the record is stuck at the previous phase boundary (`active:false`, pointing at the previous session), leaving the in-flight session unclaimed | Principle 1 (with no session recovery point, precedence is moot) |
 
-## 已确认决策
+## Confirmed decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| 恢复点落盘时机(B) | 改为**提示词下发成功即写** `active` 记录(认领在跑的会话);回合结束后按结果刷新 |
-| 可重试错误(B) | 回合以可重试会话错误结束时,把 `progress.json` **还原为下发前快照**(被弃的 fork 副本/失败会话不顶替真实恢复点)——保留 `plans/0015-session-error-retry-plan.md` 第 4 点的保护,从"不抢先落盘"改为"下发即写 + 失败还原" |
-| `remember()` 门控(B) | 去掉 `task.id.startsWith("T-")`,只留 `chain.phase`——携带阶段的会话(执行链 + 阶段步骤旁路)都写;无阶段的一次性旁路(判定/审核/脚本生成/修复规划/dryrun/fork 基点)仍不写 |
-| 阶段步骤恢复点(A) | `resume.ts` 的 `Phase` 加 `step` 变体(`phase-plan`/`phase-handover` + 归属阶段字母);`requireArtifact` 加 `spec.step`,进入时若发现同一步骤的 `active` 记录 → 续跑 |
-| 续跑时是否复用会话(A) | 会话存活且非报错桩 → 复用原会话(保留产物现场,**不重置**);会话已死/`--new-session`/报错桩 → 开新会话并**照常重置**(等同全新步骤) |
-| 收口时机(A) | 由**调用方**在自身后处理完成后经 `closeStep` 删除记录:规划 = 编号推进 + 完成日志之后;交接 = 蒸馏产物校验 + 提交之后(其后的归档/重置/台账为幂等 driver 记账,由既有"交接中断恢复"兜底)。`requireArtifact` 本身不删,避免"产物已校验但后处理未完成"时被 kill 丢失步骤认领 |
-| 路由优先级(A) | `runPhaseLoop` 在消费文件推导路由**之前**先查 `openStep`:步骤归属阶段 == 当前路由阶段且未入台账 → 重入该步骤(复用会话);阶段已入台账 → 清除陈旧记录;字母不一致(人工回退/陈旧)→ 告警并让文件路由优先 |
-| 文件推导路由的去留 | **保留**为缺省路由(人工手填 PLAN.md、k 阶段人工填任务、`phases="m"` 纯人工模式均依赖它)。本设计只增加"存在未收口会话恢复点时一律以 driver 状态为准"这一优先层,不要求每个步骤都有 driver 收口戳(否则存量项目与人工流程全部被阻塞) |
-| 覆盖面 | 本期覆盖阶段规划 + 阶段交接两个步骤,以及全部执行链会话的下发即写。知识提取(已有产物幂等守卫、失败仅告警)、编号恢复、终审生成(各有文件推导路由)暂不纳入,留作按需 |
+| Recovery-point persistence timing (B) | Changed to **write the `active` record as soon as the prompt dispatch succeeds** (claiming the in-flight session); refreshed by outcome after the turn ends |
+| Retryable errors (B) | When the turn ends with a retryable session error, **restore `progress.json` to the pre-dispatch snapshot** (an abandoned fork copy / failed session must not substitute for the real recovery point) — keeping the protection of point 4 of `plans/0015-session-error-retry-plan.md`, changed from "do not persist ahead of dispatch" to "persist on dispatch + restore on failure" |
+| `remember()` gating (B) | Drop `task.id.startsWith("T-")`, keep only `chain.phase` — every phase-carrying session (execution chains + phase-step bypasses) writes it; one-shot bypasses without a phase (adjudication/review/script generation/repair planning/dryrun/fork base) still do not |
+| Phase-step recovery points (A) | `resume.ts`'s `Phase` gains a `step` variant (`phase-plan`/`phase-handover` + the owning phase letter); `requireArtifact` gains `spec.step`; on entry, if an `active` record for the same step is found → resume |
+| Whether to reuse the session on resume (A) | Session alive and not an error stub → reuse the original session (preserving the artifact scene, **no reset**); session dead / `--new-session` / error stub → open a new session and **reset as usual** (equivalent to a brand-new step) |
+| Close-out timing (A) | The **caller** deletes the record via `closeStep` after completing its own post-processing: planning = after task-number advancement + the completion log; handover = after distilled-artifact validation + commit (the archiving/reset/ledger that follow are idempotent driver bookkeeping, backstopped by the existing "handover-interruption recovery"). `requireArtifact` itself does not delete, to avoid losing the step claim if killed when "artifacts validated but post-processing unfinished" |
+| Routing precedence (A) | `runPhaseLoop` consults `openStep` **before** consuming file-derived routing: the step's owning phase == the currently routed phase and not yet in the ledger → re-enter that step (reusing the session); the phase already in the ledger → clear the stale record; letter mismatch (manual rollback / staleness) → warn and let file routing take precedence |
+| The fate of file-derived routing | **Kept** as the default routing (manually filling in PLAN.md, manually entering tasks in the k phase, and the purely manual `phases="m"` mode all depend on it). This design only adds the precedence layer "when an unclosed session recovery point exists, driver state is always authoritative"; it does not require every step to carry a driver close-out stamp (otherwise all existing projects and manual flows would be blocked) |
+| Coverage | This iteration covers the two steps phase planning + phase handover, plus persist-on-dispatch for all execution-chain sessions. Knowledge extraction (already guarded idempotently by artifact existence, failure only warns), task-number recovery, and final-review generation (each with its own file-derived routing) are excluded for now, left as needed |
 
-## 实施(均已落地,`bun typecheck && bun test` 全绿)
+## Implementation (all landed, `bun typecheck && bun test` all green)
 
-### P1 `src/resume.ts` — 步骤恢复点类型与读写
-- 加 `PhaseLetter`(`a|d|m|t|v|k`,内联避免 resume→phases 反向依赖)与
+### P1 `src/resume.ts` — step recovery-point types and read/write
+- Add `PhaseLetter` (`a|d|m|t|v|k`, inlined to avoid a resume→phases reverse dependency) and
   `StepKind`(`phase-plan|phase-handover`)。
-- `Phase` 联合加 `{ kind: "step"; step: StepKind; letter: PhaseLetter }`。
-- 加 `openStep(dir)`:当前记录为 `active` 的 step 变体时返回 `{step, letter, session}`,
-  否则 `undefined`。
-- 加 `closeStep(dir, step, letter)`:仅当当前记录正是该步骤时 `forgetProgress`
-  (记录不匹配则不动,避免误清任务记录)。
-- 文件头注释重写:记录在下发成功时即写、可重试错误还原、阶段步骤也写记录。
+- The `Phase` union gains `{ kind: "step"; step: StepKind; letter: PhaseLetter }`.
+- Add `openStep(dir)`: returns `{step, letter, session}` when the current record is an `active` step variant,
+  `undefined` otherwise.
+- Add `closeStep(dir, step, letter)`: `forgetProgress` only when the current record is exactly that step
+  (left untouched on mismatch, to avoid clearing task records by mistake).
+- File-header comment rewritten: records are written as soon as dispatch succeeds, restored on retryable errors, and written for phase steps too.
 
-### P2 `src/runner.ts` — 下发即写 + 失败还原(B)
-- `attempt()`:`remember()` 门控去掉 `task.id.startsWith("T-")`,只留 `chain.phase`。
-- 下发前快照 `prior = peekProgress(dir)`;`client.session.prompt` 成功后立即
-  `await remember()`(认领在跑的会话)。
-- 可重试会话错误分支:还原 `chain.id/used/at` 之外,把 `progress.json` 还原为
-  `prior`(无 `prior` 则 `forgetProgress`)——被弃副本不顶替真实恢复点。
-- import 加 `peekProgress`。
+### P2 `src/runner.ts` — persist on dispatch + restore on failure (B)
+- `attempt()`: the `remember()` gating drops `task.id.startsWith("T-")`, keeping only `chain.phase`.
+- Snapshot before dispatch: `prior = peekProgress(dir)`; immediately after `client.session.prompt` succeeds,
+  `await remember()` (claiming the in-flight session).
+- Retryable session-error branch: besides restoring `chain.id/used/at`, restore `progress.json` to
+  `prior` (`forgetProgress` if there is no `prior`) — an abandoned copy must not substitute for the real recovery point.
+- Add `peekProgress` to the imports.
 
-### P3 `src/runner.ts` — `requireArtifact` 步骤续跑(A)
-- `spec` 加可选 `step?: { step: StepKind; letter: PhaseLetter }`。
-- 进入时 `recallProgress(dir, task.id)`:同一步骤的 `active` 记录 + 会话存活 + 非
-  报错桩 + 非 `--new-session` → `resumedSession`/`resumedUsage`,打"复用会话"日志;
-  否则打"开新会话重做本步骤"日志。
-- **全新步骤(无匹配 active 记录)进入时先写一个 `session` 未定的 active 恢复点**:
-  使 attempt 的下发前快照(`prior`)恒非空——可重试会话错误还原时保留步骤认领而非
-  删除记录,堵住"可重试错误耗尽 → 无记录 → 下次运行凭半成品 PLAN.md 跳过本步骤"。
-- 循环内:`resume = i===0 && resumedSession`;`resume` 时**跳过 reset**(保留产物
-  现场)、链携带 `id=resumedSession` + `note=resumeNote(stepPhase,true)` + 继承用量;
-  否则照常 reset + 新链。链一律携带 `phase=stepPhase`(使 P2 的下发即写生效)。
-- 反馈重试(i≥1)清 `resumedSession`(原会话已结束本轮却未产出,下一轮重置 + 新会话)。
-- `phaseText`/`nextStepText`/`resumeNote` 补 `step` 分支(恢复日志与续跑提示词)。
+### P3 `src/runner.ts` — `requireArtifact` step resume (A)
+- `spec` gains the optional `step?: { step: StepKind; letter: PhaseLetter }`.
+- On entry, `recallProgress(dir, task.id)`: an `active` record for the same step + session alive + not an
+  error stub + not `--new-session` → `resumedSession`/`resumedUsage`, logging "reusing session";
+  otherwise log "opening a new session to redo this step".
+- **A brand-new step (no matching active record) writes an active recovery point with `session` still undetermined on entry**:
+  this keeps attempt's pre-dispatch snapshot (`prior`) non-empty — on a retryable session error, restoration keeps the step claim rather than
+  deleting the record, closing off "retryable errors exhausted → no record → the next run skips this step on a half-finished PLAN.md".
+- Inside the loop: `resume = i===0 && resumedSession`; when `resume`, **skip reset** (preserving the artifact
+  scene), the chain carrying `id=resumedSession` + `note=resumeNote(stepPhase,true)` + inherited usage;
+  otherwise reset as usual + a new chain. Chains always carry `phase=stepPhase` (making P2's persist-on-dispatch effective).
+- Feedback retries (i≥1) clear `resumedSession` (the original session ended this round without producing output; the next round resets + a new session).
+- `phaseText`/`nextStepText`/`resumeNote` gain `step` branches (recovery logs and resume prompts).
 
-### P4 `src/loop.ts` — 路由优先级 + 收口(A)
-- import 加 `openStep`/`closeStep`。
-- `planPhase`:`requireArtifact` spec 加 `step:{step:"phase-plan",letter:phase}`;
-  成功路径(编号推进 + 完成日志后)`await closeStep(directory,"phase-plan",phase)`。
-- `handoverPhase`:spec 加 `step:{step:"phase-handover",letter:phase}`;蒸馏成功
-  (`distilled===true`)后、归档/重置/台账之前 `await closeStep(...)`。
-- `runPhaseLoop`:在 `complete` 检查之后、`plan` 分支之前插入 `openStep` 优先层
-  (见「已确认决策·路由优先级」)。
+### P4 `src/loop.ts` — routing precedence + close-out (A)
+- Add `openStep`/`closeStep` to the imports.
+- `planPhase`: the `requireArtifact` spec gains `step:{step:"phase-plan",letter:phase}`;
+  on the success path (after task-number advancement + the completion log), `await closeStep(directory,"phase-plan",phase)`.
+- `handoverPhase`: the spec gains `step:{step:"phase-handover",letter:phase}`; after distillation succeeds
+  (`distilled===true`) and before archiving/reset/ledger, `await closeStep(...)`.
+- `runPhaseLoop`: insert the `openStep` precedence layer after the `complete` check and before the `plan` branch
+  (see "Confirmed decisions · Routing precedence").
 
-### P5 测试
-- `test/resume.test.ts`:+4 用例(step 记录往返、openStep 三态、closeStep 匹配/
-  不匹配、closeStep 不误删任务记录)。
-- `test/runner.test.ts`:+4 用例(requireArtifact 续跑复用会话不重置、全新步骤重置
-  + 新会话 + 下发即写恢复点、会话已死回退重置 + 新会话、可重试错误耗尽后步骤恢复点
-  不被删除)。
+### P5 Tests
+- `test/resume.test.ts`: +4 cases (step record round-trip, openStep's three states, closeStep match/
+  mismatch, closeStep not clearing task records by mistake).
+- `test/runner.test.ts`: +4 cases (requireArtifact resume reuses the session without reset, a brand-new step resets
+  + new session + persist-on-dispatch recovery point, a dead session falls back to reset + new session, and the step recovery point
+  is not deleted after retryable errors are exhausted).
 
-### P6 文档同步
-- 本文件;`docs/behavior.md` 进度恢复条目与阶段循环条目;`docs/structure.md`
-  `resume.ts`/`runner.ts`/`loop.ts` 条目;`plans/0006-phases-design.md` D/E 节;
-  `plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md` 交叉引用;包根 AGENTS.md 导航行。
+### P6 Documentation sync
+- This file; the progress-recovery and phase-loop entries in `docs/behavior.md`; `docs/structure.md`'s
+  `resume.ts`/`runner.ts`/`loop.ts` entries; `plans/0006-phases-design.md` sections D/E;
+  `plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md` cross-references; the package-root AGENTS.md navigation line.
 
-## 验证
+## Verification
 
 ```bash
 cd packages/auto-core && bun typecheck && bun test   # 458 pass / 0 fail
 ```
 
-- 现场一回放:规划会话 `ses_f773ba946ffe` 若有 step 恢复点,下次运行 `openStep`
-  命中 → `routePhase` 的 `execute` 被覆盖 → 重入 `planPhase` → `requireArtifact`
-  复用该会话(196.8k 上下文不丢)续写/确认 PLAN.md → 编号推进 + 提交 + `closeStep`。
-- 现场二回放:分解会话下发即写 `{session: ses_f772f5aa6ffe, active:true,
-  phase:decompose}`;Ctrl+C 强退后下次运行 `runTask` 复用该会话(29.4k 上下文不丢)。
-- 回归:`plans/0015-session-error-retry-plan.md` 的"可重试中间失败态不顶替真实记录"用例仍绿
-  (改为下发即写 + 失败还原,终态不变);"不可重试阻塞正常落盘"仍绿。
+- Scene-1 replay: had the planning session `ses_f773ba946ffe` had a step recovery point, the next run's `openStep`
+  would hit → `routePhase`'s `execute` overridden → re-enter `planPhase` → `requireArtifact`
+  reuses that session (the 196.8k context is not lost) to continue writing/confirming PLAN.md → task-number advancement + commit + `closeStep`.
+- Scene-2 replay: the decompose session persists on dispatch `{session: ses_f772f5aa6ffe, active:true,
+  phase:decompose}`; after the Ctrl+C force-exit, the next run's `runTask` reuses that session (the 29.4k context is not lost).
+- Regression: the `plans/0015-session-error-retry-plan.md` case "a retryable intermediate failure state does not substitute for the real record" stays green
+  (changed to persist-on-dispatch + restore-on-failure, same end state); "non-retryable blocking still persists normally" stays green.
 
-## 与前序文档的关系
+## Relationship to prior documents
 
-- 修订 `plans/0008-precise-resume-plan.md`「维持现状」之外的实现细节:恢复点落盘时机从
-  "回合结束后"改为"下发成功即写 + 可重试失败还原"。
-- 修订 `plans/0015-session-error-retry-plan.md` 第 4 点:其"不再抢先落盘"被细化为"下发即写、
-  可重试错误还原为下发前快照"——既保住第 4 点要防的"中间失败态顶替真实会话",
-  又恢复"回合进行中被 kill 时认领在跑会话"(第 4 点改动顺带取走的能力)。
-- 第 5 点(`sessionUsage` 报错桩判据)不变;`requireArtifact` 续跑复用同款判据。
+- Revises the implementation details of `plans/0008-precise-resume-plan.md` beyond 「维持现状」 (maintain the status quo): the recovery-point persistence timing moves from
+  "after the turn ends" to "write on dispatch success + restore on retryable failure".
+- Revises point 4 of `plans/0015-session-error-retry-plan.md`: its "no persisting ahead of dispatch" is refined into "persist on dispatch,
+  restore to the pre-dispatch snapshot on retryable errors" — keeping what point 4 meant to prevent, "an intermediate failure state substituting for the real session",
+  while restoring "claiming the in-flight session when killed mid-turn" (the ability the point-4 change incidentally took away).
+- Point 5 (the `sessionUsage` error-stub criterion) is unchanged; `requireArtifact` resume reuses the same criterion.
 
-## 已知不覆盖(留作按需)
+## Known non-coverage (left as needed)
 
-- 知识提取 / 编号恢复 / 终审生成会话:各有文件推导路由或幂等守卫,未纳入 step 恢复点。
-- 跨轮次陈旧 step 记录:仅按"阶段已入台账则清除、字母不一致则告警"处置,不做轮号校验。
+- Knowledge-extraction / task-number recovery / final-review generation sessions: each has file-derived routing or an idempotent guard, and none is included in step recovery points.
+- Cross-round stale step records: handled only as "clear when the phase is already in the ledger, warn when the letter mismatches", with no round-number validation.

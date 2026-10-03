@@ -383,7 +383,8 @@ Flipped in one commit — templates and parsers together:
   match, since it names the markers verbatim for the human operator.
 - The resume-gate / `COMMIT_CLARIFY` interjection family
   (`src/exec-session.ts` / `src/resume-gate.ts`): all remaining Chinese
-  prose (`"你在原会话、被中断处继续。"`, the four-mandatory-sections note,
+  prose (`"你在原会话、被中断处继续。"` — you continue in the original session,
+  at the interruption point; the four-mandatory-sections note,
   the commit-clarification paragraph) → English. No parser reads this face;
   it is operator-facing prose, tier-1 guarded only where it doubles as a
   template (`PARTIAL_MARKERS`/`PROTOCOL_MARKERS` do not cover it — it is
@@ -405,7 +406,8 @@ directory's `done.md` with no separate flag) — both in
 `packages/auto/test/e2e.test.ts`, opt-in via `OPENCODE_AUTO_E2E=1` per the
 existing convention (not run by the default `bun test`). The legacy-layout
 usage-error requirement was already covered by the M3.7 test at
-`packages/auto/test/e2e.test.ts` ("旧布局退役(M3.7)…").
+`packages/auto/test/e2e.test.ts` ("旧布局退役(M3.7)…" — the legacy-layout
+retirement describe).
 
 ## Amendment (2026-09-22, M4.2 / plans/0049): human-gate literals
 

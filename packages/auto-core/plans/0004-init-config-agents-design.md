@@ -1,109 +1,109 @@
-# init 项目配置固化与 AGENTS.md 维护规则 — 设计说明
+# init Project Config Persistence and AGENTS.md Maintenance Rules — Design Notes
 
-> 本文档是"run 选项迁移 init 固化"(`.opencode/auto/config.json` 项目配置层)与
-> "AGENTS.md 瘦身维护规则"(第四标记块 `opencode-auto:maint`)的唯一设计基准:
-> 实现任务以本文为准。P1..P4 分期已全部实现(init/run 选项面与 §B/§C 一致,
-> 维护规则块、check 行数 note 与 README/包内 AGENTS.md 文档均已生效)。
+> This document is the sole design baseline for "migrating run options into init persistence" (the `.opencode/auto/config.json` project config layer) and
+> the "AGENTS.md slim-down maintenance rules" (the fourth marker block `opencode-auto:maint`):
+> implementation tasks defer to this document. Phases P1..P4 are all implemented (the init/run option surfaces match §B/§C;
+> the maintenance-rules block, the check line-count note, and the README/in-package AGENTS.md docs are all in effect).
 
-## 背景与动机
+## Background and Motivation
 
-1. **宪法级选项的跨 run 漂移**:`run` 每次重新接受 `-m/--mode`、`--agent`、
-   `--verify`、`--commit`、`--subtask`、`--context-limit` 等"决定会话被如何告知、
-   验收与提交语义如何运作"的开关。同一目标目录跨天/跨人运行忘带参数即回落缺省,
-   与上次运行语义错配。`.auto/config.json` 的 mode 持久化与"init 与 run 应使用
-   相同模式"的警告(src/index.ts resolveModeFlag)正是该症状的首个补丁——补丁
-   应推广为原则:**项目属性在 init 固化,run 只控制本次执行**。
-2. **AGENTS.md 原则块与运行选项失配**:init 写入验证原则块与提交原则块、PLAN.md
-   模板的 verify 字段说明、init -p 规划提示词,共同假设"验证/提交执行权在
-   driver";而 `--verify false` / `--commit false` 是 run 选项——关闭时会话读到的
-   AGENTS.md 契约描述的是一条并不运转的流水线,原则块成空文。同样,`--agent` /
-   `--context-limit` 分别决定系统提示词契约与模型上下文预算,run 中途更换即中途
-   改宪法。
-3. **AGENTS.md 膨胀风险**:AGENTS.md 不在只读之列(任务可更新其余内容),长迁移
-   (数十任务 × 多会话)中没有约束防止它累积实现细节、命令输出、一次性决策,逐渐
-   退化为"项目百科全书 + 垃圾堆";而它作为 system context 每个 provider turn 都会
-   进入上下文,膨胀直接侵蚀全部会话的有效上下文。需要一个极简的维护协议(外部
-   讨论已给出方向:工作流入口 + 路由 + 更新纪律,而非知识库架构)。
+1. **Cross-run drift of constitutional-level options**: `run` re-accepts `-m/--mode`, `--agent`,
+   `--verify`, `--commit`, `--subtask`, `--context-limit` and other switches that "determine how the session is instructed,
+   how verification and commit semantics operate". Running the same target directory on another day or by another person without the flags falls back to defaults,
+   mismatching the previous run's semantics. The mode persistence in `.auto/config.json` and the "init and run should use
+   the same mode" warning (src/index.ts resolveModeFlag) were the first patch for that symptom — a patch
+   that should be generalized into a principle: **project attributes are persisted at init; run only controls the current execution**.
+2. **Mismatch between the AGENTS.md principle blocks and run options**: init writes the verification-principles block and the commit-principles block, the PLAN.md
+   template's verify-field explanation, and the init -p planning prompt, all assuming jointly that "verification/commit execution authority sits
+   with the driver"; yet `--verify false` / `--commit false` are run options — switched off, the session reads an
+   AGENTS.md contract describing a pipeline that does not actually run, and the principle blocks become dead letter. Likewise, `--agent` /
+   `--context-limit` respectively determine the system-prompt contract and the model context budget; swapping them mid-run amends the
+   constitution mid-flight.
+3. **AGENTS.md bloat risk**: AGENTS.md is not on the read-only list (tasks may update the rest of it), and nothing in a long migration
+   (dozens of tasks × many sessions) stops it accumulating implementation details, command output, one-off decisions, gradually
+   degenerating into a "project encyclopedia + junk heap"; meanwhile, as system context it enters the context window on every provider turn,
+   so bloat directly erodes every session's effective context. A minimal maintenance protocol is needed (the external
+   discussion already gave the direction: workflow entry point + routing + update discipline, not a knowledge-base architecture).
 
-## 1. 与现状的关系(不变量)
+## 1. Relation to the Status Quo (invariants)
 
-- driver 独占状态写入、统一提交、全局单会话、进度恢复、终审闭环等机制零改动;
-- `runAll` / `runTask` 的 Opts 形状不变:配置由 `src/index.ts` 解析后照常注入
-  (loop/runner 不感知配置来源;e2e 直调 `runAll(dir, {})` 不受影响);
-- AGENTS.md 三个既有标记块(指针/验证/提交)机制不变,第四块沿用同一幂等追加
-  机制(driver 只追加标记块、永不改写其余内容的原则不变);
-- 模式层仍是提示词级引导,不进调度状态机;`loadModes` / `parseModeFile` 协议
-  不变。
+- Zero changes to the driver-exclusive state writes, unified commits, single global session, progress resume, final-review loop and other mechanisms;
+- The Opts shape of `runAll` / `runTask` is unchanged: config is parsed by `src/index.ts` and injected as before
+  (loop/runner never learns the config's source; e2e calling `runAll(dir, {})` directly is unaffected);
+- The three existing AGENTS.md marker blocks (pointer/verification/commit) keep their mechanism; the fourth block reuses the same idempotent-append
+  mechanism (the principle that the driver only appends marker blocks and never rewrites the rest is unchanged);
+- The mode layer stays prompt-level guidance and stays out of the scheduling state machine; the `loadModes` / `parseModeFile` protocol
+  is unchanged.
 
-## 2. 外部建议(ChatGPT)的适配映射
+## 2. Adaptation Map for the External (ChatGPT) Suggestions
 
-该建议面向"通用线性开发工作流";本包是迁移自动化 driver,按下表适配:
+Those suggestions target a "generic linear development workflow"; this package is a migration-automation driver, adapted per the table below:
 
-| 外部建议 | 处置 |
+| External suggestion | Disposition |
 | --- | --- |
-| Workflow / Current Task / 线性阶段状态机 | **已有机制覆盖,不在 AGENTS.md 复述**:阶段 = PLAN.md 任务序,当前任务 = CURRENT.md 镜像,角色 = 会话提示词指派;AGENTS.md 复述流程会形成第二事实源,与 PLAN/提示词漂移 |
-| Context Routing(`docs/agents/*.md`) | **采纳(轻量)**:作为维护规则块第 2 条的路由约定;不预置 architecture/implementation/testing 骨架——迁移项目的主题文件由会话按需创建 |
-| ≤150 行 / Update don't append / 只沉淀持久知识 | **采纳**:维护规则块第 1/3/4 条,压缩为四条中文规则 |
-| AGENTS.md Maintenance Rules 章节 | **采纳为第四标记块** `opencode-auto:maint`:与指针/验证/提交块同机制,init/run 幂等补写,对会话与人工同等可见 |
-| Architect→Implementer→Tester 显式角色流程 | **不采纳字面流程**:本包执行流由 driver 调度(分解/子任务/收尾/判定/审核),AGENTS.md 只承载入口与纪律 |
-| 知识库 / Memory GC / ADR 等重型机制 | **不采纳**:迁移场景以 PLAN.md + docs/ 过程产物 + 知识提取(fixme-knowledge-design §D,未来)覆盖,AGENTS.md 保持入口定位 |
+| Workflow / Current Task / linear phase state machine | **Already covered by existing mechanisms, not restated in AGENTS.md**: phase = the PLAN.md task order, current task = the CURRENT.md mirror, roles = assigned by the session prompt; restating the flow in AGENTS.md would create a second source of truth drifting from PLAN/prompts |
+| Context Routing (`docs/agents/*.md`) | **Adopted (lightweight)**: as the routing convention of maintenance rule 2; no architecture/implementation/testing skeletons pre-seeded — the migration project's topic files are created by sessions as needed |
+| ≤150 lines / Update don't append / distill only durable knowledge | **Adopted**: maintenance rules 1/3/4, compressed into four Chinese rules |
+| An AGENTS.md Maintenance Rules section | **Adopted as the fourth marker block** `opencode-auto:maint`: same mechanism as the pointer/verification/commit blocks, idempotently backfilled by init/run, equally visible to sessions and humans |
+| An explicit Architect→Implementer→Tester role flow | **The literal flow is not adopted**: this package's execution flow is scheduled by the driver (decomposition/subtasks/wrap-up/verdict/review); AGENTS.md carries only the entry point and the discipline |
+| Heavyweight mechanisms such as knowledge base / Memory GC / ADR | **Not adopted**: the migration scenario is covered by PLAN.md + docs/ process artifacts + knowledge distillation (fixme-knowledge-design §D, future); AGENTS.md keeps its entry-point positioning |
 
-## 3. 已确认决策
+## 3. Confirmed Decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| 配置载体 | `.opencode/auto/config.json`(新增;**版本化、随仓库共享、人工可编辑**)。不沿用 `.auto/config.json`——整个 `.auto/` 被 gitignore,是运行时状态,宪法应进 git 历史审计。未知键忽略(前向兼容) |
-| 配置内容 | 全键显式:`mode / agent / contextLimit / subtask / verify / verifyIdle / verifyMax / commit`(schema 见 §A);init 写出完整文件 |
-| 迁移至 init 的选项 | `-m/--mode`、`--agent`、`--context-limit`、`--subtask`、`--verify`、`--verify-idle`、`--verify-max`、`--commit`(分类总表见 §4) |
-| run 侧处置 | 上述选项在 `run` 出现即用法错误(退出码 1),报文给出修订指引(`init --<flag> <值>` 或直接编辑 config);镜像 `--commit-subtask` 移除的既有先例 |
-| init 合并语义 | **已修订(见 §B.1)**。原结论:仅写命令行显式给出的键,未给出的键保留既有配置值 → init 兼具创建与修订(amend)两种身份。现行:init 缺省**无状态全量覆盖**,amend 退为显式 `--amend` |
-| 人工修订通道 | 直接编辑 `.opencode/auto/config.json`;坏 JSON / 越界值 / 未注册模式 → run 与 init 均退出码 1 并指明键名(严格失败优于静默回落) |
-| 模式解析收口 | `-m` 仅 init 接受;resolveModeFlag 的"与持久化不一致警告"随固化消失(不再存在 run 侧分歧);run 读 `config.mode` → `loadModes` 查找,未注册名按环境错误退出 1 |
-| 原则块表述 | AGENTS.md 三个既有块保持**与配置无关的不变式**表述(会话不跑验证/不提交),不随 verify/commit 开关改写——避免配置与 AGENTS.md 双源;生效配置由 run 启动横幅与 status 打印 |
-| 留在 run 的选项 | `--server / --verbose / -i / --wait-answer / --wait-between / --permission / --review / --early(--early-review) / --final-review / --dryrun`(理由见 §4) |
-| AGENTS.md 维护规则 | 第四标记块 `opencode-auto:maint`(全文见 §D.1):精简(≤150 行)/ 路由不复制(docs/agents/)/ 更新不追加 / 只沉淀持久工作流知识 |
-| agent 契约同步 | `templates/.opencode/agent/auto.md` 更新 AGENTS.md 相关条款:不得改写任何 opencode-auto 标记块、更新其余内容须遵守维护规则块(init 总是替换该文件 → 旧项目一次 init 即升级) |
-| config 只读护栏 | `.opencode/auto/config.json` 加入 src/protect.ts 的 FILES(run 期间 chmod 0o444;人工修订在 run 外进行) |
-| check 扩展 | AGENTS.md 超 150 行输出 note(不计 findings、不影响退出码)——维护规则的唯一机器观测点 |
+| Config carrier | `.opencode/auto/config.json` (new; **versioned, shared via the repo, human-editable**). Not `.auto/config.json` — the entire `.auto/` tree is gitignored runtime state, while the constitution belongs in git history for audit. Unknown keys are ignored (forward compatible) |
+| Config content | All keys explicit: `mode / agent / contextLimit / subtask / verify / verifyIdle / verifyMax / commit` (schema in §A); init writes out the complete file |
+| Options migrated to init | `-m/--mode`, `--agent`, `--context-limit`, `--subtask`, `--verify`, `--verify-idle`, `--verify-max`, `--commit` (full classification table in §4) |
+| run-side disposition | Any of the above appearing on `run` is a usage error (exit code 1); the message gives remediation guidance (`init --<flag> <值>` — `<值>` meaning the value — or editing the config directly), mirroring the existing precedent of the `--commit-subtask` removal |
+| init merge semantics | **Revised (see §B.1)**. Original conclusion: write only the keys explicitly given on the command line, keep the existing config values for keys not given → init carried the dual identity of creation and amendment (amend). Current: init defaults to **stateless full overwrite**, with amend demoted to the explicit `--amend` |
+| Manual revision channel | Edit `.opencode/auto/config.json` directly; bad JSON / out-of-range values / unregistered mode → both run and init exit 1 naming the key (strict failure over silent fallback) |
+| Mode resolution funnelled to one place | `-m` is accepted by init only; resolveModeFlag's "inconsistent with the persisted value" warning disappears with persistence (no run-side divergence exists anymore); run reads `config.mode` → `loadModes` lookup, an unregistered name exits 1 as an environment error |
+| Principle-block wording | The three existing AGENTS.md blocks keep their **config-independent invariant** wording (sessions run no verification / make no commits) and are not rewritten along with the verify/commit switches — avoiding config and AGENTS.md as dual sources; the effective config is printed by run's startup banner and status |
+| Options staying on run | `--server / --verbose / -i / --wait-answer / --wait-between / --permission / --review / --early(--early-review) / --final-review / --dryrun` (rationale in §4) |
+| AGENTS.md maintenance rules | Fourth marker block `opencode-auto:maint` (full text in §D.1): stay lean (≤150 lines) / route, don't duplicate (docs/agents/) / update, don't append / distill only durable workflow knowledge |
+| agent contract sync | `templates/.opencode/agent/auto.md` updates the AGENTS.md-related clauses: never rewrite any opencode-auto marker block; updates to the rest must follow the maintenance-rules block (init always replaces this file → one init upgrades an old project) |
+| config read-only guardrail | `.opencode/auto/config.json` added to src/protect.ts's FILES (chmod 0o444 during run; manual revision happens outside a run) |
+| check extension | AGENTS.md over 150 lines emits a note (not counted in findings, no effect on the exit code) — the maintenance rules' only machine-observable point |
 
-## 4. 选项分类总表
+## 4. Option Classification Table
 
-现状 run 选项逐一归类("迁移" = 移入 init 并持久化到 config):
+Each current run option classified one by one ("migrate" = moved into init and persisted to config):
 
-| 选项 | 归属 | 理由 |
+| Option | Home | Rationale |
 | --- | --- | --- |
-| `-m/--mode` | **迁移** | 模式相关(用户点名);提示词级场景引导应全项目一致,现有持久化 + 警告已是症状补丁 |
-| `--agent` | **迁移** | AGENTS.md/契约内容相关:agent 文件即系统提示词契约,init 生成并维护 auto.md;run 中途换 agent = 中途改行为宪法 |
-| `--context-limit` | **迁移** | 模型相关:上下文预算依 agent 绑定的模型上下文窗口而定,与 agent 同时选定 |
-| `--subtask` | **迁移** | 计划形态相关:auto 档经分解会话把检查项注入 PLAN.md(任务正文持久形态),与 off/ondemand 的整任务流水线提示词不同;中途切换使同一计划内任务执行形态混杂、跨 run 不一致 |
-| `--verify` | **迁移** | AGENTS.md 内容相关:验证原则块 + PLAN verify 字段 + init -p 提示词三处在 init 时即假设该机制;run 关闭则原则块与 verify 字段成空文,"done"的含义(verified 与否)随 run 漂移 |
-| `--verify-idle` / `--verify-max` | **迁移** | 参数化的是既定的验收机制,与 verify 同属验收宪法;机器差异经人工编辑 config 调整(config 本身就是修订通道) |
-| `--commit` | **迁移** | AGENTS.md 内容相关:提交原则块在 init 下沉;`--commit false` 时块内"driver 统一提交"表述与实际不符,审计轨迹(git 历史)语义随 run 漂移 |
-| `--server` | 留 run(+init -p) | 环境接入(本机是否有现成实例),非项目属性 |
-| `--verbose` / `-i` | 留 run | 终端 UX |
-| `--wait-answer` / `--wait-between` | 留 run | 本次运行的人机交互节奏(监督强度),逐次权衡 |
-| `--permission` | 留 run | 本次运行的权限监督策略(ask-* 需人在场、与 dryrun 联动);opencode.json 的放行规则本身是 init 产物,策略是运行时监督,两者正交 |
-| `--review` / `--early` / `--early-review` | 留 run | 审核深度与调度优化是逐次运行的成本权衡;产物(audit 报告 / fix 检查项)为附加文档,不改变 AGENTS.md 契约与计划静态形态(修复注入是 additive 修复机制,verify 差距修复亦同) |
-| `--final-review` | 留 run | 终审闭环是"全部任务完成之后"的收尾触发器,逐次决定是否进入 |
-| `--dryrun` | 留 run | 一次性检查模式 |
+| `-m/--mode` | **Migrate** | Mode-related (named by the user); prompt-level scenario guidance should be consistent project-wide, and the existing persistence + warning is already a symptom patch |
+| `--agent` | **Migrate** | AGENTS.md/contract-content related: the agent file is the system-prompt contract; init generates and maintains auto.md; switching agent mid-run = amending the behavioral constitution mid-flight |
+| `--context-limit` | **Migrate** | Model-related: the context budget depends on the context window of the model the agent is bound to, chosen together with the agent |
+| `--subtask` | **Migrate** | Plan-shape related: the auto tier injects checklist items into PLAN.md via the decomposition session (the task body's persisted shape), unlike the off/ondemand whole-task pipeline prompts; switching mid-way mixes execution shapes within one plan and is inconsistent across runs |
+| `--verify` | **Migrate** | AGENTS.md-content related: the verification-principles block + the PLAN verify field + the init -p prompt all assume this mechanism already at init time; turned off at run, the principle block and the verify field become dead letter, and the meaning of "done" (verified or not) drifts per run |
+| `--verify-idle` / `--verify-max` | **Migrate** | They parameterize the established acceptance mechanism and belong to the acceptance constitution together with verify; machine differences are tuned by hand-editing config (config itself is the revision channel) |
+| `--commit` | **Migrate** | AGENTS.md-content related: the commit-principles block is landed at init; with `--commit false` the block's "the driver commits uniformly" wording no longer matches reality, and the audit trail (git history) semantics drift per run |
+| `--server` | Stays on run (+ init -p) | Environment access (whether this machine already has a live instance), not a project attribute |
+| `--verbose` / `-i` | Stays on run | Terminal UX |
+| `--wait-answer` / `--wait-between` | Stays on run | The human-machine interaction rhythm of this run (supervision intensity), weighed per invocation |
+| `--permission` | Stays on run | This run's permission-supervision policy (ask-* needs a human present, interlocks with dryrun); the allow rules in opencode.json are themselves an init artifact while the policy is runtime supervision — the two are orthogonal |
+| `--review` / `--early` / `--early-review` | Stays on run | Review depth and scheduling optimization are per-run cost trade-offs; their artifacts (audit report / fix checklist items) are additive documents that change neither the AGENTS.md contract nor the plan's static shape (fix injection is an additive repair mechanism, and so is verify-gap repair) |
+| `--final-review` | Stays on run | The final-review loop is an "after all tasks are done" wrap-up trigger; whether to enter it is decided per run |
+| `--dryrun` | Stays on run | One-shot check mode |
 
-判别标准(写入 README):**"改它需要同时改 AGENTS.md / PLAN / 契约的表述,或它
-描述的是模型/项目属性" → init;"只描述本次运行怎么跑、人怎么盯" → run。**
+The discriminating criterion (to be written into the README): **"changing it requires also changing the wording of AGENTS.md / PLAN / the contract, or it
+describes a model/project attribute" → init; "only describes how this run goes and how the human watches" → run.**
 
-## A. 项目配置层 `src/config.ts`(新增)
+## A. Project config layer `src/config.ts` (new)
 
 ```ts
 import type { SubtaskMode } from "./runner"
 
-// .opencode/auto/config.json 的全量模式;未知键忽略(前向兼容)。
+// Full schema of .opencode/auto/config.json; unknown keys are ignored (forward compatible).
 export type ProjectConfig = {
-  mode: string          // 须为 loadModes(dir) 已注册名
-  agent: string         // 缺省 "auto";存在性仍由 run 前完整性检查兜底
-  contextLimit: number  // 千 tokens(与 CLI 单位一致;run 侧 ×1000 注入 Opts)
+  mode: string          // must be a name already registered by loadModes(dir)
+  agent: string         // default "auto"; existence is still backstopped by the pre-run completeness check
+  contextLimit: number  // thousands of tokens (same unit as the CLI; injected into Opts ×1000 on the run side)
   subtask: SubtaskMode
   verify: boolean
-  verifyIdle: number    // 分钟,1..120
-  verifyMax: number     // 分钟,0 = 不设,1..1440
+  verifyIdle: number    // minutes, 1..120
+  verifyMax: number     // minutes, 0 = unset, 1..1440
   commit: boolean
 }
 
@@ -112,35 +112,35 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   verify: false, verifyIdle: 10, verifyMax: 0, commit: true,
 }
 
-// 读取 + 校验: 文件缺失 → 缺省 + legacy 回落(.auto/config.json 的 mode);
-// 坏 JSON / 键值越界 / mode 未注册(loadModes) → throw(中文报错含键名与期望),
-// CLI 侧转退出码 1。run 与 init -p 均经此入口。
+// Read + validate: file missing → defaults + legacy fallback (the mode in `.auto/config.json`);
+// bad JSON / out-of-range key value / unregistered mode (loadModes) → throw (Chinese error message naming the key and the expectation),
+// converted to exit code 1 on the CLI side. Both run and init -p go through this entry.
 export async function loadProjectConfig(dir: string): Promise<ProjectConfig>
 
-// init 用: 显式给出的键覆盖既有值,其余保留;返回待写回的完整配置。
+// For init: explicitly given keys override the existing values, the rest are kept; returns the complete config to write back.
 export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<ProjectConfig>): ProjectConfig
 
-// 普通整写(mkdir -p .opencode/auto;不在 protect 期内的写入,无需原子写)。
+// Plain whole-file write (mkdir -p .opencode/auto; the write is not inside a protect window, no atomic write needed).
 export async function saveProjectConfig(dir: string, config: ProjectConfig): Promise<void>
 
-// run 启动横幅 / status 共用的一行摘要,如:
-// 模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 上下文上限 64k
+// The one-line summary shared by run's startup banner / status, e.g.:
+// 模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 上下文上限 64k (mode · agent · subtask · verify off · watchdog idle 10m/max unset · commit on · context limit 64k)
 export function formatProjectConfig(config: ProjectConfig): string
 ```
 
-- 落盘后校验的值域与既有 parse\* 一致(contextLimit 正整数;verifyIdle 1..120;
-  verifyMax 0..1440;subtask/commit 取值枚举);init 的 CLI 解析复用
-  src/index.ts 既有 parseCommit/parseSubtask/parseContextLimit/parseVerifyIdle/
-  parseVerifyMax——两道关口径一致;
-- legacy 回落仅当新文件不存在时生效;新文件一经写出,`.auto/config.json` 不再
-  读取(不删除,留在 gitignore 内自然沉没);
-- mode 校验依赖 `loadModes(dir)`,config.ts 由此依赖 mode.ts(方向:config →
-  mode,与 prompt → mode 同向,无环);mode.ts 的 readPersistedMode/
-  writePersistedMode 删除,职责并入本模块。
+- Value ranges validated after persisting match the existing parse\* (contextLimit a positive integer; verifyIdle 1..120;
+  verifyMax 0..1440; subtask/commit value enums); init's CLI parsing reuses
+  src/index.ts's existing parseCommit/parseSubtask/parseContextLimit/parseVerifyIdle/
+  parseVerifyMax — both gates share one standard;
+- The legacy fallback applies only while the new file does not exist; once the new file is written out, `.auto/config.json` is no
+  longer read (not deleted; left inside gitignore to sink naturally);
+- Mode validation depends on `loadModes(dir)`, so config.ts thereby depends on mode.ts (direction: config →
+  mode, same direction as prompt → mode, no cycle); mode.ts's readPersistedMode/
+  writePersistedMode are deleted, their responsibility absorbed into this module.
 
-## B. init 改造(src/index.ts)
+## B. init rework (src/index.ts)
 
-选项面(用法文本同步):
+Option surface (usage text kept in sync):
 
 ```
 opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>]
@@ -148,51 +148,51 @@ opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent
     [--verify-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--server <url>]
 ```
 
-流程(保持既有顺序骨架):
+Flow (keeping the existing ordering skeleton):
 
-1. 解析显式键(复用既有 parse\* 函数;`-m` 经缩减版 resolveMode 校验注册名:
-   显式值 > 既有 config 值 > 缺省);
-2. `loadProjectConfig`(含 legacy 回落)→ `mergeProjectConfig` → 校验 →
+1. Parse the explicit keys (reusing the existing parse\* functions; `-m` validates the registered name through a slimmed resolveMode:
+   explicit value > existing config value > default);
+2. `loadProjectConfig` (with legacy fallback) → `mergeProjectConfig` → validate →
    `saveProjectConfig`;
-3. 打印生效配置(formatProjectConfig);
-4. 既有步骤不变:usePromptLibrary → 模板复制(PLAN/opencode.json 跳过已存在、
-   auto.md 总是替换)→ ensurePointer(含新的 maint 块,见 §D)→ ensureGitignore;
-5. `-p` 会话的 agent 取合并后 config;
-6. `--agent` 显式值仅持久化(与现状一致不做存在性校验,留给 run 前完整性检查)。
+3. Print the effective config (formatProjectConfig);
+4. Existing steps unchanged: usePromptLibrary → template copy (PLAN/opencode.json skip existing,
+   auto.md always replaced) → ensurePointer (including the new maint block, see §D) → ensureGitignore;
+5. The `-p` session's agent comes from the merged config;
+6. An explicit `--agent` value is persisted only (no existence check, same as now; left to the pre-run completeness check).
 
-### B.1 修订:无状态全量覆盖 + `--amend`(后续变更,覆盖 §3 的"init 合并语义"行)
+### B.1 Revision: stateless full overwrite + `--amend` (a later change, superseding the "init merge semantics" row in §3)
 
-**动机**:原设计让 init 兼具创建与修订两种身份,后果是产出取决于磁盘上的历史状态
-——`init --agent foo --verify true` 之后再跑无参 `init`,那两个键原样留着。同一条命令
-在干净环境与脏环境下产出两份不同的 `config.json`,用户无法靠单次 init 得到确定状态,
-必须先知道"上次传过什么"。
+**Motivation**: the original design gave init the dual identity of creation and amendment, so the output depends on the on-disk history —
+after `init --agent foo --verify true`, running a bare `init` leaves those two keys untouched. The same command
+yields two different `config.json` files in a clean versus a dirty environment; the user cannot get a deterministic state from a single init
+without first knowing "what was passed last time".
 
-**现行结论**:
+**Current conclusion**:
 
-- `init` 缺省**无状态全量覆盖**:产出仅由本次执行传入的参数决定,未给出的键一律回落
-  `CONFIG_DEFAULTS`,不与磁盘上的旧配置做任何增量合并。可选键 `source` / `destDir` 未
-  给出时直接从文件中消失(`CONFIG_DEFAULTS` 不含它们,无须为"删键"写特例)。
-- `--amend` 显式切回原合并语义;`continue` 恒为 amend(续轮迁移依赖既有配置,跨轮固定
-  项已被前置守卫拒绝传入,没有"全量覆盖"可言)。
-- 实现上只有一个分水岭 `base = amend ? existing : CONFIG_DEFAULTS`,其余取基线处一律
-  改读 `base`。
-- **阶段台账前缀护栏改判本次生效值**(`effectivePhases = phases ?? base.phases`),不再
-  判"是否显式给出 `--phases`"。否则一个已跑到 `admt` 的阶段化项目上执行无参 init,
-  phases 会被静默重置为缺省 `"m"`,紧接着根 `PLAN.md` 的轮次符号链接被还原成普通文件
-  ——轮次布局当场破掉且无任何报错。这是全量覆盖引入的唯一真实破坏性风险。
-- **两道防误触闸**(均排在第一个写盘点 `saveProjectConfig` 之前,先拦截再询问):
-  ① 工作区干净度(`src/clean.ts`,复用 `git.ts` 的 `changedFiles`,覆盖目标目录所在仓库
-  与目录树下全部嵌套仓库/子模块);② 交互确认(`src/confirm.ts`,非 TTY 视为已授权直接
-  放行)。二者仅在"已存在配置且本次为全量覆盖"时生效,`-f/--force` 一并跳过。
-  非 TTY 免提示与干净度闸门**互不覆盖**:脚本与 CI 同样会被脏工作区拦下。
-- `brief.md` 不随配置的全量覆盖被清空:它是独立文件,只在给 `-p` 时整写覆盖。
+- `init` defaults to **stateless full overwrite**: the output is decided solely by the arguments passed in this invocation; keys not given always fall back
+  to `CONFIG_DEFAULTS`, with no incremental merge against old on-disk config. Optional keys `source` / `destDir` simply
+  disappear from the file when not given (`CONFIG_DEFAULTS` does not contain them, so no special case is needed for "key deletion").
+- `--amend` explicitly switches back to the original merge semantics; `continue` is always amend (continuation rounds depend on the existing config; cross-round fixed
+  items are already rejected by the front guard, so "full overwrite" is beside the point).
+- Implementation-wise there is a single watershed `base = amend ? existing : CONFIG_DEFAULTS`; every other place that takes a baseline
+  reads `base` instead.
+- **The phase-ledger prefix guard now judges this invocation's effective value** (`effectivePhases = phases ?? base.phases`), no longer
+  judging "was `--phases` explicitly given". Otherwise a bare init on a phased project already progressed to `admt`
+  would silently reset phases to the default `"m"`, whereupon the root `PLAN.md`'s round symlinks are restored into ordinary files —
+  the round layout breaks on the spot with no error at all. This is the only real destructive risk the full overwrite introduces.
+- **Two misfire-prevention gates** (both placed before the first write point `saveProjectConfig`: intercept first, then ask):
+  ① workspace cleanliness (`src/clean.ts`, reusing `git.ts`'s `changedFiles`, covering the repo containing the target directory
+  and every nested repo/submodule under the tree); ② interactive confirmation (`src/confirm.ts`; non-TTY counts as authorized and passes
+  straight through). Both take effect only when "a config already exists and this invocation is a full overwrite"; `-f/--force` skips both.
+  The non-TTY prompt exemption and the cleanliness gate **do not override each other**: scripts and CI are equally stopped by a dirty workspace.
+- `brief.md` is not wiped by the config's full overwrite: it is a standalone file, overwritten whole only when `-p` is given.
 
-**逆操作**见 `src/reset.ts`(`reset` 子命令):与 init 互逆,精确移除配置层产物。清单与
-边界口径写在该文件头注释。
+**The inverse operation** is `src/reset.ts` (the `reset` subcommand): the exact inverse of init, precisely removing the config-layer artifacts. The manifest and
+  boundary rules are in that file's header comment.
 
-## C. run 改造(src/index.ts)
+## C. run rework (src/index.ts)
 
-选项面:
+Option surface:
 
 ```
 opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i]
@@ -200,27 +200,27 @@ opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive
     [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
 ```
 
-- 参数解析循环不动(`-m`/`--verify` 等照旧进 flags Map);**run 分支开头统一拒绝
-  已固化选项**:`mode / agent / context-limit / subtask / verify / verify-idle /
-  verify-max / commit` 任一出现 → 退出码 1,报文形如
-  `--verify 已在 init 固化(.opencode/auto/config.json)。变更方式: opencode-auto init <dir> --verify <值>,或直接编辑该文件`(`-m` 报文同型);
-  `--commit-subtask` 既有移除报文保留;
-- `loadProjectConfig` 失败 → 退出码 1;成功后
-  `log("⚙ 项目配置(.opencode/auto/config.json): " + formatProjectConfig(cfg))`
-  (既有"沿用上次持久化的模式"提示随之删除);
-- mode 解析:`loadModes(directory)[cfg.mode]`,未注册 → 退出码 1(报文列出支持
-  的模式);
-- 注入 runAll Opts(形状不变):`agent: cfg.agent`、
-  `contextLimit: cfg.contextLimit * 1000`、`subtask/commit/verify` 直传、
-  `verifyIdleMs/verifyMaxMs` 换算、`mode: ModeSpec`;`--review/--early/
-  --permission/...` 照旧解析透传;
-- loop 内既有降级提示(early 无 verify 窗口)按配置值自然触发,零改动;
-- `status` 命令:加载 config 成功则在任务清单前打印同一行配置摘要(失败仅提示
-  配置缺失/非法,不阻塞任务列表)。
+- The argument-parsing loop is untouched (`-m`/`--verify` etc. still go into the flags Map as before); **the run branch uniformly rejects the persisted options
+  up front**: any of `mode / agent / context-limit / subtask / verify / verify-idle /
+  verify-max / commit` appearing → exit code 1, with a message shaped like
+  `--verify 已在 init 固化(.opencode/auto/config.json)。变更方式: opencode-auto init <dir> --verify <值>,或直接编辑该文件` (the `-m` message has the same shape; it reads: --verify is already persisted at init in .opencode/auto/config.json — to change it, run opencode-auto init <dir> --verify <value>, or edit that file directly);
+  the existing `--commit-subtask` removal message is kept;
+- `loadProjectConfig` failure → exit code 1; on success
+  `log("⚙ 项目配置(.opencode/auto/config.json): " + formatProjectConfig(cfg))` (the prefix reads "project config")
+  (the existing "沿用上次持久化的模式" notice — "reusing the mode persisted last time" — is deleted along with this);
+- Mode resolution: `loadModes(directory)[cfg.mode]`; unregistered → exit code 1 (the message lists the supported
+  modes);
+- Injected into runAll Opts (shape unchanged): `agent: cfg.agent`,
+  `contextLimit: cfg.contextLimit * 1000`, `subtask/commit/verify` passed straight through,
+  `verifyIdleMs/verifyMaxMs` converted, `mode: ModeSpec`; `--review/--early/
+  --permission/...` parsed and passed through as before;
+- The loop's existing downgrade notice (early without a verify window) fires naturally per the config values, zero changes;
+- The `status` command: on a successful config load, prints the same one-line config summary before the task list (on failure it only notes
+  the missing/invalid config without blocking the task list).
 
-## D. AGENTS.md 提示词优化
+## D. AGENTS.md prompt optimization
 
-### D.1 第四标记块 `opencode-auto:maint`(src/loop.ts 常量 + ensurePointer 追加)
+### D.1 Fourth marker block `opencode-auto:maint` (src/loop.ts constant + appended by ensurePointer)
 
 ```text
 <!-- opencode-auto:maint:start -->
@@ -235,108 +235,108 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
 <!-- opencode-auto:maint:end -->
 ```
 
-- ensurePointer 增第四个布尔返回值 `maint`(幂等:文本含
-  `opencode-auto:maint:start` 即跳过),init 与 runAll 两处调用点同步打印;
-- 既有三个块的文本不动(它们描述的是与配置无关的不变式,见 §3"原则块表述")。
+- ensurePointer gains a fourth boolean return value `maint` (idempotent: skipped once the text contains
+  `opencode-auto:maint:start`); both call sites — init and runAll — print it in sync;
+- The existing three blocks' text is untouched (they describe config-independent invariants; see the "principle-block wording" row in §3).
 
-### D.2 agent 契约(templates/.opencode/agent/auto.md)
+### D.2 agent contract (templates/.opencode/agent/auto.md)
 
-第 2 条中 AGENTS.md 段落改为:
+The AGENTS.md paragraph in item 2 becomes (the template text below is quoted verbatim in Chinese; gist: AGENTS.md may be updated when a task needs it, opencode-auto marker blocks must never be deleted or rewritten, and other updates follow the maintenance-rules block):
 
 > AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写任何
 > opencode-auto 标记块(指针/验证/提交/维护规则,`<!-- opencode-auto:*:start -->`
 > 到 `<!-- opencode-auto:*:end -->`);更新其余内容时遵守 AGENTS.md 维护规则块
 > (保持精简、路由到 docs/agents/、更新不追加、只沉淀持久工作流知识)。
 
-(init 总是替换该文件 → 旧目标目录一次 init 即升级。)
+(init always replaces this file → one init upgrades an old target directory.)
 
-### D.3 docs/agents/ 路由约定
+### D.3 docs/agents/ routing convention
 
-- 语义分工:`docs/agents/<主题>.md` = **跨任务**的工作流知识(规范、映射约定、
-  环境 quirks);docs/ 根的既有产物(subtasks/report/fix/final 等)= **单任务**
-  过程产物。两者都随 driver 统一提交入库;
-- 不预置骨架文件;会话在首次需要时创建主题文件并在 AGENTS.md 维护一行路由
-  (维护规则块第 2 条即协议,无 driver 侧解析——纯提示词契约);
-- `check` 不扫描 docs/agents/(它扫描的是"违背验证执行权"的语句,范围不变)。
+- Semantic split: `docs/agents/<主题>.md` (`<主题>` = topic) = **cross-task** workflow knowledge (norms, mapping conventions,
+  environment quirks); the existing artifacts at the docs/ root (subtasks/report/fix/final etc.) = **single-task**
+  process artifacts. Both land in the repo through the driver's unified commits;
+- No skeleton files are pre-seeded; a session creates the topic file on first need and maintains a one-line route in AGENTS.md
+  (maintenance rule 2 is the protocol, with no driver-side parsing — a purely prompt-level contract);
+- `check` does not scan docs/agents/ (what it scans for are statements that "violate verification execution authority"; that scope is unchanged).
 
-### D.4 check 扩展(src/check.ts)
+### D.4 check extension (src/check.ts)
 
-- notes 增一条:AGENTS.md 总行数 > 150 →
-  `AGENTS.md 当前 <n> 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/`;
-  note 不进 findings、不影响退出码(与现有 notes 同级)。
+- notes gains one entry: AGENTS.md total lines > 150 →
+  `AGENTS.md 当前 <n> 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/` (i.e. AGENTS.md is currently <n> lines, over the 150-line cap of maintenance rule 1; slim it per the rules and route the details to docs/agents/);
+  the note does not enter findings and does not affect the exit code (same level as the existing notes).
 
-## E. 兼容与迁移
+## E. Compatibility and Migration
 
-| 场景 | 行为 |
+| Scenario | Behavior |
 | --- | --- |
-| 旧项目(仅 `.auto/config.json` 有 mode) | loadProjectConfig 回落读取 mode,run 打 `ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置`;init 写出新文件后回落终止 |
-| 旧脚本 `run -m xxx` / `run --verify` 等 | 退出码 1 + 修订指引(发布说明注明 breaking) |
-| 重复 `init`(无参数) | **全键回落缺省值**(§B.1 修订后;原为"配置不变"),模板/块照常幂等 |
-| `init --verify false` | 写 verify 键,其余键回落缺省 |
-| `init --amend --verify false` | 仅改写 verify 键,其余保留(原 amend 语义) |
-| 中途把 verify on→off | 已 done 任务的 verified 字段不回溯;未完成任务此后收尾即 done;`--review`/`--early` 的既有联动(串行审核/降级提示)按新值生效 |
-| 中途切换 subtask | 已注入检查项的任务照旧从勾选状态续跑(进度 phase 按任务记录,不跨任务混淆);新任务按新档执行;README 注明不建议中途切换 |
-| 中途换 mode | 仅提示词文案变化(模式不进调度状态机的既有保证);终审已产出的报告不受影响 |
-| 中途把 commit off | 工作区开始累积未提交改动(run 启动时 pendingChanges 提示既有) |
-| `.opencode/auto/config.json` 坏值 | run/init 均退出码 1,报错含键名与期望值域 |
+| Old projects (only `.auto/config.json` has a mode) | loadProjectConfig falls back to reading mode, and run prints `ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置` ("mode reuses the value persisted at the old location .auto/config.json; re-run init to persist the full config"); once init writes the new file, the fallback ends |
+| Old scripts like `run -m xxx` / `run --verify` | Exit code 1 + remediation guidance (release notes flag it as breaking) |
+| Repeated `init` (no arguments) | **All keys fall back to the defaults** (after the §B.1 revision; formerly "config unchanged"); templates/blocks stay idempotent as usual |
+| `init --verify false` | Writes the verify key; the other keys fall back to the defaults |
+| `init --amend --verify false` | Rewrites only the verify key, keeping the rest (the original amend semantics) |
+| Flipping verify on→off mid-way | The verified field of already-done tasks is not rewritten retroactively; unfinished tasks become done at wrap-up from then on; the existing `--review`/`--early` interplay (serial review / downgrade notice) takes effect per the new value |
+| Switching subtask mid-way | Tasks with injected checklist items keep resuming from their checked state (the progress phase is recorded per task, never confused across tasks); new tasks execute per the new tier; the README notes that mid-way switching is discouraged |
+| Switching mode mid-way | Only the prompt wording changes (the existing guarantee that modes never enter the scheduling state machine); reports the final review has already produced are unaffected |
+| Turning commit off mid-way | The workspace starts accumulating uncommitted changes (the pendingChanges notice at run startup already exists) |
+| Bad values in `.opencode/auto/config.json` | Both run/init exit 1, the error naming the key and its expected value range |
 
-## F. 组合行为矩阵(run 侧留驻选项 × 配置)
+## F. Combined-behavior matrix (run-side resident options × config)
 
-| 组合 | 行为 |
+| Combination | Behavior |
 | --- | --- |
-| config verify=false + `--review n` | 既有语义:审核串行,启动打降级提示 |
-| config verify=false + `--early` | 既有语义:并行窗口不存在,降级提示(`--early` 仍需搭配 `--review` 的校验不变) |
-| config verify=true + `--review --early` | 并行审核照旧(看门狗取 config 的 verifyIdle/verifyMax) |
-| `--dryrun` | 读 config 的 agent/contextLimit;verify/commit/subtask 不参与 |
-| `--final-review` | 终审任务照旧强制跳过任务级验收(与 config.verify 无交互) |
-| `-i` / `--verbose` / `--wait-*` / `--permission` / `--server` | 与配置零交互,照旧 |
-| `status` | 打印配置摘要 + 任务清单 |
+| config verify=false + `--review n` | Existing semantics: reviews run serially, startup prints the downgrade notice |
+| config verify=false + `--early` | Existing semantics: no parallel window exists, downgrade notice (the check that `--early` still requires `--review` is unchanged) |
+| config verify=true + `--review --early` | Parallel review as before (the watchdog takes verifyIdle/verifyMax from config) |
+| `--dryrun` | Reads agent/contextLimit from config; verify/commit/subtask do not participate |
+| `--final-review` | The final-review task still forcibly skips task-level acceptance (no interaction with config.verify) |
+| `-i` / `--verbose` / `--wait-*` / `--permission` / `--server` | Zero interaction with config, unchanged |
+| `status` | Prints the config summary + the task list |
 
-## G. 文件级改动清单与分期
+## G. File-level change list and phasing
 
-| 文件 | 改动 | 分期 |
+| File | Change | Phase |
 | --- | --- | --- |
-| `src/config.ts`(新增) | ProjectConfig / CONFIG_DEFAULTS / loadProjectConfig / mergeProjectConfig / saveProjectConfig / formatProjectConfig(含 legacy 回落与值域校验) | P1 |
-| `src/mode.ts` | 删除 readPersistedMode / writePersistedMode(职责并入 config.ts;loadModes / parseModeFile 不动) | P1 |
-| `test/config.test.ts`(新增) | 缺省 / 合并 / amend / legacy 回落 / 坏 JSON / 越界值 / 未注册 mode / 未知键忽略 | P1 |
-| `test/mode.test.ts` | 持久化用例迁往 config.test.ts | P1 |
-| `src/index.ts` | run 分支拒绝固化选项 + loadProjectConfig 注入;init 分支选项面扩展 + merge/save + 打印配置;resolveModeFlag 缩减为 init 侧;用法文本重写 | P2 |
-| `src/protect.ts` | FILES 增 `.opencode/auto/config.json` | P2 |
-| `test/e2e.test.ts` | run 拒绝各固化选项(退出码 1 + 报文);init 写出完整 config;init amend 仅改显式键;status 打印 | P2 |
-| `src/loop.ts` | MAINT_RULE 常量 + ensurePointer 第四块(返回值 / 两处调用点打印) | P3 |
-| `templates/.opencode/agent/auto.md` | D.2 条款修订 | P3 |
-| `src/check.ts` | AGENTS.md 行数 note | P3 |
-| `test/prompt.test.ts` / `test/check.test.ts` | auto.md 含 maint 引用断言(防漂移);行数 note 用例 | P3 |
-| `README.md` / 包内 `AGENTS.md` | init/run 选项表重写、配置文件节、维护规则块与 docs/agents/ 约定、兼容迁移说明 | P4 |
+| `src/config.ts` (new) | ProjectConfig / CONFIG_DEFAULTS / loadProjectConfig / mergeProjectConfig / saveProjectConfig / formatProjectConfig (with legacy fallback and value-range validation) | P1 |
+| `src/mode.ts` | Delete readPersistedMode / writePersistedMode (responsibility absorbed into config.ts; loadModes / parseModeFile untouched) | P1 |
+| `test/config.test.ts` (new) | defaults / merge / amend / legacy fallback / bad JSON / out-of-range values / unregistered mode / unknown keys ignored | P1 |
+| `test/mode.test.ts` | Persistence cases moved to config.test.ts | P1 |
+| `src/index.ts` | run branch rejects the persisted options + loadProjectConfig injection; init branch option-surface expansion + merge/save + config printing; resolveModeFlag slimmed to the init side; usage text rewritten | P2 |
+| `src/protect.ts` | FILES gains `.opencode/auto/config.json` | P2 |
+| `test/e2e.test.ts` | run rejects each persisted option (exit code 1 + message); init writes the complete config; init amend changes only the explicit keys; status printing | P2 |
+| `src/loop.ts` | MAINT_RULE constant + ensurePointer fourth block (return value / printing at both call sites) | P3 |
+| `templates/.opencode/agent/auto.md` | D.2 clause revision | P3 |
+| `src/check.ts` | AGENTS.md line-count note | P3 |
+| `test/prompt.test.ts` / `test/check.test.ts` | Assertion that auto.md references maint (drift protection); line-count note cases | P3 |
+| `README.md` / in-package `AGENTS.md` | init/run option-table rewrite, config-file section, maintenance-rules block and docs/agents/ conventions, compatibility/migration notes | P4 |
 
-分期边界:P1(纯逻辑,可独立合入,合入后 config.ts 暂无人调用)→ P2(CLI 双
-命令切换,行为生效点;发布说明注明 breaking 与迁移指引)→ P3(AGENTS.md 提示词
-侧,可与 P2 并行开发但建议其后合入)→ P4(文档)。
+Phase boundaries: P1 (pure logic, independently mergeable; once merged, config.ts temporarily has no callers) → P2 (the CLI's two
+commands switch over — the point where behavior takes effect; release notes flag the breaking change and the migration guidance) → P3 (the AGENTS.md prompt
+side, developable in parallel with P2 but recommended to merge after it) → P4 (docs).
 
-## H. 风险、边界与已知局限
+## H. Risks, Boundaries, and Known Limitations
 
-- **"修订需 init"的额外步骤**:固化根治漂移但把变更成本前移;两条修订通道
-  (init amend / 直接编辑 config)均已保留,且 config 进 git 历史可审计变更;
-- **维护规则是提示词级约束**:150 行上限与路由纪律无硬校验(note 仅提示),
-  会话仍可能膨胀 AGENTS.md——机器观测点只有 check 的 note;标记块本身受
-  "不得改写"契约与幂等补写保护;
-- **config 版本化 vs 机器差异**:同一目标目录换机器运行时共享看门狗/上下文上限
-  参数;必要时该机器本地编辑 config(设计接受这一摩擦,换取宪法单一事实源);
-- **docs/agents/ 与 docs/ 根的分工靠约定**:会话可能把过程产物写进 agents/
-  (低风险,终审 audit 侧重视角可纠正);
-- **中途切换 subtask/verify 的任务形态混杂**(见 §E):README 明示不建议;
-- **protect 新增条目**:run 期间 config 只读,人工修订需等 run 结束(与 PLAN 等
-  既有护栏一致);
-- **dogfood 顺序**:实现期间运行中的 driver 仍是旧版,新行为自下一次 run 生效;
-  本包自身 AGENTS.md 的选项描述在 P4 前与代码不一致(实现会话须以本文档为准)。
+- **The extra "revision requires init" step**: persistence cures the drift but front-loads the change cost; both revision channels
+  (init amend / editing the config directly) are kept, and config lands in git history so changes are auditable;
+- **The maintenance rules are prompt-level constraints**: the 150-line cap and the routing discipline have no hard validation (the note only reminds),
+  a session can still bloat AGENTS.md — the only machine-observable point is check's note; the marker blocks themselves are protected by
+  the "no rewriting" contract and idempotent backfill;
+- **Versioned config vs machine differences**: running the same target directory on a different machine shares the watchdog/context-limit
+  parameters; that machine edits config locally when needed (the design accepts this friction in exchange for a single source of truth for the constitution);
+- **The docs/agents/ vs docs/-root split rests on convention**: a session may write process artifacts into agents/
+  (low risk; the final-review audit's side-view perspective can correct it);
+- **Mixed task shapes from switching subtask/verify mid-way** (see §E): the README says explicitly that it is discouraged;
+- **New protect entry**: config is read-only during a run; manual revision must wait for the run to end (consistent with the existing guardrails
+  such as PLAN);
+- **Dogfooding order**: during implementation the running driver is still the old version; new behavior takes effect from the next run;
+  this package's own AGENTS.md option descriptions disagree with the code until P4 (implementation sessions must defer to this document).
 
-## I. 测试与验证
+## I. Testing and Verification
 
-- `bun typecheck` + `bun test`:P1 纯函数;P2 e2e 解析用例镜像既有风格(临时
-  目录,不依赖 server 与网络);
-- 手工验证:旧目标目录(含 `.auto/config.json`)run 观察回落提示;init 后
-  AGENTS.md 四块齐备、config 完整;`init --verify true` amend 只改一键;
-  `run --verify` 报退出码 1 与指引;run 启动横幅 / status 打印配置摘要;
-- AGENTS.md 维护规则触发路径:构造 >150 行 AGENTS.md 跑 check 观察 note;
-- 全部完成后 `bun run build` 冒烟(auto.md 模板仍经 `type: "file"` 嵌入,
-  templates/ 无新增文件)。
+- `bun typecheck` + `bun test`: P1 pure functions; P2 e2e parsing cases mirror the existing style (temporary
+  directories, no dependency on a server or the network);
+- Manual verification: run on an old target directory (containing `.auto/config.json`) and observe the fallback notice; after init,
+  AGENTS.md has all four blocks and the config is complete; `init --verify true` amend changes only one key;
+  `run --verify` exits 1 with guidance; run's startup banner / status prints the config summary;
+- AGENTS.md maintenance-rules trigger path: build a >150-line AGENTS.md and run check to observe the note;
+- After everything is done, a `bun run build` smoke run (the auto.md template is still embedded via `type: "file"`,
+  no new files under templates/).

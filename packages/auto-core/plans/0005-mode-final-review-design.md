@@ -1,240 +1,240 @@
-# --mode 模式层与 --final-review 终审闭环 — 设计说明
+# --mode mode layer and --final-review final review loop -- design notes
 
-> **状态(2026-10-02 勘正,`plans/0069` §4.2 A3):两项能力均已实现。`--final-review`
-> 终审闭环已被 `plans/0044`(完成侧退役,2026-09-21 裁定)整体删除——依其 D1,该旗标
-> 在所有子命令上一律用法错误(退出码 1),模式层的 `final:` 三节同批退役;`--mode`
-> 模式层仍在运行(`src/mode.ts`),形态已演进为文件模板注册(`templates/modes/` 与
-> 项目 overlay)。本文为历史设计记录,原文如下保留。**
+> **Status (2026-10-02 correction, `plans/0069` §4.2 A3): both capabilities have been implemented. `--final-review`
+> final review loop was deleted wholesale by `plans/0044` (retired on the completion side, ruled 2026-09-21) -- per its D1, the flag
+> is a usage error on all subcommands (exit code 1), and the mode layer's `final:` three sections were retired in the same batch; `--mode`
+> mode layer is still in operation (`src/mode.ts`), its shape having evolved into file-template registration (`templates/modes/` and
+> project overlay). This document is a historical design record, preserved as-is below.**
 
-> 本文档是 `--mode` 模式层与 `--final-review` 终审闭环的唯一设计基准:实现任务以本文
-> 为准;与其冲突的旧约定(`--review` 终审升级为 `docs/final-audit.md` 单会话全面审核
-> 的既有语义保持不变,终审闭环是独立新增的机制,不改动它)以本文为准。
+> This document is the sole design baseline for the `--mode` mode layer and the `--final-review` final review loop: implementation tasks
+> defer to it; older conventions that conflict with it (the existing semantics of `--review`'s final review escalating to a `docs/final-audit.md`
+> single-session full audit remain unchanged -- the final review loop is an independently added mechanism and does not modify it) defer to this document.
 
-> **修订(终审不对检验再做检验)**:终审任务(T-F\<k\>,全部四阶段)依 final 字段
-> 强制 review=0 且跳过任务级三段式验收(`--verify` 对其无效),任务不再写 verify
-> 字段、提案的 `verify:` 行兼容剥离一律忽略;报告缺失/协议非法由路由解析时的
-> brokenReport 阻塞兜底(退出码 2,人工核查),不再有结构检查 verify 的修复轮
-> 自愈。下文与该修订冲突的描述(结构检查 verify、协议自愈、remediate/finalize
-> 参与逐任务审核等)以本修订为准。
+> **Revision (the final review does not re-verify the verification)**: final review tasks (T-F\<k\>, all four stages), per the final field,
+> force review=0 and skip task-level three-stage acceptance (`--verify` has no effect on them); tasks no longer write the verify
+> field, and the `verify:` line in proposals is compatibility-stripped and always ignored; a missing report / illegal protocol is backstopped by the
+> brokenReport block at routing-parse time (exit code 2, manual inspection), and there is no longer self-healing via a repair round that
+> structurally checks verify. Descriptions below that conflict with this revision (structural verify checks, protocol self-healing,
+> remediate/finalize participating in per-task review, etc.) defer to this revision.
 
-## 背景与动机
+## Background and motivation
 
-1. **模式层**:不同场景(迁移、优化、新实现、测试)下,计划初始化与执行各阶段的
-   提示词侧重不同(如迁移强调"外部行为不变、新旧对等")。当前提示词无场景概念,
-   需要一个不影响 driver 调度状态机的轻量模式层,且新增模式零调度改动。
-2. **终审闭环**:既有 `--review` 的终审(最后一个任务的 final 审核)是单会话全面
-   审核,产出报告后没有修复闭环;审核发现的差距只能人工处理。需要一个任务驱动的
-   多阶段终审流程(Audit → Refactor/Patch → Validate → Finalize,Validate 可回退
-   Audit),把"终审发现的问题"也纳入 driver 驱动的分解/执行/验收闭环,并获得与
-   普通任务一致的断点恢复能力。
+1. **Mode layer**: across different scenarios (migration, optimization, new implementation, testing), the prompts for plan initialization and
+   each execution stage have different emphases (e.g. migration stresses "external behavior unchanged, old/new equivalence"). The current prompts have no scenario concept;
+   what is needed is a lightweight mode layer that does not affect the driver's scheduling state machine, with zero scheduling changes for new modes.
+2. **Final review loop**: the existing `--review` final review (the final audit of the last task) is a single-session full audit
+   with no repair loop after the report is produced; gaps found by the audit can only be handled manually. What is needed is a task-driven,
+   multi-stage final review process (Audit → Refactor/Patch → Validate → Finalize, with Validate able to fall back
+   to Audit) that also brings "problems found by the final review" into the driver-driven decompose/execute/accept loop, and gains
+   breakpoint-recovery capability consistent with ordinary tasks.
 
-## 已确认决策
+## Confirmed decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| CLI 形态 | `--final-review [n]` 独立选项(可与 `--review n` 组合:逐任务审核照常 + 终审闭环;单用即仅终审)。不采用 `--review-level`(会破坏 `--review` 既有的数值语义与解析),不引入 `--final` 修饰符(单独出现无意义,双拼法徒增解析分支) |
-| n 语义 | 审计轮上限(含首轮 Audit,即 Audit→Remediate→Validate 的最大循环次数);缺省(无选项)0 不启用;裸选项 = 2;显式值须为 1..5 整数,否则用法错误(退出码 1) |
-| 回退熔断 | Validate 差距且审计轮耗尽 → 把残余差距写入 PLAN.md 阻塞问题(block 最后的 validate/audit 任务)并退出码 2;**不生成 Manual_Escalation 任务**——人工介入在本包是停机事件而非任务,"给人看的任务"会让 verify/收尾/勾选语义空转;残余风险清单已在 audit/validate 报告中,阻塞问题引用文件指针即可 |
-| 审计报告结构化 | 复用本包"末行结论"中文协议,不用 JSON(自由会话稳定产出 JSON 比"末行结论"更脆,且 parseVerdict 已有成熟解析形态):audit 报告末两行 `结论: <概述>` 与 `策略: 重构\|修补\|无`,driver 正则解析做确定性路由 |
-| `策略: 无` 路由 | 直达 Finalize,**跳过 Remediate 与 Validate**:Audit 本身就是全局检查,无补救即无验证对象;原任务已有任务级 verify 兜底 |
-| Validate 路由 | 报告末行 `结论: 通过`(→ 生成 Finalize 任务)或 `结论: 差距 <描述>`(→ 回退 Audit,受轮上限约束);不设独立"建议"字段——结论即建议 |
-| 模式层形态 | `src/mode.ts` 类型化注册表(策略模式精神),不用 prompts/ 目录模板:提示词是 TS 函数组合(带运行时参数:路径/字段/上下文),templates/ 只承载 init 复制件且须逐文件 `with { type: "file" }` 导入嵌入二进制,目录模板两者都冲突。新增模式 = 加一个类型完整的条目,driver 零改动 |
-| 终审阶段载体 | 真任务入 PLAN.md(`T-F<k>` ID + `final: <stage>@<round>` 字段标记),复用 runTask 全流水线(分解/子任务会话/收尾/CURRENT.md/进度恢复/commit 档位;任务级验收与逐任务审核依 final 强制跳过),driver 只做"生成任务 → 跑任务 → 解析报告路由"的状态机 |
-| audit/validate 任务的逐任务审核 | **(修订)** 全部终审任务跳过逐任务审核与任务级三段式验收——终审阶段本身即检验,不对检验再做检验(审核/验收套娃浪费会话且语义混乱):runTask 内按 final 标记强制 review=0 且 verify 关闭(收尾后直接 done);闭环内部的修复质量由同轮 validate 回归验证兜底 |
-| 产物位置 | `docs/final/`(audit-r\<N\>.md / refactor-r\<N\>.md / patch-r\<N\>.md / validate-r\<N\>.md / finalize.md / plan-\<stage\>-r\<N\>.md 提案),避开既有终审报告 `docs/final-audit.md`(`--review` 的产物,命名不冲突) |
-| 全局单会话不变量 | 保持:终审闭环全程串行(生成会话 → 任务会话),无并行窗口,不需要 worktree |
+| CLI shape | `--final-review [n]` as an independent option (composable with `--review n`: per-task review as usual + final review loop; used alone, final review only). `--review-level` is not adopted (it would break `--review`'s existing numeric semantics and parsing); no `--final` modifier is introduced (meaningless on its own, and the double spelling would only add parsing branches) |
+| n semantics | the cap on audit rounds (including the first Audit round, i.e. the maximum number of Audit→Remediate→Validate cycles); default (option absent) 0, not enabled; bare option = 2; an explicit value must be an integer in 1..5, otherwise usage error (exit code 1) |
+| Fallback circuit breaker | Validate gap with audit rounds exhausted → write the residual gaps into PLAN.md as a blocking problem (block the last validate/audit task) and exit code 2; **no Manual_Escalation task is generated** -- human intervention in this package is a halt event rather than a task, and "a task for humans to read" would leave the verify/wrap-up/check-off semantics spinning idle; the residual-risk list is already in the audit/validate report, so the blocking problem need only reference the file pointer |
+| Audit report structuring | reuse this package's "last-line conclusion" Chinese protocol instead of JSON (a free-form session produces stable JSON less reliably than a "last-line conclusion", and parseVerdict already has a mature parsing shape): the audit report's last two lines `结论: <概述>` (conclusion: <summary>) and `策略: 重构\|修补\|无` (strategy: refactor\|patch\|none), parsed by the driver's regex for deterministic routing |
+| `策略: 无` (strategy: none) routing | go straight to Finalize, **skipping Remediate and Validate**: Audit is itself a global check, and with no remediation there is nothing to validate; the original tasks already have task-level verify as a backstop |
+| Validate routing | report last line `结论: 通过` (conclusion: pass) (→ generate the Finalize task) or `结论: 差距 <描述>` (conclusion: gap <description>) (→ fall back to Audit, subject to the round cap); no separate "suggestion" field -- the conclusion is the suggestion |
+| Mode layer shape | a typed registry in `src/mode.ts` (in the spirit of the strategy pattern), not prompts/ directory templates: prompts are TS function composition (with runtime parameters: paths / fields / context), while templates/ only carries init copies and each file must be imported `with { type: "file" }` to be embedded in the binary -- directory templates conflict with both. Adding a mode = adding one fully typed entry, zero driver changes |
+| Final review stage vehicle | real tasks in PLAN.md (`T-F<k>` ID + `final: <stage>@<round>` field marker), reusing the full runTask pipeline (decomposition / subtask sessions / wrap-up / CURRENT.md / progress recovery / commit tier; task-level acceptance and per-task review are forcibly skipped per final), with the driver being only a "generate task → run task → parse report and route" state machine |
+| Per-task review of audit/validate tasks | **(Revision)** all final review tasks skip per-task review and task-level three-stage acceptance -- the final review stages are themselves the verification, and the verification is not re-verified (nesting review/acceptance wastes sessions and muddles the semantics): inside runTask, the final marker forces review=0 and turns verify off (straight to done after wrap-up); repair quality inside the loop is backstopped by the same round's validate regression check |
+| Artifact location | `docs/final/` (audit-r\<N\>.md / refactor-r\<N\>.md / patch-r\<N\>.md / validate-r\<N\>.md / finalize.md / plan-\<stage\>-r\<N\>.md proposals), steering clear of the existing final review report `docs/final-audit.md` (the product of `--review`; no naming conflict) |
+| Global single-session invariant | kept: the final review loop is serial throughout (generation session → task session), with no parallel window and no worktree needed |
 
-## A. 模式层(`-m/--mode`)
+## A. Mode layer (`-m/--mode`)
 
-### A.1 注册表 `src/mode.ts`
+### A.1 Registry `src/mode.ts`
 
 ```ts
 export type ModeSpec = {
   name: string
-  // renderInit 的模式导语:场景定义、任务排布原则、verify 侧重
+  // The mode preamble for renderInit: scenario definition, task arrangement principles, verify emphasis
   init: string
-  // 执行类提示词(分解/整任务/子任务/收尾)附加的模式注意事项
+  // Mode caveats appended to execution prompts (decompose / whole task / subtask / wrap-up)
   exec: string
-  // 终审各阶段提示词的侧重
+  // The emphases of each final review stage's prompts
   final: { audit: string; validate: string; finalize: string }
 }
 export const MODES: Record<string, ModeSpec> = { migrate: { ... } }
 ```
 
-- V1 只注册 `migrate`(迁移/升级:以保持外部行为不变为前提,任务按"基线确认 →
-  迁移改造 → 回归验证"排布,verify 优先复用既有测试/构建命令;终审 audit 侧重
-  新旧行为对等与残留旧路径,validate 侧重回归覆盖,finalize 侧重旧实现清理与
-  兼容层收尾)。`optimize/implement/test` 为既定扩展名,未注册即不可用。
-- `resolveMode(name): ModeSpec | undefined`;CLI 侧未注册名 → 用法错误退出码 1,
-  报文列出当前支持的模式。
-- 文案为提示词级引导,不含调度语义;实现任务时在 prompt.test.ts 断言注入。
+- V1 registers only `migrate` (migration/upgrade: premised on keeping external behavior unchanged, tasks arranged as "baseline confirmation →
+  migration changes → regression verification"; verify prefers reusing existing test/build commands; final review audit emphasizes
+  old/new behavioral equivalence and leftover old paths, validate emphasizes regression coverage, and finalize emphasizes cleaning up the old
+  implementation and wrapping up compatibility layers). `optimize/implement/test` are established extension names; unregistered means unavailable.
+- `resolveMode(name): ModeSpec | undefined`; an unregistered name at the CLI → usage error with exit code 1,
+  the message listing the currently supported modes.
+- The copy is prompt-level guidance with no scheduling semantics; assert its injection in prompt.test.ts during the implementation task.
 
-### A.2 CLI 接线
+### A.2 CLI wiring
 
-- `-m/--mode <name>` 进 VALUE_FLAGS(`src/index.ts`),新增短选项 `-m`(镜像 `-p`
-  的吞值规则);`init`(作用于 renderInit)与 `run`(经 Opts 透传 runner)都接受,
-  缺省 `migrate`。
-- 持久化:V1 不做(只有一种模式不存在分歧);README 注明 init 与 run 应使用相同
-  模式。PLAN.md 头部注释戳(`<!-- opencode-auto-mode: migrate -->`)列为后续可选项。
+- `-m/--mode <name>` goes into VALUE_FLAGS (`src/index.ts`), adding the short option `-m` (mirroring `-p`'s
+  value-swallowing rule); both `init` (acting on renderInit) and `run` (passed through Opts to the runner) accept it,
+  with default `migrate`.
+- Persistence: not done in V1 (with only one mode there is no divergence); the README notes that init and run should use the same
+  mode. A PLAN.md header comment stamp (`<!-- opencode-auto-mode: migrate -->`) is listed as a later optional item.
 
-## B. `--final-review [n]` 终审闭环
+## B. `--final-review [n]` final review loop
 
-### B.1 选项语义与组合矩阵
+### B.1 Option semantics and combination matrix
 
-`parseFinalReviewLimit` 镜像 `parseReviewLimit` 风格:缺省 0 不启用;裸选项 2;
-显式值 1..5 整数,否则用法错误退出码 1。用法文本同步。
+`parseFinalReviewLimit` mirrors `parseReviewLimit`'s style: default 0, not enabled; bare option 2;
+an explicit value must be an integer in 1..5, otherwise usage error with exit code 1. The usage text is updated to match.
 
-| 组合 | 语义 |
+| Combination | Semantics |
 | --- | --- |
-| `--final-review` 单用 | 无逐任务质量审核;原任务全部完成后进入终审闭环 |
-| `--review n` + `--final-review [m]` | 逐任务审核照常;终审闭环在全部任务完成后进行 |
-| `--early` / `--early-review` | 只作用于逐任务审核窗口,与终审无交互;`--early-review` 与 `--final-review` 可同现 |
-| `--dryrun` | 不执行任务,终审不触发 |
-| `--commit once` | 整体提交保持在终审全部结束后的既有位置(终审闭环本身产生的改动一并提交) |
-| `--subtask off/ondemand` | 终审任务遵循全局档位;终审任务不做任务级验收,无 verify 差距回退一途(报告异常在路由时阻塞) |
-| `--wait-between` | 终审任务之间同样生效(与普通任务一致) |
+| `--final-review` alone | no per-task quality review; the final review loop is entered after all original tasks complete |
+| `--review n` + `--final-review [m]` | per-task review as usual; the final review loop runs after all tasks complete |
+| `--early` / `--early-review` | affects only the per-task review window, no interaction with the final review; `--early-review` and `--final-review` may co-occur |
+| `--dryrun` | tasks are not executed; the final review is not triggered |
+| `--commit once` | the wholesale commit stays at its existing position after the final review ends entirely (changes produced by the final review loop itself are committed with it) |
+| `--subtask off/ondemand` | final review tasks follow the global tier; final review tasks do no task-level acceptance, so there is no verify-gap rollback path (report anomalies block at routing) |
+| `--wait-between` | also in effect between final review tasks (same as ordinary tasks) |
 
-退出码:终审任务 blocked/incomplete → 既有退出码 2 语义;熔断 → 2(阻塞写入
-PLAN.md);Finalize 完成 → 0。
+Exit codes: a final review task blocked/incomplete → the existing exit code 2 semantics; circuit breaker → 2 (blocking written into
+PLAN.md); Finalize complete → 0.
 
-### B.2 状态机与流水线
+### B.2 State machine and pipeline
 
-核心机制:终审阶段是入 PLAN.md 的真任务,由主循环 `next()` 按文件顺序自然执行
-(追加在文件尾);driver 的终审状态机是 `(PLAN.md 中带 final 标记的任务及其状态,
-docs/final/ 产物)` 的**纯函数**,无新增持久化状态。
-
-```
-[原任务全部 done](next() 返回空,终审未完成)
- → 生成会话(旁路一次性,requireArtifact 骨架)产出任务提案 docs/final/plan-audit-r1.md
- → driver 解析并 appendTask:T-F1,字段 final: audit@1(不写 verify 字段)
- → 主循环 next() 拾取 → runTask(T-F1) 全流水线(分解/子任务/收尾;强制跳过任务级
-   验收与逐任务审核,收尾后直接 done)
- → runTask 完成且任务带 final 标记 → 路由:解析 docs/final/audit-r1.md 末行
-      策略: 无        → 生成 Finalize 任务 → 执行 → commit once(既有位置)→ 退出 0
-      策略: 重构|修补  → 生成 remediate 任务 → 执行
-                       → 生成 validate 任务 → 执行
- → 解析 docs/final/validate-r1.md 末行:
-      结论: 通过 → 生成 Finalize 任务 → 执行 → 完成
-      结论: 差距 → 审计轮 < n ? 生成聚焦残余差距的 audit@<r+1> 任务 → 继续闭环
-                  审计轮 ≥ n ? 熔断(block 最后任务,退出码 2)
-      报告缺失/协议行非法 → brokenReport 阻塞该任务(退出码 2,人工核查)
-```
-
-- 任务 ID `T-F<k>`:k = 既有终审任务数 + 1,追加顺序确定、免碰撞(HEADING 的
-  `T-[\w-]+` 兼容);`T-` 前缀匹配 persistStage 的进度写入条件(`src/runner.ts`),
-  终审任务内部中断走既有 recallProgress/peekProgress 机制,零新增。
-- 任务标题带阶段前缀(如 `终审审计(第 1 轮)`),status 命令自然可见。
-- runTask 完成后的路由挂点与 `next()` 为空时的终审启动挂点均在 `src/loop.ts`
-  主循环接入;终审启动打印横幅(`banner("全部任务完成,进入终审闭环")`)。
-
-### B.3 任务生成会话 `renderFinalTask(plan, stage, round, prior, mode)`
-
-旁路全新会话(不进任何任务链,复用 runner 导出的 requireArtifact 骨架:产物缺失
-带反馈重试一次,仍失败按隐性阻塞)。输入为上游产物指针(audit/validate 报告路径、
-残余差距原文、全部已完成任务概览),产出提案文件 `docs/final/plan-<stage>-r<N>.md`:
+Core mechanism: final review stages are real tasks in PLAN.md, naturally executed by the main loop's `next()` in file order
+(appended at the end of the file); the driver's final review state machine is a **pure function** of `(the final-marked tasks in PLAN.md and their states,
+the docs/final/ artifacts)`, with no newly persisted state.
 
 ```
-# <任务标题>
-
-<任务正文:目标、范围、上下文、检查项由 runTask 的分解会话另行生成,不手写>
+[all original tasks done](next() returns empty, final review not yet complete)
+ → generation session (one-off bypass, requireArtifact skeleton) produces the task proposal docs/final/plan-audit-r1.md
+ → driver parses and appendTask: T-F1, field final: audit@1 (no verify field written)
+ → main loop next() picks it up → runTask(T-F1) full pipeline (decompose/subtask/wrap-up; forcibly skips task-level
+   acceptance and per-task review, straight to done after wrap-up)
+ → runTask complete and the task carries the final marker → routing: parse the last line of docs/final/audit-r1.md
+      策略: 无 (strategy: none) → generate Finalize task → execute → commit once (existing position) → exit 0
+      策略: 重构|修补 (strategy: refactor|patch) → generate remediate task → execute
+                       → generate validate task → execute
+ → parse the last line of docs/final/validate-r1.md:
+      结论: 通过 (conclusion: pass) → generate Finalize task → execute → complete
+      结论: 差距 (conclusion: gap) → audit round < n ? generate an audit@<r+1> task focused on residual gaps → continue the loop
+                  audit round ≥ n ? circuit breaker (block the last task, exit code 2)
+      report missing / protocol line illegal → brokenReport blocks that task (exit code 2, manual inspection)
 ```
 
-(修订:提案不再包含可选 `verify:` 行——终审任务强制跳过任务级验收,该字段无用;
-旧提案中残留的该行解析时兼容剥离、被忽略。)
+- Task ID `T-F<k>`: k = existing final review task count + 1, append order deterministic and collision-free (compatible with
+  HEADING's `T-[\w-]+`); the `T-` prefix matches persistStage's progress-write condition (`src/runner.ts`),
+  and an interruption inside a final review task goes through the existing recallProgress/peekProgress mechanism -- zero additions.
+- Task titles carry a stage prefix (e.g. `终审审计(第 1 轮)` -- "final review audit (round 1)"), naturally visible to the status command.
+- The routing hook after runTask completes and the final review kick-off hook when `next()` is empty are both wired into the `src/loop.ts`
+  main loop; final review kick-off prints a banner (`banner("全部任务完成,进入终审闭环")` -- "all tasks complete, entering the final review loop").
 
-- 各阶段侧重注入 `mode.final[stage]`(migrate 见 A.1);
-- 提案正文是任务的自包含描述:凭它 + CURRENT.md + docs/ 即可执行;
-- 约束:只规划不实施;复用 QUESTION_RULE / STATE_RULE;硬性要求产出提案文件;
-- audit@r≥2 的生成会话输入为 validate 差距原文 + 上一轮报告,提示词要求聚焦
-  残余差距与回归检查,不做全量重审。
+### B.3 Task generation session `renderFinalTask(plan, stage, round, prior, mode)`
 
-driver 解析提案后 `appendTask`:ID/`final` 字段由 driver 决定,标题与正文取自提案,
-不写 verify 字段(终审任务强制跳过任务级验收)。
+A fresh bypass session (it enters no task chain; it reuses the requireArtifact skeleton exported by the runner: a missing artifact
+is retried once with feedback, and a second failure is treated as a silent block). Its inputs are upstream artifact pointers (audit/validate report paths,
+the residual gap verbatim, an overview of all completed tasks), and it produces the proposal file `docs/final/plan-<stage>-r<N>.md`:
 
-### B.4 报告协议与验收的关系
+```
+# <任务标题> (task title)
 
-- **audit 任务**:正文要求产出审计报告 `docs/final/audit-r<N>.md`,末两行
-  `结论: <概述>`、`策略: 重构|修补|无`。
-- **validate 任务**:报告 `docs/final/validate-r<N>.md`,末行
-  `结论: 通过` 或 `结论: 差距 <描述>`。
-- **报告异常兜底(修订)**:终审任务不做任务级验收,策略/结论行缺失或取值非法
-  (多为会话漏写或报告被人工改动)在 runTask 完成后的路由解析时按 brokenReport
-  阻塞该任务——退出码 2、提示人工核查(修复报告或删改终审任务后状态重建重新
-  路由);不做修复轮自愈。
-- **remediate 任务**:报告 `docs/final/refactor-r<N>.md` / `patch-r<N>.md`,
-  自由正文无协议;修复质量由同轮 validate 回归验证兜底。
-- **finalize 任务**:收尾报告 `docs/final/finalize.md`(自由正文)。
-- 各终审任务的收尾会话仍照常写 `docs/T-F<k>.report.md` 产出摘要,与阶段报告并存
-  (摘要 vs 结论,不冲突)。
+<任务正文:目标、范围、上下文、检查项由 runTask 的分解会话另行生成,不手写> (task body: goal, scope, context, and checklist are generated separately by runTask's decompose session, not hand-written)
+```
 
-### B.5 熔断
+(Revision: proposals no longer contain an optional `verify:` line -- final review tasks forcibly skip task-level acceptance, so the field is useless;
+the line left over in old proposals is compatibility-stripped at parse time and ignored.)
 
-Validate 差距且审计轮耗尽:`block(path, 最后的终审任务id, question)`,question 为
+- Each stage's emphasis is injected via `mode.final[stage]` (for migrate see A.1);
+- The proposal body is the task's self-contained description: it plus CURRENT.md plus docs/ suffices to execute;
+- Constraints: plan only, do not implement; reuse QUESTION_RULE / STATE_RULE; producing the proposal file is a hard requirement;
+- The generation session for audit@r≥2 takes as input the validate gap verbatim + the previous round's report; the prompt requires focusing on
+  the residual gaps and regression checks, not a full re-audit.
+
+After the driver parses the proposal it calls `appendTask`: the ID / `final` field are decided by the driver, the title and body are taken from the proposal,
+and no verify field is written (final review tasks forcibly skip task-level acceptance).
+
+### B.4 Relationship between the report protocol and acceptance
+
+- **audit task**: the body requires producing the audit report `docs/final/audit-r<N>.md`, whose last two lines are
+  `结论: <概述>` (conclusion: <summary>) and `策略: 重构|修补|无` (strategy: refactor|patch|none).
+- **validate task**: report `docs/final/validate-r<N>.md`, last line
+  `结论: 通过` (conclusion: pass) or `结论: 差距 <描述>` (conclusion: gap <description>).
+- **Report-anomaly backstop (Revision)**: final review tasks do no task-level acceptance; a missing or illegal strategy/conclusion line
+  (usually a session omission or a manually edited report) is handled at the routing parse after runTask completes as brokenReport
+  blocking that task -- exit code 2, prompting manual inspection (after fixing the report or editing/removing the final review tasks, state
+  reconstruction re-routes); no repair-round self-healing.
+- **remediate task**: report `docs/final/refactor-r<N>.md` / `patch-r<N>.md`,
+  free-form body with no protocol; repair quality is backstopped by the same round's validate regression check.
+- **finalize task**: wrap-up report `docs/final/finalize.md` (free-form body).
+- Each final review task's wrap-up session still writes the `docs/T-F<k>.report.md` artifact summary as usual, coexisting with the stage report
+  (summary vs conclusion; no conflict).
+
+### B.5 Circuit breaker
+
+Validate gap with audit rounds exhausted: `block(path, 最后的终审任务id, question)` (block(path, last final review task id, question)), where question is
 `终审闭环连续 <n> 轮仍未通过,残余差距见 docs/final/validate-r<N>.md 与
-docs/final/audit-r<M>.md:<最近一轮差距原文>`,退出码 2。人工处理(改 PLAN/改代码/
-直接重跑)后重新运行:blocked 任务直接续跑(既有语义),或人工删改终审任务后由
-状态重建重新路由。
+docs/final/audit-r<M>.md:<最近一轮差距原文>` ("the final review loop still has not passed after <n> consecutive rounds; see docs/final/validate-r<N>.md and docs/final/audit-r<M>.md for the residual gaps: <the latest round's gap verbatim>"), exit code 2. After manual handling (edit PLAN / edit the code /
+simply rerun), run again: the blocked task resumes directly (existing semantics), or after manually removing or editing the final review tasks,
+state reconstruction re-routes.
 
-### B.6 runTask 适配
+### B.6 runTask adaptation
 
-- Opts 增 `mode`(透传 prompt 渲染);
-- 终审任务(任务对象带 `final` 字段,全部四阶段)强制 `review = 0` 且跳过三段式
-  验收(`--verify` 对其无效,`--early` 随之自然失效),收尾后直接 markDone
-  (不写 verified);陈旧 verify/review 阶段恢复记录不补跑(enterAudit 加
-  limit>0 守卫,verify 阶段记录走收尾跳过 + 直接完成);
-- 导出 `requireArtifact` / `runSession` 供 `src/final.ts` 的生成会话复用;
-- 其余(链复用、权限、交互、看门狗)零改动。
+- Opts gains `mode` (passed through to prompt rendering);
+- Final review tasks (task objects carrying the `final` field, all four stages) force `review = 0` and skip the three-stage
+  acceptance (`--verify` has no effect on them, and `--early` naturally lapses with it), going straight to markDone after wrap-up
+  (no verified written); stale verify/review phase recovery records are not replayed (enterAudit gains a
+  limit>0 guard; verify-phase records go the wrap-up-skip + direct-completion route);
+- Export `requireArtifact` / `runSession` for `src/final.ts`'s generation session to reuse;
+- Everything else (chain reuse, permissions, interaction, watchdog): zero changes.
 
-## C. 中断恢复与幂等
+## C. Interrupt recovery and idempotence
 
-状态重建规则(`src/final.ts` 的路由纯函数,run 启动与每次 runTask 完成后求值):
+State reconstruction rules (the routing pure function in `src/final.ts`, evaluated at run startup and after every runTask completion):
 
-1. 存在未完成(pending/in_progress/blocked)的终审任务 → 主循环既有机制处理,
-   不生成新任务(blocked 等人工,in_progress 中断走 recallProgress);
-2. audit 任务 done 且报告末行策略合法 → 按策略路由;若下一阶段任务已存在(追加后
-   中断)→ 不重复生成,主循环直接拾取;
-3. 提案文件已产出但对应任务未追加(追加前中断)→ 直接解析追加,不开生成会话;
-4. 终审任务 done 但报告缺失/协议非法 → 路由时按 brokenReport 阻塞,提示人工
-   核查(终审任务不做任务级验收,该检查是唯一兜底);
-5. 全部原任务与终审任务 done、无待生成阶段 → 终审完成,退出 0。
+1. Unfinished (pending/in_progress/blocked) final review tasks exist → handled by the main loop's existing mechanisms,
+   no new tasks are generated (blocked waits for a human; an interrupted in_progress goes through recallProgress);
+2. An audit task is done and the report's last-line strategy is legal → route by strategy; if the next-stage task already exists (interrupted after
+   appending) → do not regenerate; the main loop picks it up directly;
+3. The proposal file was produced but the corresponding task was not appended (interrupted before appending) → parse and append directly, without opening a generation session;
+4. A final review task is done but the report is missing / the protocol is illegal → blocked as brokenReport at routing, prompting manual
+   inspection (final review tasks do no task-level acceptance; this check is the only backstop);
+5. All original tasks and final review tasks done, no stage awaiting generation → the final review is complete, exit 0.
 
-## D. 文件级改动清单
+## D. File-level change list
 
-| 文件 | 改动 | 分期 |
+| File | Change | Phase |
 | --- | --- | --- |
-| `src/mode.ts`(新增) | ModeSpec / MODES / resolveMode | P1 |
-| `src/index.ts` | `-m/--mode`(VALUE_FLAG + 短选项)、`--final-review`(parseFinalReviewLimit)解析、用法文本 | P1 / P2 |
-| `src/prompt.ts` | 各 render 注入 mode 段;renderFinalTask | P1 / P2 |
-| `src/runner.ts` | Opts.mode;终审任务(final 字段)强制 review=0 且跳过任务级验收;导出 requireArtifact/runSession | P1 / P2 |
-| `src/loop.ts` | Opts 透传;runTask 完成后路由挂点、next() 为空时终审启动挂点、横幅 | P2 |
-| `src/plan.ts` | Task 解析 `final` 字段;appendTask | P2 |
-| `src/final.ts`(新增) | 状态机路由表、策略/结论解析、appendFinalTask、幂等重建 | P2 |
-| `test/mode.test.ts`(新增) / `test/plan.test.ts` / `test/prompt.test.ts` | 注册表与未知名报错;appendTask 与 final 字段往返、未知字段保留;模式注入与 renderFinalTask 断言 | P1 / P2 |
-| `test/final.test.ts`(新增) | 路由表(策略 无/重构/修补;结论 通过/差距;熔断)、提案文件幂等追加、状态重建 | P2 |
-| `test/e2e.test.ts` | CLI 解析用例(镜像既有风格) | P3 |
-| `README.md` / 包内 `AGENTS.md` | 命令表、行为约定、结构节 | P3 |
+| `src/mode.ts` (new) | ModeSpec / MODES / resolveMode | P1 |
+| `src/index.ts` | `-m/--mode` (VALUE_FLAG + short option), `--final-review` (parseFinalReviewLimit) parsing, usage text | P1 / P2 |
+| `src/prompt.ts` | mode section injected into each render; renderFinalTask | P1 / P2 |
+| `src/runner.ts` | Opts.mode; final review tasks (final field) force review=0 and skip task-level acceptance; export requireArtifact/runSession | P1 / P2 |
+| `src/loop.ts` | Opts pass-through; routing hook after runTask completes, final review kick-off hook when next() is empty, banner | P2 |
+| `src/plan.ts` | Task parsing of the `final` field; appendTask | P2 |
+| `src/final.ts` (new) | state machine routing table, strategy/conclusion parsing, appendFinalTask, idempotent reconstruction | P2 |
+| `test/mode.test.ts` (new) / `test/plan.test.ts` / `test/prompt.test.ts` | registry and unknown-name error; appendTask and final field round trip, unknown-field preservation; mode injection and renderFinalTask assertions | P1 / P2 |
+| `test/final.test.ts` (new) | routing table (策略 无/重构/修补 -- strategy none/refactor/patch; 结论 通过/差距 -- conclusion pass/gap; circuit breaker), idempotent proposal-file appending, state reconstruction | P2 |
+| `test/e2e.test.ts` | CLI parsing cases (mirroring the existing style) | P3 |
+| `README.md` / in-package `AGENTS.md` | command table, behavior conventions, structure section | P3 |
 
-## E. 风险、边界与已知局限
+## E. Risks, boundaries, and known limitations
 
-- **报告协议的会话依从性(修订)**:终审任务无结构检查验收兜底,报告协议行全靠
-  提案正文中的硬性要求约束;漏写时在路由时按 brokenReport 阻塞、需人工介入,
-  代价是一个停机事件而非自动修复——换取的是不对检验再做检验的纯粹性。
-- **空 PLAN**:无任务时终审照常进入(audit 大概率 `策略: 无` → finalize),
-  不特判。
-- **终审成本**:每轮 = 生成会话×2..3 + 任务全流水线×2..3;`--final-review 1`
-  可用作"只审一轮、不回退"的廉价形态。
-- **dogfood 顺序**:实现期间运行中的 driver 仍是旧版,新行为自下一次 run 生效。
-- **模式不持久化**(V1):跨天恢复时 CLI 忘带 `-m` 会回落 migrate;当前只有
-  migrate 一种模式,无实际分歧,扩展第二模式前必须先补持久化(列为前置条件)。
+- **Session compliance with the report protocol (Revision)**: final review tasks have no structural-check acceptance backstop; the report protocol lines rest entirely on
+  the hard requirements in the proposal body; an omission is blocked as brokenReport at routing and needs human intervention,
+  the cost being a halt event rather than automatic repair -- what it buys is the purity of not re-verifying the verification.
+- **Empty PLAN**: with no tasks, the final review still enters as usual (audit most likely `策略: 无` -- strategy: none → finalize);
+  no special-casing.
+- **Final review cost**: each round = 2..3 generation sessions + 2..3 full task pipelines; `--final-review 1`
+  can serve as the cheap "one audit round, no rollback" form.
+- **dogfood ordering**: the driver running during implementation is still the old version; the new behavior takes effect from the next run.
+- **Mode not persisted** (V1): on cross-day recovery, the CLI forgetting `-m` falls back to migrate; currently there is only the one
+  mode migrate, so no real divergence -- persistence must be added before extending a second mode (listed as a precondition).
 
-## F. 测试与验证
+## F. Testing and verification
 
-- `bun typecheck` + `bun test`;final/mode 测试不依赖 opencode server 与网络
-  (路由解析与状态重建为纯函数,提案/报告用 fixture 文件);
-- e2e(`OPENCODE_AUTO_E2E=1`,需凭据)为可选手工验证项:`--final-review 1` 跑一次
-  空转闭环(audit `策略: 无` → finalize),观察 `docs/final/` 产物、T-F 任务追加与
-  勾选;
-- 全部任务完成后 `bun run build` 冒烟,确认 `type: "file"` 模板导入不受影响
-  (预计不变,templates/ 无新增)。
+- `bun typecheck` + `bun test`; final/mode tests depend on neither the opencode server nor the network
+  (routing parse and state reconstruction are pure functions; proposals/reports use fixture files);
+- e2e (`OPENCODE_AUTO_E2E=1`, requires credentials) is an optional manual verification item: run `--final-review 1` once for a
+  no-op loop (audit `策略: 无` -- strategy: none → finalize), observing the `docs/final/` artifacts and the appending and
+  check-off of T-F tasks;
+- After all tasks complete, `bun run build` as a smoke test to confirm `type: "file"` template imports are unaffected
+  (expected unchanged; nothing new in templates/).
 
 <!-- auto: eof -->

@@ -1,618 +1,618 @@
-> **Retired historical document (2026-09-19, M0.6 / D6 two-tier docs)**: moved verbatim from `docs/behavior.md` into `plans/` as a numbered plan-era record. It describes the runtime behavior contract imposed on target directories as of the auto-core era; much of it will change under the auto-next refactor (intent/phase/agent rework). **Not maintained — never aligned with later code changes.** When needed, distill still-valid content into fresh numbered plans/ documents as the migration progresses; new documents are written in English (D7). Original preserved untranslated (historical record).
+> **Retired historical document (2026-09-19, M0.6 / D6 two-tier docs)**: moved verbatim from `docs/behavior.md` into `plans/` as a numbered plan-era record. It describes the runtime behavior contract imposed on target directories as of the auto-core era; much of it will change under the auto-next refactor (intent/phase/agent rework). **Not maintained — never aligned with later code changes.** When needed, distill still-valid content into fresh numbered plans/ documents as the migration progresses; new documents are written in English (D7). Originally preserved untranslated (historical record); translated to English 2026-10-03 with the plans/ corpus (protocol-string citations inside backticks keep their original Chinese spelling).
 
-# 行为约定详述(路由自 AGENTS.md)
+# Behavior Contract in Detail (routed from AGENTS.md)
 
-> 本文件描述的是**本程序对目标目录施加的运行时行为契约**(PLAN.md/CURRENT.md/统一提交/verify 等均为目标目录侧的对象与机制),属于设计本程序功能所需的认知;AGENTS.md 只保留高频核心不变量。设计基准见 docs/ 下各设计文档。
+> This file describes **the runtime behavior contract this program imposes on target directories** (PLAN.md/CURRENT.md/unified commits/verify etc. are all objects and mechanisms on the target-directory side); it is knowledge required for designing this program's features. AGENTS.md keeps only the high-frequency core invariants. The design baseline is in the design documents under docs/.
 
-- 退出码:`0` 全部完成(阶段化流程下 = 台账覆盖 `phases` 全部阶段),`1` 用法/环境错误
-  (含 run 前 agent 契约文件缺失的完整性检查、项目配置 .opencode/auto/config.json 非法、
-  阶段台账 docs/phases.md 非法或记录了 `phases` 之外的字母),`2` 阻塞或未完成为 pending、等待人工介入
-  (阻塞问题写入 PLAN.md;pending 回退不写字段;含阶段规划会话受阻与 --final-review 终审闭环熔断),
-  `3` `--interactive` 下收到 /exit、已在安全边界处暂停退出(不需要人工介入,重新
-  运行即可完整恢复,见下方 /exit 一条与设计文档 plans/0014-exit-resume-design.md),
-  `130` 被连续两次 Ctrl+C 强制终止(单次 Ctrl+C 仅提示,3 秒窗口内第二次才退出,
-  退出前尽力恢复文件可写并关闭 server)。
-- 项目配置固化(src/config.ts,设计文档 plans/0004-init-config-agents-design.md 与
-  plans/0006-phases-design.md A.2):宪法级选项
-  -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir 仅
-  init 接受(**init 缺省无状态全量覆盖**: 产出仅由本次参数决定,未给出的键回落
-  CONFIG_DEFAULTS、可选键 source/destDir 直接消失——同一条 init 在任何环境下产出一致,
-  单次即可得到确定状态;`--amend` 切回增量修订语义即"仅显式给出的键被改写、其余保留
-  既有值",continue 恒为 amend。设计文档 plans/0004-init-config-agents-design.md §B.1;
-  source 两键成对、任一给出即整体覆盖,init 时校验
-  <工作目录>/join 后存在(经 stat 跟随软链接——source-dir 可为指向工作目录外的软链,
-  断链按不存在拒绝);三迁移键均须为不含 .. 的相对路径,dest-dir 独立固化/修订、
-  不校验存在性——迁移目标在 <工作目录>/<dest-dir>,driver 流程文件与迁移产出经它隔离;
-  台账非空时 phases 须满足前缀护栏——已完成阶段构成**本次生效值**的前缀,否则退出码 1
-  并指引人工修订台账或改用 --amend;护栏判生效值而非"是否显式给出 --phases",否则无参
-  init 会把阶段化项目 phases 静默重置为 "m"、毁掉轮次布局),run 出现即用法错误退出码 1
-  (报文给修订指引;run 同样拒绝 --amend 与 -f/--force)。
-  覆盖既有配置时有两道防误触闸,均排在第一个写盘点之前、先拦截再询问,`-f/--force`
-  一并跳过: ① 工作区干净度(src/clean.ts,覆盖目标目录所在仓库与目录树下全部嵌套
-  仓库/子模块,非 git 目录视为干净);② 交互确认(src/confirm.ts,非 TTY 直接放行)。
-  二者互不覆盖——非 TTY 只免掉提问,干净度拦截对 CI 与脚本照常生效。
-  人工修订通道为直接编辑配置文件;坏 JSON/键值越界/mode 未注册时 run 与 init 均退出
-  码 1(严格失败优于静默回落),未知键忽略;旧 .auto/config.json 的 mode 仅在新文件
-  缺失时回落读取(run 打提示);run 期间配置文件置只读(brief.md 不在其列,非状态文件);
-  status 与 run 启动横幅打印
-  formatProjectConfig 一行摘要(含阶段)。判别标准: 改它需同时改 AGENTS.md/PLAN/契约表述或
-  描述模型/项目属性 → init;只描述本次运行怎么跑、人怎么盯 → run。
-- 反初始化(src/reset.ts,`reset` 子命令):与 init 互逆,精确移除 init 写出的配置层产物,
-  把工作区还原至未初始化状态。清理 .opencode/auto/config.json 与 brief.md、
-  .opencode/agent/auto.md、旧版 .auto/config.json、AGENTS.md 的 opencode-auto 标记块、
-  .gitignore 的 tmp/ 与 .auto/ 条目,以及**内容逐字节等于模板**的 opencode.json(被改过
-  则保留并说明原因);PLAN.md、docs/(含 R-NN 与 T-NNN)、.auto/ 其余运行时状态与 tmp/
-  一律不动;目录一律 rmdir 仅在为空时回收(绝不 rm -r),用户自建的 .opencode/auto/prompts/
-  与 .opencode/agent/ 下其他 agent 契约因此完好。执行前先打印完整清单,再过与 init 同款的
-  干净度闸门与交互确认(reset 恒为破坏性,闸门无条件生效)。init → reset → init 的产出
-  与首次 init 逐字节一致;无任何 init 产物时打提示并以 0 退出。
-- init 去 AI 化(plans/0006-phases-design.md):init 不启动任何 AI 会话,`-p/--prompt` 整写覆盖
-  .opencode/auto/brief.md(项目意图,版本化、人工可编辑,阶段规划会话消费;无 -p 保留
-  既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成
-  阶段规划);phases 含 v 而 verify 未启用时 init 打 note 一次(v 与 verify 正交);
-  phases ≠ "m" 时 PLAN.md 以空模板(templates/PLAN.scaffold.md)产出,交给规划会话。
-- --auto-number/--no-auto-number(config.autoNumber,缺省 true,--no-auto-number 为退出
-  开关;宪法级选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;
-  设计文档 plans/0001-auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
-  编号持久化在 .auto/next-task(内容仅为一个正整数,driver 维护;.auto/ 已被 gitignore,
-  新克隆天然缺失)。唯一消费点是阶段规划会话:planPhase 先 ensureNumbering 确保记录
-  就位,把记录值作为编号起点注入规划提示词(替代"自 T-001 起"文案),collect 校验全部
-  任务编号 ≥ 起点(复用已占用编号视为无效产出,带反馈重试一次仍失败隐性阻塞退出 2),
-  成功后记录推进到本次最大编号 + 1(只增不减);phases = "m" 无规划会话,开关不产生
-  效果(init 时该组合打一次 ℹ 提示)。记录缺失时先恢复再继续:确定性下限(现存
-  PLAN.md/阶段与轮次归档 PLAN/docs 产物文件名中的最大编号 + 1)为 1(全新项目)直接
-  写 1 不开会话;大于 1 开旁路一次性 AI 恢复会话(模板 number-recovery.md)通读归档
-  与 git 提交历史推导下一编号并写入记录(git 历史可发现产物已删除的编号),driver 以
-  下限校验其产出(小于下限无效,重试一次仍失败隐性阻塞退出 2),恢复产物随会话统一
-  提交(stage=numbering)。T-F<k> 终审编号是独立推导命名空间,不参与自动编号记录。
-- 阶段循环(config.phases ≠ "m",P1..P4 已接线;设计文档 plans/0006-phases-design.md D/E/F 节):阶段
-  状态是推导式的,routePhase 只读阶段台账(新布局轮内 docs/R-NN/phases.md,旧布局根
-  docs/phases.md)与 PLAN.md(零新增持久化状态),
-  run 据此循环——PLAN.md 为空模板 → 开阶段规划会话(旁路一次性,复用 requireArtifact
-  骨架,产物 = 已填充的 PLAN.md;仅此会话经 allowWrite 被授权写 PLAN.md,受阻退出 2;
-  会话输入注入 brief、source、destDir、mode.init 与各前序阶段交接文档的预拼接
-  handovers——交接文档在 docs/handovers/R<N>-<字母>-<slug>.md 永久路径(stable-refs
-  P2),P2 前完成的阶段自归档目录内读回落;蒸馏产物是跨阶段记忆唯一通道,不注入前序
-  原始 docs/,缺文件标注"(无交接文档)")、
-  有未完成任务 → 走既有主循环(分解/执行/验收/审核/统一提交/进度恢复语义不变;
-  v 阶段任务豁免任务级验收与 --review,见下条)、
-  本阶段任务全 done → 交接(先开蒸馏会话产出 docs/handovers/ 永久路径交接文档
-  ——四小节协议关键决策/约束与坑/下一阶段必读清单/产物索引,validHandover 逐字
-  校验标题行,产物缺失带反馈重试一次仍失败隐性阻塞退出 2;再把 PLAN.md 拷贝进
-  归档目录(新布局轮内 docs/R-NN/<字母>-<slug>/,旧布局 docs/phases/<字母>-<slug>/;
-  仅收过期状态文件)→ PLAN.md 重置空模板 →
-  台账追加(行协议含交接指针 handovers/ 路径,旧行形态容忍)→ 统一提交
-  stage=phase-transition;本阶段 docs/ 产物文档为永久路径,交接不搬移);
-  台账覆盖 phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段
-  打一次提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
-- k 阶段(P4,plans/0006-phases-design.md D.4;整体认领 plans/0002-fixme-knowledge-design.md 的
-  --extract-knowledge,该 CLI 选项不存在):plan 路由(PLAN.md 空模板态)不开
-  规划会话、不填 PLAN.md,直接进入知识提取旁路会话(src/knowledge.ts
-  extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段交接文档
-  (docs/handovers/ 优先),产出永久路径
-  docs/migration-kb/R<N>-migration-<时间戳>.md(章节骨架/质量约束内联在
-  templates/prompts/knowledge.md,mode.exec 作场景背景注入;不随交接/轮次归档
-  移动);本轮 R<N>- 前缀非空 .md 已存在(交接前中断)则幂等跳过(前几轮文档
-  不算本轮已提取,第 1 轮无前缀存量按读回落视为本轮产物);提取失败(会话受阻
-  或两次未产出)仅打 ⚠ 警告、不污染退出码,k 阶段照常交接——迁移成功不被文档
-  生成失败反向污染;知识文档随会话统一提交(stage=knowledge);人工在 k 阶段
-  自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;交接完成
-  后重试提取 = 人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀
-  文档后重跑)。
-- v 阶段验收豁免(plans/0006-phases-design.md D.3):runTask 依 loop 透传的 Opts.phase 在
-  当前阶段为 v 时强制 review=0 且跳过任务级三段式验收(收尾后直接 markDone、不写
-  verified)——与终审任务的 final 字段共用同一豁免代码路径,内部标记、不写 final
-  字段、不污染 PLAN.md 协议;v 阶段任务全 done 即交接、不因验收差距熔断(D.3
-  预留了 handover 路由前解析验收报告结论的挂点备选,V1 不做)。
-- 续轮迁移(continue 子命令,plans/0006-phases-design.md M 节;2026-09-08 轮次专用目录
-  方案):上一轮阶段化迁移全部完成(台账覆盖既有 phases 全部字母)后开启新一轮
-  继续迁移,目标是让迁移结果与源更加完整、一致。continue = init 的 amend 机制 +
-  establishRound 轮首建立新轮目录(docs/R-NN/,轮首即建、落盘即永久——PLAN.md/
-  phases.md/AGENTS.md.bak/阶段归档/handovers/phase-docs/migration-kb.md/
-  prior-kb.md 全部轮内自包含,根 PLAN.md 重建为指向轮内的相对符号链接,无现场
-  清理、无轮末搬移——archiveRound 已删除);上一轮结论(归档索引 + 最终阶段
-  交接文档全文 + 迁移知识文档全文: 新布局读轮内,旧布局 docs/migration-kb/ 的
-  R<N>- 前缀文件与前缀存量、P2 前轮次归档内的 migration-kb/ 读回落收集)
-  经 prevRoundDigest 注入新一轮首个阶段规划会话,后续阶段照常走本轮 handover
-  蒸馏链。迁移同一性选项(-m/--mode、--source-dir/--source-path/
-  --dest-dir)跨轮固定、continue 时显式给出即退出码 1(换源/换目标/换模式不是
-  同一迁移的继续);--phases/-p 与其余执行选项可按轮修订(--phases 不受前缀护栏
-  约束)。轮次推导式(存在 docs/R-NN/ → 当前轮 = R 系最大号;否则回落旧语义
-  round-<N> 最大编号 + 1),run/status 阶段进度行带
-  `第 N 轮` 标注(round > 1 时);`--continue` 不是选项,init/run 出现即报错指向
-  continue 子命令;前置校验失败(非阶段化项目/台账为空/缺阶段/含外字母/新
-  --phases 为 "m")均退出码 1 给指引。
-- 下发任务失败(UnknownError)的常见根因是目标目录缺少 `.opencode/agent/<agent>.md`
-  (服务端错误体不含根因):run 前完整性检查拦截该情况;运行中发生时 driver 在
-  阻塞问题后追加恢复提示(检测依赖 Opts.dir,run/init/dryrun 均须传入)。
-- 任务文档路径契约(stable-refs P1,src/docpaths.ts 单一构造点):任务文档只出现在
-  任务自己的目录 `docs/T-NNN/` 内(理解摘要 context.md、分解检查项 subtasks.md、
-  收尾报告 report.md、审核报告 audit.md、修复检查项 fix.md、上下文交接 handoff.md、
-  任务级测试交接 testhandoff.md 与其归档份 testhandoff-<n>.md),子任务产物
-  `docs/T-NNN/S<两位序号>/index.md`、子任务级测试交接与归档份同目录;终审产物按产出任务锚定各自的
-  `docs/T-F<k>/`(提案 plan-<stage>-r<N>.md 与 audit-r/refactor-r/patch-r/
-  validate-r/finalize 报告);这些路径一经创建即为永久路径。`--review` 的终审
-  审计与任务审计同路径 docs/<taskId>/audit.md。**读回落**:旧平铺项目
-  (docs/<id>.<role>.md 等)读点优先新路径、新缺失而旧存在回落旧路径,写目标恒为
-  新路径;读回落永久保留、平铺旧布局原地保留(refcheck-scope-design D2 摒弃移动
-  适配:2026-09-08 起 run 不再做存量目录化迁移,遗留引用失效走 git 历史恢复,
-  见 plans/0013-refcheck-scope-design.md §4)。**永久性全貌(stable-refs P2)**:docs/ 下文档
-  (docs/T-*/、docs/handovers/、docs/migration-kb/、docs/prior-kb/)一经创建
-  永不移动、永不改名——轮次专用目录方案(2026-09-08)起,每轮一个
-  docs/R-NN/(轮首建立):阶段交接产出台账行内轮内 handovers/<字母>-<slug>.md
-  (handoverDoc,src/phases.ts),知识文档轮内固定名 migration-kb.md 与
-  prior-kb.md(docpaths.ts knowledgeDoc/priorKnowledgeDoc,轮目录恒空使新一轮
-  必重新蒸馏,旧机制轮次(台账有完成阶段而无本轮文档)旧平铺无前缀存量读回落;
-  刻意例外: 前置知识提取的中间产物 temp-kb.md(正式产物同目录)非永久——AI
-  只写它并在末尾标「完成」收笔,driver 确认后改名为 prior-kb.md 并提交,
-  完成判定 = 落盘且已提交,见 knowledge.ts extractPriorKnowledge);
-  阶段 PLAN 快照等过期状态收在轮内 <字母>-<slug>/ 归档目录,状态文件不被任何
-  文档引用;旧布局(docs/handovers/R<N>-*.md、docs/migration-kb|prior-kb/ 平铺、
-  docs/phases/ 与 round-N/ 归档)原地保留为读回落,P2 前布局(交接在归档目录
-  内、知识无前缀)各读点回落兼容。
- - 引用一致性三层(stable-refs P4,D6;设计文档 plans/0010-stable-refs-design.md §3.3;
-   **2026-09-08 起经实验开关 `OPENCODE_AUTO_REF_CHECK=on/off` 管控,缺省 off**
-   ——off 时三层挂点全部空转、目标目录零引用检查行为,范围收敛与恢复设计见
-   plans/0013-refcheck-scope-design.md):引用唯一
-  合法形态 = 目标目录根相对路径(反引号或 md 链接,可带 `:行号` 锚,锚可再带
-  `@<sha>` 版本标记);校验语义 = 路径存在 + 行号 ≤ 文件总行数(带 `@<sha>` 标记的
-  历史快照引用只查存在性、豁免行号上限);直接路径未命中时按段边界后缀在目标目录树内找唯一文件
-  匹配——带上下文语境的相对引用(以引用者所在目录为基书写)唯一命中即视为有效并
-  消解到匹配文件(尤利于非 docs 引用),无匹配或多重匹配(语境歧义)按缺失;代码围栏内
-  与行内含 已删除/已归档/历史 标记的引用豁免;
-  URL/绝对路径/`~`/`./`/`../` 形态与纯版本号 token(如 `v1.2`)不校验,md 链接的
-  `#fragment` 剥后验,目录引用只查存在性。三层:① **auto-correct**——每次统一提交前
-  (runner 的 afterSession 挂点,覆盖全部会话后提交)driver 先做 git rename 配对
-  (`git add -A` 暂存后 `git diff --cached --find-renames HEAD`,暂存本就是下一次提交
-   的前奏)机械改写活文档引用(**只配对 rename,删除/语义变化不自动改**;改写不动
-   排版——仅就地替换命中路径 token,行结构/空白/对齐原样保留),再复扫
-  findings 并做**缺失恢复**(refcheck-scope P2,失效确认在先、恢复在后:missing
-  引用目标经 git 历史 rename 地图——目标仓库及嵌套子仓库的
-  `git log --find-renames` 按新→旧首现优先、链式解析最终落点——追踪,落点当前
-  存在即就地改写恢复(行号锚保留);落点已删除或历史中不曾存在不自动恢复(只恢复
-  移动/改名类失效,删除与语义变化保留人工订正),改写后再复扫),再做**范围再确认**
-  (refcheck-scope P3:带 `:N`/`:N-M` 行号锚且未带版本标记的引用,其目标文件在所属
-  git 仓库有未提交内容差异时比对 HEAD 版本与当前版本的同范围行切片——一致不动;
-  不一致(当前文件行数不足即不一致)保留原范围、就地追加 `@<sha>` 版本标记(sha =
-  所属仓库当前 HEAD 短哈希),语义 = 该范围仅对标记的历史版本有效、豁免行号上限
-  校验;已带标记的引用不再追加或更新,留待人工订正;嵌套子仓库逐个判定、各钉各
-  仓库的 HEAD;改写后再复扫),然后维护失效清单
-  `.auto/invalid-refs.md`(只登记未恢复的失效引用;键 = `文件 → 路径(problem)`,每轮
-  全量重写——修复后自动移除、复发视为新出现):已收录键不再 ⚠,仅对新出现的失效
-  引用输出警告日志(防无休止重复报告,人工核验订正以清单为入口);改写内容随本次
-  统一提交落账,不另起提交;非 git 目录 auto-correct
-  空转(校验仍可跑)。② **check 子命令**——原则检查之外全量扫描活文档
-  (docs/**/*.md,排除 docs/phases/**;docs/phases.md 台账属活文档),失效引用命中
-  退出码 1(check 为人工/CI 显式调用,报告不按清单去重);AGENTS.md 缺 opencode-auto
-  块与非 git 目录(auto-correct 不可用)给 note。③
-  **verify 门禁**——verifyTask 在每个判定会话前对任务产物文档(docs/T-NNN/**,
-  终审任务 T-F<k> 同法)做确定性预扫,失效引用 = 差距直接进修复轮(不消耗判定会话;
-  off 模式回退 pending,FIX_ROUNDS 耗尽阻塞退出 2);verify 未启用时门禁不存在,
-  退化为第①层的 ⚠ 日志(宽松契约)。该规范经 init 下沉:AGENTS.md 的 opencode-auto
-  标记块内引用规范段落(无条件出现——路径稳定性不依赖任何开关);
-  wrapup(report 引用要求)/verify-script-gen(脚本内根相对路径)/fix(失效引用
-  允许只更新引用行)模板同步注入提示文案。
-- 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
-  src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
-  仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
-  变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 <label> <任务标题/子任务>` 短标签
-   标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
-   blocked/pending/done,伪任务用 PLAN <label>:plan/handover/transition/knowledge/
-   numbering/final-plan/doc-migrate/housekeeping/carryover/implement;子任务条目为 `任务编号 S<n> <标题>`、
-   省略任务标题)+ `Auto-Task`/
-  `Auto-Stage` trailer(目标仓库另以 `Auto-Nested` 记录**全部**嵌套仓库路径与最终
-  /最新 SHA——本轮有提交记新 SHA、无提交记当前 HEAD,任一 root 提交都能对齐跨仓库
-  状态)。挂点:
-   分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后(状态写入含 CURRENT.md
-   镜像刷新: 分解注入与子任务勾选先刷新镜像再提交),判定/审核/脚本生成/
-   修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
-   边界提交(中断现场也提交,支持回滚到断点);dryrun 不提交。
-  **提交是完成条件(plans/0021-commit-boundary-design.md,2026-09-14)**:任务/子任务/隐藏任务
-  (伪任务/旁路会话)只要修改了 Git 纳管内容,统一提交成功才算完成——提交失败
-  一律**阻塞停机(退出码 2)待人工**,不再仅警告(commitTree 把失败清单上报给
-  调用方);每个执行单元(任务/子任务/独立隐藏任务)启动时经 beginUnit 做
-  **clean 门禁**(工作区必须干净,依赖的信息全部由上一次提交固定;driver 独占
-  状态文件 PLAN.md/CURRENT.md 的遗留由 carryover 补提交自愈,其余脏区阻塞交人工
-  ——run 启动与各单元启动同口径,旧"工作区遗留改动会被下一次提交吸纳"语义随之
-  废除)并记录逐仓库 HEAD SHA 基线,收口时经 unitViolations 校验:工作区干净且
-  基线..HEAD 区间内全部提交带 `Auto-Stage` trailer(外部提交 = 隔离破坏,阻塞);
-  恢复续跑(active 进度记录 + 会话复用/交接续跑)豁免 clean 检查——工作区脏区是
-  本单元自身进度。独立隐藏任务的幂等入口推广前置知识提取的 ③④ 协议: 产物已落盘
-  未提交 → 补提交即完成(git.ts commitPending;knowledge/phase-handover 直连,
-  phase-plan 经 carryover 自愈覆盖,final 提案经追加提交覆盖);产物缺失而工作区
-  脏 → dirty 阻塞交人工(不写状态文件、不清扫,git 决定权在人工;k 阶段"提取失败
-  仅警告"对 dirty 例外)。AGENTS.md 指针块/.gitignore 的启动补写经 housekeeping
-  提交收口;终审任务追加与修复检查项注入(driver 状态写入)各自成提交。仓库未配置
-  user.email 时以固定身份兜底。**提交不可关闭(2026-09-15 退役 `--commit false`)**:
-  统一提交是完成条件,单元 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交恒开"
-  为前提,关闭档与之冲突——`--commit false`(及旧别名 `none`)出现即用法错误退出 1,
-  存量 `.opencode/auto/config.json` 里写着 `commit: false` 的按坏文件严格失败(请删该键
-  或改 true);`--commit true` 仍可写,等同缺省。门禁此后只在 dryrun 与非 git 环境不生效
-  (代码侧 `opts.commit` 分支暂留、恒不可达,清理另立任务;旧四档 subtask/task/once
-  与别名 --commit-subtask 早已移除,出现即用法错误)。该执行权原则经 init
-  下沉:AGENTS.md 提交原则块、agent 契约与 state-rule 片段;`check` 子命令同步
-  扫描违背该原则的描述。
-- subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务,
-  子任务会话同样带 handoff-steer 交接——已用量达配置 contextLimit 的 2 倍时 steer 交接
-   提示,会话写出 docs/<id>/handoff.md(末行 `状态: 继续|完成`,以该子任务是否完成计),
-  新会话凭交接续跑,子任务完成后 driver 删除该文件)/
-  `off`(单会话完成整个任务;
-  验收差距不做修复重跑,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
-  watch 在已用量达到配置 contextLimit 的 2 倍时向进行中会话 steer 交接提示——每会话一次,
-  v2 prompt 默认 steer;会话结束按 docs/<id>/handoff.md 末行 `状态: 继续|完成`
-  决定续跑或进入收尾,文件缺失带反馈重试一次再按隐性阻塞)。中途切换:已注入检查项
-  的任务照旧从勾选状态续跑(进度按任务记录),新任务按新档执行;README 注明不建议。
-- --dryrun: 只跑一次权限预检会话(列出授权外目录/操作并逐只读探查),该会话内
-  权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复;报告写入
-  .auto/dryrun.md 并打印,不执行任何任务。
-- 提问自动答复(question.asked)与代答审计(OPENCODE_AUTO_ASK,缺省 off;设计文档
-  plans/0020-auto-resolve-design.md):非权限提问由 autoAnswer(ask) 自动答复,两档文案都点明
-  "这是一个被代答的提问";--wait-answer 下先等人工 stdin 答复,超时回落自动答复;
-  缺省 --wait-answer 时权限类提问(question 工具)直接阻塞;同一问题重复出现仍阻塞
-  停机。决策标记分两类,判据是**这个分歧点的决定权本应属于谁**——属于用户(需求意图
-  与范围取舍、对外可见行为与接口契约的变更、「什么算做完」的判定标准、事实确认类问题、
-  超出或收窄任务描述的字面范围)→ `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)`;
-  属于 AI(实现手段的选择,且任一选项都不改变用户可见行为)→
-  `AUTO-DECISION: <决策> (<理由>)`;同一决策只标一类,拿不准标 AUTO-RESOLVE。提问策略
-  两档由 OPENCODE_AUTO_ASK 切换,提问义务与标注义务同进同退: off(缺省,渲染结果逐
-  字节等价改造前)压制非权限提问、强制两类标注;on 令归属用户的分歧点主动调 question
-  工具、纯实现手段自主决定且**不要求任何标注**(driver 已在事件侧完整落账)。driver
-  两路采集:① question.asked 的回落自动答复入回合内 `resolves[]`(经 7 个 snapshot
-  出口带出,人工真答与 dryrun 预检会话不计),② 会话收尾扫描本次未提交变更文件里的
-  两类标记行(扫描挂在提交门禁关闭(dryrun,及已退役的 `--commit false`)的提前
-  return **之前**——采集是审计,不该受提交开关影响);两源经 sameIssue 配对,展示时已配对的 driver 项让位给信息更全
-  的 agent 项,未配对的以 ⚠ 点名"会话未按要求标注"。AUTO-RESOLVE 在任务三态行、阶段
-  收口、轮次完成之前以 `⚑` 置顶展示(任务级逐条、上限 8 条、单条压成单行截断 80 字,
-  阶段/轮次只给计数);AUTO-DECISION 只折成一个计数(有代答时折进高亮块末行,无代答时
-  仅进 vlog),阶段/轮次汇总完全不展示。收尾会话被注入 driver 观测到的代答清单(只列
-  driver 源、未配对的排在前、不截断),要求 docs/T-NNN/report.md 单列「自动代答问题」
-  节——持久审计轨迹是进 git 的标记行与该节,台账只是 driver 的计数与高亮依据。
-- 死循环检测(OPENCODE_AUTO_STUCK,缺省 on;设计文档 plans/0016-stuck-loop-design.md):
-  弱模型常连续多次以同一方式重复同一动作且始终不成功,自己走不出来;driver 在
-  watch 中观察工具调用终态,两条会话级判据——同一工具 + 同一报错(**不含参数**,
-  参数微调仍撞同一个坑)累计 3 次,或同一工具 + 同一参数 + 完全相同的输出累计
-  4 次(结果一模一样 = 没带来新信息);结果有变化一律视为有进展、不计数,不要求
-  连续(交替重试同样识别)。命中即经 promptAsync 向该会话 steer 一条提示(下一个
-  provider turn 边界生效),逐级升级: ① 摆出证据 + 核对前提 + 换一种手段 →
-  ② 要求先写清"目标/已试过什么/下一步换什么"再动手 → ③ 停止重试,以
-  `AUTO-FIXME: <原因与计划>` 标注遗留、交代进度后结束会话。每会话至多三次,命中后
-  该签名计数清零(再犯满一轮才再提示),达上限后静默。**只提示不停机**——不中止
-  会话、不改判定、不写状态文件(判据可能误判,停机代价远高于一条多余的提示;
-  第三级把收尾的决定权交回 AI,由既有流水线接管),steer 投递失败只记日志。
-  dryrun 预检会话恒不检测(反复被拒探查权限是其正常形态)。
-- 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK,缺省
-  均未设 = 现状逐字节等价;设计文档 plans/0017-model-routing-design.md):实验开关层按
-  「(阶段字母, 会话角色) → 模型」逐次给每个提示词带 `model`——唯一注入点在 attempt 的
-  `client.session.prompt`,求值为 undefined 时**不带 model 键**(而非带 `model: undefined`);
-  逐次 prompt 级 model 优先级最高、会回写会话表供链上后续沿用,故不改 opencode.json、不按阶段
-  拆 agent 契约、不重启 server。OPENCODE_AUTO_MODEL 两形态:裸值 `prov/model`(等价 `*=prov/model`
-  全量覆盖),或条目表 `键=prov/model` 逗号分隔(条目内分隔符用 `=` 而非 `:`,因 model id 可含
-  冒号;值必含 `/`,否则中文报错退出码 1);键 ∈ `*` ∪ 阶段字母 `admtvk` ∪ 角色词表。角色来源:
-  执行链按 `chain.phase` 推导(understand/decompose/whole/subtask/wrapup/verify-{generate,exec,
-  judge,fix}/review-{audit,planfix,fixrun}/phase-plan/phase-handover),旁路一次性会话按
-  requireArtifact 的 `spec.role`(verify-judge/verify-generate/review-audit/review-planfix/
-  final-plan/knowledge/prior-knowledge/implement-scan/number-recovery,未给则 `bypass`);求值
-  优先级 **角色 > 字母 > `*`**(resolveModel)。OPENCODE_AUTO_MODEL_FALLBACK 为有序候选表
-  `prov/a,prov/b`,缺省空 = 不降级。配额降级:watch 三条触发面把会话错误归类
-  (classifySessionError → quota/auth/rate/overflow/transient/unknown,判据问「换模型有没有用」
-  而非「重试有没有用」,与 opencode 自身的 retry 分类刻意不同;不确定即 unknown、保守不换;
-  overflow 明确不换,交交接机制)——① session.error 的结构化字段(message/statusCode/isRetryable/
-  responseBody),② message.part.updated 的 retry part(带 attempt 与 ApiError),③ session.status
-  的 retry 变体(带 attempt 与 next 下次等待时长);命中 quota/auth/rate 即降级:取有序候选表下一
-  候选写入 `chain.model`,复用既有 fork 副本路径续跑(session.fork 只搬消息、prompt 级 model 覆盖
-  之,**上下文随迁、无需重做**),降级**前先 `session.abort`** 防 server 端孤儿回合与 fork 副本
-  并发改文件(与断流清理同一手法),并经一次性 `chain.note` 提醒 AI 换模型续跑沿用前文产物格式与
-  协议(与 stuck-hint 同一弱模型兜底哲学)。候选经上下文窗口钳制(`contextLimits` 已知 limit.context
-  `< 配置 contextLimit` 者跳过并记原因,避免降级后立刻撞上限比原故障更糟;上限未知不过滤);候选
-  耗尽(全部已试或全部被钳制)回落既有阻塞(退出码 2、回退 pending 语义不变,文案追加已试候选清单)。
-  降级动作有两个触发面:上述 quota/auth/rate(立即,排在重试阶梯之前),以及**重试阶梯耗尽后
-  人工未裁决的回落**(transient/unknown,见上文 --idle-time 条)——后者分叉源取与重试环同一套
-  「最值钱会话」判据(失败会话本体与链上原会话按已积累用量取大者,0 用量的纯报错桩不保)。
-  降级只改 model 参数、**不落盘**(`chain.model` 仅内存、progress.json 不记 model)、不改会话
-  创建方式(「独立判定会话不 fork」不受影响);每个候选各享一轮完整重试阶梯(降级计数与阶梯计数
-   分离,互不掩盖,总上限 =(1 + 候选数)× 阶梯长度);`chain.model` 只在链内有效,执行链逐任务新建,
-   任务边界重新按路由表求值(缺省不跨任务粘滞,代价是配额型故障在每条新链首个提示词重撞一次
-   主模型,D.5 已接受取舍)。回试粒度可调(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE,缺省 `task` =
-   现状,D.6): `phase` 仅阶段边界重置(降级经 failback 模块 sticky holder 跨任务粘滞)、`subtask`
-   加子任务边界清链上候选、`session` 每个全新会话起点(create 分支)回试首选——降级 fork 出的
-   迁移会话不清,防 failover 被立即 undo 成震荡。`--interactive` 下另有 `/failback` 人工接管
-   (D.7,与 /exit 同构的安全边界消费、不退出): 无参 = 下一边界重置降级状态回试首选;带参
-   `/failback 首选 prov/a 候选 prov/b ...` = 下一边界整体重定义运行期模型序(首个为首选通配、
-   其余为降级候选环,经 failback 模块 override 层优先于 switches.model,memo 恒定不破)。每个
-   提示词实际使用的模型播报上终端(D.8): `◈ <任务> 使用模型 prov/model(路由|降级候选|
-   降级候选·阶段内粘滞|/failback 指定)`,同链同模型去重不重复。
-- --permission 四档(permission.asked 的处理策略,缺省 ask-deny):auto-allow 立即
-  自动授权(always 放行,不等待);ask-allow/ask-deny/ask-fail 先等人工
-  (--wait-answer 分钟,未设则不等待即视为超时;allow/yes/y 等视为授权以 always
-  放行,明确的其余回答拒绝该权限但不中断),超时分别回落:自动授权 / 自动拒绝但
-  会话继续(AI 无授权绕开) / 拒绝并退出运行(阻塞停机);dryrun 下仍自动拒绝但
-  不中断。--wait-between 在每个任务完成后暂停等待人工(回车立即继续,超时自动
-  继续),首个任务前不等待。
-- --interactive/-i 旁路交互(与 --verbose 互斥,index.ts 检查):不改变任何既有
-  处理逻辑——常驻 readline 把回车输入作为额外用户消息经 `session.promptAsync`
-  注入当前活动会话(v1 引擎 steer 语义,下一 provider turn 边界处理;**不要用
-  v2 `delivery: "queue"`**,它与 v1 引擎不兼容会产生无历史的并发 drain);无活动
-  会话时输入丢弃并提示;ask/--wait-between 的人工等待改经该输入行接收(提示语、
-  超时、空行、回落语义与独立 readline 完全一致);终端不显示 verbose 明细,但日志
-  文件保持 --verbose 级完整记录(interactive 隐含 verbose 记录级别)。输入行识别
-  到 `/exit`(trim 后完全相等,pending——正在等待 ask/步进暂停的回答——时不特判,
-  原样作答)不发往会话,只置位退出请求:在下一个 phase/task/subtask 安全边界
-  (与步进模式 `OPENCODE_AUTO_STEP` 的三级边界同一批挂点,该处 PLAN.md/CURRENT.md/
-  .auto/progress.json 均已由边界自身的常规收尾写好)以退出码 `3` 停机,不写任何
-  阻塞/pending 标记,重新运行凭已持久化的进度精确恢复(与该处发生真实 crash/kill
-  中断的恢复路径完全同构)。详见设计文档 plans/0014-exit-resume-design.md。
-- **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
-  全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json
-  与 .opencode/auto/config.json)
-  被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),
-  driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。唯一例外是
-  verify 判定会话:其被授权更新后续未完成任务的 verify 字段(verify 经验沉淀),
-  会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑(checkPlanEdit 比对任务集合/
-   状态/attempts/正文)整体还原。完成判定不靠
-   agent 自报——任务级验收由 driver 执行 verify 脚本、旁路独立判定会话读输出判定,
-   driver 只解析其判定文件;子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
-   **完成判定以提交为条件(plans/0021-commit-boundary-design.md)**:任何单元(任务/子任务/
-   隐藏任务)的产物或状态写入,统一提交成功落账才算完成——提交失败即阻塞退出 2;
-   单元启动要求工作区 clean(SHA 基线),收口校验提交区间内只有 driver 提交
-   (带 Auto-Stage trailer)。
-- verify 验收开关(config.verify,缺省 false;仅启用时 driver 才进入任务级三段式验收)
-  ——未启用时任务在收尾后由 driver 直接 markDone(不写 verified,未经验证不落账),
-  --review 的质量审核改为此时串行执行(--early 的并行窗口不存在,loop 启动时打降级
-  提示),idleTime/idleMax 看门狗不参与;终审任务(带 final 字段)无论该键
-  与否一律强制跳过任务级验收(报告缺失/协议非法在路由时按协议异常 block)。
-  该开关同时门控验收描述在产物中的存在:未启用时 init 产出的 PLAN.md/agent 契约
-  (renderText 条件渲染)、ensurePointer 不补写 AGENTS.md 验证原则块(已存在的移除)、
-  各会话提示词(state-rule 片段等经 baseCtx 的 verify 变量)不含
-  verify 相关描述——验收机制不存在,提示词不得提及。
-- --test-by-driver/--handover-test(config.testByDriver/handoverTest,缺省 false;宪法级选项,init --test-by-driver/--handover-test 修订,run 拒绝;与 verify 正交的测试执行协议): 前者把实现环节"编译/测试/构建/lint 等可能耗时长或产生大量输出的命令"的执行权收归 driver——执行类会话(子任务/整任务/验收修复轮;分解/收尾/判定/审核等旁路会话与 --dryrun 不适用)不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录(命名清晰、可执行、可复用,随仓库版本化),把脚本路径(相对工作目录)写入 tmp/test.sh 标记(存在即待执行请求,重写即再次请求),driver 在会话 idle 时检测标记:内容 trim 后单行且指向现存文件 → 直接运行该脚本并 best-effort 补 chmod +x(AI 常忘加执行位;test/ 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落整写为 tmp/test.<n>.sh 后运行(保留执行快照供审计);两种形态均把 stdout/stderr 合并整写 tmp/test.<n>.out(单文件,编号跨运行接续,共用 idleTime/idleMax 看门狗),移除标记后退出码/耗时/脚本与输出路径经 steer 注入同一会话由 AI 直读文件判断(退出码非 0 不由 driver 判定;steer 一律经 promptAsync 投递——v2 同步 /message 端点会阻塞到回合结束,在 watch 事件循环内同步等待会卡死事件循环;投递失败记 log 并按隐性阻塞 blocked 处理,回合结束的孪生 idle 事件经 watch 去重,处理过一次后直到新会话事件出现前不再结算);重跑同一测试 = 把同一脚本路径再次写入 tmp/test.sh(脚本可先修改再重跑)。每个执行会话入口清除遗留待执行标记。后者(需前者,配置层与 init 均交叉校验;设计 plans/0023-test-handover-early-design.md)把交接前置到测试之前,判定时点固定为**AI 发起测试的那一刻**(tmp/test.sh 出现时),判据解耦为单条件 used ≥ contextLimit(不再叠加测试失败;实时用量未到位时回落会话起跑值 startUsed——复用/恢复接管的会话取链上已用量,fork 与全新会话归零)。命中时 driver 在这一刻依次:① **提交定版**(afterSession,stage `<单元> handoff-<n>-pin`)固定被测的脚本与源码——此刻会话 idle,无半写文件;② **并发执行测试**(不 await,串行会把会话晾到缓存失效;收口统一在 attempt 于 watch 返回后做,测试进程不跨会话悬挂);③ steer 收尾+交接指令(test-wrapup 模板),要求 AI 把不依赖测试结果的剩余工作落盘、把与测试相关的部分写入测试交接文档后结束会话。会话结束后 **重测守卫**比对定版以来已跟踪的非文档改动(git.ts trackedSourceChanges,排除 docs/**、PLAN.md/CURRENT.md,未跟踪新增不计):非空即 stash -u → 对定版快照重跑同一脚本(runTestScript)→ stash pop,pop 冲突不吞(stash 条目保留、阻塞停机);随后交接文档**归档**为 testhandoff-<n>.md(docpaths archivedTestHandoff/latestHandoffSeq,编号跨会话/跨运行接续)并落**提交 #2**(stage `<单元> handoff-<n>`)确认交接——一次交接两次提交,提交之间源码与脚本无修改。文档按执行范围命名(子任务为 docs/<id>/S<两位序号>/testhandoff.md,整任务会话与验收修复轮为 docs/<id>/testhandoff.md),交接只对本执行范围生效、下一子任务不会误读上一子任务的遗留交接(缺失带反馈重试一次仍缺失隐性阻塞),driver 开新会话以续跑提示(先读归档交接文档、再判读那次测试的结果)继续,不设硬上限、连续超 10 次提醒评估是否陷入无法解决的问题(可 AUTO-FIXME 标注遗留后继续);执行范围完成时清除该范围的测试交接文档含全部归档份(removeHandoffChain,与 ondemand 交接同口径,下一子任务重新起算;历史交接内容由 git 提交记录承载),非恢复续跑时清除任务级与子任务级的陈旧交接链。提示词协议段经 subtask/whole/fix 模板的 testByDriver/handoverTest 条件块注入,steer 文案在 test-result/test-wrapup/test-continue 模板(无 driver 解析协议;test-wrapup 登记覆盖标记 {{handoffFile}} 与"不依赖本次测试结果")——**收尾文案刻意不提上下文/上限/tokens**:会话一旦知道自己上下文吃紧就会自行判定余量不足、省略本应完成的落盘工作(现场实证),也不写"不要改源码"(发起测试时它本就知道,真动了由定版提交 + 重测守卫兜底)。该执行权约定经 init 下沉:AGENTS.md 测试执行原则块(随 config.testByDriver 补写/移除,镜像验证原则块)与 agent 契约的 testByDriver 条件段;`check` 子命令在 testByDriver 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自运行编译/测试/构建/lint 的描述(TEST_PATTERNS,与验证类同构)。
-- verify 三段式(config.verify 启用时):verify 的处理权在 driver,验收只在任务级做一次——收尾会话后:
-  ① 脚本准备(resolveVerifyScript 依 verifyCommand 三分支:`command:` 为单个存在
-  且可执行的文件路径 → existing 直接使用;普通命令行 → wrapped,driver 包装
-  tmp/verify.sh——首行 shebang 其后原命令原文,不加 set -e 等额外语义,
-  每次幂等覆盖;自然语言或缺失 → generate,先开一次性旁路脚本生成会话产出脚本,
-  产物约定名 tmp/verify.sh,跨修复轮复用,V1 不自动重生成);② driver 执行
-  (runVerifyScript:cwd=目标目录,有执行位直接 spawn 否则经 bash;stdout/stderr
-  合并整写 tmp/verify.out 单文件,执行前 truncate;进度看门狗——输出文件持续
-  无增长达 idleTime(缺省 10 分钟)才 kill、code 记 124 且 timeoutReason=idle,
-  idleMax(缺省不设)为绝对上限兜底;执行完毕的运行记录持久化到进度记录,
-  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话——进入前
-  driver 先对任务产物文档 docs/T-NNN/** 做引用门禁确定性预扫,失效引用 = 差距直接
-  进修复轮、不消耗判定会话(stable-refs P4 引用一致性三层),随后判定会话
+- Exit codes: `0` everything completed (in the phased flow = the ledger covers all `phases` phases), `1` usage/environment error
+  (including the pre-run integrity check for a missing agent contract file, an invalid project config .opencode/auto/config.json, or
+  an invalid phase ledger docs/phases.md or one that records letters outside `phases`), `2` blocked, or unfinished as pending, awaiting human intervention
+  (blocking issues are written into PLAN.md; a pending rollback writes no field; includes a blocked phase-planning session and the --final-review final-review loop circuit-breaking),
+  `3` /exit received under `--interactive`, already paused and exited at a safe boundary (no human intervention needed; re-running
+  restores fully; see the /exit entry below and design document plans/0014-exit-resume-design.md),
+  `130` force-terminated by two consecutive Ctrl+C presses (a single Ctrl+C only prints a notice; only the second press within the 3-second window exits,
+  before exiting it best-effort restores file writability and shuts down the server).
+- Project config persistence (src/config.ts, design documents plans/0004-init-config-agents-design.md and
+  plans/0006-phases-design.md A.2): constitutional-level options
+  -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir are accepted only by
+  init (**init defaults to stateless full overwrite**: the output is decided solely by this invocation's arguments; keys not given fall back to
+  CONFIG_DEFAULTS, and the optional keys source/destDir simply disappear -- the same init invocation yields identical output in any environment,
+  a single run yields a deterministic state; `--amend` switches back to incremental-revision semantics, i.e. "only explicitly given keys are rewritten, the rest keep
+  their existing values", and continue is always amend. Design document plans/0004-init-config-agents-design.md §B.1;
+  the two source keys go as a pair; giving either overwrites the whole pair, and at init time it is validated that the path exists after
+  <working directory>/join (stat follows symlinks -- source-dir may be a symlink pointing outside the working directory;
+  a broken link is rejected as non-existent); all three migration keys must be relative paths without ..; dest-dir is persisted/revised independently,
+  and its existence is not validated -- the migration destination lives at <working directory>/<dest-dir>, which isolates driver flow files from migration output;
+  when the ledger is non-empty, phases must satisfy the prefix guardrail -- completed phases must form a prefix of **the value effective this time**, otherwise exit code 1
+  with guidance to manually revise the ledger or switch to --amend; the guardrail judges the effective value, not "whether --phases was given explicitly"; otherwise a no-argument
+  init would silently reset a phased project's phases to "m", destroying the round layout); these options appearing on run are a usage error with exit code 1
+  (the message gives revision guidance; run likewise rejects --amend and -f/--force).
+  When overwriting an existing config there are two accidental-touch gates, both ordered before the first write point -- intercept first, then ask; `-f/--force`
+  skips both: ① workspace cleanliness (src/clean.ts, covering the repository containing the target directory and all nested
+  repositories/submodules under the directory tree; non-git directories are treated as clean); ② interactive confirmation (src/confirm.ts; non-TTY passes through directly).
+  The two do not override each other -- non-TTY only skips the question; the cleanliness intercept still applies to CI and scripts as usual.
+  The manual revision channel is editing the config file directly; on bad JSON / out-of-range key values / unregistered mode, both run and init exit with
+  code 1 (strict failure over silent fallback); unknown keys are ignored; the mode in the legacy .auto/config.json is read as fallback only when the new file
+  is missing (run prints a notice); during run the config files are made read-only (brief.md is not among them; it is not a state file);
+  status and the run startup banner print
+  a one-line formatProjectConfig summary (including phases). The discriminator: changing it requires simultaneously changing AGENTS.md/PLAN/contract wording or
+  describing model/project properties → init; only describing how this run runs and how a human monitors it → run.
+- De-initialization (src/reset.ts, `reset` subcommand): the inverse of init; it precisely removes the config-layer artifacts init wrote,
+  restoring the workspace to the uninitialized state. It cleans .opencode/auto/config.json and brief.md,
+  .opencode/agent/auto.md, the legacy .auto/config.json, the opencode-auto marker block in AGENTS.md,
+  the tmp/ and .auto/ entries in .gitignore, and the opencode.json whose **content is byte-identical to the template** (if it has been modified
+  it is kept and the reason explained); PLAN.md, docs/ (including R-NN and T-NNN), the rest of .auto/ runtime state, and tmp/
+  are all left untouched; directories are reclaimed via rmdir only when empty (never rm -r), so user-created .opencode/auto/prompts/
+  and other agent contracts under .opencode/agent/ remain intact. Before executing it prints the full manifest, then passes the same gates as init:
+  the cleanliness gate and interactive confirmation (reset is always destructive; the gates apply unconditionally). The output of init → reset → init
+  is byte-identical to the first init; when there are no init artifacts at all it prints a notice and exits 0.
+- init de-AI-ification (plans/0006-phases-design.md): init starts no AI session; `-p/--prompt` overwrites
+  .opencode/auto/brief.md in full (project intent, versioned, human-editable, consumed by the phase-planning session; without -p the existing
+  one is kept); the closing message has two states by phases ("m" keeps the current "编辑 PLAN.md" (edit PLAN.md) wording; the others prompt to start the first uncompleted
+  phase planning); if phases contains v while verify is not enabled, init prints a note once (v and verify are orthogonal);
+  when phases ≠ "m", PLAN.md is produced as an empty template (templates/PLAN.scaffold.md) and handed to the planning session.
+- --auto-number/--no-auto-number (config.autoNumber, default true, --no-auto-number being the opt-out
+  switch; a constitutional-level option, revised via init/continue, rejected by run; both switches present with neither carrying =false is a usage error;
+  design document plans/0001-auto-number-design.md): when enabled, task numbers (T-NNN) **never repeat** in the target directory -- the next available
+  number is persisted in .auto/next-task (its content is just one positive integer, maintained by the driver; .auto/ is already gitignored,
+  so a fresh clone naturally lacks it). The sole consumer is the phase-planning session: planPhase first runs ensureNumbering to ensure the record
+  is in place, injects the recorded value as the numbering start into the planning prompt (replacing the "自 T-001 起" (starting from T-001) wording), and collect validates that all
+  task numbers are ≥ the start (reusing an occupied number counts as invalid output; retry once with feedback, and on continued failure a silent block with exit 2),
+  after success the record advances to this run's max number + 1 (increases only, never decreases); phases = "m" has no planning session, so the switch has no
+  effect (init prints a one-time ℹ notice for that combination). When the record is missing, recover first, then continue: a deterministic lower bound (the max number among existing
+  PLAN.md / phase and round archive PLAN/docs artifact file names, + 1) of 1 (a brand-new project) means writing
+  1 directly without opening a session; a bound greater than 1 opens a one-off bypass AI recovery session (template number-recovery.md) that reads through the archives
+  and the git commit history to derive the next number and write it into the record (git history can discover numbers of deleted artifacts); the driver validates its
+  output against the lower bound (below the bound is invalid; retry once, and on continued failure a silent block with exit 2); the recovery output is committed with the session via the unified
+  commit (stage=numbering). T-F<k> final-review numbers are an independently derived namespace and do not participate in the auto-number record.
+- Phase loop (config.phases ≠ "m", P1..P4 wired; design document plans/0006-phases-design.md sections D/E/F): phase
+  state is derived; routePhase reads only the phase ledger (docs/R-NN/phases.md inside the round in the new layout, the root
+  docs/phases.md in the old layout) and PLAN.md (zero newly persisted state),
+  run loops on this -- PLAN.md is the empty template → open a phase-planning session (one-off bypass, reusing the requireArtifact
+  skeleton, artifact = the filled-in PLAN.md; only this session is authorized via allowWrite to write PLAN.md; if blocked, exit 2;
+  the session input injects brief, source, destDir, mode.init, and the pre-concatenated handover documents of all preceding phases as
+  handovers -- handover documents live at the permanent path docs/handovers/R<N>-<letter>-<slug>.md (stable-refs
+  P2); phases completed before P2 read-fall-back from within their own archive directories; distilled artifacts are the only cross-phase memory channel -- the preceding raw docs/ are not injected;
+  a missing file is annotated "(无交接文档)" (no handover document)),
+  unfinished tasks exist → take the existing main loop (decompose/execute/acceptance/review/unified commit/progress-recovery semantics unchanged;
+  v-phase tasks are exempt from task-level acceptance and --review, see the next entry),
+  all tasks of this phase done → handover (first open a distillation session producing a handover document at a permanent docs/handovers/ path
+  -- the four-section protocol key decisions / constraints and pitfalls / must-read list for the next phase / artifact index; validHandover checks the title lines
+  verbatim, a missing artifact retries once with feedback and on continued failure silently blocks with exit 2; then PLAN.md is copied into
+  the archive directory (docs/R-NN/<letter>-<slug>/ inside the round in the new layout, docs/phases/<letter>-<slug>/ in the old layout;
+  it collects only expired state files) → PLAN.md is reset to the empty template →
+  the ledger append (the row protocol carries the handover pointer handovers/ path; old row shapes are tolerated) → unified commit
+  stage=phase-transition; this phase's docs/ artifact documents are at permanent paths and are not moved by the handover);
+  the ledger covers all letters of phases → exit 0. `--final-review` is hooked only in phase m (other phases
+  print a one-time notice); AGENTS.md exceeding 150 lines gets only a note at handover, not rewritten.
+- Phase k (P4, plans/0006-phases-design.md D.4; wholly takes over the --extract-knowledge of
+  plans/0002-fixme-knowledge-design.md; that CLI option does not exist): the plan route (PLAN.md empty-template state) opens no
+  planning session and does not fill PLAN.md; it goes straight into the knowledge-extraction bypass session (src/knowledge.ts
+  extractKnowledge, requireArtifact skeleton) -- it reads through the phase ledger and every phase's handover documents
+  (docs/handovers/ first), producing the permanent path
+  docs/migration-kb/R<N>-migration-<timestamp>.md (the section skeleton / quality constraints are inlined in
+  templates/prompts/knowledge.md, mode.exec injected as scenario background; not moved by handover / round archiving
+  ); if a non-empty R<N>-prefixed .md already exists for this round (interrupted before handover), skip idempotently (earlier rounds' documents
+  do not count as extracted this round; round 1, lacking prefixed stock, treats the read-fallback as this round's product); extraction failure (session blocked
+  or two failures to produce) only prints a ⚠ warning and does not pollute the exit code; phase k hands over as usual -- migration success is not reversely polluted
+  by document-generation failure; the knowledge document is committed with the session via the unified commit (stage=knowledge); when a human fills tasks into PLAN.md during phase k
+  themselves, the generic execute/handover routes apply and the extraction hook does not fire; retrying extraction after the handover is complete
+  = the manual rollback procedure (delete the ledger's k row and this round's R<N>-prefixed
+  document inside docs/migration-kb/, then re-run).
+- v-phase acceptance exemption (plans/0006-phases-design.md D.3): runTask, per the Opts.phase passed through by loop, when the current
+  phase is v forces review=0 and skips the task-level three-stage acceptance (straight to markDone after wrap-up, writing no
+  verified) -- it shares the same exemption code path with the final field of final-review tasks; an internal flag, writing no final
+  field, and not polluting the PLAN.md protocol; when all v-phase tasks are done it hands over immediately, no circuit-break on acceptance gaps (D.3
+  reserved an optional hook to parse the acceptance report's verdict before the handover route; not done in V1).
+- Follow-up round migration (continue subcommand, plans/0006-phases-design.md section M; the 2026-09-08 round-dedicated-directory
+  scheme): after the previous round's phased migration is fully complete (the ledger covers all existing letters of phases), a new round opens
+  to continue migrating, aiming to make the migration result more complete and consistent with the source. continue = init's amend mechanism +
+  establishRound creating the new round directory at round start (docs/R-NN/, built at round start, permanent once on disk -- PLAN.md/
+  phases.md/AGENTS.md.bak/phase archives/handovers/phase-docs/migration-kb.md/
+  prior-kb.md are all self-contained within the round; the root PLAN.md is rebuilt as a relative symlink pointing into the round; no on-site
+  cleanup, no end-of-round moving -- archiveRound has been deleted); the previous round's conclusions (archive index + the final phase's
+  handover document in full + the migration knowledge document in full: the new layout reads within the round; the old layout reads docs/migration-kb/'s
+  R<N>-prefixed files and un-prefixed stock, plus migration-kb/ inside pre-P2 round archives, collected via read-fallback)
+  are injected via prevRoundDigest into the new round's first phase-planning session; later phases take this round's handover
+  distillation chain as usual. Migration-identity options (-m/--mode, --source-dir/--source-path/
+  --dest-dir) are fixed across rounds; giving any explicitly at continue is exit code 1 (switching source/target/mode is not
+  the continuation of the same migration); --phases/-p and the remaining execution options may be revised per round (--phases is not subject to the prefix guardrail
+  constraint). Rounds are derived (docs/R-NN/ exists → current round = the largest R number; otherwise fall back to the old semantics
+  of round-<N> max number + 1); the run/status phase-progress line carries
+  the `第 N 轮` (round N) annotation (when round > 1); `--continue` is not an option -- appearing on init/run raises an error pointing to the
+  continue subcommand; pre-check failures (non-phased project / empty ledger / missing phases / foreign letters present / new
+  --phases being "m") all exit code 1 with guidance.
+- A common root cause of task-dispatch failure (UnknownError) is the target directory missing `.opencode/agent/<agent>.md`
+  (the server error body carries no root cause): the pre-run integrity check intercepts this case; when it happens mid-run the driver appends
+  a recovery hint after the blocking issue (detection depends on Opts.dir, which run/init/dryrun must all pass in).
+- Task document path contract (stable-refs P1, src/docpaths.ts as the single construction point): task documents appear only
+  inside the task's own directory `docs/T-NNN/` (understanding summary context.md, decomposition checklist subtasks.md,
+  wrap-up report report.md, review report audit.md, fix checklist fix.md, context handover handoff.md,
+  task-level test handover testhandoff.md and its archived copy testhandoff-<n>.md); subtask artifacts
+  `docs/T-NNN/S<两位序号>/index.md` (S + two-digit index), with subtask-level test handovers and archived copies in the same directory; final-review artifacts are anchored to the producing task's own
+  `docs/T-F<k>/` (proposal plan-<stage>-r<N>.md and the audit-r/refactor-r/patch-r/
+  validate-r/finalize reports); once created these paths are permanent. `--review`'s final-review
+  audit shares the path with the task audit, docs/<taskId>/audit.md. **Read fallback**: old flat-layout projects
+  (docs/<id>.<role>.md etc.) -- read sites prefer the new path and fall back to the old path when the new is missing but the old exists; write targets are always
+  the new path; read fallback is kept permanently and the old flat layout stays in place (refcheck-scope-design D2 rejects the move-to-adapt
+  approach: since 2026-09-08 run no longer migrates existing stock into directories; broken legacy references are recovered via git history,
+  see plans/0013-refcheck-scope-design.md §4). **Permanence overview (stable-refs P2)**: documents under docs/
+  (docs/T-*/, docs/handovers/, docs/migration-kb/, docs/prior-kb/) once created are
+  never moved, never renamed -- since the round-dedicated-directory scheme (2026-09-08), one
+  docs/R-NN/ per round (created at round start): phase handover produces handovers/<letter>-<slug>.md inside the round, referenced by the ledger row
+  (handoverDoc, src/phases.ts); knowledge documents use the fixed in-round names migration-kb.md and
+  prior-kb.md (docpaths.ts knowledgeDoc/priorKnowledgeDoc; the round directory always starts empty, forcing every new round
+  to re-distill; for old-mechanism rounds (the ledger has completed phases but no this-round documents), the old flat un-prefixed stock is read as fallback;
+  deliberate exception: the prior-knowledge-extraction intermediate temp-kb.md (same directory as the formal artifact) is not permanent -- the AI
+  only writes it and closes out by marking "完成" (done) at the end; after the driver confirms, it is renamed to prior-kb.md and committed,
+  the completion test = on disk and committed, see knowledge.ts extractPriorKnowledge);
+  expired state such as phase PLAN snapshots is kept in the in-round <letter>-<slug>/ archive directory; state files are referenced by no
+  document; the old layout (docs/handovers/R<N>-*.md, flat docs/migration-kb|prior-kb/,
+  docs/phases/ and round-N/ archives) stays in place as read fallback; pre-P2 layouts (handovers inside the archive directory,
+  knowledge without prefix) are each read-fallback compatible at the read sites.
+ - Reference-consistency three layers (stable-refs P4, D6; design document plans/0010-stable-refs-design.md §3.3;
+   **governed since 2026-09-08 by the experiment switch `OPENCODE_AUTO_REF_CHECK=on/off`, default off**
+   -- when off all three layers' hooks no-op and the target directory sees zero reference-check behavior; the scope-reduction and restoration design is in
+   plans/0013-refcheck-scope-design.md): the sole legal form a reference may take
+  is a path relative to the target directory root (backticks or an md link; it may carry a `:行号` (line-number) anchor, and the anchor may in turn carry
+  an `@<sha>` version marker); validation semantics = path exists + line number ≤ the file's total line count (references with an `@<sha>` marker
+  are historical-snapshot references and check existence only, exempt from the line-number cap); when a direct path misses, a segment-boundary suffix finds the unique file in the target directory tree
+  -- a contextual relative reference (written relative to the referrer's own directory) that hits uniquely counts as valid and is
+  resolved to the matched file (especially helpful for non-docs references); no match or multiple matches (ambiguous context) counts as missing; references inside code fences
+  and inline references carrying the 已删除/已归档/历史 (deleted/archived/historical) markers are exempt;
+  URL/absolute-path/`~`/`./`/`../` forms and pure version-number tokens (e.g. `v1.2`) are not validated; an md link's
+  `#fragment` is stripped before validation; directory references check existence only. Three layers: ① **auto-correct** -- before each unified commit
+  (the runner's afterSession hook, covering all post-session commits) the driver first does git rename pairing
+  (after `git add -A` staging, `git diff --cached --find-renames HEAD`; the staging is anyway the prelude to the next commit
+   ) and mechanically rewrites live-document references (**only renames are paired; deletions/semantic changes are not auto-changed**); the rewrite does not touch
+   layout -- only the hit path token is replaced in place; line structure/whitespace/alignment are preserved as-is), then it rescans
+  findings and performs **missing-reference recovery** (refcheck-scope P2, confirm-broken first, recover after: a missing
+  reference target is traced through the git-history rename map -- `git log --find-renames` of the target repo and its nested
+  subrepositories, preferring the first new→old appearance and chain-resolving the final landing point -- ; if the landing point currently
+  exists it is rewritten in place to recover (line-number anchors kept); if the landing point is deleted or never existed in history there is no auto-recovery (only
+  move/rename-type breakage is recovered; deletions and semantic changes are left for manual correction), followed by a rescan); it then performs **scope reconfirmation**
+  (refcheck-scope P3: for a reference with a `:N`/`:N-M` line anchor and no version marker, when its target file has uncommitted changes in its git
+  repository, the same-range line slices of the HEAD version and the current version are compared -- identical: leave alone;
+  different (an insufficient current line count counts as different): keep the original range and append an `@<sha>` version marker in place (sha =
+  the owning repository's current HEAD short hash); semantics = the range is valid only for the marked historical version and is exempt from the line-number-cap
+  validation; references already carrying a marker get no further append or update and are left for manual correction; nested subrepositories are judged individually, each pinned to its own
+  repository's HEAD; followed by a rescan); it then maintains the invalid-reference list
+  `.auto/invalid-refs.md` (registering only unrecovered broken references; key = `文件 → 路径(problem)` (file → path(problem)), fully
+  rewritten each round -- auto-removed once fixed, recurrence counts as newly appeared): keys already registered get no more ⚠; warning logs are emitted only for newly appeared broken
+  references (to prevent endless duplicate reporting; manual verification and correction enter via the list); rewrite content lands with this
+  unified commit, no separate commit; auto-correct in a non-git directory
+  no-ops (validation can still run). ② **check subcommand** -- beyond the principle checks it fully scans live documents
+  (docs/**/*.md, excluding docs/phases/**; the docs/phases.md ledger counts as a live document); a broken-reference hit is
+  exit code 1 (check is an explicit human/CI invocation; reports are not deduplicated against the list); a missing opencode-auto block in AGENTS.md and non-git directories
+  (auto-correct unavailable) get a note. ③
+  **verify gate** -- verifyTask does a deterministic pre-scan of the task artifact documents (docs/T-NNN/**,
+  same for final-review tasks T-F<k>) before each verdict session; a broken reference = a gap, going straight into the fix round (no verdict session consumed;
+  off mode falls back to pending, FIX_ROUNDS exhausted blocks with exit 2); when verify is not enabled the gate does not exist and it
+  degrades to layer ①'s ⚠ logging (lenient contract). This norm is sunk via init: the reference-spec section inside the opencode-auto
+  marker block of AGENTS.md (appears unconditionally -- path stability does not depend on any switch);
+  the wrapup (report reference requirements)/verify-script-gen (root-relative paths inside scripts)/fix (broken references
+  may be fixed by updating just the reference line) templates get matching injected prompt copy.
+- Unified commits (revoking the AI's commit right): after any session ends and the driver has written its state, the driver, via
+  commitTree in src/git.ts, recursively commits all changes (nested .git subrepositories first, then the repository containing the
+  target directory; path discovery does not rely on git status -- nested repositories are usually ignored by the parent); git history is thus the audit trail of AI
+  changes, with rollback granularity = one session. Commit message = the `任务编号 <label> <任务标题/子任务>` (task number <label> <task title/subtask>) short-label
+   title line (label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
+   blocked/pending/done; pseudo-tasks use PLAN <label>:plan/handover/transition/knowledge/
+   numbering/final-plan/doc-migrate/housekeeping/carryover/implement; subtask entries are `任务编号 S<n> <标题>` (task number S<n> <title>),
+   omitting the task title) + the `Auto-Task`/
+  `Auto-Stage` trailer (the target repository additionally records **all** nested repository paths and their final
+  /latest SHAs via `Auto-Nested` -- a new SHA if this round committed there, the current HEAD if not; any root commit can align cross-repository
+  state). Hook points:
+   decomposition injection / subtask checkbox / whole task / fix round / wrap-up after the state write (the state write includes the CURRENT.md
+   mirror refresh: decomposition injection and subtask checkbox refresh the mirror before committing); verdict/review/script-generation/
+   fix-planning/final-review-planning and other bypass sessions after the session ends; task completion/blocking/pending rollback are committed by loop at the
+   boundary (the interrupted scene is committed too, supporting rollback to the breakpoint); dryrun does not commit.
+  **Committing is the completion condition (plans/0021-commit-boundary-design.md, 2026-09-14)**: for a task/subtask/hidden task
+  (pseudo-task/bypass session), as long as it modified Git-tracked content, completion requires the unified commit to succeed -- commit failure
+  always means **blocked halt (exit code 2) awaiting a human**, no longer a mere warning (commitTree reports the failure list to the
+  caller); each execution unit (task/subtask/standalone hidden task) at startup goes through beginUnit for the
+  **clean gate** (the worktree must be clean; all depended-on information is pinned by the previous commit; leftovers of the driver-exclusive
+  state files PLAN.md/CURRENT.md are self-healed by a carryover make-up commit; other dirty areas block and go to a human
+  -- run startup and each unit startup use the same rule, and the old semantics that "leftover worktree changes get absorbed by the next commit" is thereby
+  abolished) and records a per-repository HEAD SHA baseline; at close-out unitViolations verifies: the worktree is clean and
+  every commit in the baseline..HEAD range carries the `Auto-Stage` trailer (an external commit = an isolation breach, blocked);
+  resumed runs (active progress record + session reuse/handover continuation) are exempt from the clean check -- the dirty worktree areas are
+  the unit's own progress. The idempotent entry of standalone hidden tasks generalizes the ③④ protocol of prior-knowledge extraction: artifact already on disk
+  but uncommitted → a make-up commit completes it (git.ts commitPending; knowledge/phase-handover are wired directly,
+  phase-plan is covered by carryover self-healing, the final proposal by an append commit); artifact missing while the worktree is
+  dirty → dirty block to a human (no state file written, no cleanup; the git decision belongs to the human; phase k's "extraction failure
+  is only a warning" makes an exception for dirty). Startup make-up writes of the AGENTS.md pointer block/.gitignore are closed out by a housekeeping
+  commit; final-review task appending and fix-checklist injection (driver state writes) each form their own commit. When the repository has no
+  user.email configured, a fixed identity is the fallback. **Committing cannot be turned off (2026-09-15 retired `--commit false`)**:
+  unified commit is the completion condition, and the unit clean gate / SHA baseline and the recovery-fidelity rollback anchors all presuppose "commit always on";
+  an off setting conflicts with that -- `--commit false` (and the legacy alias `none`) appearing is a usage error, exit 1;
+  an existing `.opencode/auto/config.json` containing `commit: false` strictly fails as a bad file (please delete that key
+  or set it to true); `--commit true` can still be written and equals the default. The gate hereafter fails to apply only in dryrun and non-git environments
+  (the code-side `opts.commit` branch remains for now, permanently unreachable; cleanup is a separate task; the old four settings subtask/task/once
+  and the alias --commit-subtask were long removed; appearing is a usage error). This execution-right principle is sunk via init:
+  the AGENTS.md commit-principle block, the agent contract and state-rule fragments; the `check` subcommand likewise
+  scans for descriptions violating this principle.
+- subtask three settings (config.subtask, revised via init --subtask): `auto` (default; decomposition session → subtask by subtask,
+  subtask sessions likewise carry the handoff-steer handover -- when usage reaches twice the configured contextLimit, the steer handover
+   prompt is steered; the session writes docs/<id>/handoff.md (last line `状态: 继续|完成` (status: continue|done), counted by whether that subtask completed),
+  the new session continues from the handover, and the driver deletes the file once the subtask completes) /
+  `off` (the entire task is completed in a single session;
+  acceptance gaps get no fix rerun -- the task rolls back to pending awaiting human improvement) / `ondemand` (single-session execution,
+  watch steers a handover prompt into the in-flight session when usage reaches twice the configured contextLimit -- once per session,
+  the v2 prompt defaults to steer; at session end, the last line `状态: 继续|完成` of docs/<id>/handoff.md
+  decides continuation versus wrap-up; a missing file retries once with feedback and is then treated as a silent block). Mid-run switching: tasks with checklists already injected
+  keep resuming from the checkbox state as before (progress follows the task record); new tasks run under the new setting; the README notes this is not recommended.
+- --dryrun: runs only one permission pre-check session (listing out-of-scope directories/operations and probing each read-only); inside that session
+  permission requests are auto-denied without interruption (so the AI can record blocked items) and questions are all auto-answered; the report is written to
+  .auto/dryrun.md and printed; no task is executed.
+- Question auto-answering (question.asked) and proxy-answer auditing (OPENCODE_AUTO_ASK, default off; design document
+  plans/0020-auto-resolve-design.md): non-permission questions are auto-answered by autoAnswer(ask); both settings' copy makes clear
+  "这是一个被代答的提问" ("this is a proxy-answered question"); under --wait-answer it first waits for a human stdin reply, falling back to the auto answer on timeout;
+  with --wait-answer unset, permission-class questions (the question tool) block directly; a repeated identical question still blocks
+  with a halt. Decision markers come in two classes; the criterion is **who should rightfully own this decision point** -- owned by the user (requirement intent
+  and scope trade-offs, changes to externally visible behavior and interface contracts, the criteria for "what counts as done", fact-confirmation questions,
+  going beyond or narrowing the task description's literal scope) → `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` (original question -> chosen option (reason));
+  owned by the AI (choice of implementation means, where no option changes user-visible behavior) →
+  `AUTO-DECISION: <决策> (<理由>)` (decision (reason)); one decision gets exactly one class; when unsure, mark AUTO-RESOLVE. The questioning strategy
+  has two settings switched by OPENCODE_AUTO_ASK, with the questioning duty and the marking duty advancing and retreating together: off (default, rendering byte-for-byte
+  identical to before the rework) suppresses non-permission questions and forces both marker classes; on makes decision points owned by the user proactively call the question
+  tool, while purely-implementation choices are decided autonomously with **no marking required at all** (the driver already fully records on the event side). The driver
+  collects on two paths: ① question.asked's fallback auto answers go into the round's `resolves[]` (carried out via 7 snapshot
+  exits; genuine human answers and the dryrun pre-check session are excluded); ② at session close it scans this run's uncommitted changed files for
+  the two classes of marker lines (the scan is hooked before the early return of a closed commit gate (dryrun, and the retired `--commit false`)
+  -- collection is auditing and must not be affected by the commit switch); the two sources are paired via sameIssue, and at display time paired driver items yield to the more informative
+  agent item; unpaired ones are named with a ⚠ "会话未按要求标注" (the session did not mark as required). AUTO-RESOLVE is displayed pinned at the top with `⚑` in the task three-state line, at
+  phase closing, and before round completion (task-level one per entry, cap of 8 entries, each entry squeezed to a single line truncated at 80 characters;
+  phase/round give counts only); AUTO-DECISION is folded into a single count (folded into the highlight block's last line when proxy answers exist, otherwise
+  vlog only), and phase/round summaries do not show it at all. The wrap-up session gets the driver-observed proxy-answer list injected (listing only
+  driver source, unpaired ones first, untruncated), requiring docs/T-NNN/report.md to carry a dedicated "自动代答问题"
+  (auto-answered questions) section -- the persistent audit trail is the marker lines that enter git plus that section; the ledger is only the driver's counting and highlighting basis.
+- Infinite-loop detection (OPENCODE_AUTO_STUCK, default on; design document plans/0016-stuck-loop-design.md):
+  weak models often repeat the same action the same way many times in a row without ever succeeding and cannot escape on their own; the driver,
+  from watch, observes tool-call terminal states, with two session-level criteria -- same tool + same error (**parameters excluded**,
+  parameter tweaks still hit the same pit) totaling 3 times, or same tool + same parameters + identical output totaling
+  4 times (an identical result = no new information); any change in the result always counts as progress and is not counted, and consecutiveness is not
+  required (alternating retries are recognized too). On a hit, a hint is steered into that session via promptAsync (taking effect at the next
+  provider turn boundary), escalating level by level: ① lay out the evidence + re-check premises + switch approach →
+  ② require writing down "目标/已试过什么/下一步换什么" (goal / what has been tried / what to switch to next) before acting again → ③ stop retrying; use
+  `AUTO-FIXME: <原因与计划>` (cause and plan) to mark the leftover, report progress, and end the session. At most three times per session; after a hit
+  that signature's counter resets to zero (a full new round of hits is needed before the next hint); after the cap is reached, silence. **Hint only, never halt** -- it does not abort
+  the session, change verdicts, or write state files (the criteria can misjudge, and the cost of halting far exceeds one surplus hint;
+  the third level hands the wrap-up decision back to the AI, taken over by the existing pipeline); a failed steer delivery only logs.
+  The dryrun pre-check session is never checked (being repeatedly denied while probing permissions is its normal shape).
+- Phased model routing and quota demotion (OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK, defaults
+  both unset = byte-identical to the status quo; design document plans/0017-model-routing-design.md): the experiment-switch layer, per
+  "(phase letter, session role) → model", attaches `model` to each individual prompt -- the sole injection point is at attempt's
+  `client.session.prompt`; when it evaluates to undefined, **no model key is attached** (rather than attaching `model: undefined`);
+  the per-prompt model has the highest priority and is written back to the session table for reuse later in the chain, so opencode.json is not changed, agent contracts are not split
+  per phase, and the server is not restarted. OPENCODE_AUTO_MODEL has two forms: a bare value `prov/model` (equivalent to the `*=prov/model`
+  full overwrite), or an entry table of comma-separated `键=prov/model` (key=prov/model) entries (the in-entry separator is `=` not `:`, because model ids may contain
+  colons; the value must contain `/`, otherwise a Chinese error message and exit code 1); keys ∈ `*` ∪ phase letters `admtvk` ∪ the role vocabulary. Role sources:
+  execution chains derive from `chain.phase` (understand/decompose/whole/subtask/wrapup/verify-{generate,exec,
+  judge,fix}/review-{audit,planfix,fixrun}/phase-plan/phase-handover); one-off bypass sessions follow
+  requireArtifact's `spec.role` (verify-judge/verify-generate/review-audit/review-planfix/
+  final-plan/knowledge/prior-knowledge/implement-scan/number-recovery, or `bypass` when unset); evaluation
+  priority is **role > letter > `*`** (resolveModel). OPENCODE_AUTO_MODEL_FALLBACK is an ordered candidate list
+  `prov/a,prov/b`; the default, empty, = no demotion. Quota demotion: three watch trigger surfaces classify session errors
+  (classifySessionError → quota/auth/rate/overflow/transient/unknown; the criterion asks "would switching models help"
+  rather than "would retrying help", deliberately different from opencode's own retry classification; when unsure, unknown -- conservatively no switch;
+  overflow explicitly does not switch, deferring to the handover mechanism) -- ① the structured fields of session.error (message/statusCode/isRetryable/
+  responseBody); ② the retry part of message.part.updated (carrying attempt and ApiError); ③ session.status's
+  retry variants (carrying attempt and next, the next wait duration); a quota/auth/rate hit demotes immediately: take the ordered candidate list's next
+  candidate into `chain.model`, reusing the existing fork-copy path to continue (session.fork moves only the messages; the prompt-level model override
+  covers it, so **the context travels along, nothing needs redoing**); **`session.abort` is called before demoting** to prevent a server-side orphan turn and the fork copy from
+  concurrently writing files (the same technique as broken-stream cleanup), plus a one-shot `chain.note` reminding the AI that after the model switch it should keep following the prior artifact formats and
+  protocols (the same weak-model safety-net philosophy as stuck-hint). Candidates are clamped by context window (`contextLimits`: entries whose known limit.context
+  `< 配置 contextLimit` ("< the configured contextLimit") candidates are skipped with the reason recorded, to avoid immediately hitting the cap after demotion, worse than the original fault; unknown caps are not filtered); when candidates
+  are exhausted (all tried or all clamped), it falls back to the existing block (exit code 2, rollback-to-pending semantics unchanged; the message appends the list of already-tried candidates).
+  The demotion action has two trigger surfaces: the above quota/auth/rate (immediate, ahead of the retry ladder), and **the fallback after the retry ladder is exhausted with
+  no human adjudication** (transient/unknown, see the --idle-time entry above) -- the latter's fork source uses the same
+  "most valuable session" criterion as the retry loop (the larger of accumulated usage between the failed session itself and the chain's original session; a 0-usage pure-error stub is not preserved).
+  Demotion only changes the model parameter and **persists nothing** (`chain.model` is memory-only; progress.json records no model); it does not change how sessions are
+  created ("standalone verdict sessions do not fork" is unaffected); each candidate gets its own full round of the retry ladder (demotion counting and ladder counting are
+   separate, neither masking the other; total cap = (1 + number of candidates) × ladder length); `chain.model` is valid only within the chain; the execution chain is rebuilt per task,
+   and the routing table is re-evaluated at task boundaries (by default not sticky across tasks; the cost is that a quota-type fault re-hits the primary model once on each new chain's first prompt --
+   a trade-off accepted in D.5). Failback granularity is adjustable (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE, default `task` =
+   the status quo, D.6): `phase` resets only at phase boundaries (demotion is sticky across tasks via the failback module's sticky holder); `subtask`
+   additionally clears chain candidates at subtask boundaries; `session` re-tries the primary at every brand-new session start (the create branch) -- the migrated session forked out by demotion
+   is not cleared, preventing the failover from being immediately undone into oscillation. Under `--interactive` there is also `/failback` for manual takeover
+   (D.7, a safe-boundary consumption isomorphic to /exit, without exiting): with no argument = reset the demotion state at the next boundary and retry the primary; with arguments
+   `/failback 首选 prov/a 候选 prov/b ...` (primary prov/a, candidates prov/b ...) = wholly redefining the runtime model order at the next boundary (the first is the primary wildcard,
+   the rest are the demotion candidate ring, applied via the failback module's override layer ahead of switches.model; the memo stays intact). Every
+   prompt's actually-used model is announced on the terminal (D.8): `◈ <任务> 使用模型 prov/model(路由|降级候选|
+   降级候选·阶段内粘滞|/failback 指定)` (task uses model prov/model: routed | demotion candidate | demotion candidate, sticky within the phase | /failback-specified), deduplicated for the same model in the same chain.
+- --permission four settings (handling strategy for permission.asked, default ask-deny): auto-allow immediately
+  auto-grants (always lets it through, no waiting); ask-allow/ask-deny/ask-fail first wait for a human
+  (--wait-answer minutes; unset means no waiting, i.e. immediate timeout; allow/yes/y etc. count as authorization and pass with always
+  semantics; any other explicit answer denies that permission without interrupting); on timeout they respectively fall back to: auto-grant / auto-deny but the
+  session continues (the AI works around without the permission) / deny and quit the run (blocked halt); under dryrun still auto-denied but
+  not interrupted. --wait-between pauses for a human after each task completes (Enter resumes immediately; on timeout it auto-continues),
+  no waiting before the first task.
+- --interactive/-i bypass interaction (mutually exclusive with --verbose, checked in index.ts): it changes no existing
+  processing logic -- a resident readline feeds each entered line as an extra user message via `session.promptAsync`
+  into the currently active session (v1 engine steer semantics, processed at the next provider turn boundary; **do not use
+  v2 `delivery: "queue"`**, it is incompatible with the v1 engine and produces a concurrent drain with no history); with no active
+  session the input is discarded with a notice; the human waits of ask/--wait-between are received via this input line instead (prompt wording,
+  timeout, empty line, and fallback semantics fully identical to the standalone readline); the terminal shows no verbose detail, but the log
+  file keeps full --verbose-level recording (interactive implies the verbose logging level). When the input line recognizes
+  `/exit` (exact equality after trim; when pending -- waiting for an ask/step-pause answer -- it is not special-cased and is
+  answered as-is) it is not sent to the session; it only sets the exit request: at the next phase/task/subtask safe boundary
+  (the same batch of hook points as the three-level boundaries of step mode `OPENCODE_AUTO_STEP`, where PLAN.md/CURRENT.md/
+  .auto/progress.json have all been written by the boundary's own regular closing) it halts with exit code `3`, writing no
+  blocking/pending marker; re-running restores precisely from the already-persisted progress (fully isomorphic to the recovery
+  path of a real crash/kill interruption at that point). See design document plans/0014-exit-resume-design.md.
+- **Driver-exclusive state writes**: the status markers of PLAN.md, checklist checkboxes, the verified field, and CURRENT.md
+  are all written by the driver; agent sessions are forbidden to edit these two files; during `run` these files (including opencode.json
+  and .opencode/auto/config.json)
+  are chmod-ed read-only as an accidental-write guardrail (not a security boundary; a same-user process can bypass via bash chmod),
+  the driver's own writes are temporarily allowed via `src/protect.ts` allowWrite/reprotect. The sole exception is
+  the verify verdict session: it is authorized to update the verify fields of later unfinished tasks (verify knowledge distillation),
+  allowWrite(PLAN.md) during the session, verification after it ends; an out-of-bounds edit (checkPlanEdit compares the task set/
+   status/attempts/body) is wholly reverted. Completion is not judged by
+   agent self-reporting -- task-level acceptance is the driver executing the verify script and a standalone bypass verdict session reading the output to judge;
+   the driver only parses its verdict file; after a subtask session ends the driver does the checkbox per its trusted ticks (acceptance is uniformly done at task level).
+   **Completion is conditioned on committing (plans/0021-commit-boundary-design.md)**: for any unit (task/subtask/
+   hidden task), an artifact or state write counts as complete only once the unified commit lands successfully -- commit failure is a block with exit 2;
+   unit startup requires a clean worktree (SHA baseline); at close-out it is verified that the commit range contains only driver commits
+   (carrying the Auto-Stage trailer).
+- verify acceptance toggle (config.verify, default false; only when enabled does the driver enter task-level three-stage acceptance)
+  -- when not enabled, after wrap-up the driver directly marks tasks done (no verified written; nothing lands without verification),
+  --review's quality review instead runs serially at this point (the --early parallel window does not exist; loop prints a downgrade
+  notice at startup), and the idleTime/idleMax watchdog does not participate; final-review tasks (carrying the final field) regardless of this key
+  always forcibly skip task-level acceptance (a missing report / invalid protocol is blocked as a protocol exception at routing).
+  This toggle also gates the presence of acceptance wording in the artifacts: when not enabled, the PLAN.md/agent contract produced by init
+  (renderText conditional rendering), ensurePointer does not add the AGENTS.md verification-principle block (an existing one is removed), and
+  the session prompts (state-rule fragments etc., via baseCtx's verify variable) contain no
+  verify-related wording -- the acceptance mechanism does not exist, so the prompts must not mention it.
+- --test-by-driver/--handover-test (config.testByDriver/handoverTest, default false; constitutional-level options, revised via init --test-by-driver/--handover-test, rejected by run; a test-execution protocol orthogonal to verify): the former takes back from sessions the right to execute, within the implementation loop, "编译/测试/构建/lint 等可能耗时长或产生大量输出的命令" (commands such as compile/test/build/lint that may take long or produce large output) -- execution-class sessions (subtask/whole-task/acceptance fix rounds; decompose/wrap-up/verdict/review and other bypass sessions and --dryrun do not apply) no longer run such commands directly inside the session; instead the command is written as a script placed in the test/ directory (clearly named, executable, reusable, versioned with the repository), and the script path (relative to the working directory) is written into the tmp/test.sh marker (presence = a pending-execution request; rewriting = requesting again); the driver detects the marker while the session is idle: if the content, trimmed, is a single line pointing to an existing file → run that script directly and best-effort add the execute bit via chmod +x (the AI often forgets the execute bit; scripts under test/ are already versioned via unified commits, no separate archiving); otherwise fall back to inline-script handling: write it wholesale to tmp/test.<n>.sh and run that (an execution snapshot is kept for audit); both forms merge stdout/stderr and write them wholesale to tmp/test.<n>.out (a single file, numbering continues across runs, sharing the idleTime/idleMax watchdog); after the marker is removed, the exit code/elapsed time/script and output paths are steered into the same session, and the AI reads the file directly to judge (a non-0 exit code is not judged by the driver; steers are always delivered via promptAsync -- the v2 synchronous /message endpoint blocks until the turn ends, and synchronously waiting inside the watch event loop would deadlock it; a failed delivery is logged and handled as a silent block; the twin idle event at turn end is deduplicated by watch, and once handled no further settlement happens until a new session event appears); re-running the same test = writing the same script path into tmp/test.sh again (the script may be modified first, then re-run). Every execution session's entry clears leftover pending-execution markers. The latter (requires the former, cross-validated at both the config layer and init; design plans/0023-test-handover-early-design.md) moves the handover ahead of the test: the judgment moment is pinned to **the instant the AI initiates the test** (when tmp/test.sh appears), and the criterion is decoupled to the single condition used ≥ contextLimit (test failure no longer stacks on top; when live usage has not yet reached it, fall back to the session's starting value startUsed -- sessions taken over by reuse/recovery use the chain's accumulated usage, while fork and brand-new sessions count from zero). On a hit the driver, at this instant, does in order: ① **pinned commit** (afterSession, stage `<单元> handoff-<n>-pin`, i.e. "unit handoff-<n>-pin") to fix the script and source under test -- at this moment the session is idle, with no half-written files; ② **run the test concurrently** (no await; serializing would leave the session hanging until its cache goes stale; the close-out is uniformly done by attempt after watch returns, and the test process never dangles across sessions); ③ steer the wrap-up + handover instruction (test-wrapup template), asking the AI to land the remaining work that does not depend on the test result, write the test-dependent part into the test handover document, and end the session. After the session ends, the **re-test guard** compares tracked non-document changes since the pinned commit (git.ts trackedSourceChanges, excluding docs/** and PLAN.md/CURRENT.md; untracked additions do not count): non-empty means stash -u → re-run the same script against the pinned snapshot (runTestScript) → stash pop; a pop conflict is not swallowed (the stash entry is kept, blocked halt); the handover document is then **archived** as testhandoff-<n>.md (docpaths archivedTestHandoff/latestHandoffSeq, numbering continues across sessions/runs) and lands **commit #2** (stage `<单元> handoff-<n>`, i.e. "unit handoff-<n>") confirming the handover -- one handover, two commits, with no source or script modification between the two commits. The document is named by execution scope (subtasks get docs/<id>/S<two-digit index>/testhandoff.md; whole-task sessions and acceptance fix rounds get docs/<id>/testhandoff.md); the handover applies only to its own execution scope, so the next subtask cannot misread the previous subtask's leftover handover (missing retries once with feedback, still missing is a silent block); the driver opens a new session and continues via the continuation prompt (first read the archived handover document, then interpret that test's result), with no hard cap -- past 10 consecutive occurrences it reminds the user to evaluate whether the work is stuck on an unsolvable problem (it may continue after marking the leftover with AUTO-FIXME); when the execution scope completes, that scope's test handover document including all archived copies is cleared (removeHandoffChain, the same rule as the ondemand handover; the next subtask starts counting anew; historical handover content is carried by the git commit record), and on non-recovery continuations the stale task-level and subtask-level handover chains are cleared. The prompt protocol section is injected via the testByDriver/handoverTest conditional blocks of the subtask/whole/fix templates, and the steer copy lives in the test-result/test-wrapup/test-continue templates (no driver-parsed protocol; test-wrapup registers the override markers {{handoffFile}} and "不依赖本次测试结果" (does not depend on this test's result)) -- **the wrap-up copy deliberately never mentions context/limits/tokens**: once a session knows its context is running low, it will judge its remaining budget insufficient on its own and omit disk-landing work it should have completed (empirically observed in the field); the copy also never says "do not modify source" (the AI already knows that when initiating the test, and if it really does modify, the pinned commit + re-test guard provide the safety net). This execution-right convention is sunk via init: the AGENTS.md test-execution-principle block (added/removed with config.testByDriver, mirroring the verification-principle block) and the agent contract's testByDriver conditional section; the `check` subcommand, when testByDriver is enabled, scans AGENTS.md/PLAN.md for descriptions requiring sessions to personally run compile/test/build/lint (TEST_PATTERNS, isomorphic to the verification class).
+- verify three stages (when config.verify is enabled): verify processing belongs to the driver; acceptance happens exactly once at task level -- after the wrap-up session:
+  ① script preparation (resolveVerifyScript with three branches per verifyCommand: `command:` being a single existing
+  and executable file path → existing, used directly; a plain command line → wrapped, the driver wraps
+  tmp/verify.sh -- first line the shebang, then the original command text verbatim, adding no extra semantics like set -e,
+  idempotently overwriting each time; natural language or missing → generate, first opening a one-off bypass script-generation session to produce the script,
+  with the agreed artifact name tmp/verify.sh, reused across fix rounds, not auto-regenerated in V1); ② the driver executes
+  it (runVerifyScript: cwd=target directory; spawned directly if it has the execute bit, otherwise via bash; stdout/stderr
+  merged and written wholesale to the single file tmp/verify.out, truncated before execution; a progress watchdog -- only when the output file shows no growth
+  for idleTime (default 10 minutes) is it killed, code recorded 124 with timeoutReason=idle,
+  idleMax (default unset) is the absolute-cap backstop; a completed run record is persisted into the progress record,
+  and later interrupt-recovery skips re-running it; a non-0 exit code is not directly judged a failure); ③ a standalone bypass verdict session -- before entering,
+  the driver first does a deterministic reference-gate pre-scan of the task artifact documents docs/T-NNN/**; a broken reference = a gap, going straight
+  into the fix round without consuming a verdict session (stable-refs P4 reference-consistency three layers); then the verdict session
   (renderVerifyJudge,
-  一次性 chain 不进任务链)直读输出与代码判定——**判定会话禁止执行验证脚本
-  或验证性命令**(运行测试/构建/lint/服务等;只读检查不受限),认定脚本本身有问题
-  或覆盖不足时编写新脚本替换 tmp/verify.sh 并以末行 `结论: 重验 <原因>`
-  结束,driver 固定改为执行该指定路径(不再按 verify 字段重新解析,wrapped 重包装
-  会覆盖替换产物)并把输出整写回传同一输出文件,由新判定会话继续判定,至多
-  REVERIFY_ROUNDS=3 轮(耗尽或声称重验但未写出脚本按隐性阻塞);判定会话另被授权
-  verify 经验沉淀——发现预设命令的通病时可更新 PLAN.md 中后续未完成任务的
-  verify 字段(仅限该字段,会话期间 allowWrite(PLAN.md)、结束后 checkPlanEdit 校验,
-  越权整体还原),当前脚本无问题时不做修改。正常结论写
-  `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选 `verified-command:`
-  行;通过 → markDone(verified 优先取判定的 verified-command,其次原命令,最后
-  实际脚本路径);差距 → renderFix 反馈回执行会话链修复,重新收尾与验收
-  (FIX_ROUNDS=3,off 模式直接回退 pending)。旁路产物缺失"带反馈重试一次仍失败
-  按隐性阻塞"统一走 requireArtifact。driver 执行脚本不经 opencode 权限体系
-  (等同人工本地跑测试,非安全边界,文档须明示);verify 产物统一在目标目录
-  tmp/(工作目录内会话可直读,避免 /tmp 权限问题),run/init 经 ensureGitignore
-  保证 tmp/ 与 .auto/ 不进仓库。该执行权原则经 init 下沉:AGENTS.md 验证
-  原则块与 PLAN.md 模板;`check` 子命令可扫描两文件中违背
-  该原则的描述——下沉与扫描均以 config.verify 启用为前提(见上方"verify 验收
-  开关"条)。
-- --review:`--review [1-10]`(缺省 0 不启用、裸选项 3、显式值须 1..10 整数,
-  index.ts parseReviewLimit 校验,loop 透传 runTask)。runTask 外层轮循环:执行
-  阶段(ensureDecomposed/executeWhole)仅首轮进入;验收通过后 reviewTask 开旁路
-  审核会话(renderReview:维度=忠实性/正确性/验证过程有效性;final 由"当前任务
-   之后全部 done"判定,审计报告统一写 docs/T-NNN/audit.md(final 与非 final
-   同一路径,P1-D2),
-  范围以本任务改动为限、终审不限),结论写 `.auto/review.md`(协议同 VERDICT_FILE,
-  复用 parseVerdict)。通过 → completed;差距 → off 模式 setStatus pending 返回
-  incomplete(与该模式 verify 失败语义一致);轮数超限 → blocked(question=差距
-  全文);未超 → 任务先置回 in_progress(verifyTask 已标 done,否则中断重跑时
-  next() 会跳过、fix 检查项永不执行)→ planReviewFix 旁路规划会话产出
-  docs/T-NNN/fix.md → appendSubtasks 注入 PLAN.md → 刷新 CURRENT.md → 下一轮
-  (fix 检查项走子任务会话循环)。early 两形态:`--review n --early` 或快捷糖
-  `--early-review [n]`(index.ts 校验:--early 单独出现、--early-review 与
-  --review 同现均为用法错误退出码 1)——审核会话经 verifyTask 审核挂点在 verify
-  脚本执行窗口并行启动(executeVerifyScript 在 runVerifyScript 前调起、判定会话
-  前 join,审核 blocked 立即上抛;generate 分支的脚本生成会话结束后才启动;每次
-  脚本执行含修复轮重跑都重开一次新审核,early 措辞见 renderReview),结论随
-  `{type:"done", audit}` 带回由外层消费(通过 → completed;差距 → 既有 review
-  差距流程,off/超轮语义不变),非 early 走原串行路径;全局保持任意时刻至多一个
-  LLM 会话(脚本执行为纯本地进程,窗口内唯一会话即审核会话),因此无需 worktree。
-- 提示词模板:全部会话提示词以文件模板管理(`templates/prompts/` 19 个会话模板 +
-  `_partials.md` 共享片段,src/template.ts 渲染,语法 `{{var}}`/`{{#if x}}`/`{{^x}}`/
-  `{{> 片段}}`、块标签独占一行整行吞掉);目标目录 `.opencode/auto/prompts/` 同名
-  覆盖,协议敏感模板(verify-judge/review/verify-script-gen/review-fix/decompose/
-  handoff-steer/final-task/phase-plan/phase-handover/number-recovery)覆盖时校验关键协议内容
-  (`结论: 通过|差距|重验`、`.auto/verify.md`、交接四小节标题、`.auto/next-task` 等),
-  缺失即退出码 1。改提示词文案只动模板文件,不动 src/prompt.ts
-  (那里只做数据组装);改后必须跑 test/prompt-*.test.ts 防协议行漂移。
-- `-m/--mode` 模式层:提示词级场景引导,不影响 driver 调度状态机——ModeSpec 三段
-  文案(init 导语 / exec 执行注记 / final 终审各阶段侧重,文件模板管理:内置
-  templates/modes/ + 目标目录 .opencode/auto/modes/,见 src/mode.ts)注入
-  阶段规划会话(已接线)、执行类模板与 renderFinalTask。内置仅 migrate;新增模式 = 目标目录加
-  一个协议完整的 .md 文件,零源码改动。-m 仅 init 接受(优先级 显式值 > 既有配置值 >
-  缺省),持久化在 .opencode/auto/config.json 的 mode 键;run 读配置经 loadModes 查找,
-  未注册名为环境错误退出码 1(报文列出当前支持的模式)。
-- `--final-review [1-5]` 终审闭环(parseFinalReviewLimit 镜像 parseReviewLimit:缺省
-  0 不启用、裸选项 2、显式值须 1..5 整数为审计轮上限含首轮 audit;与 --review/
-  --early-review 可同现,二者无交互;--dryrun 不触发)。原任务全部 done 后进入
-  audit → remediate → validate → finalize 状态机——终审阶段是入 PLAN.md 的真任务
-  (T-F<k> 按追加顺序编号、`final: <stage>@<round>` 字段、不写 verify 字段),
-  复用 runTask 全流水线:生成会话(renderFinalTask,旁路一次性)产出提案
-  docs/T-F<k>/plan-<stage>-r<N>.md(锚定即将追加的 T-F<k> 目录)→ appendFinalTask 追加 → 主循环 next() 拾取执行 →
-  报告末行协议路由(策略: 重构|修补|无;结论: 通过|差距 <描述>):策略无直达
-  finalize(跳过 remediate 与 validate,原任务已有任务级 verify 兜底);remediate
-  后生成同轮 validate;validate 通过生成 finalize、差距回退 audit@r+1(聚焦残余
-  差距不全量重审),审计轮耗尽熔断 block 最后终审任务(残余差距与报告指针写入
-  question,退出码 2)。**终审任务本身即检验、不对检验再做检验**:全部四阶段任务
-  依 final 字段强制 review=0 且跳过任务级三段式验收(--early 随之自然失效),
-  收尾后 driver 直接 markDone;报告缺失/协议非法不在任务级拦截,由路由解析报告时
-  按协议异常 block 提示人工核查。
-  中断恢复零新增状态(routeFinal 重新求值:未完成终审任务不生成新任务、下一阶段
-  任务已存在不重复生成、提案已产出直接解析追加、done 但报告缺失/协议非法按阻塞
-  提示人工核查;终审任务内部中断走既有 recallProgress/peekProgress);终审任务沿用
-  waitBetween/统一提交/退出码语义,终审各阶段改动随其生成/执行会话的统一提交落账。
-- 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN/subtasks.md,
-  driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN/report.md
-  (只写产出摘要,不运行任务级 verify、不下验收结论)。
-   任务内所有会话共用一条链:链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控,
-   **缺省 off——每个提示词都开新会话**;开关为 on 时恢复阈值复用(上一会话结束时
-   上下文占比低于 50%、已用量低于配置 contextLimit 的一半(默认 32k tokens)且距其
-   结束不超过 5 分钟(REUSE_IDLE_MS)才复用,否则新建;verify 脚本执行与判定/审核
-   等耗时较久后自动换新会话)。占比与用量由 watch 始终跟踪(与 --verbose 无关),
-   拿不到模型上限时占比记 100 即总是新建;瞬时会话错误重试不复用出错的会话,而是
-   **从已积累上下文最多的活会话分叉一份副本**重试——首选刚失败的会话本体(超时类
-   故障与会话内容无关,里面的已核实产出是本轮最值钱的资产;用量为 0 的纯报错桩除外),
-   其次链上原会话,链上无会话可分叉时回落 fork 基点重新播种,再不济才空白新会话
-   (plans/0015-session-error-retry-plan.md「2026-09-12 修正」)。
-   重试次数与间隔由阶梯 `OPENCODE_AUTO_RETRY_WAITS` 描述(「2026-09-12 修正二」):
-   每个元素是该次重试前的等待、元素个数即重试上限,**缺省 `0,1,2,4,8`** = 五次重试,
-   首次立即(瞬时抖动常在下一回合就恢复),其后 1/2/4/8 分钟;退避从分钟起步而非
-   秒级翻倍,因为 opencode 内层每次故障已用掉 6×300s 超时 + 60s 退避 ≈ 31 分钟,
-   外层再叠秒级曲线只占零头,分钟级等待的意义只在跨过一段上游退化。`off` = 不自动
-   重试(首次失败即进等待-探测环)。
-   **会话故障不退出**(「2026-09-16 修正三」):不可重试错误(配额/鉴权类
-   isRetryable:false)、阶梯耗尽的瞬时错误、配额降级候选用尽——三条故障路径的
-   终点不再是阻塞退出(退出码 2),而是同一个**等待-探测环**:以
-   `OPENCODE_AUTO_RECOVERY_WAIT`(缺省 30 分钟)为间隔无限等待,每轮用一个
-   **全新临时干净会话**下发极小探测提示词(绝不用被中断的会话探测——往真实会话
-   塞探测轮次会污染上下文,分叉探测则每轮白烧一遍全量前缀;探测链不带 phase、
-   不写进度记录,但复制真实链的 model/role,探测的就是恢复后要续跑的那条模型);
-   探测成功(服务恢复)后 **fork 被中断的会话**(同一套「保住最值钱的会话」判据)
-   从副本重发原提示词并附一次性恢复说明,阶梯重开一轮;链上无可分叉内容则空白
-   新会话重发。等待期间连按两次 Ctrl+C 经进程级 SIGINT 处理器强制退出(130),
-   这是唯一出口——无论面临何种配额限制,程序都能等到额度恢复后再继续。SDK 抛出
-   的异常(订阅断开等)与创建/下发失败同样按会话故障进入该机制;仍直接阻塞返回
-   的只有会话内阻塞提问与权限拒绝(那需要人工答复,不属于故障)。阶梯耗尽后的
-   出路:候选表(OPENCODE_AUTO_MODEL_FALLBACK)非空时先切下一个候选模型、从最值钱
-   的会话 fork 续跑、阶梯重开一轮(与配额降级同一段逻辑,见下条),候选也用尽才
-   进等待-探测环。quota/auth/rate 三类可降级错误在更上游就已换模型续跑。
-   等待期间经 statsWaitBegin/End 从 AI 用时中扣除。
-   每个会话结束都无条件打印两行统计(`◉ 会话结束`,设计
-   plans/0019-stats-timing-design.md):行 1 `◉ 会话结束: 上下文 n% (用量/上限 tokens),
-   用时 X(累计 Y / N 轮)`(用时取纯 AI 口径,会话内 askHuman 挂起不计;单轮省略
-   "(累计…)"),行 2 `tokens 入 … / 出 … [/ 思考 …] / 缓存读 … / 缓存写 …,
-   命中率 …[,费用 $…(累计 $…)]`(reasoning=0 省略思考项、cost=0 省略费用、命中率
-   分母 0 显示 —);verify 判定/审核/阶段规划/交接蒸馏等旁路会话、复用会话与中断
-   恢复接管的会话同样打印(下发失败未发生会话事件除外)。会话标题与提交标题共用同一短标签
-   方案且全部显式命名(不依赖服务端自动起题):新建会话以本阶段提交标题命名,
-   复用会话跨阶段在结束时改名(renameSession),任务终态再改名为
-   `T-NNN done|blocked|pending <标题>`——标题前缀即该会话的最新进度。
-- CURRENT.md 是当前任务镜像(抗上下文压缩的兜底,非每会话必读——提示词已内联当前
-  任务、子任务会话另有 context.md 背景摘要,仅在上下文被压缩或对进度存疑时读):任务开始(首个会话前)
-  写入、每次勾选后刷新(刷新在该次统一提交之前落盘,与 PLAN.md 的勾选同入一次
-  提交,镜像不落后于已提交的 PLAN.md)、任务完成时删除;非完成结局(阻塞/回退 pending)写"中断
-  备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask
-  重建镜像时,备注要点经恢复提示词带给 AI);强制中断遗留文件同样下次重建。
-  AGENTS.md 中 driver 只维护单一标记块 `opencode-auto:start`/`opencode-auto:end`
-  (内容为英文,含指针、验证原则、测试执行原则、提交原则、摘要原则——非交互场景不
-  产出会话末尾总结、维护规则、引用规范(stable-refs P4,规范全文精编:存放目录化/
-  永久路径、引用根相对路径语法、检查三层)七段;验证/测试两段随 config.verify/
-  config.testByDriver 出现或消失,见"verify 验收开关"与"--test-by-driver"条,其余
-  段落无条件出现):run/init 启动时按当前配置渲染该块并与文件中现有的标准块比对,
-  不一致则整块替换、缺失则追加,文件中残留的任何其他 `opencode-auto:<name>:start/end`
-  标记块(旧版六块格式,或任何游离标记块)一律清理——这也是旧格式向新格式的迁移
-  路径。AGENTS.md 不置只读(任务可更新其余内容,但经 agent 契约约束不得删除
-  或改写 opencode-auto 标记块、更新其余内容须遵守块内的维护规则——保持精简 ≤150
-  行、路由到 docs/agents/<主题>.md 存放跨任务工作流知识、更新不追加、只沉淀持久
-  知识;check 对块缺失/内容过期/残留旧版块与行数超限均输出 note);指令文件每个
-  provider turn 现场重读,且 AGENTS.md 指纹(mtime+size)变更时 server.syncAgents
-  在下一个新会话前重启 server 兜底。
-- 进度恢复(应用重启后精确恢复中断):run 期间 driver 把当前阶段与执行链会话
-  持久化到目标目录 .auto/progress.json({task, session, at, active, phase};阶段
-  边界经 persistStage 写 active=false 总结态,执行链会话经 attempt 在**提示词下发
-  成功时即写 active=true**(认领在跑的会话——回合进行中被 kill/Ctrl+C 也不丢,此前
-  只在回合结束后写会丢失认领),回合结束后按结果刷新;可重试的会话错误把记录还原为
-  下发前快照,被弃的 fork 副本不顶替真实恢复点。测试交接收场(testhandoff.md 写出
-  `状态: 继续`)是唯一不认领会话的成功出口——该会话任务已告完成,记录转「无会话
-  在途态」(active=true 而 session 缺失,链 id 同步清空),续跑会话出错退出后记录
-  不再指回交接之前的会话,重启复用经 .auto/handover.json 的 nextSession/定版锚点
-  接回交接之后的会话。无阶段的一次性旁路会话(判定/审核/
-  脚本生成/修复规划/dryrun/fork 基点)不写;**阶段级旁路步骤**(phase-plan 规划 /
-  phase-handover 交接蒸馏,phase.kind="step")经 requireArtifact 的 spec.step 同样
-  写 active 记录,driver 收口(产物校验+提交+后处理)后经 closeStep 删除——见
-  plans/0018-session-resume-precedence-design.md);runTask 开始时 recallProgress 读回——
-  active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
-  与 `opencode -r` 同构,不设时间窗;该接管不受 OPENCODE_AUTO_REUSE_SESSION 与
-  复用阈值约束——恢复语义即"接着被中断的那个会话继续",首个提示词进原会话,恢复
-  说明用后即清、此后回归常规规则。seed 的用量为经 session.messages 重建的真实值
-  ——从末条往前取第一条真正跑完过的 assistant 消息(tokens 非 0):末条常是 provider
-  报错/被中断留下的 0-token 行,直接取末条会把"跑了很多活、最后一轮撞错"的长会话读成
-  0 用量(恢复日志假值 + 复用判定误杀);整条会话都没有这种消息时才是纯报错桩会话
-  (旧"重试即换白板会话"遗留),判为不可复用、开新会话。恢复日志与链内后续决策据此,
-  不再用 0/0 占位),否则新会话;**交接文件优先**——active
-  恢复时交接文档已存在(ondemand 的 docs/<id>/handoff.md 或 handover-test 的
-  任务级/任一子任务级 testhandoff.md 遗留均判定)则不复用旧会话,
-  开新会话凭交接续跑(handoff `状态: 完成`
-  时直接跳过整任务会话);`--new-session` 显式放弃复用(仅跳过复用、阶段精确
-  重入保留,并立即把记录转 active=false);**单元归属门禁**(unitReruns)——active
-  记录的中断会话属于某个具体执行单元(任务级阶段/子任务 #N/修复检查项 #N,
-  子任务与 fixrun 记录携带 1 起归属序号 index),仅当本次运行将重跑该单元才
-  允许复用其会话;单元已过(中断于子任务收口后的间歇)、配置/开关变更使其不再
-  执行、或老记录缺序号无法判定归属时,记录转 active=false、开新会话——恢复
-  只发生在原单元重跑时;两种情况首个提示词均附加"[driver]
-  中断后的继续"说明(读 CURRENT.md、git status/diff 核对进度,按 phase 给出
-  下一步指引,不重做)。phase 支撑阶段级重入:verify 有持久化 run 记录跳过
-  脚本重跑直接判定、stage=fix 凭持久化的判定差距原文(gap)重新下发修复提示
-  续跑修复轮、off/ondemand 过执行阶段不重跑 executeWhole、review/planfix 有
-  有效 fix.md 直接注入、decompose 先直读 subtasks.md;loop 启动经 peekProgress
-  把 verify/review 阶段中断但已标 done 的任务置回 in_progress。SSE 事件流未
-  收到会话结束事件即耗尽(server 故障/网络断开)时 abort 孤儿回合、按会话错误
-  处理,不误判会话正常结束。任务完成 forgetProgress;优雅退出(非网络类
-  blocked/incomplete)保留记录但清复用资格;网络类 blocked 保持 active 供恢复
-  复用;伪任务 AUTO(dryrun/编号恢复等无阶段旁路)不记忆,伪任务 PLAN 仅在承载
-  阶段步骤(spec.step)时记忆。**会话恢复优先于流程恢复**:runPhaseLoop 在消费
-  routePhase 的文件推导路由之前先查 openStep——存在未收口的阶段步骤恢复点(归属
-  阶段 == 当前路由阶段且未入台账)即重入该步骤续跑(复用中断的会话),即使 PLAN.md
-   已有任务/台账已让文件路由前进;PLAN.md 任务与交接文档是 AI 写的(或会话中断后
-   driver 才补的),不能证明会话已收口,唯有 driver 恢复点被 closeStep 删除才算收口
-   (阶段已入台账则清除陈旧记录,字母不一致则告警并让文件路由优先)。
-   `.auto/` 另有 driver 独占写的统计文件 `.auto/stats.json`(src/stats.ts,设计
-   plans/0019-stats-timing-design.md),与恢复判定完全无关:不参与 recallProgress/openStep
-   等任何判定,损坏或缺失只是统计从当下重开、不影响运行;它是本机运行足迹(换机/
-   清 .auto/ 即丢失,跨中断经增量落盘与折旧续接);清零 = 人工 `rm .auto/stats.json`
-   (人工回退重跑同一任务前的既定规程——重跑与中断续跑对统计不可区分)。代答台账
-   `.auto/resolves.json`(src/resolve.ts,设计 plans/0020-auto-resolve-design.md)同族同契约:
-   driver 独占写、gitignore 内、不进 protect 名单、不参与 recallProgress/openStep 等
-   任何恢复判定,损坏或缺失只是高亮与计数从当下重开、不影响运行与退出码(写失败全
-   静默);**独立成文件不并入 stats.json**——stats 有 30s 心跳高频写,塞进一个会增长的
-   问题文本数组会让每次心跳重写全量文本;条目上限 512 FIFO 淘汰,清零同样是人工
+  one-off, its chain not entering the task chain) reads the output and code directly to judge -- **the verdict session is forbidden from executing verification scripts
+  or verification-flavored commands** (running tests/builds/lint/services etc.; read-only checks are unrestricted); when it deems the script itself faulty
+  or insufficiently covering, it writes a new script replacing tmp/verify.sh and ends with the last line `结论: 重验 <原因>` (verdict: re-verify <reason>)
+  to close the session; the driver then fixedly executes that specified path (no longer re-resolving per the verify field; wrapped's re-wrapping
+  would overwrite the replacement artifact) and writes the output wholesale back into the same output file, with a new verdict session continuing the judgment, at most
+  REVERIFY_ROUNDS=3 rounds (exhaustion, or claiming re-verify without writing the script, is a silent block); the verdict session is additionally authorized
+  to distill verify knowledge -- upon finding a common defect of the preset command it may update the verify fields of later unfinished tasks in PLAN.md
+  (that field only; allowWrite(PLAN.md) during the session, checkPlanEdit verification after it ends;
+  an out-of-bounds edit is wholly reverted); when the current script has no problem, no modification is made. A normal verdict is written to
+  `.auto/verify.md`; the driver parses the last line `结论: 通过|差距` (verdict: pass|gap) and the optional `verified-command:`
+  line; pass → markDone (verified prefers the verdict's verified-command, then the original command, and last
+  the actual script path); gap → renderFix feeds it back into the execution session chain to fix, then wrap-up and acceptance run again
+  (FIX_ROUNDS=3; off mode rolls straight back to pending). A missing bypass artifact follows the unified "retry once with feedback, on continued failure
+  treat as a silent block" rule via requireArtifact. The driver executing scripts does not go through the opencode permission system
+  (equivalent to a human running tests locally; not a security boundary, the docs must state this explicitly); verify artifacts live uniformly in the target directory's
+  tmp/ (sessions can read them directly within the working directory, avoiding /tmp permission issues); run/init via ensureGitignore
+  ensures tmp/ and .auto/ stay out of the repository. This execution-right principle is sunk via init: the AGENTS.md verification
+  principle block and the PLAN.md template; the `check` subcommand can scan both files for descriptions violating
+  the principle -- both the sinking and the scan presuppose config.verify being enabled (see the "verify acceptance
+  toggle" entry above).
+- --review: `--review [1-10]` (default 0 disabled, bare option 3, explicit values must be integers 1..10,
+  validated by index.ts parseReviewLimit, passed through by loop to runTask). runTask's outer round loop: the execution
+  stage (ensureDecomposed/executeWhole) is entered only in the first round; after acceptance passes, reviewTask opens a bypass
+  review session (renderReview: dimensions = faithfulness/correctness/verification-process validity; final is decided by "all tasks after
+   the current one being done"; the audit report is uniformly written to docs/T-NNN/audit.md (final and non-final
+   share the same path, P1-D2),
+  scope limited to this task's changes, the final review unlimited); the verdict is written to `.auto/review.md` (same protocol as VERDICT_FILE,
+  reusing parseVerdict). Pass → completed; gap → in off mode setStatus pending and return
+  incomplete (consistent with that mode's verify-failure semantics); rounds over the limit → blocked (question = the gap
+  text in full); not over → the task is first set back to in_progress (verifyTask already marked it done; otherwise a re-run after interruption
+  would have next() skip it and the fix checklist would never execute) → a planReviewFix bypass planning session produces
+  docs/T-NNN/fix.md → appendSubtasks injects into PLAN.md → refresh CURRENT.md → next round
+  (fix checklist items go through the subtask session loop). early in two forms: `--review n --early` or the shortcut sugar
+  `--early-review [n]` (index.ts validates: --early appearing alone, or --early-review together with
+  --review, are both usage errors with exit code 1) -- the review session is started in parallel within the verify
+  script execution window via verifyTask's review hook (executeVerifyScript starts it before runVerifyScript; the verdict session
+  joins in front of it; a blocked review propagates immediately; the generate branch starts it only after the script-generation session ends; every
+  script execution, including fix-round re-runs, reopens a fresh review -- early wording in renderReview); the verdict returns
+  via `{type:"done", audit}` and is consumed by the outer layer (pass → completed; gap → the existing review
+  gap flow, with off/over-round semantics unchanged); non-early takes the original serial path; globally, at most one
+  LLM session at any moment (script execution is a purely local process, so the only session inside the window is the review session), hence no worktree is needed.
+- Prompt templates: all session prompts are managed as file templates (`templates/prompts/` 19 session templates +
+  the `_partials.md` shared partials, rendered by src/template.ts, syntax `{{var}}`/`{{#if x}}`/`{{^x}}`/
+  `{{> 片段}}` (partial include), block tags occupying a whole line and swallowing it entirely); same-named files in the target directory's `.opencode/auto/prompts/`
+  override; protocol-sensitive templates (verify-judge/review/verify-script-gen/review-fix/decompose/
+  handoff-steer/final-task/phase-plan/phase-handover/number-recovery) have their key protocol content validated when overridden
+  (`结论: 通过|差距|重验` (pass|gap|re-verify), `.auto/verify.md`, the four handover section titles, `.auto/next-task`, etc.);
+  missing means exit code 1. To change prompt wording, touch only the template files, not src/prompt.ts
+  (it only assembles data); after changes you must run test/prompt-*.test.ts to guard against protocol-line drift.
+- The `-m/--mode` mode layer: prompt-level scenario guidance that does not affect the driver's scheduling state machine -- the three ModeSpec
+  texts (init intro / exec execution notes / final per-stage emphasis of the final review, managed as file templates: built-in
+  templates/modes/ + the target directory's .opencode/auto/modes/, see src/mode.ts) are injected into
+  the phase-planning session (wired), the execution-class templates, and renderFinalTask. Only migrate is built in; a new mode = adding one
+  protocol-complete .md file in the target directory, zero source changes. -m is accepted only by init (priority: explicit value > existing config value >
+  default), persisted in the mode key of .opencode/auto/config.json; run reads the config and looks up via loadModes,
+  an unregistered name is an environment error with exit code 1 (the message lists the currently supported modes).
+- `--final-review [1-5]` final-review loop (parseFinalReviewLimit mirrors parseReviewLimit: default
+  0 disabled, bare option 2, explicit values must be integers 1..5 as the audit-round cap including the first audit; composable with --review/
+  --early-review with no interaction between them; --dryrun does not trigger it). After all original tasks are done it enters the
+  audit → remediate → validate → finalize state machine -- final-review stages are real tasks that enter PLAN.md
+  (T-F<k> numbered by append order, the `final: <stage>@<round>` field, no verify field written),
+  reusing runTask's full pipeline: the generation session (renderFinalTask, one-off bypass) produces the proposal
+  docs/T-F<k>/plan-<stage>-r<N>.md (anchored to the T-F<k> directory about to be appended) → appendFinalTask appends it → the main loop's next() picks it up for execution →
+  report last-line protocol routing (策略: 重构|修补|无 -- strategy: refactor|patch|none; 结论: 通过|差距 <描述> -- verdict: pass|gap <description>): strategy none goes straight to
+  finalize (skipping remediate and validate; the original tasks already have task-level verify as the backstop); remediate
+  then generates a same-round validate; validate passing generates finalize, a gap rolls back to audit@r+1 (focused on residual
+  gaps rather than a full re-audit); audit rounds exhausted circuit-breaks and blocks the last final-review task (residual gaps and the report pointer written into
+  question, exit code 2). **A final-review task is itself the inspection and gets no inspection of the inspection**: all four-stage tasks
+  force review=0 per the final field and skip the task-level three-stage acceptance (--early naturally becomes ineffective with them),
+  after wrap-up the driver directly marks them done; a missing report / invalid protocol is not intercepted at task level -- when routing parses the report it is
+  blocked as a protocol exception prompting human verification.
+  Interrupt recovery adds zero new state (routeFinal re-evaluates: unfinished final-review tasks generate no new task, the next stage's
+  task already existing is not generated again, an already-produced proposal is parsed and appended directly, and done-but-report-missing/protocol-invalid blocks
+  with a prompt for human verification; interruptions inside a final-review task use the existing recallProgress/peekProgress); final-review tasks follow
+  the waitBetween/unified-commit/exit-code semantics; each final-review stage's changes land with its generation/execution session's unified commit.
+- Task pipeline (auto mode): when the body has no checklist items, the decomposition session runs first (producing docs/T-NNN/subtasks.md,
+  with the driver injecting the checklist), then sessions execute checklist item by item, and finally the wrap-up session writes docs/T-NNN/report.md
+  (only an artifact summary; it runs no task-level verify and issues no acceptance verdict).
+   All sessions within a task share one chain: in-chain reuse is governed by OPENCODE_AUTO_REUSE_SESSION,
+   **default off -- every prompt opens a new session**; when the switch is on, threshold-based reuse is restored (only if the previous session ended with
+   a context ratio below 50%, usage below half the configured contextLimit (default 32k tokens), and no more than 5 minutes
+   since its end (REUSE_IDLE_MS); otherwise a new one is created; after longer waits such as verify script execution and verdict/review
+   a new session is switched to automatically). Ratio and usage are tracked by watch at all times (independent of --verbose);
+   when the model's cap cannot be obtained, the ratio is recorded as 100, i.e. always a new session; transient session-error retries do not reuse the failed session but instead
+   **fork a copy from the live session with the most accumulated context** to retry -- first choice is the just-failed session itself (timeout-class
+   faults have nothing to do with session content, and its verified output is this round's most valuable asset; a 0-usage pure-error stub excepted),
+   next the chain's original session; when the chain has no session to fork, fall back to the fork point and re-seed; only in the worst case a blank new session
+   (plans/0015-session-error-retry-plan.md "2026-09-12 修正" (2026-09-12 correction)).
+   Retry counts and intervals are described by the ladder `OPENCODE_AUTO_RETRY_WAITS` ("2026-09-12 修正二" (2026-09-12 correction two)):
+   each element is the wait before that retry, and the element count is the retry cap; **default `0,1,2,4,8`** = five retries,
+   the first immediate (transient jitter often recovers by the next turn), then 1/2/4/8 minutes; backoff starts at minutes rather than
+   seconds-level doubling, because each inner opencode failure has already burned 6×300s timeouts + 60s backoff ≈ 31 minutes,
+   and stacking a seconds-level curve on the outer layer would be a rounding error; minute-level waiting matters only for riding across a stretch of upstream degradation. `off` = no automatic
+   retries (the first failure goes straight into the wait-probe loop).
+   **Session faults do not exit** ("2026-09-16 修正三" (2026-09-16 correction three)): non-retryable errors (quota/auth class
+   isRetryable:false), transient errors with the ladder exhausted, and quota-demotion candidates exhausted -- the endpoints of these three fault
+   paths are no longer a blocked exit (exit code 2) but the same **wait-probe loop**: waiting indefinitely at
+   intervals of `OPENCODE_AUTO_RECOVERY_WAIT` (default 30 minutes), each round dispatching one minimal probe prompt via a
+   **brand-new temporary clean session** (never probe with the interrupted session -- stuffing probe turns into a real session
+   pollutes its context, while fork-probing would re-burn the full prefix every round; the probe chain carries no phase and
+   writes no progress record, but copies the real chain's model/role -- what it probes is exactly the model to be resumed after recovery);
+   after a successful probe (service recovered), it **forks the interrupted session** (the same "preserve the most valuable session" criterion)
+   and re-sends the original prompt from the copy with a one-shot recovery note, the ladder reopening a round; with nothing forkable on the chain, a blank
+   new session re-sends. During the wait, two consecutive Ctrl+C presses force-quit (130) via the process-level SIGINT handler --
+   this is the only exit -- whatever quota limits are faced, the program can wait for the quota to recover and then continue. Exceptions thrown by the SDK
+   (subscription disconnect etc.) and creation/dispatch failures likewise enter this mechanism as session faults; what still returns blocked directly
+   is only in-session blocking questions and permission denials (those need human replies; they are not faults). After the ladder is exhausted,
+   the way out: when the candidate list (OPENCODE_AUTO_MODEL_FALLBACK) is non-empty, first switch to the next candidate model, fork from the most valuable
+   session to continue, and reopen a ladder round (the same logic as quota demotion, see the next entry); only when candidates are also exhausted does it enter
+   the wait-probe loop. The three demotable classes quota/auth/rate switch models and continue further upstream.
+   Time spent waiting is deducted from AI time via statsWaitBegin/End.
+   Every session end unconditionally prints two statistics lines (`◉ 会话结束` (session ended), design
+   plans/0019-stats-timing-design.md): line 1 `◉ 会话结束: 上下文 n% (用量/上限 tokens),
+   用时 X(累计 Y / N 轮)` (context n% (used/cap tokens), duration X (cumulative Y / N rounds); duration uses the pure-AI measure, in-session askHuman suspension not counted; a single round omits
+   the "(累计…)" (cumulative) part); line 2 `tokens 入 … / 出 … [/ 思考 …] / 缓存读 … / 缓存写 …,
+   命中率 …[,费用 $…(累计 $…)]` (tokens in ... / out ... [/ thinking ...] / cache read ... / cache write ..., hit rate ...[, cost $...(cumulative $...)]) (reasoning=0 omits the thinking item, cost=0 omits cost, and a zero
+   denominator shows —); bypass sessions such as verify verdict/review/phase planning/handover distillation, reused sessions, and interruption-
+   recovery-takeover sessions also print them (except a dispatch failure where no session event occurred). Session titles and commit titles share the same short-label
+   scheme, all named explicitly (no reliance on server-side auto-titling): a new session is named after the current stage's commit title,
+   a reused session is renamed (renameSession) at its end when crossing stages, and at the task's terminal state it is renamed to
+   `T-NNN done|blocked|pending <标题>` (title) -- the title prefix is the session's latest progress.
+- CURRENT.md is a mirror of the current task (a fallback against context compression, not a must-read for every session -- the prompt already inlines the current
+  task, and subtask sessions additionally get the context.md background summary; read it only when context has been compressed or progress is in doubt): written at task start (before the first session),
+  refreshed after every checkbox tick (the refresh lands on disk before that unified commit, entering the same commit as PLAN.md's tick, so the mirror never lags
+  the committed PLAN.md), deleted at task completion; non-completion endings (blocked/rolled back to pending) write an "interruption
+  note" (exit reason/interrupted stage/recovery method) and are kept for human inspection and the next recovery (at the next runTask's
+  mirror rebuild, the note's key points are passed to the AI via the recovery prompt); files left by a forced interruption are likewise rebuilt next time.
+  In AGENTS.md the driver maintains a single marker block `opencode-auto:start`/`opencode-auto:end`
+  (content in English, containing pointers, the verification principle, the test-execution principle, the commit principle, the summary principle -- non-interactive scenarios produce no
+  end-of-session summaries -- the maintenance rules, and the reference spec (stable-refs P4, condensed full spec: directory-based storage/
+  permanent paths, root-relative reference syntax, the three checking layers) -- seven sections; the verification/test sections appear or disappear with config.verify/
+  config.testByDriver, see the "verify acceptance toggle" and "--test-by-driver" entries; the remaining
+  sections appear unconditionally): at run/init startup the block is rendered per the current config and compared with the existing standard block in the file;
+  on mismatch the whole block is replaced, on absence appended; any other leftover `opencode-auto:<name>:start/end`
+  marker blocks in the file (the legacy six-block format, or any stray marker block) are all cleaned up -- this is also the migration path from the old format to the new.
+  AGENTS.md is not made read-only (tasks may update the rest of its content, but the agent contract constrains them never to delete
+  or rewrite the opencode-auto marker block, and updates to the rest must follow the block's maintenance rules -- stay concise ≤150
+  lines, route cross-task workflow knowledge into docs/agents/<topic>.md, update rather than append, and distill only durable
+  knowledge; check outputs a note for a missing block / stale content / leftover legacy blocks / over-limit line counts); instruction files are re-read live every
+  provider turn, and when AGENTS.md's fingerprint (mtime+size) changes, server.syncAgents
+  restarts the server before the next new session as a backstop.
+- Progress recovery (precise resumption of interruptions after an application restart): during run the driver persists the current phase and execution-chain session
+  into the target directory's .auto/progress.json ({task, session, at, active, phase}; at phase
+  boundaries persistStage writes the summarized active=false state; the execution-chain session is written by attempt as active=true **at the moment the prompt dispatch
+  succeeds** (**claiming the running session** -- not lost even when killed/Ctrl+C'd mid-turn; previously
+  writing only after the turn ended could lose the claim), refreshed per the result after the turn ends; a retryable session error restores the record to
+  its pre-dispatch snapshot; an abandoned fork copy does not displace the real recovery point. A test-handover wrap-up (testhandoff.md written with
+  `状态: 继续`) is the only successful exit that does not claim a session -- that session's task is already complete; the record switches to the "no session
+  in flight" state (active=true while session is missing, chain id cleared in sync); after the continuation session errors out, the record no longer
+  points back to the pre-handover session; a restart reuses .auto/handover.json's nextSession/pinned-commit anchor to reconnect to the post-handover session.
+  Phase-less one-off bypass sessions (verdict/review/
+  script-generation/fix-planning/dryrun/fork base points) write nothing; **phase-level bypass steps** (phase-plan planning /
+  phase-handover distillation, phase.kind="step") likewise write an active record via requireArtifact's spec.step,
+  deleted by the driver via closeStep after it closes out (artifact validation + commit + post-processing) -- see
+  plans/0018-session-resume-precedence-design.md); at runTask start recallProgress reads it back --
+  active and the session still exists on the server → reuse the original session to continue (the chain directly seeds that session,
+  isomorphic to `opencode -r`, no time window; this takeover is not subject to OPENCODE_AUTO_REUSE_SESSION or
+  the reuse threshold -- the recovery semantics is exactly "continue the very session that was interrupted": the first prompt goes into the original session; the recovery
+  note is cleared after use and regular rules apply thereafter. The seeded usage is the true value rebuilt from session.messages
+  -- scanning from the last message backward for the first assistant message that actually completed (tokens non-0): the last message is often a 0-token line left by a provider
+  error/interruption; taking the last message directly would read a long session that "did lots of work but hit an error on the final round" as
+  0 usage (false recovery-log values + wrongly-killed reuse decisions); only when the whole session has no such message is it a pure-error stub session
+  (a legacy of the old "retry means switching to a blank session"), judged unreusable, opening a new session. The recovery log and subsequent in-chain decisions use these values,
+  instead of 0/0 placeholders), otherwise a new session; **handover files take precedence** -- when recovering an active
+  record, if a handover document already exists (a leftover ondemand docs/<id>/handoff.md, or any of handover-test's
+  task-level / any subtask-level testhandoff.md leftovers, all count), the old session is not reused;
+  a new session opens and continues from the handover (with a handoff `状态: 完成`
+  (status: done) the whole-task session is skipped outright); `--new-session` explicitly abandons reuse (skipping reuse only; precise phase re-entry
+  is kept, and the record is immediately switched to active=false); **unit-ownership gate** (unitReruns) -- an active
+  record's interrupted session belongs to a concrete execution unit (task-level stage/subtask #N/fix checklist item #N;
+  subtask and fixrun records carry a 1-based ownership index) and may be reused only if this run will re-run that unit;
+  if the unit has passed (interrupted in the gap after a subtask's close-out), config/switch changes make it no longer execute,
+  or an old record lacks the index so ownership cannot be decided, the record switches to active=false and a new session opens -- recovery
+  happens only when the original unit re-runs; in both cases the first prompt appends the "[driver]
+  中断后的继续" (continuation after interruption) note (read CURRENT.md and verify progress via git status/diff; per-phase guidance for the
+  next step, no redoing). phase supports stage-level re-entry: verify skips re-running the script when a run record is persisted,
+  judging directly; stage=fix re-dispatches the fix prompt from the persisted verdict-gap text (gap)
+  to continue the fix round; off/ondemand pass the execution stage without re-running executeWhole; review/planfix with a
+  valid fix.md inject it directly; decompose reads subtasks.md directly first; at loop startup peekProgress
+  sets tasks interrupted in the verify/review stage but already marked done back to in_progress. When the SSE event stream exhausts without
+  receiving a session-end event (server failure/network drop), the orphan turn is aborted and handled as a session error,
+  not misjudging a session as having ended normally. Task completion calls forgetProgress; graceful exits (non-network-class
+  blocked/incomplete) keep the record but clear the reuse eligibility; network-class blocked stays active for recovery
+  reuse; the pseudo-task AUTO (dryrun/numbering recovery and other phase-less bypasses) is not remembered, and the pseudo-task PLAN is remembered only when it carries a
+  phase step (spec.step). **Session recovery takes precedence over flow recovery**: runPhaseLoop, before consuming
+  routePhase's file-derived routing, first checks openStep -- if an unclosed phase-step recovery point exists (owning
+  phase == the currently routed phase and not yet in the ledger), it re-enters that step to continue (reusing the interrupted session), even if PLAN.md
+  already has tasks / the ledger has already advanced the file routing; PLAN.md tasks and handover documents are written by the AI (or back-filled by the driver only after the session was
+   interrupted), which cannot prove the session was closed out; only the driver recovery point being deleted by closeStep counts as closed out
+   (if the phase is already in the ledger the stale record is cleared; if the letter mismatches, warn and let file routing take precedence).
+   `.auto/` also holds the driver-exclusive statistics file `.auto/stats.json` (src/stats.ts, design
+   plans/0019-stats-timing-design.md), entirely unrelated to recovery decisions: it takes part in no recallProgress/openStep
+   or any other decision; corruption or absence just restarts statistics from now and does not affect the run; it is this machine's run footprint (lost on machine change/
+   wiping .auto/; across interruptions it continues via incremental disk writes and depreciation); zeroing = manually `rm .auto/stats.json`
+   (the established procedure before a manual rollback re-runs the same task -- a re-run and an interrupted continuation are indistinguishable to statistics). The proxy-answer ledger
+   `.auto/resolves.json` (src/resolve.ts, design plans/0020-auto-resolve-design.md) is of the same family and contract:
+   driver-exclusive writes, inside gitignore, not on the protect list, taking part in no recallProgress/openStep or other
+   recovery decision; corruption or absence just restarts highlighting and counting from now, affecting neither the run nor the exit code (write failures are all
+   silent); **a standalone file, not merged into stats.json** -- stats has high-frequency 30s heartbeat writes, and stuffing an ever-growing
+   question-text array would make every heartbeat rewrite the full text; entries are capped at 512 with FIFO eviction; zeroing is likewise the manual
    `rm .auto/resolves.json`。
-- 严格恢复(OPENCODE_AUTO_STRICT_RESUME,**缺省 off = 现状逐字节等价**;设计文档
-  plans/0022-session-recovery-fidelity-design.md,2026-09-15 实施、灰度中):会话复用的判据
-  从"会话还在"收紧为"恢复后行为可论证地等于未中断的延续",不满足即**回滚到单元基线
-  重跑**,以浪费的半截工作换确定性。整体 gated 于"开关 on 且提交门禁在位"(dryrun 下
-  空转——无基线即无回滚锚点)。① **记录标准**:active 进度记录随带 `baseline`(逐仓库
-  HEAD 短 SHA,任务入口/阶段边界/子任务门禁后/requireArtifact 单元起点逐级刷新,越近
-  回滚半径越小)与 `model`(本次提示词的生效 provider/model 串)。② **恢复核对**:各
-  仓库 HEAD == 基线,或 基线..HEAD 区间全是 driver 提交(Auto-Stage trailer)——
-  `git.baselineIntact`,与单元收口校验的差异是**不看未提交改动**(半途脏区正是恢复
-  对象);外部提交混入一律 dirty 阻塞交人工(回滚只回收 driver 自己的单元内改动)。
-  生效模型与当前配置解析结果不一致 → 不复用(异模型续跑 = 行为漂移);**未配置
-  OPENCODE_AUTO_MODEL 时记录无模型可写,严格恢复下视同不匹配——要会话复用就得配
-  模型路由**。旧记录(开关启用前写入,无基线)不可严格核对 → 不复用、也不回滚,开
-  新会话。③ **回滚协议**(`git.rollbackUnit`,逐仓库深度优先镜像 commitTree):
-  `git stash push -u`(信息含 `auto-rollback` 前缀)保全现场 → 基线..HEAD 有本单元
-  driver 提交时 `git reset --soft` 回基线后再 stash 收回;检测到 upstream 的仓库只
-  stash 不动历史(已推送/被引用),基线为空或单元期间新建的仓库同样只 stash;随后
-  进度记录转总结态(清基线/模型)、CURRENT.md 写回滚备注(现场去向与找回方式),
-  新会话冷启动重做本单元(不附恢复说明)。④ **提示词瘦身**:复用原会话时恢复说明
-  收敛为一句 `[driver] 会话曾中断,请继续当前工作直至本单元完成。`(会话本就靠盘面
-  自定位,阶段指引冗余);门禁不在位与非复用路径维持既有按阶段指引。⑤ **交接边界
-  写核**:交接文档在交接当下即校验(ondemand handoff.md 认 `状态: 继续|完成` 行,
-  测试交接 testhandoff.md 认非空——那一刻测试结果尚未判读,会话无从判定"完成"),严格
-  恢复下不再 steer 补写重试——无效一次即回滚冷启动重做(每个执行单元一次为限,再失败
-  按既有隐性阻塞),"完成判定不靠 agent 自报"同样适用于交接文档。
-- opencode server 管理(src/server.ts manage):run 缺省 spawn `opencode serve`
-  并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
-  client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE
-  匹配 Internal network failure / Network error 等)在换新会话重试前先 restart;
-  外部实例 restart 返回 false 仅提示。agent 取 config.agent(缺省 `auto`,init 生成
-  的契约 agent,`init --agent` 修订),显式指定时须为目标目录
-  .opencode/agent/ 下已存在的 agent,run 前完整性检查兜底。
-- `PLAN.md` 字段行(`  - key: value`)必须紧跟任务标题且连续;第一个非字段行(含空行)
-  结束字段块。修改解析规则时同步更新 `test/plan.test.ts` 与 README 的格式说明。
-- 运行时依赖外部 `opencode` CLI(`createOpencodeServer` spawn `opencode serve`),
-  或通过 `--server` / `OPENCODE_AUTO_SERVER` 复用已有 server;二进制自身不含 opencode。
+- Strict recovery (OPENCODE_AUTO_STRICT_RESUME, **default off = byte-identical to the status quo**; design document
+  plans/0022-session-recovery-fidelity-design.md, implemented 2026-09-15, in gradual rollout): the criterion for session reuse
+  tightens from "the session still exists" to "post-recovery behavior is provably equal to an uninterrupted continuation"; when unmet it **rolls back to the unit baseline
+  and re-runs**, trading wasted half-work for determinism. The whole thing is gated on "the switch on and the commit gate in place" (under dryrun it
+  no-ops -- no baseline means no rollback anchor). ① **record standard**: the active progress record carries a `baseline` (per-repository
+  HEAD short SHAs, refreshed stepwise at task entry/phase boundaries/after subtask gates/requireArtifact unit starts -- the fresher,
+  the smaller the rollback radius) and `model` (the effective provider/model string of this prompt). ② **recovery verification**: each
+  repository's HEAD == baseline, or the baseline..HEAD range is all driver commits (Auto-Stage trailer) --
+  `git.baselineIntact`; the difference from the unit close-out check is that **uncommitted changes are not examined** (mid-way dirty areas are precisely the recovery
+  target); any external commit mixed in always means a dirty block to a human (rollback reclaims only the driver's own within-unit changes).
+  The effective model disagreeing with the current config's resolution → no reuse (resuming on a different model = behavioral drift); **when
+  OPENCODE_AUTO_MODEL is unset the record has no model to write, and under strict recovery this counts as a mismatch -- session reuse requires configuring
+  model routing**. Old records (written before the switch was enabled, no baseline) cannot be strictly verified → no reuse and no rollback; a new
+  session opens. ③ **rollback protocol** (`git.rollbackUnit`, depth-first per repository, mirroring commitTree):
+  `git stash push -u` (message containing the `auto-rollback` prefix) preserves the scene → if baseline..HEAD contains this unit's
+  driver commits, `git reset --soft` back to baseline and then pop the stash back; repositories with a detected upstream only
+  stash without touching history (already pushed/referenced); repositories with an empty baseline or created during the unit likewise only stash; then the
+  progress record switches to the summarized state (baseline/model cleared), CURRENT.md gets a rollback note (where the scene went and how to find it),
+  and a new session cold-starts to redo this unit (no recovery note attached). ④ **prompt slimming**: when reusing the original session, the recovery note
+  shrinks to one sentence `[driver] 会话曾中断,请继续当前工作直至本单元完成。` ("the session was interrupted; continue the current work until this unit is complete." The session locates itself from the board anyway;
+  stage guidance is redundant); paths without the gate in place and non-reuse paths keep the existing per-stage guidance. ⑤ **handover-boundary
+  write verification**: the handover document is validated at the very moment of handover (ondemand handoff.md accepts a `状态: 继续|完成` (continue|done) line,
+  the test handover testhandoff.md accepts non-empty -- at that moment the test result has not been interpreted yet, so the session cannot possibly declare "完成" (done)); under strict
+  recovery there is no more steer-to-backfill retry -- one invalid occurrence triggers rollback and a cold-start redo (limited to once per execution unit; a further failure
+  follows the existing silent block), and "completion is not judged by agent self-reporting" applies to handover documents as well.
+- opencode server management (src/server.ts manage): run by default spawns `opencode serve`
+  and manages its lifecycle; with an explicit url (--server / OPENCODE_AUTO_SERVER) it connects to an external instance and does not manage it.
+  The client is a Proxy, so after restart swaps the instance, existing references take effect automatically. Network-class session errors (NETWORK_FAILURE
+  matching Internal network failure / Network error etc.) restart before retrying with a new session;
+  an external instance's restart returning false only prints a notice. The agent comes from config.agent (default `auto`, generated by init
+  as the contract agent, revised via `init --agent`); when explicitly specified it must be an agent already existing under the target directory's
+  .opencode/agent/, backstopped by the pre-run integrity check.
+- `PLAN.md` field lines (`  - key: value`) must immediately follow the task title and be contiguous; the first non-field line (including a blank line)
+  ends the field block. When changing the parsing rules, update `test/plan.test.ts` and the README's format documentation in sync.
+- Runtime depends on the external `opencode` CLI (`createOpencodeServer` spawns `opencode serve`),
+  or reuses an existing server via `--server` / `OPENCODE_AUTO_SERVER`; the binary itself does not bundle opencode.

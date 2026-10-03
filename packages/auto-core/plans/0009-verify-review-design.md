@@ -1,340 +1,340 @@
-# verify 三段式与 --review 审核循环 — 设计说明
+# verify three-stage design and the --review review loop — design notes
 
-> **状态(2026-10-02 勘正,`plans/0069` §4.2 A4):verify 三段式与 `--review` 审核循环
-> 均已实现(T-017..T-024 落地,含 `--early` 并行审核),后被 `plans/0044`(完成侧退役,
-> 2026-09-21 裁定)整体删除——依其 D1,`--verify`/`--review`/`--early`/`--early-review`
-> 在所有子命令上一律用法错误(退出码 1)。本文为历史设计记录,原文如下保留。**
+> **Status (2026-10-02 correction, `plans/0069` §4.2 A4): the verify three-stage design and the `--review` review loop
+> were both implemented (T-017..T-024 landed, including `--early` parallel review), then deleted wholesale by `plans/0044` (completion-side retirement,
+> ruled 2026-09-21) — per its D1, `--verify`/`--review`/`--early`/`--early-review`
+> are unconditionally usage errors (exit code 1) on all subcommands. This document is a historical design record; the original text below is preserved as-is.**
 
-> 本文档是 PLAN.md 第三阶段(T-017..T-021)的唯一设计基准:分解、执行、审核会话均以
-> 本文为准。包内 AGENTS.md 中与本文冲突的旧约定(如"driver 不亲自执行任何 verify
-> 命令")将在 T-021 统一改写;此前任务实现时不要按旧约定"纠正"代码。
-> 第四阶段(T-022..T-024,--early 并行审核)以本文 F 节为唯一设计基准。
+> This document is the sole design baseline for PLAN.md's third phase (T-017..T-021): the decomposition, execution, and review sessions all
+> defer to this document. Old conventions in the package's AGENTS.md that conflict with it (e.g. "the driver never runs any verify
+> command itself") will be rewritten uniformly in T-021; until then, do not "correct" code per the old conventions when implementing tasks.
+> The fourth phase (T-022..T-024, --early parallel review) takes section F of this document as its sole design baseline.
 
-## 背景与动机
+## Background and motivation
 
-1. **verify 执行效率与稳定性**:当前任务级验收完全在旁路审核会话内进行,AI 通过 bash
-   工具运行检查命令,工具输出被截断(2000 字符),大输出场景下 AI 反复重跑同一命令,
-   浪费上下文与时间。改为 driver 直接执行脚本、输出落盘、AI 只读文件判定后:输出零
-   截断、命令只执行一次、执行与判定分离更客观。
-2. **缺少实现质量的独立审核**:verify 只回答"验收标准是否满足",不回答"实现是否忠实
-   于设计/任务描述、是否处理了所有情形、验证过程本身是否全面有效"。新增 `--review`
-   审核循环补上这一层,并以驱动式 fix 子任务闭环。
+1. **verify execution efficiency and stability**: task-level acceptance currently runs entirely inside a bypass review session, where the AI runs check commands through the bash
+   tool and tool output gets truncated (2000 characters); with large outputs the AI repeatedly re-runs the same command,
+   wasting context and time. After the change — the driver executes the script directly, output lands on disk, and the AI judges by only reading files — output has zero
+   truncation, each command runs exactly once, and separating execution from judgment is more objective.
+2. **No independent review of implementation quality**: verify only answers "are the acceptance criteria met", not "is the implementation faithful
+   to the design/task description, are all cases handled, and is the verification process itself comprehensive and effective". The new `--review`
+   review loop adds this layer and closes the loop with driver-driven fix subtasks.
 
-## 已确认决策
+## Confirmed decisions
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| verify 产物位置 | 目标目录下 `tmp/` 子目录:`tmp/{verify.sh, verify.out, verify.err}`(V2 修订: 自 `/tmp/<目标目录基名>` 迁入工作目录,会话可直读、避免 /tmp 权限问题;run/init 经 ensureGitignore 保证不进仓库,清扫提交规则不变) |
-| `--review` 语义 | 缺省不启用;裸 `--review` = 3 轮;`--review n` 须为 1..10 的整数,否则用法错误(退出码 1) |
-| `--subtask off` 下 review 失败 | 与该模式 verify 失败行为一致:回退 `pending` 停机(退出码 2),不进 fix 循环 |
-| 审核范围界定 | 提示词引导:审核会话依据 `docs/T-NNN.report.md` + git log/status 自行界定本任务改动范围,不新增持久化状态 |
+| verify artifact location | the `tmp/` subdirectory under the target directory: `tmp/{verify.sh, verify.out, verify.err}` (V2 revision: moved into the working directory from `/tmp/<目标目录基名>` (the target directory's basename), so sessions can read it directly and /tmp permission issues are avoided; run/init keeps it out of the repo via ensureGitignore; the sweep-commit rules are unchanged) |
+| `--review` semantics | disabled by default; bare `--review` = 3 rounds; `--review n` must be an integer in 1..10, otherwise a usage error (exit code 1) |
+| review failure under `--subtask off` | same behavior as a verify failure in that mode: fall back to `pending` and halt (exit code 2), no fix loop |
+| Review-scope delineation | prompt-guided: the review session delineates this task's change scope itself from `docs/T-NNN.report.md` + git log/status, adding no new persisted state |
 
-## A. verify 三段式(脚本准备 → driver 执行 → AI 判定)
+## A. verify three-stage design (script preparation → driver execution → AI judgment)
 
-### A.1 机制层 `src/verify.ts`(T-017)
+### A.1 Mechanism layer `src/verify.ts` (T-017)
 
-纯逻辑模块,不依赖 SDK 与 runner,可独立单测。导出:
+Pure-logic module with no SDK or runner dependencies, independently unit-testable. Exports:
 
 ```ts
-// 目标目录下 tmp/(不负责创建,调用方或本函数内 mkdir -p 均可)
+// tmp/ under the target directory (creation is not its responsibility; mkdir -p by the caller or inside this function are both fine)
 verifyTmpDir(dir: string): string   // join(resolve(dir), "tmp")
 
 export type VerifyScript =
-  | { kind: "existing"; script: string }   // 直接使用既有可执行文件
-  | { kind: "wrapped"; script: string }    // driver 包装命令生成的 verify.sh
-  | { kind: "generate" }                   // 需 AI 生成会话产出脚本
+  | { kind: "existing"; script: string }   // use the existing executable file directly
+  | { kind: "wrapped"; script: string }    // the verify.sh the driver generates to wrap the command
+  | { kind: "generate" }                   // a script must be produced by the AI generation session
 
 resolveVerifyScript(task: Task, dir: string): Promise<VerifyScript>
 runVerifyScript(dir: string, script: string, timeoutMs?: number):
   Promise<{ code: number; ms: number; timedOut: boolean; out: string; err: string }>
 ```
 
-`resolveVerifyScript` 判定规则(`verifyCommand(task)` 为 `src/plan.ts` 既有函数,提取
-`verify: command: <cmd>` 前缀):
+`resolveVerifyScript` resolution rules (`verifyCommand(task)` is an existing function in `src/plan.ts` that extracts
+the `verify: command: <cmd>` prefix):
 
-- **existing**:cmd 为单 token(`/^\S+$/`)、不以 `-` 开头,且作为路径(相对 `dir` 或
-  绝对)存在并可执行(`X_OK`)→ 直接用该文件。例:`./scripts/e2e.sh`、`/abs/check.sh`。
-- **wrapped**:cmd 存在但不满足 existing(如 `bun test`、`make check`)→ driver 写
-  `verifyTmpDir/verify.sh`:首行 `#!/usr/bin/env bash`,其后为原命令原文,**不加
-  `set -e` 等额外语义**,退出码原样透传;`chmod 0o755`。每次 verifyTask 重新生成
-  (幂等覆盖,verify 字段可能被人工改过)。
-- **generate**:verify 为自然语言或缺失 → 交脚本生成会话(脚本持久于 tmp/,缺失时
-  重新生成;跨修复轮复用)。
+- **existing**: cmd is a single token (`/^\S+$/`), does not start with `-`, and exists as a path (relative to `dir` or
+  absolute) and is executable (`X_OK`) → use that file directly. Examples: `./scripts/e2e.sh`, `/abs/check.sh`.
+- **wrapped**: cmd exists but does not satisfy existing (e.g. `bun test`, `make check`) → the driver writes
+  `verifyTmpDir/verify.sh`: first line `#!/usr/bin/env bash`, followed by the original command text verbatim, **adding no
+  extra semantics such as `set -e`**, exit code passed through as-is; `chmod 0o755`. Regenerated on every verifyTask
+  (idempotent overwrite; the verify field may have been edited by hand).
+- **generate**: verify is natural language or missing → handed to the script-generation session (the script persists in tmp/ and is regenerated when
+  missing; reused across fix rounds).
 
-`runVerifyScript` 执行语义:
+`runVerifyScript` execution semantics:
 
-- `cwd` = 目标目录;脚本可执行(有执行位)则直接 `spawn [script]`,否则
+- `cwd` = the target directory; if the script is executable (has the execute bit), `spawn [script]` directly, otherwise
   `spawn ["bash", script]`;
-- stdout 整写 `verify.out`、stderr 整写 `verify.err`(每次执行前 truncate;
-  Bun.spawn 的 stdout/stderr 可直接接 `Bun.file(path)` 写端,版本不支持则 pipe
-  后流式复制);
-- 超时常量 `VERIFY_TIMEOUT_MS = 10 分钟`(导出供测试覆盖小值);超时 `proc.kill()`,
-  `code = 124`、`timedOut = true`(已知局限:孙进程树不保证清理,V1 接受);
-- **退出码非 0 不直接判失败**——判定权在 AI,保留"脚本本身坏/环境不适用不误判"的
-  既有韧性。
+- stdout written wholesale to `verify.out`, stderr wholesale to `verify.err` (truncate before each execution;
+  Bun.spawn's stdout/stderr can connect directly to the write end of `Bun.file(path)`; if the version does not support that, pipe and
+  stream-copy after the pipe);
+- Timeout constant `VERIFY_TIMEOUT_MS = 10 分钟` (10 minutes; exported so tests can override it with a small value); on timeout `proc.kill()`,
+  `code = 124`, `timedOut = true` (known limitation: grandchild process trees are not guaranteed to be cleaned up; accepted in V1);
+- **A non-zero exit code is not directly judged a failure** — the judgment belongs to the AI, preserving the existing resilience that "a script that is itself broken or an
+  unsuitable environment is not misjudged".
 
-### A.2 脚本生成会话 `renderVerifyScriptGen(plan, task, scriptPath)`(T-018)
+### A.2 Script-generation session `renderVerifyScriptGen(plan, task, scriptPath)` (T-018)
 
-旁路全新会话(不进任务执行链)。只读分析源码与 docs/,按 verify 字段的自然语言语义
-或任务验收标准,写出可执行脚本到 runner 传入的 `scriptPath`(tmp/ 下绝对路径)并
-`chmod +x`。约束:只做验证类操作(运行测试/检查、读文件),不修改任何实现代码;
-硬性要求产出文件(缺失带反馈重试一次,仍失败按隐性阻塞——与分解会话/判定文件同
-策略);复用 QUESTION_RULE / STATE_RULE。
+A fresh bypass session (not part of the task execution chain). It analyzes source and docs/ read-only and, per the natural-language semantics of the verify field
+or the task's acceptance criteria, writes an executable script to the runner-provided `scriptPath` (an absolute path under tmp/) and
+`chmod +x`s it. Constraints: verification-type operations only (running tests/checks, reading files); no implementation code is modified;
+producing the file is mandatory (retry once with feedback if missing; if it still fails, a silent block — the same policy as the decomposition session/verdict file);
+reuses QUESTION_RULE / STATE_RULE.
 
-### A.3 判定会话 `renderVerifyJudge(plan, task, run)`(T-018,替换并删除 renderVerify)
+### A.3 Judge session `renderVerifyJudge(plan, task, run)` (T-018, replaces and deletes renderVerify)
 
-旁路全新会话。提示词注入:脚本路径、退出码、耗时、是否超时、out/err 绝对路径。
-要求:直读 out/err 文件(大文件分段读,不经工具截断——这正是本次改造的目的)、读
-相关代码,必要时可自行补跑只读检查;保留"脚本/命令本身有问题不判不通过,说明原因
-并用等价方式验证"。判定协议不变:写 `.auto/verify.md`(VERDICT_FILE),末行
-`结论: 通过` 或 `结论: 差距 <描述>`,可选 `verified-command: <driver 实际执行的
-脚本路径或原命令>` 独立成行。
+A fresh bypass session. Prompt injection: script path, exit code, elapsed time, whether it timed out, absolute out/err paths.
+Requirements: read the out/err files directly (large files in segments, never through tool truncation — the very point of this rework), read
+the related code; when necessary it may re-run read-only checks itself; keep the rule "脚本/命令本身有问题不判不通过,说明原因并用等价方式验证"
+(a script/command that is itself broken is not judged as failed — explain the reason and verify in an equivalent way). The verdict protocol is unchanged: write `.auto/verify.md` (VERDICT_FILE), last line
+`结论: 通过` ("verdict: pass") or `结论: 差距 <描述>` ("verdict: gap <description>"); optionally `verified-command: <driver 实际执行的
+脚本路径或原命令>` ("the script path or original command the driver actually executed"), on its own line.
 
-### A.4 runner 接入(T-019)
+### A.4 runner integration (T-019)
 
-`verifyTask` 新流程:
+`verifyTask` new flow:
 
 ```
 script = resolveVerifyScript(task, dir)
-  └─ generate → 先开脚本生成会话(一次性 chain {pct:100, used:0},不进任务链;
-                 产物缺失带反馈重试一次,仍失败隐性阻塞)
-run = runVerifyScript(dir, script)        # log: 退出码、耗时、out/err 路径
-verdict = 判定会话(renderVerifyJudge)+ 解析 VERDICT_FILE(沿用 parseVerdict
-           与"缺失重试一次"策略)
-pass → markDone(path, id, verdict.command ?? verifyCommand(task) ?? 实际脚本路径)
-gap  → 既有 renderFix 修复循环不变(FIX_ROUNDS=3);每轮修复后重跑同一脚本再判定
+  └─ generate → open the script-generation session first (one-shot chain {pct:100, used:0}, not in the task chain;
+                 artifact missing → retry once with feedback; still failing → silent block)
+run = runVerifyScript(dir, script)        # log: exit code, elapsed, out/err paths
+verdict = judge session (renderVerifyJudge) + parse VERDICT_FILE (reusing parseVerdict
+           and the "retry once if missing" policy)
+pass → markDone(path, id, verdict.command ?? verifyCommand(task) ?? actual script path)
+gap  → existing renderFix repair loop unchanged (FIX_ROUNDS=3); after each fix round, re-run the same script and judge again
 ```
 
-> **2026-09-07 注记(stable-refs P4 引用门禁)**:判定会话前 driver 先对任务产物文档
-> (`docs/T-NNN/**`)做确定性预扫(src/refcheck.ts taskRefFindings)——失效引用 =
-> 差距,直接进上述 renderFix 修复循环、不消耗判定会话(off 模式回退 pending,
-> 耗尽阻塞退出 2);verify 未启用时无任务级验收,门禁不存在(退化为提交时
-> auto-correct 的 ⚠ 日志)。引用规范与三层检查的设计基准见
+> **2026-09-07 note (stable-refs P4 reference gate)**: before the judge session, the driver first runs a deterministic pre-scan over the task's artifact documents
+> (`docs/T-NNN/**`) (src/refcheck.ts taskRefFindings) — a dead reference =
+> a gap, going straight into the renderFix repair loop above without consuming a judge session (off mode falls back to pending,
+> exhaustion blocks with exit 2); when verify is not enabled there is no task-level acceptance and the gate does not exist (degenerating into the ⚠ log of
+> commit-time auto-correct). The design baseline for the reference conventions and the three-layer check is in
 > plans/0010-stable-refs-design.md §3.3/§4.5。
 
-现有 `review()` 中"判定文件缺失带反馈重试一次"的骨架可抽为通用 helper 供生成会话
-与判定会话复用。会话链、dryrun、interactive、权限等待行为均不受影响。
+The "retry once with feedback when the verdict file is missing" skeleton in the existing `review()` can be extracted into a generic helper for the generation session
+and the judge session to reuse. Session chaining, dryrun, interactive, and permission-wait behavior are all unaffected.
 
-### A.5 verified 字段
+### A.5 The verified field
 
-通过时优先取判定文件 `verified-command:` 行,其次 `verifyCommand(task)`(原始命令),
-最后实际执行的脚本路径;不通过或未执行则清除(维持现状)。
+On pass, prefer the verdict file's `verified-command:` line, then `verifyCommand(task)` (the original command),
+and finally the actually executed script path; on fail or non-execution it is cleared (status quo maintained).
 
-## B. --review 审核循环(T-020)
+## B. The --review review loop (T-020)
 
-### B.1 选项语义
+### B.1 Option semantics
 
-`index.ts`:`--review` 进 VALUE_FLAGS;`parseReviewLimit`:缺省(无选项)→ 0 不启用;
-裸选项 → 3;显式值须为 1..10 整数,否则用法错误退出码 1。用法文本同步。
+`index.ts`: `--review` goes into VALUE_FLAGS; `parseReviewLimit`: default (no option) → 0, disabled;
+bare option → 3; an explicit value must be an integer in 1..10, otherwise a usage error with exit code 1. Usage text updated in sync.
 
-### B.2 流水线(runTask 重构)
+### B.2 Pipeline (runTask refactor)
 
 ```
 runTask:
   begin; writeCurrent
-  首轮: [auto] ensureDecomposed / [off|ondemand] executeWhole(仅首轮,后续轮直接进检查项循环)
+  first round: [auto] ensureDecomposed / [off|ondemand] executeWhole (first round only; later rounds go straight into the checklist loop)
   for (reviewRound = 0; ; ):
-    逐未勾选检查项: runSubtask → tick → writeCurrent
-    wrapup 会话
-    verifyTask(三段式,内部修复轮 ≤ 3;每轮 review-fix 后自然重置)
-    if opts.review ≤ 0 → markDone 已完成,返回 completed
+    for each unchecked checklist item: runSubtask → tick → writeCurrent
+    wrapup session
+    verifyTask (three-stage, internal fix rounds ≤ 3; naturally reset after each review-fix round)
+    if opts.review ≤ 0 → markDone done, return completed
     audit = reviewTask:
-      final = 当前任务之后全部任务 done(或无后继)
-      旁路审核会话 renderReview(plan, task, { final })
-      产出 docs/T-NNN.audit.md(final: docs/final-audit.md)
-      结论写 .auto/review.md(REVIEW_FILE,协议同 VERDICT_FILE,复用同一解析)
-    通过 → completed
-    差距:
-      off 模式 → setStatus pending,返回 incomplete(与该模式 verify 失败一致)
-      reviewRound+1 > limit → blocked(question = 审核差距全文)
-      否则 → 旁路修复规划会话 renderReviewFix → docs/T-NNN.fix.md 检查项
-             → plan.appendSubtasks 注入 PLAN.md → writeCurrent 刷新
-             → continue 外层(子任务会话逐项执行 → 收尾 → verify → 再审核)
+      final = all tasks after the current task done (or no successor)
+      bypass review session renderReview(plan, task, { final })
+      produces docs/T-NNN.audit.md (final: docs/final-audit.md)
+      verdict written to .auto/review.md (REVIEW_FILE, protocol same as VERDICT_FILE, reusing the same parser)
+    pass → completed
+    gap:
+      off mode → setStatus pending, return incomplete (same as a verify failure in that mode)
+      reviewRound+1 > limit → blocked (question = full text of the review gap)
+      otherwise → bypass fix-planning session renderReviewFix → docs/T-NNN.fix.md checklist items
+             → plan.appendSubtasks injects into PLAN.md → writeCurrent refresh
+             → continue outer loop (subtask sessions execute the items one by one → wrapup → verify → review again)
 ```
 
-状态全在 PLAN.md,中断重跑自然续;fix 检查项复用既有子任务会话机制,不新造执行路径。
+All state lives in PLAN.md, so an interrupted re-run resumes naturally; fix checklist items reuse the existing subtask-session mechanism, with no new execution path built.
 
-### B.3 审核会话 `renderReview(plan, task, { final })`(T-018)
+### B.3 Review session `renderReview(plan, task, { final })` (T-018)
 
-审核维度:**忠实性**(实现与任务描述/设计文档对齐)、**正确性**(边界情形是否处理)、
-**验证过程全面性与有效性**(verify 脚本与判定是否有效覆盖验收标准)。
+Review dimensions: **fidelity** (is the implementation aligned with the task description/design documents), **correctness** (are edge cases handled),
+**comprehensiveness and effectiveness of the verification process** (do the verify script and verdict effectively cover the acceptance criteria).
 
-- `final = false`(中间任务):范围**以本任务改动为限**——依 `docs/T-NNN.report.md`
-  与 git log/status(自上一任务完成后的提交与工作区状态)界定,明确禁止审核其他
-  任务的代码;
-- `final = true`(最后一个任务):对整个计划执行过程中的设计、实现、文档做全面
-  审核(通读 PLAN.md 全部任务、docs/ 各报告与设计文档、整体 git 历史);
-- 产出审计报告 `docs/T-NNN.audit.md`(final 为 `docs/final-audit.md`),结论写
-  REVIEW_FILE,末行 `结论: 通过` 或 `结论: 差距 <描述>`;
-- 只审不改:禁止修改任何实现代码(audit 报告与结论文件除外);复用
+- `final = false` (intermediate task): scope is **limited to this task's changes** — bounded by `docs/T-NNN.report.md`
+  and git log/status (commits and working-tree state since the previous task completed); reviewing other
+  tasks' code is explicitly forbidden;
+- `final = true` (the last task): a comprehensive review of the design, implementation, and documentation across the
+  whole plan's execution (reading through all PLAN.md tasks, the reports and design documents in docs/, and the overall git history);
+- Produces the audit report `docs/T-NNN.audit.md` (for final, `docs/final-audit.md`); the verdict goes
+  to REVIEW_FILE with last line `结论: 通过` ("verdict: pass") or `结论: 差距 <描述>` ("verdict: gap <description>");
+- Review only, no modification: modifying any implementation code is forbidden (the audit report and verdict file excepted); reuses
   QUESTION_RULE / STATE_RULE。
 
-### B.4 修复规划会话 `renderReviewFix(plan, task, gap)`(T-018)
+### B.4 Fix-planning session `renderReviewFix(plan, task, gap)` (T-018)
 
-旁路全新会话。输入审核差距(及 audit 报告路径),产出**单步或多步** fix 检查项到
-`docs/T-NNN.fix.md`(`- [ ]` 自包含描述,凭描述 + CURRENT.md + docs/ 即可执行);
-硬性要求产出(缺失带反馈重试一次,仍失败隐性阻塞)。driver 经
-`plan.appendSubtasks(path, id, items)` 把检查项追加到任务正文既有检查项块之后
-(无检查项时接正文末),随后刷新 CURRENT.md。
+A fresh bypass session. It takes the review gap (and the audit report path) as input and produces **single-step or multi-step** fix checklist items into
+`docs/T-NNN.fix.md` (`- [ ]` self-contained descriptions, executable from the description + CURRENT.md + docs/ alone);
+producing output is mandatory (retry once with feedback if missing; if it still fails, a silent block). The driver appends the checklist
+items after the task body's existing checklist block via `plan.appendSubtasks(path, id, items)`
+(at the end of the body when there is no checklist block), then refreshes CURRENT.md.
 
-## C. 文件级改动清单
+## C. File-level change list
 
-| 文件 | 改动 | 任务 |
+| File | Change | Task |
 | --- | --- | --- |
-| `src/verify.ts`(新增) | verifyTmpDir / resolveVerifyScript / runVerifyScript / VERIFY_TIMEOUT_MS | T-017 |
-| `test/verify.test.ts`(新增) | 来源三分支、包装内容、执行/退出码/out-err 落盘、超时 kill | T-017 |
-| `src/prompt.ts` | REVIEW_FILE;renderVerifyScriptGen / renderVerifyJudge(删 renderVerify)/ renderReview / renderReviewFix | T-018 |
-| `test/prompt.test.ts` | 新模板断言,移除 renderVerify 旧断言 | T-018 |
-| `src/runner.ts` | verifyTask 三段式;Opts.review 字段 | T-019 |
-| `src/index.ts` / `src/loop.ts` | --review 解析与透传、用法文本 | T-020 |
-| `src/plan.ts` / `test/plan.test.ts` | appendSubtasks + 用例 | T-020 |
-| `src/runner.ts` | runTask 外层 review 循环、reviewTask、fix 注入、isFinal 判定 | T-020 |
-| `README.md` / 包内 `AGENTS.md` | 选项表、流水线、行为约定改写 | T-021 |
+| `src/verify.ts` (new) | verifyTmpDir / resolveVerifyScript / runVerifyScript / VERIFY_TIMEOUT_MS | T-017 |
+| `test/verify.test.ts` (new) | source three-way branch, wrapper contents, execution/exit code/out-err persistence, timeout kill | T-017 |
+| `src/prompt.ts` | REVIEW_FILE; renderVerifyScriptGen / renderVerifyJudge (renderVerify removed) / renderReview / renderReviewFix | T-018 |
+| `test/prompt.test.ts` | new template assertions, remove the old renderVerify assertions | T-018 |
+| `src/runner.ts` | verifyTask three-stage; Opts.review field | T-019 |
+| `src/index.ts` / `src/loop.ts` | --review parsing and pass-through, usage text | T-020 |
+| `src/plan.ts` / `test/plan.test.ts` | appendSubtasks + test cases | T-020 |
+| `src/runner.ts` | runTask outer review loop, reviewTask, fix injection, isFinal determination | T-020 |
+| `README.md` / the package's `AGENTS.md` | option table, pipeline, behavior-convention rewrite | T-021 |
 
-## D. 风险、边界与已知局限
+## D. Risks, boundaries, and known limitations
 
-- **权限体系**:driver 直接执行 verify 脚本不经 opencode 权限体系,等同人工在本地
-  跑测试;脚本来源为用户 PLAN 或受提示词约束的生成会话,定位为便利性取舍而非安全
-  边界,文档须明示。
-- **tmp/ 位置与清理**:产物位于目标目录 tmp/(V2 前 位于 /tmp/<基名>/,同基名目录共享);文件每次
-  执行覆盖写,脚本跨轮复用,系统重启丢失则按规则重新生成/包装,可接受。
-- **Windows**:交叉编译产物需 bash 可用(git bash);verify 脚本假设 POSIX shell,
-  文档注明。
-- **超时清理**:kill 只杀直接子进程,孙进程树不保证清理(V1 已知局限)。
-- **脚本复用策略(V1)**:AI 生成脚本每任务生成一次、跨修复轮复用;判定会话发现
-  脚本不足时可自行补跑只读检查,不自动重生成脚本(演进项:判定标注脚本缺陷时触发
-  重生成)。
-- **dogfood 顺序**:执行 T-017..T-021 期间运行中的 driver 仍是旧版(模块已在进程
-  内加载),旧 verify 语义贯穿本阶段执行,符合预期;新行为自下一次 run 生效。
+- **Permission system**: the driver executing verify scripts directly does not go through the opencode permission system — equivalent to a human running
+  tests locally; the script source is the user's PLAN or a generation session constrained by the prompt, so this is positioned as a convenience trade-off, not a security
+  boundary; the documentation must state this explicitly.
+- **tmp/ location and cleanup**: artifacts live in the target directory's tmp/ (before V2 they lived in /tmp/<basename>/, shared by directories with the same basename); files are
+  overwritten on every execution, scripts are reused across rounds, and if lost to a system reboot they are regenerated/wrapped per the rules — acceptable.
+- **Windows**: cross-compiled artifacts need bash available (git bash); verify scripts assume a POSIX shell,
+  noted in the documentation.
+- **Timeout cleanup**: kill only kills the direct child; grandchild process trees are not guaranteed to be cleaned up (a known V1 limitation).
+- **Script reuse policy (V1)**: an AI-generated script is generated once per task and reused across fix rounds; when the judge session finds
+  the script insufficient it may re-run read-only checks itself, but the script is not regenerated automatically (evolution item: trigger regeneration when
+  the verdict flags a script defect).
+- **dogfood ordering**: while T-017..T-021 are being executed, the running driver is still the old version (modules already loaded in the process),
+  so the old verify semantics run throughout this phase's execution, as expected; the new behavior takes effect from the next run.
 
-## F. --early 并行审核(T-022..T-024)
+## F. --early parallel review (T-022..T-024)
 
-### F.1 动机与已确认决策
+### F.1 Motivation and confirmed decisions
 
-verify 的脚本执行阶段(`runVerifyScript`,超时上限 10 分钟)是纯本地进程,不含任何
-opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后。`--early` 把审核
-会话挪进脚本执行窗口并行,节省约一个审核会话的墙钟时间(脚本越长收益越大;短脚本
-场景退化为串行,不劣于现状)。
+verify's script-execution stage (`runVerifyScript`, timeout cap of 10 minutes) is a purely local process containing no
+opencode session; the `--review` review session used to be serialized after the whole of verify. `--early` moves the review
+session into the script-execution window to run in parallel, saving roughly one review session of wall-clock time (the longer the script, the greater the gain; with short
+scripts it degenerates to serial, no worse than the status quo).
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| 并行窗口 | 仅 driver 执行 verify 脚本的阶段;窗口内 verify 侧零会话 |
-| 全局不变量 | **任意时刻至多一个 LLM 会话**(公理,记入本节;任何并行化扩展前必须先修订本节) |
-| 窗口内代码改动 | 零:审核会话只审不改(既有契约);review 差距只出修复计划不执行修复 |
-| worktree | 不需要,舍弃(无代码改动并行 → 无状态分叉、无合并回主线、无第二 server) |
-| 修复轮审核 | 每次脚本执行(含修复轮重跑)都重开一次新审核;通过时的审核与通过代码严格同步,**不再二次串行审核** |
-| audit 阻塞传播 | 窗口 join 得到 blocked 即从 verifyTask 返回 blocked(脚本输出已落盘,重跑语义与既有 blocked 一致) |
+| Parallel window | only the stage where the driver executes the verify script; zero sessions on the verify side within the window |
+| Global invariant | **at most one LLM session at any moment** (an axiom, recorded in this section; this section must be revised before any parallelization extension) |
+| Code changes inside the window | zero: the review session reviews but does not modify (existing contract); a review gap only produces a fix plan, it does not execute fixes |
+| worktree | not needed, dropped (no parallel code changes → no state fork, no merge back to the mainline, no second server) |
+| Fix-round review | every script execution (including fix-round re-runs) reopens a fresh review; the review at pass time is strictly in sync with the passing code — **no second serialized review** |
+| audit block propagation | if the window's join yields blocked, verifyTask returns blocked immediately (script output is already on disk, so the re-run semantics match the existing blocked) |
 
-### F.2 流水线
+### F.2 Pipeline
 
 ```
-每轮(round):
-  逐检查项子任务会话 → 收尾会话                          (不变)
+Each round:
+  per-checklist-item subtask sessions → wrapup session                    (unchanged)
   verifyTask:
-    resolve 脚本(existing/wrapped;generate 先开生成会话)   (不变)
-    ── 启动审核会话(旁路一次性 chain, renderReview early 措辞) ──┐
-    driver 执行脚本(runVerifyScript)                            │ 并行窗口
-    ── join 审核会话 → audit 结论(blocked 则立即上抛)          ─┘
-    判定会话(renderVerifyJudge) → VERDICT_FILE                (不变)
-    通过 → markDone,携带 audit 结论返回 {type:"done", audit}
-    差距 → renderFix 修复 → 收尾 → 重新执行脚本 ∥ 重开新审核 → 再判定
-    off 模式差距 / 修复轮耗尽 → 既有语义不变
-  结论合并(runTask 外层消费 verifyTask 带回的 audit):
-    verify 通过 + audit 通过   → completed
-    verify 通过 + audit 差距   → 既有 review 差距流程(off→pending;超轮→blocked;
-                                 否则 planReviewFix → appendSubtasks → 下一轮)
-    audit 阻塞                → blocked(见上表)
-    verify 差距/off/耗尽       → 既有语义;audit 报告仍留 docs/ 供人工参考
+    resolve script (existing/wrapped; generate opens the generation session first)   (unchanged)
+    ── start review session (bypass one-shot chain, renderReview early wording) ──┐
+    driver executes script (runVerifyScript)                            │ parallel window
+    ── join review session → audit verdict (blocked propagates up immediately)   ─┘
+    judge session (renderVerifyJudge) → VERDICT_FILE                (unchanged)
+    pass → markDone, return {type:"done", audit} carrying the audit verdict
+    gap → renderFix repair → wrapup → re-execute script ∥ reopen a new review → judge again
+    off-mode gap / fix rounds exhausted → existing semantics unchanged
+  verdict merge (runTask's outer layer consumes the audit brought back by verifyTask):
+    verify pass + audit pass   → completed
+    verify pass + audit gap   → existing review-gap flow (off→pending; over-limit→blocked;
+                                 otherwise planReviewFix → appendSubtasks → next round)
+    audit blocked                → blocked (see the table above)
+    verify gap/off/exhausted    → existing semantics; the audit report stays in docs/ for human reference
 ```
 
-时序保证(全局单会话不变量的两个落点):
+Timing guarantees (the two landing points of the global single-session invariant):
 
-1. **启动侧**:generate 分支的脚本生成会话结束后才启动审核(existing/wrapped 无前置
-   会话,直接与脚本并行启动);
-2. **汇合侧**:脚本执行完毕先 join 审核,再开判定会话——审核慢于短脚本时判定等待,
-   不得重叠。
+1. **Start side**: the review starts only after the generate branch's script-generation session has ended (existing/wrapped have no preceding
+   session and start directly in parallel with the script);
+2. **Join side**: once script execution finishes, first join the review, then open the judge session — if the review is slower than a short script, the judge session
+   waits; no overlap allowed.
 
-### F.3 审核会话适配(renderReview early 模式)
+### F.3 Review-session adaptation (renderReview early mode)
 
-- 提示词告知 verify 脚本正在同目录执行:避免运行可能与之冲突的命令(并发跑测试等),
-  以读文件 / git log 为主;
-- 维度 3(验证过程有效性)按脚本内容与验收标准做**静态审核**(脚本文件在执行前已存在
-  于 `tmp/verify.sh`),运行结果的解读属判定会话职责;
-- final 判定、结论协议(REVIEW_FILE)、产物重试策略(requireArtifact)全部不变。
+- The prompt tells it a verify script is executing in the same directory: avoid running commands that might conflict with it (concurrent test runs, etc.),
+  favoring file reads / git log;
+- Dimension 3 (verification-process effectiveness) becomes a **static review** against the script content and the acceptance criteria (the script file already exists at
+  `tmp/verify.sh` before execution); interpreting run results is the judge session's responsibility;
+- final determination, verdict protocol (REVIEW_FILE), and artifact retry policy (requireArtifact) are all unchanged.
 
-### F.4 选项语义
+### F.4 Option semantics
 
-- `--review N --early`:组合模式;`--early` 为布尔修饰,要求 review 已启用,单独出现
-  为用法错误(退出码 1);
-- `--early-review [n]`:快捷糖,等价 `--review n --early`;裸选项 3,显式值 1..10
-  (复用 parseReviewLimit 校验);与 `--review` 同时出现为用法错误(消除歧义);
-- 非 early(`--review N` 单用)行为完全不变:审核仍在整个 verify 通过后串行执行;
-- `--subtask off` / `--commit once|none` / `--interactive` 无额外约束(无 worktree
-  依赖);`--dryrun` 不达 verify,early 自然无效。
+- `--review N --early`: combined mode; `--early` is a boolean modifier that requires review to be enabled — appearing alone
+  is a usage error (exit code 1);
+- `--early-review [n]`: syntactic sugar, equivalent to `--review n --early`; bare option means 3, explicit values 1..10
+  (reusing the parseReviewLimit validation); appearing together with `--review` is a usage error (to remove ambiguity);
+- Non-early (`--review N` alone) behavior is completely unchanged: the review still runs serialized after the whole verify passes;
+- `--subtask off` / `--commit once|none` / `--interactive` gain no extra constraints (no worktree
+  dependency); `--dryrun` never reaches verify, so early is naturally ineffective.
 
-### F.5 runner 接口约定
+### F.5 runner interface contract
 
-- `verifyTask` 增加可选挂点参数(审核 thunk):`runVerifyScript` 前启动、判定会话前
-  join;每次脚本执行(含修复轮)重开;最后一次 audit 随 done 返回;
-- `verifyTask` 返回值扩展:`{ type: "done"; audit?: Verdict }`(非 early 模式不带);
-- `runTask` 外层:early 时不再独立调用 reviewTask,消费 verifyTask 带回的 audit;
-  非 early 走原路径;轮数计数、off 模式、FIX_ROUNDS 语义均不变。
+- `verifyTask` gains an optional hook-point parameter (a review thunk): started before `runVerifyScript`, joined before the judge
+  session; reopened on every script execution (including fix rounds); the last audit returns with done;
+- `verifyTask`'s return value is extended: `{ type: "done"; audit?: Verdict }` (omitted in non-early mode);
+- `runTask`'s outer layer: under early it no longer calls reviewTask separately and consumes the audit brought back by verifyTask;
+  non-early takes the original path; round counting, off mode, and FIX_ROUNDS semantics are all unchanged.
 
-### F.6 风险与边界
+### F.6 Risks and boundaries
 
-- 短脚本场景审核慢于脚本时判定会话等待,极端下 early 收益为零,不劣于串行;
-- 审核会话若补跑只读命令可能与脚本争用环境(如测试缓存):F.3 提示词已约束以读为主;
-- 中断恢复零新增:遗留 `.auto/review.md` 与 audit 报告由 requireArtifact 的 reset()
-  在下次运行清理,无新增持久化并行状态;
-- `--interactive`:窗口内唯一会话为审核会话,attach 无歧义。
+- In short-script scenarios where the review is slower than the script, the judge session waits; in the extreme, early's gain is zero, no worse than serial;
+- If the review session re-runs read-only commands it may contend with the script for the environment (e.g. test caches): the F.3 prompt already constrains it to be read-mostly;
+- Zero additions for interruption recovery: leftover `.auto/review.md` and audit reports are cleaned up by requireArtifact's reset()
+  on the next run — no new persisted parallel state;
+- `--interactive`: the only session inside the window is the review session, so attach is unambiguous.
 
-## G. 判定会话执行限制与重验协议(后续修订,以此为准)
+## G. Judge-session execution restrictions and the re-verification protocol (later revision; this section prevails)
 
-> 本节修订 A.3 的判定会话约定与相关提示词;与其冲突的旧文("必要时可自行补跑只读
-> 检查""说明原因并用等价方式验证")以本节为准。其余各节(A/B/F)不变。
+> This section revises A.3's judge-session conventions and the related prompts; where the older text conflicts ("必要时可自行补跑只读检查" ("when necessary it may re-run
+> read-only checks itself") and "说明原因并用等价方式验证" ("explain the reason and verify in an equivalent way")), this section prevails. The other sections (A/B/F) are unchanged.
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| 判定会话执行权 | **禁止直接执行任何验证脚本或验证性命令**(运行测试、构建、lint、启动服务等);执行结果一律以 driver 回传的 out/err 文件为准;只读检查(读文件、git log/status、grep 源码)不受限 |
-| 脚本缺陷处理 | 判定会话可编写**新的验证脚本替换**指定脚本(`tmp/verify.sh`,覆盖写 + chmod +x),判定文件末行 `结论: 重验 <原因>` |
-| 重验循环 | driver 固定改为执行该指定路径(不再按 verify 字段重新解析——wrapped 重包装会覆盖替换产物),输出整写回传同一对 out/err,由新判定会话继续判定;至多 REVERIFY_ROUNDS=3 轮,耗尽或声称重验但未写出脚本按隐性阻塞(blocked) |
-| verified-command | 判定通过且替换过脚本时,可附 `verified-command: <新脚本核心命令>`;markDone 的取值优先级不变 |
-| 生成会话 | renderVerifyScriptGen 同样禁止执行验证性命令(只读分析 + `bash -n` 类语法检查除外) |
-| 审核会话 | renderReview 两形态维度 3 统一为静态审核(脚本内容/判定记录对照验收标准),不执行验证脚本或验证命令;early 额外告知脚本并行执行、以只读为主 |
-| 原则下沉 | init 向 AGENTS.md 追加验证原则块(独立标记 `opencode-auto:verify:start/end`,幂等、与指针块互不影响)、PLAN.md 模板与 renderInit 提示词写明"任务描述不要求执行者亲自运行验证命令/脚本";`opencode-auto check` 启发式扫描 AGENTS.md/PLAN.md 中与原则相违背的描述,命中退出码 1(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算) |
+| Judge-session execution rights | **directly executing any verification script or verification command is forbidden** (running tests, builds, lint, starting services, etc.); execution results are always taken from the out/err files the driver passes back; read-only checks (reading files, git log/status, grepping source) are unrestricted |
+| Script-defect handling | the judge session may write a **new verification script to replace** the designated script (`tmp/verify.sh`, overwrite + chmod +x); the verdict file's last line is `结论: 重验 <原因>` ("verdict: re-verify <reason>") |
+| Re-verification loop | the driver is permanently changed to execute that designated path (no longer re-resolved from the verify field — a wrapped re-wrap would overwrite the replacement artifact); output is written wholesale back to the same out/err pair, and a new judge session continues the judgment; at most REVERIFY_ROUNDS=3 rounds — exhaustion, or claiming a re-verify without writing out a script, is a silent block (blocked) |
+| verified-command | when the verdict passes and the script was replaced, it may attach `verified-command: <新脚本核心命令>` ("the new script's core command"); markDone's value precedence is unchanged |
+| Generation session | renderVerifyScriptGen is likewise forbidden from executing verification commands (read-only analysis + `bash -n`-style syntax checks excepted) |
+| Review session | renderReview's two forms unify dimension 3 as a static review (script content/verdict records checked against the acceptance criteria), executing no verification scripts or commands; early additionally tells it the script executes in parallel and to stay read-mostly |
+| Principle push-down | init appends a verification-principles block to AGENTS.md (own markers `opencode-auto:verify:start/end`, idempotent, no interference with the pointer block); the PLAN.md template and the renderInit prompt state explicitly "任务描述不要求执行者亲自运行验证命令/脚本" ("task descriptions do not require the executor to personally run verification commands/scripts"); `opencode-auto check` heuristically scans AGENTS.md/PLAN.md for descriptions that violate the principles and exits with code 1 on a hit (negations, driver-attribution sentences, PLAN field lines, and opencode-auto marker blocks do not count) |
 
-## H. 中断恢复、看门狗与判定会话 verify 字段授权(后续修订,以此为准)
+## H. Interruption recovery, watchdog, and judge-session verify-field authorization (later revision; this section prevails)
 
-> 本节修订会话记忆、verify 超时与判定会话写权限的约定;与其冲突的旧文
-> (固定 10 分钟超时、`.auto/session.json` 仅记会话 ID、状态文件绝对只读)
-> 以本节为准。
+> This section revises the conventions for session memory, the verify timeout, and the judge session's write permissions; older text that conflicts
+> (the fixed 10-minute timeout, `.auto/session.json` recording only the session ID, state files being absolutely read-only)
+> yields to this section.
 
-| 决策点 | 结论 |
+| Decision point | Conclusion |
 | --- | --- |
-| 进度记录 | `.auto/progress.json` 取代 session.json:`{task, session?, at, active, phase}`;driver 在每个阶段边界写入(active=false 总结态),执行链会话运行期间由 attempt 刷新为 active=true(半途态);旁路一次性会话(判定/审核/脚本生成/修复规划)不写,修复"旁路会话污染执行链记忆"缺陷;旧版 session.json 兼容读取(视为半途会话、无阶段) |
-| phase 阶段 | decompose / whole / subtasks / wrapup / verify{stage: generate\|exec\|judge\|fix, round, rechecks, replaced, gap?, run?, audit?} / review{round, stage: audit\|planfix\|fixrun};stage=fix 时 gap 持久化判定差距原文,修复轮中断后凭它重新下发修复提示续跑 |
-| 会话内恢复 | active 且会话在 server 上存在 → 复用原会话(**无时间窗**,与 `opencode -r <session-id>` 同构:会话历史持久化在 server 项目存储,向原会话下发新 prompt 即带全部上下文继续);否则新会话;两种情况首个提示词均附"[driver] 中断后的继续"(按 phase 给出下一步指引)。**交接文件优先**:active 恢复时若交接文档已存在(ondemand `docs/<id>.handoff.md` 或 handover-test 的 `<id>[-S<n>].testhandoff.md`,任务级或任一子任务级遗留均判定)→ 不复用旧会话(上下文已用满、进度由交接文档承载),开新会话凭交接续跑;handoff `状态: 完成` 时直接跳过整任务会话。`--new-session` 显式放弃旧会话(仅跳过复用,阶段精确重入保留),并立即把记录转 active=false(防无会话阶段中断后旧会话与已推进阶段错位) |
-| SSE 断流处理 | 事件流未收到会话结束事件即耗尽(server 故障/网络断开)→ abort 孤儿回合,按"会话错误"处理(走既有重试路径、保持 active 可复用),不再误判为会话正常结束而误勾选子任务 |
-| 阶段级重入 | verify 有持久化 run → 跳过脚本重跑直接判定(early 缺 audit 时只补跑审核);off/ondemand 已过执行阶段不重跑 executeWhole;review/planfix 且 fix.md 有效直接注入;verify/review 阶段已标 done 的任务由 loop 置回 in_progress 补跑;decompose 先直读 subtasks.md |
-| 优雅退出 | 非完成结局(阻塞/回退 pending)在 CURRENT.md 写"中断备注"(原因/阶段/恢复方式)并保留文件,记录转总结态(不复用会话);任务完成才删除 CURRENT.md 与记录;网络类 blocked(会话错误重试耗尽)保持 active 记录(会话半途无法总结) |
-| 链内复用间隔 | 复用条件在 pct<50 && used<contextLimit/2 之上增加"距上一会话结束 ≤5 分钟"(REUSE_IDLE_MS);重启恢复的复用不受此限(复用决策已由恢复判定做出,chain.at 重置为当前时刻) |
-| verify 看门狗 | 固定 10 分钟超时废除:轮询(默认 5s)verify.out/verify.err 文件大小,任一增长即重置 idle 计时;持续 `--verify-idle`(缺省 10 分钟,1..120)无增长才 kill(退出码 124,timeoutReason=idle);`--verify-max`(缺省不设,1..1440)为绝对上限兜底(timeoutReason=max)。只要持续有输出,运行时长不受限 |
-| 判定会话写授权 | 判定会话期间临时 allowWrite(PLAN.md)、结束后 reprotect 并校验:解析失败或任务集合/状态/attempts/正文任一变化 → 恢复会话前快照并警告(越权编辑整体还原);提示词授权**仅更新后续未完成(pending/blocked)任务的 verify 字段**(保持 `command: ` 单行格式),当前脚本无通病时不做任何修改;CURRENT.md 不放开(纯镜像,写了会被覆盖) |
-| 原则块措辞 | AGENTS.md 验证原则块(init 追加)补充判定会话 verify 字段授权例外;STATE_RULE 对判定会话改为 judge 专属表述 |
+| Progress record | `.auto/progress.json` replaces session.json: `{task, session?, at, active, phase}`; the driver writes it at every phase boundary (active=false, the summary state), and while an execution-chain session is running, the attempt refreshes it to active=true (the mid-flight state); bypass one-shot sessions (judge/review/script generation/fix planning) do not write it, fixing the "bypass session pollutes execution-chain memory" defect; the old session.json is still read compatibly (treated as a mid-flight session with no phase) |
+| phase | decompose / whole / subtasks / wrapup / verify{stage: generate\|exec\|judge\|fix, round, rechecks, replaced, gap?, run?, audit?} / review{round, stage: audit\|planfix\|fixrun}; when stage=fix, gap persists the verdict gap's original text, so an interrupted fix round resumes by re-issuing the fix prompt from it |
+| In-session recovery | active and the session exists on the server → reuse the original session (**no time window**; isomorphic to `opencode -r <session-id>`: session history is persisted in the server's project storage, so sending a new prompt to the original session continues with the full context); otherwise a new session; in both cases the first prompt carries "[driver] 中断后的继续" ("[driver] continuation after interruption", giving next-step guidance per phase). **Handover file takes precedence**: during an active recovery, if a handover document already exists (ondemand `docs/<id>.handoff.md` or handover-test's `<id>[-S<n>].testhandoff.md`, counted whether left at the task level or any subtask level) → do not reuse the old session (context is exhausted, progress is carried by the handover document); open a new session and resume from the handover; when the handoff says `状态: 完成` ("status: complete"), skip the whole-task session outright. `--new-session` explicitly abandons the old session (skipping reuse only; precise phase re-entry is kept) and immediately flips the record to active=false (preventing the old session from misaligning with already-advanced phases after an interruption in a session-less phase) |
+| SSE stream-break handling | the event stream exhausting without a session-end event (server failure/network drop) → abort the orphaned turn and treat it as a "session error" (taking the existing retry path and staying active for reuse), no longer misjudged as a normal session end that wrongly ticks off a subtask |
+| Phase-level re-entry | verify has a persisted run → skip the script re-run and judge directly (under early, if audit is missing only the review is re-run); off/ondemand past the execution phase do not re-run executeWhole; review/planfix with a valid fix.md injects directly; tasks already marked done in the verify/review phase are set back to in_progress by loop for the make-up run; decompose reads subtasks.md directly first |
+| Graceful exit | a non-completion ending (blocked/fallback to pending) writes an "interruption note" (reason/phase/how to resume) into CURRENT.md and keeps the file, with the record flipped to the summary state (no session reuse); CURRENT.md and the record are deleted only when the task completes; network-class blocked (session-error retries exhausted) keeps the active record (a mid-flight session cannot be summarized) |
+| In-chain reuse interval | the reuse conditions gain, on top of pct<50 && used<contextLimit/2, "≤5 minutes since the previous session ended" (REUSE_IDLE_MS); reuse from restart recovery is exempt (the reuse decision was already made by the recovery determination, and chain.at resets to the current moment) |
+| verify watchdog | the fixed 10-minute timeout is abolished: poll (default 5s) the verify.out/verify.err file sizes, resetting the idle timer whenever either grows; kill only after a continuous `--verify-idle` (default 10 minutes, 1..120) with no growth (exit code 124, timeoutReason=idle); `--verify-max` (unset by default, 1..1440) is the absolute-cap backstop (timeoutReason=max). As long as output keeps coming, run duration is unlimited |
+| Judge-session write authorization | during the judge session, allowWrite(PLAN.md) temporarily; after it ends, reprotect and verify: a parse failure or any change to the task set/states/attempts/body → restore the pre-session snapshot and warn (unauthorized edits reverted wholesale); the prompt authorizes **updating only the verify fields of later unfinished (pending/blocked) tasks** (keeping the `command: ` single-line format), with no modification at all when the current script has no systemic defect; CURRENT.md is not unlocked (a pure mirror; anything written there would be overwritten) |
+| Principle-block wording | the AGENTS.md verification-principles block (appended by init) gains the judge-session verify-field authorization exception; STATE_RULE changes to judge-specific wording for the judge session |
 
-### H.1 已知取舍
+### H.1 Known trade-offs
 
-- review/audit 阶段恢复时,early 已得出的审核结论若尚未被消费即中断,恢复后
-  重新开审核会话(不做结论持久化复用,窗口极窄、代价一次会话);
-- AGENTS.md 验证原则块的措辞更新只对新 init 目录生效(标记块幂等追加、不回写)。
+- When recovering in the review/audit phase, if a review verdict already reached under early is interrupted before being consumed, the recovery
+  reopens a review session (no persisted-verdict reuse; the window is extremely narrow and the cost is one session);
+- Wording updates to the AGENTS.md verification-principles block take effect only for newly init'ed directories (the marker block is appended idempotently, never written back).
 
-## E. 测试与验证
+## E. Testing and verification
 
-- 每任务 verify:`bun typecheck` + 对应测试文件(见 PLAN.md 各任务 verify 字段);
-- `test/verify.test.ts` 不依赖 opencode server 与网络,超时用注入小超时值验证;
-- e2e(`OPENCODE_AUTO_E2E=1`,需凭据)为可选手工验证项:三段式 verify 与
-  `--review 1` 循环各跑一次,观察 `tmp/` 产物、audit 报告与 fix 注入;
-- 全部任务完成后 `bun run build` 冒烟,确认 `type: "file"` 模板导入不受影响
-  (预计不变)。
+- Per-task verify: `bun typecheck` + the corresponding test files (see each task's verify field in PLAN.md);
+- `test/verify.test.ts` depends on neither the opencode server nor the network; timeouts are verified by injecting a small timeout value;
+- e2e (`OPENCODE_AUTO_E2E=1`, requires credentials) is an optional manual verification item: run three-stage verify and
+  the `--review 1` loop once each, observing the `tmp/` artifacts, the audit report, and fix injection;
+- After all tasks complete, `bun run build` as a smoke test to confirm the `type: "file"` template import is unaffected
+  (expected unchanged).
 
 <!-- auto: eof -->
