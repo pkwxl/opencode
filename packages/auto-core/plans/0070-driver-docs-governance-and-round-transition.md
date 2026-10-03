@@ -1,7 +1,11 @@
 # 0070 — Driver-docs governance, R-01→R-02 transition, and the next-round program
 
-Status: **ruled, 2026-10-03 — P-1..P-10 all as recommended; execution begins with the
-R-01→R-02 transition (target plans/0014) and the R-02 program (target plans/0015).**
+Status: **ruled, 2026-10-03 — P-1..P-10 all as recommended; executed the same day as
+T-114..T-129: the R-01→R-02 transition (target plans/0014) and the full R-02 program
+(target plans/0015) — §3's distillation and deletion, §4's transition, and §5.2's U-1..U-9
+all landed (P-7's verdict: no Rust spike, recorded in 0063 §5). Open by design: U-10
+(0057 S0 evidence captures) stays gated on the next spent quota window; P-8's falsifier
+evaluation is dated ~2026-12, its instrument being T-129's record artifact.**
 Drafted at the person's direct instruction (not a driver
 unit; no T-number). Grounded in three read-only investigations run 2026-10-03 over the
 target repo's task corpus (`docs/T-001..T-113`, `docs/R-01/`, `docs/temp/`, `docs/agents/`)
