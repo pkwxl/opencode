@@ -10,17 +10,17 @@
 import type { SessionChain } from "./chain"
 import { bindAgent, resumeSession, setRoute } from "./chain-transitions"
 import { formatTokens } from "./format"
-import { baselineIntact, type UnitBaseline } from "./git"
+import type { UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Task } from "./tasks"
 import { recallProgress, saveProgress, type Phase, type StepKind } from "./resume"
-import { resumeNote } from "./resume-gate"
+import { recoveryLadder, resumeNote } from "./resume-gate"
 import { routingOf, runSession } from "./session"
 import { clientOf, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
-import { commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The generic "bypass session must produce a file" skeleton (design doc A.4):
 // when a session ends with its artifact missing or invalid, retry once with
@@ -105,11 +105,16 @@ export async function requireArtifact<T>(
   // Phase-step resume: the last run was interrupted in this step (driver did not
   // close it) and the original session is still reusable → the first prompt goes
   // into the original session (keeping the artifact state); otherwise treat it as
-  // a fresh step (reset + new session).
-  // Strict resume (OPENCODE_AUTO_STRICT_RESUME): check the unit baseline and the
-  // effective model before reuse (plans/0022-session-recovery-fidelity-design.md 3.1);
-  // when fidelity cannot be kept, roll back to the baseline and redo as a fresh
-  // step — foreign commits mixed in go straight to dirty for a human (git untouched).
+  // a fresh step (reset + new session). The reuse/rollback/fresh decision itself
+  // is the shared recovery ladder (resume-gate.ts, plans/0069 §2.2 D6): this step
+  // caller passes its role and its liveness probe; a matching step record always
+  // reruns (the step is being entered now) and no handover document can precede
+  // it, so the task caller's rerun/handedOff rungs stay out of reach. Strict
+  // resume (OPENCODE_AUTO_STRICT_RESUME): check the unit baseline and the
+  // effective model before reuse (plans/0022-session-recovery-fidelity-design.md
+  // 3.1); when fidelity cannot be kept, roll back to the baseline and redo as a
+  // fresh step — foreign commits mixed in go straight to dirty for a human (git
+  // untouched).
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
@@ -128,75 +133,41 @@ export async function requireArtifact<T>(
     if (openRecord && spec.restart) log(`↻ ${task.id} ${spec.kind} step restarting in a new session (${spec.restart})`)
     const sameStep = openRecord && !spec.restart
     if (sameStep) {
-      const candidate = !opts.newSession ? recalled!.session : undefined
       // The recorded session's liveness runs on its own agent's host (§8.2:
       // the record carries it; absent = the run's start profile), resolved
       // through the routing facts (always defined — the implicit registry
       // where no layer exists).
       const recalledClient = await clientOf(client, recalled!.agent ?? routingOf(opts, switches).runAgent)
-      const alive = candidate !== undefined ? await sessionAlive(recalledClient, candidate) : false
-      const usage = alive ? await sessionUsage(recalledClient, candidate!, recalled!.used) : undefined
-      // An error stub (the whole session produced nothing real) is never reused — the same double check as runTask's cross-process resume.
-      const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
-      const legacyRecord = strict && recalled!.baseline === undefined
-      // §8.3 (plans/0055 §8.2): the dead-session verdict — a recorded
-      // session is resumed only if its agent is this run's and its recorded
-      // model is usable now; otherwise the step is redone in a new session
-      // (strict resume: rolled back).
-      const dead = deadSessionWhy(opts, switches, recalled!, spec.role)
-      if (strict && recalled!.baseline) {
-        const drift = await baselineIntact(opts.dir, recalled!.baseline)
-        if (drift.length) return { type: "dirty", files: drift }
-        const modelNow = resumeModelNow(opts, switches, recalled!.phase, spec.role)
-        // §10 item 11 (plans/0055): eligibility replaces the raw-string
-        // equality — a window change that only moves the fresh pick does not
-        // roll this step back.
-        const modelOk = recalled!.model !== undefined && resumeModelEligible(opts, switches, recalled!.model, recalled!.phase, spec.role)
-        if (dead === undefined && usable && !legacyRecord && modelOk) {
-          resumedSession = candidate
-          resumedUsage = usage
-          resumedModel = recalled!.model
-          resumedAgent = recalled!.agent
-          log(
-            `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
-              `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
-          )
-        } else {
-          const why = opts.newSession
-            ? "--new-session given"
-            : dead !== undefined
-              ? `${dead}; the recorded session is dead`
-              : !usable
-                ? "the original session is not reusable"
-                : recalled!.model === undefined
-                  ? "the record has no effective model (an old record from before strict resume)"
-                  : `the recorded model ${recalled!.model} is not usable now`
-          const done = await rollbackUnitState(opts.dir, task, `${spec.kind} step`, recalled!.baseline, { progress: recalled })
-          if (done.type !== "ok") return done
-          log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; strict resume rolled back, redoing this step)`)
-        }
-      } else if (dead === undefined && usable && !legacyRecord) {
-        resumedSession = candidate
-        resumedUsage = usage
-        resumedModel = recalled!.model
-        resumedAgent = recalled!.agent
+      const verdict = await recoveryLadder(recalled!, {
+        dir: opts.dir,
+        opts,
+        switches,
+        strict,
+        role: spec.role,
+        probe: async (session) => {
+          const alive = await sessionAlive(recalledClient, session)
+          return { alive, usage: alive ? await sessionUsage(recalledClient, session, recalled!.used) : undefined }
+        },
+      })
+      if (verdict.kind === "dirty") return { type: "dirty", files: verdict.files }
+      if (verdict.kind === "reuse") {
+        resumedSession = verdict.session
+        resumedUsage = verdict.usage
+        resumedModel = verdict.model
+        resumedAgent = verdict.agent
         log(
-          `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
-            `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
+          `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${verdict.session} (context intact, ` +
+            `${formatTokens(verdict.usage.used)}${verdict.usage.limit ? `/${formatTokens(verdict.usage.limit)} tokens, ${verdict.usage.pct}%` : " tokens"} used)`,
         )
+      } else if (verdict.kind === "rollback") {
+        // Strict resume judged the step unfaithful: roll back to the unit
+        // baseline and redo cold (plans/0053 D9's restart carries the same
+        // no-rollback shape for a changed planning input).
+        const done = await rollbackUnitState(opts.dir, task, `${spec.kind} step`, recalled!.baseline!, { progress: recalled })
+        if (done.type !== "ok") return done
+        log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${verdict.why}; strict resume rolled back, redoing this step)`)
       } else {
-        const why = opts.newSession
-          ? "--new-session given"
-          : candidate === undefined
-            ? "the record has no session"
-            : legacyRecord
-              ? "an old record from before strict resume has no unit baseline and cannot be checked strictly"
-              : dead !== undefined
-                ? `${dead}; the recorded session is dead`
-                : alive
-                  ? "the original session only took an error and produced nothing real"
-                  : "the original session is not reusable"
-        log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; redoing this step in a new session)`)
+        log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${verdict.why}; redoing this step in a new session)`)
       }
     } else {
       // A fresh step (or a record of another step): write an active resume point

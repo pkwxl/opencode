@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { requireArtifact } from "../src/artifact"
+import { noCommitGit } from "../src/git-ops"
+import { runTask } from "../src/runner"
 import { closeStep, forgetProgress, openStep, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
+import { fakeAgent } from "./fixtures/agent"
+import { pastMessage } from "./fixtures/loop"
+import { seedUnits } from "./fixtures/units"
 
 describe("progress record", () => {
   let dir: string
@@ -214,5 +220,141 @@ describe("phase-step recovery points (openStep/closeStep)", () => {
     await saveProgress(dir, { task: "T-009", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
     await closeStep(dir, "phase-plan", "m")
     expect((await peekProgress(dir))?.task).toBe("T-009")
+  })
+})
+
+// ---- Both resume callers through the shared recovery ladder (T-126, ----
+// ---- plans/0069 §2.2 D6): the reuse/rollback/fresh decision lives in     ----
+// ---- src/resume-gate.ts and the verdicts carry no phase wording — each ----
+// ---- caller renders its own precision, pinned here explicitly: the     ----
+// ---- task caller (runTask) names the recorded phase (phaseText, down   ----
+// ---- to the owning subtask index), the step caller (requireArtifact)   ----
+// ---- names its session kind, never the phase. The drives stay pure:    ----
+// ---- the fake agent is in-process and the no-commit git double keeps   ----
+// ---- strict resume off (records: false) without a repository.          ----
+
+describe("recovery through the shared ladder: the task caller (runTask)", () => {
+  const setup = async (progress: Progress, gone: string[] = []) => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-task-resume-"))
+    const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+    await saveProgress(dir, progress)
+    const agent = fakeAgent({ gone, history: { ses_old: [pastMessage("ses_old", 5000)] } })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    return { dir, plan, agent, lines, printed }
+  }
+
+  test("a live active record reuses its session and the log names the recorded phase (phaseText precision)", async () => {
+    const { dir, plan, agent, lines, printed } = await setup({ task: "T-001", session: "ses_old", at: 1, active: true, phase: { kind: "whole" } })
+    try {
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false, git: noCommitGit() })
+      expect(outcome).toEqual({ type: "completed" })
+      // The takeover: the first prompt goes into the interrupted session.
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).toBe("ses_old")
+      // The task caller's precision: the recorded phase's own description
+      // (never the step caller's "resuming the interruption point" shape).
+      const line = lines.find((value) => value.includes("resume after interruption"))
+      expect(line).toContain("whole-task single-session execution, reusing the interrupted session ses_old to continue")
+      expect(line).not.toContain("resuming the interruption point")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a dead recorded session starts a fresh one: the same shared cause string renders with the task caller's action tail, and only the task caller attaches the resume note", async () => {
+    const { dir, plan, agent, lines, printed } = await setup({ task: "T-001", session: "ses_old", at: 1, active: true, phase: { kind: "whole" } }, ["ses_old"])
+    try {
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false, git: noCommitGit() })
+      expect(outcome).toEqual({ type: "completed" })
+      expect(agent.prompts[0]!.session).not.toBe("ses_old")
+      expect(agent.prompts[0]!.text).toContain("Part of the work may already be done.")
+      const line = lines.find((value) => value.includes("resume after interruption"))
+      expect(line).toContain("whole-task single-session execution(the original session is not reusable; starting a new session to continue)")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the task caller's own rung: a record whose unit will not re-run (decompose phase under --subtask off) flips summarized and names the obsolete unit — with the phase's full description", async () => {
+    const { dir, plan, agent, lines, printed } = await setup({ task: "T-001", session: "ses_old", at: 1, active: true, phase: { kind: "decompose" } })
+    try {
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false, git: noCommitGit() })
+      expect(outcome).toEqual({ type: "completed" })
+      const line = lines.find((value) => value.includes("resume after interruption"))
+      expect(line).toContain("task understanding and decomposition (context.md/shared.md/subtasks.md and the subtask todo.md files; checklist not yet injected)")
+      expect(line).toContain(
+        "(the interrupted session's execution unit will not re-run this time (already done or no longer executing); its resume point is obsolete; starting a new session to continue)",
+      )
+      // The run completed (the record itself is cleared on completion; the
+      // caller-flips-first shape is pinned by the ladder unit tests).
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("recovery through the shared ladder: the step caller (requireArtifact)", () => {
+  const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
+  const spec = (reset: () => void) => ({
+    kind: "phase planning",
+    step: { step: "phase-plan" as const, unit: "R-01.P01" },
+    artifact: "a filled task index",
+    requirement: "write the index",
+    reset: async () => {
+      reset()
+    },
+    collect: async () => 4,
+  })
+
+  const setup = async (progress: Progress, gone: string[] = []) => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-resume-"))
+    await saveProgress(dir, progress)
+    const agent = fakeAgent({ gone, history: { ses_old: [pastMessage("ses_old", 5000)] } })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    return { dir, agent, lines, printed }
+  }
+
+  test("a live step record reuses its session and the log names the session kind (spec.kind precision, never the phase description)", async () => {
+    const { dir, agent, lines, printed } = await setup({ task: "PLAN", session: "ses_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
+    let resetCalled = false
+    try {
+      expect(await requireArtifact(agent.client, planTask, "planning prompt", { dir, git: noCommitGit() }, spec(() => (resetCalled = true)))).toBe(4)
+      expect(resetCalled).toBe(false) // reuse keeps the artifact scene
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).toBe("ses_old")
+      // The step caller's precision: its session kind, not the recorded
+      // phase's phaseText wording.
+      const line = lines.find((value) => value.includes("resuming the interruption point"))
+      expect(line).toContain("PLAN phase planning session resuming the interruption point, reusing session ses_old (context intact")
+      expect(line).not.toContain("phase planning step (phase R-01.P01")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a dead step record redoes in a new session: the same shared cause string as the task caller renders with the step caller's action tail, and no resume note is attached", async () => {
+    const { dir, agent, lines, printed } = await setup({ task: "PLAN", session: "ses_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } }, ["ses_old"])
+    let resetCalled = false
+    try {
+      expect(await requireArtifact(agent.client, planTask, "planning prompt", { dir, git: noCommitGit() }, spec(() => (resetCalled = true)))).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(agent.prompts[0]!.session).not.toBe("ses_old")
+      expect(agent.prompts[0]!.text).not.toContain("[DRIVER]") // the note belongs to the task-level resume
+      const line = lines.find((value) => value.includes("resuming the interruption point"))
+      expect(line).toContain("PLAN phase planning session resuming the interruption point (the original session is not reusable; redoing this step in a new session)")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

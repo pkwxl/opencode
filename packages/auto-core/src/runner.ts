@@ -2,18 +2,18 @@ import { basename, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
-import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
+import { rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
 import { failbackApplies } from "./failback"
 import { formatTokens } from "./format"
-import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
+import { removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
-import { phaseText, resumeNote, unitReruns } from "./resume-gate"
+import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
 import { begin, checklistTitle, markDone, reloadTask, type ChecklistItem, type Plan, type Task } from "./tasks"
@@ -130,9 +130,8 @@ export async function runTask(
   // old session's context is exhausted and the document carries the progress — a fresh
   // session continues from the handover (executeWhole/runSubtask/runExecSession
   // seed the continuation from the file).
-  // Strict resume: rolledBack = already rolled back to the unit baseline at
-  // resume (a fresh session cold-starts the redo, no resume note attached).
-  let rolledBack = false
+  // Strict resume: an unfaithful record is rolled back to the unit baseline
+  // at resume (a fresh session cold-starts the redo, no resume note attached).
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     enterPhase(chain, recalled.phase)
@@ -196,96 +195,36 @@ export async function runTask(
       handoffRaw !== undefined &&
       handoffStatus(handoffRaw) === undefined &&
       recalled.baseline !== undefined
-    // Strict resume: a legacy record without a baseline (written before the
-    // switch was enabled) cannot be strictly verified; treated as not
-    // reusable.
-    const legacyRecord = strict && recalled.baseline === undefined
-    // §8.3 (plans/0055 §8.2): the dead-session verdict under a registry — a
-    // recorded session is resumed only if its agent is this run's and its
-    // recorded model is usable now; otherwise it is a dead session and the
-    // resume takes the existing new-session path (strict resume: the rollback
-    // path). Without a registry there is no verdict (undefined).
-    const dead = deadSessionWhy(opts, switches, recalled)
-    // The run's routing facts, always defined (the implicit registry where
-    // no layer exists): the record's agent resolves through them, as does
-    // the strict-resume model check below.
-    const routing = routingOf(opts, switches)
-    // The recorded session's liveness runs on its own agent's host (§8.2:
-    // the record carries it; absent = the run's start profile, the shape
-    // every pre-binding record reads as), resolved through the pool when the
-    // caller passed one.
-    const recalledClient = await clientOf(client, recalled.agent ?? routing.runAgent)
-    const alive =
-      !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(recalledClient, recalled.session))
-    // Inherit the interrupted session's real context usage (rebuilt from the
-    // last assistant message): the seed used to be a 0/0 placeholder to
-    // guarantee the first prompt always reused, at the cost of the post-resume
-    // log and the chain's later reuse decisions all working off fake values;
-    // first-round reuse is now guaranteed by attempt's `resumed` criterion, so
-    // only the real values are taken here (for an agent without readable
-    // history, the figure an /exit inside the recovery wait recorded).
-    const usage = alive ? await sessionUsage(recalledClient, recalled.session!, recalled.used) : undefined
-    // Belt and braces (plans/0015-session-error-retry-plan.md item 5): a
-    // legacy progress.json may record a session that only ever took one error
-    // and never produced real content (leftover of the old "retry means a
-    // blank-slate session" logic: the whole session has not a single completed
-    // assistant turn, only the error stub). With the item 3/4 fixes in place
-    // such records should in theory no longer appear; this is only a backstop
-    // for old files generated before that rework went live. Note the criterion
-    // must not look at the last line alone: a long session that died on a
-    // non-retryable error (exactly what items 3/4 deliberately preserve) also
-    // ends on an error stub — the criterion lives in sessionUsage's basis
-    // scan.
-    const errorStub = usage !== undefined && usage.used === 0 && usage.errorStub
-    // Strict verification and rollback (3.1 ③④ + 3.3): applies only to
-    // records that are active, will re-run, were not handed over, and have a
-    // baseline on record; after the rollback the record flips to the
-    // summarized state (reusing the existing "not a resumed run" semantics —
-    // pipeline cleans up the stale handover document and the next unit starts
-    // from a clean baseline), a fresh session cold-starts the redo with no
-    // resume note attached.
     if (handoffInvalid) {
       const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
-      rolledBack = true
       recalled.active = false
       log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} exists but has no valid status line; strict resume judged unfaithful, rolled back and re-running`)
-    } else if (strict && recalled.active === true && rerun && !handedOff && recalled.baseline) {
-      const drift = await baselineIntact(dir, recalled.baseline)
-      if (drift.length) {
-        // External commits mixed in: no rollback (a rollback only reclaims
-        // the driver's own changes inside the unit); the dirty outcome goes to
-        // a human.
-        return { type: "dirty", files: drift }
-      }
-      const modelNow = resumeModelNow(opts, switches, recalled.phase)
-      // §10 item 11 (plans/0055): the recorded internal name and agent are
-      // judged by eligibility — the recorded model must still be usable now,
-      // so a window change that only moves the fresh pick does not roll a
-      // unit back.
-      const modelOk = recalled.model !== undefined && resumeModelEligible(opts, switches, recalled.model, recalled.phase)
-      if (dead !== undefined || !(alive && usage && !errorStub) || opts.newSession || !modelOk) {
-        const why = opts.newSession
-          ? "--new-session specified"
-          : dead !== undefined
-            ? `${dead}; the recorded session is dead`
-            : !(alive && usage)
-              ? "original session not reusable"
-              : errorStub
-                ? "original session only hit an error, no real output"
-                : recalled.model === undefined
-                  ? "no effective model recorded (an old record from before strict resume)"
-                  : `the recorded model ${recalled.model} is not usable now`
-        const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
-        if (done.type !== "ok") return done
-        rolledBack = true
-        recalled.active = false
-        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why}); strict resume judged unfaithful, rolled back to the unit baseline and redone`)
-      }
-    }
-    if (!rolledBack) {
-      if (dead === undefined && alive && usage && !errorStub) {
-        resumeSession(chain, recalled.session!, usage, Date.now(), resumeNote(recalled.phase, true, strict))
+    } else {
+      // The shared recovery ladder (resume-gate.ts, plans/0069 §2.2 D6): the
+      // one reuse / strict-rollback / fresh decision this task caller and the
+      // phase-step caller (requireArtifact) both run. The task caller's own
+      // facts are rerun (unit attribution above) and handedOff (the handover
+      // precedence above); the liveness probe is engine I/O the kernel home
+      // takes injected, run on the record's own agent's host (§8.2: the
+      // record carries it; absent = the run's start profile).
+      const routing = routingOf(opts, switches)
+      const recalledClient = await clientOf(client, recalled.agent ?? routing.runAgent)
+      const verdict = await recoveryLadder(recalled, {
+        dir,
+        opts,
+        switches,
+        strict,
+        rerun,
+        handedOff,
+        probe: async (session) => {
+          const alive = await sessionAlive(recalledClient, session)
+          return { alive, usage: alive ? await sessionUsage(recalledClient, session, recalled.used) : undefined }
+        },
+      })
+      if (verdict.kind === "dirty") return { type: "dirty", files: verdict.files }
+      if (verdict.kind === "reuse") {
+        resumeSession(chain, verdict.session, verdict.usage, Date.now(), resumeNote(recalled.phase, true, strict))
         // Session-agent binding and the continuation's model (plans/0055 §8.2,
         // §6.2): the resumed session stays bound to the agent its record
         // names (§8.3: absent = the run's start profile, the pre-binding
@@ -293,12 +232,22 @@ export async function runTask(
         // continues on that model while it is still usable (selection keeps
         // the chain's entry on a continuation), instead of a fresh pick
         // moving the live session's model.
-        bindAgent(chain, recalled.agent ?? routing.runAgent)
-        if (recalled.model !== undefined) setRoute(chain, { entry: recalled.model, model: routing.registry.models.get(recalled.model)?.model })
+        bindAgent(chain, verdict.agent ?? routing.runAgent)
+        if (verdict.model !== undefined) setRoute(chain, { entry: verdict.model, model: routing.registry.models.get(verdict.model)?.model })
         log(
-          `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${recalled.session} to continue (context intact, ` +
-            `${formatTokens(usage.used)} used${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens, limit unknown"})`,
+          `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${verdict.session} to continue (context intact, ` +
+            `${formatTokens(verdict.usage.used)} used${verdict.usage.limit ? `/${formatTokens(verdict.usage.limit)} tokens, ${verdict.usage.pct}%` : " tokens, limit unknown"})`,
         )
+      } else if (verdict.kind === "rollback") {
+        // Strict resume judged the record unfaithful: roll back to the unit
+        // baseline and redo cold (no resume note attached); the record flips
+        // to the summarized state (reusing the existing "not a resumed run"
+        // semantics — pipeline cleans up the stale handover document and the
+        // next unit starts from a clean baseline).
+        const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
+        if (done.type !== "ok") return done
+        recalled.active = false
+        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${verdict.why}); strict resume judged unfaithful, rolled back to the unit baseline and redone`)
       } else {
         // --new-session explicitly gives up the old session: flip the record
         // to the summarized state right away, so that when this run is
@@ -308,20 +257,15 @@ export async function runTask(
           await saveProgress(dir, { ...recalled, active: false })
         }
         attachNote(chain, resumeNote(recalled.phase, false, strict))
-        const why = !rerun
-          ? "the interrupted session's execution unit will not re-run this time (already done or no longer executing); its resume point is obsolete, starting a new session to continue"
-          : handedOff
-            ? "a handover document was written before the interruption; starting a new session to continue from the handover"
-            : opts.newSession
-              ? "--new-session specified; starting a new session to continue"
-              : legacyRecord
-                ? "the legacy record predates strict resume and has no unit baseline, so strict verification is impossible; starting a new session to continue"
-                : dead !== undefined
-                  ? `${dead}; the recorded session is dead, starting a new session to continue`
-                  : errorStub
-                    ? "the original session only hit an error with no real output; starting a new session to continue"
-                    : "the original session is not reusable; starting a new session to continue"
-        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why})`)
+        // The fresh line renders the shared cause plus this caller's uniform
+        // action tail. AUTO-DECISION: the pre-merge rungs carried their own
+        // tail variants ("…obsolete, starting…" / "…dead, starting…" / the
+        // handover rung's "from the handover" clause); the merge normalizes
+        // to one appended "; starting a new session to continue" and folds
+        // the handover destination into the cause (rejected: per-rung tails —
+        // the action is the same for every rung, only the cause differs, and
+        // the shared home must not grow caller-specific tail grammar).
+        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${verdict.why}; starting a new session to continue)`)
       }
     }
   }

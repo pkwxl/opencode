@@ -1,9 +1,11 @@
-// Unit tests for src/resume-gate.ts: the recovery point's unit-ownership gate (unitReruns/phaseText) and the interruption-recovery note (resumeNote).
+// Unit tests for src/resume-gate.ts: the recovery point's unit-ownership gate (unitReruns/phaseText), the shared recovery ladder (recoveryLadder — the one reuse/rollback/fresh decision both resume callers run, plans/0069 §2.2 D6), and the interruption-recovery note (resumeNote).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
-import type { Phase } from "../src/resume"
-import { phaseText, resumeNote, unitReruns, type UnitRerunCtx } from "../src/resume-gate"
+import type { Opts } from "../src/opts"
+import type { Phase, Progress } from "../src/resume"
+import { phaseText, recoveryLadder, resumeNote, unitReruns, type LadderRun, type LivenessProbe, type UnitRerunCtx } from "../src/resume-gate"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("unitReruns (the recovery point's unit-ownership gate: reuse allowed only when the owning unit will rerun)", () => {
   const ctx = (over: Partial<UnitRerunCtx> = {}): UnitRerunCtx => ({
@@ -151,5 +153,123 @@ describe("resumeNote (interruption-recovery note)", () => {
       expect(note).toContain("do not mean the changes were lost")
       expect(note).toContain("committed to Git by the DRIVER")
     }
+  })
+})
+
+// ---- The shared recovery ladder (plans/0069 §2.2 D6 / §2.3 R3): the one ----
+// ---- decision the task caller (runner) and the step caller              ----
+// ---- (requireArtifact) both run. The verdicts carry no phase wording — ----
+// ---- each caller renders its own precision (the task caller phaseText, ----
+// ---- the step caller its session kind), pinned by the caller drives in  ----
+// ---- test/resume.test.ts. The dirty arm (drift since the baseline       ----
+// ---- needs a real repository) is covered through the step caller by     ----
+// ---- test/artifact.test.ts's strict suite.                              ----
+
+describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
+  // Routing over the implicit registry (the record's model is its wildcard
+  // entry, so eligibility holds; an unknown name is not usable).
+  const STRICT = parseSwitches({ [SWITCH_ENV.strictResume]: "on", [SWITCH_ENV.model]: "*=kimi/k2" })
+  const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off", [SWITCH_ENV.model]: "*=kimi/k2" })
+
+  const healthy: LivenessProbe = async () => ({ alive: true, usage: { used: 5000, pct: 8, limit: 60_000, errorStub: false } })
+  const gone: LivenessProbe = async () => ({ alive: false })
+  const stub: LivenessProbe = async () => ({ alive: true, usage: { used: 0, pct: 100, errorStub: true } })
+
+  const record = (over: Partial<Progress> = {}): Progress => ({
+    task: "T-001",
+    session: "ses_old",
+    at: 1,
+    active: true,
+    phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" },
+    ...over,
+  })
+  // dir is only read by the baseline check; the empty baseline (a unit that
+  // started with no commits) keeps it pure — no git, no spawn.
+  const run = (over: Partial<LadderRun> & { probe: LivenessProbe }): LadderRun => ({
+    dir: ".",
+    opts: {} as Opts,
+    switches: LOOSE,
+    strict: false,
+    ...over,
+  })
+
+  test("non-strict: a live usable record with a usable model reuses its session, carrying the continuation's model/agent", async () => {
+    const verdict = await recoveryLadder(record({ model: "kimi/k2", agent: "opencode" }), run({ probe: healthy }))
+    expect(verdict).toEqual({ kind: "reuse", session: "ses_old", usage: { used: 5000, pct: 8, limit: 60_000, errorStub: false }, model: "kimi/k2", agent: "opencode" })
+  })
+
+  test("strict: intact baseline + usable session + eligible model → reuse", async () => {
+    const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ switches: STRICT, strict: true, probe: healthy }))
+    expect(verdict.kind).toBe("reuse")
+  })
+
+  test("strict: --new-session → rollback naming the flag (the collapsed string both callers share)", async () => {
+    const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ opts: { newSession: true } as Opts, switches: STRICT, strict: true, probe: healthy }))
+    expect(verdict).toEqual({ kind: "rollback", why: "--new-session given" })
+  })
+
+  test("strict: a dead session (recorded model not usable now) → rollback quoting the dead verdict", async () => {
+    const verdict = await recoveryLadder(record({ model: "kimi/old", baseline: [] }), run({ switches: STRICT, strict: true, probe: healthy }))
+    expect(verdict).toEqual({
+      kind: "rollback",
+      why: "the recorded session's model kimi/old is not usable now; the recorded session is dead",
+    })
+  })
+
+  test("strict: an error-stub session → rollback with the finer error-stub rung (the step caller's strict branch previously folded it into not-reusable)", async () => {
+    const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ switches: STRICT, strict: true, probe: stub }))
+    expect(verdict).toEqual({ kind: "rollback", why: "the original session only took an error and produced nothing real" })
+  })
+
+  test("strict: a record with no effective model → rollback naming the missing model", async () => {
+    const verdict = await recoveryLadder(record({ baseline: [] }), run({ switches: STRICT, strict: true, probe: healthy }))
+    expect(verdict).toEqual({ kind: "rollback", why: "the record has no effective model (an old record from before strict resume)" })
+  })
+
+  test("strict: a legacy record without a baseline → fresh, never reused or rolled back", async () => {
+    const verdict = await recoveryLadder(record(), run({ switches: STRICT, strict: true, probe: healthy }))
+    expect(verdict).toEqual({ kind: "fresh", why: "an old record from before strict resume has no unit baseline and cannot be checked strictly" })
+  })
+
+  test("the task caller's own rungs: an obsolete unit (rerun=false, the caller already flipped the record summarized) and a handover document (handedOff) are fresh causes only its facts reach — and the probe is never paid", async () => {
+    let probed = 0
+    const counting: LivenessProbe = async (session) => {
+      probed++
+      return await healthy(session)
+    }
+    const obsolete = await recoveryLadder(record({ active: false }), run({ rerun: false, probe: counting }))
+    expect(obsolete).toEqual({
+      kind: "fresh",
+      why: "the interrupted session's execution unit will not re-run this time (already done or no longer executing); its resume point is obsolete",
+    })
+    const handed = await recoveryLadder(record(), run({ handedOff: true, probe: counting }))
+    expect(handed).toEqual({ kind: "fresh", why: "a handover document was written before the interruption and carries the progress" })
+    expect(probed).toBe(0)
+  })
+
+  test("non-strict: --new-session → fresh naming the flag, without probing", async () => {
+    let probed = 0
+    const verdict = await recoveryLadder(record(), run({ opts: { newSession: true } as Opts, probe: async (session) => ((probed++), await healthy(session)) }))
+    expect(verdict).toEqual({ kind: "fresh", why: "--new-session given" })
+    expect(probed).toBe(0)
+  })
+
+  test("non-strict: an active record with no session (a stage persisted before the first dispatch) → fresh naming the missing session — the rung the task caller previously folded into the generic default", async () => {
+    let probed = 0
+    const verdict = await recoveryLadder(record({ session: undefined }), run({ probe: async (session) => ((probed++), await healthy(session)) }))
+    expect(verdict).toEqual({ kind: "fresh", why: "the record has no session" })
+    expect(probed).toBe(0)
+  })
+
+  test("non-strict: a dead probe → fresh with the generic default; an error-stub probe → fresh with the shared error-stub string", async () => {
+    expect(await recoveryLadder(record(), run({ probe: gone }))).toEqual({ kind: "fresh", why: "the original session is not reusable" })
+    expect(await recoveryLadder(record(), run({ probe: stub }))).toEqual({ kind: "fresh", why: "the original session only took an error and produced nothing real" })
+  })
+
+  test("a summarized record (active=false, a graceful exit's summary) never probes and never reuses", async () => {
+    let probed = 0
+    const verdict = await recoveryLadder(record({ active: false, model: "kimi/k2" }), run({ probe: async (session) => ((probed++), await healthy(session)) }))
+    expect(verdict).toEqual({ kind: "fresh", why: "the original session is not reusable" })
+    expect(probed).toBe(0)
   })
 })

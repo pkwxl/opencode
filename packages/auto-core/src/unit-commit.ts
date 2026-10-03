@@ -128,9 +128,11 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——
 // The verdicts of this section live in src/router.ts (recordedAgentOk,
 // resumeModelEligible, deadSessionWhy). The exported helper signatures here
-// stay stable — runner, artifact and exec-session call them with the session
-// options — so each body is one verdict call unwrapping opts (the cap is
-// the unit context limit the selections ask with).
+// stay stable — the callers hand them the session options (the shared
+// recovery ladder in src/resume-gate.ts since T-126; strictResumeActive's
+// callers below keep their own holds) — so each body is one verdict call
+// unwrapping opts (the cap is the unit context limit the selections ask
+// with).
 
 // The §10 item 11 eligibility of a strict resume (eligibility replaces
 // equality — a window change that only moves the fresh pick does not roll a
