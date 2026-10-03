@@ -72,4 +72,22 @@ Offered to 0061 §10; each is small relative to the program.
 
 Assesses [0061](./0061-driver-consolidation-plan.md) against the code; accepts the corrected reading of [0060](./0060-driver-consolidation.md) that 0061 §2.3 records. Its verification evidence (SDK confinement, Bun-API inventory, suite timing) feeds [0063](./0063-rust-reimplementation-analysis.md); its duration/hold finding feeds the sequencing discussion in [0064](./0064-positioning-alignment.md) §5.
 
+## 9. Measurement fold (2026-10-03)
+
+The reproducible measurements behind this lineage — the 0060 review (T-044) whose re-measured facts 0061 §1 states and this assessment re-verified (§1) — live as raw artifacts the docs-governance round rules for deletion: `docs/T-044/measure/graph.py` with `graph-baseline-45021392f.txt` and `graph-head-91da1e515.txt` (the import graph at 0060's own commit `45021392f` and at HEAD `91da1e515` — the snapshot 0061's twenty facts were measured at; value, type-only and `import()` edges kept apart, in/out degree, SCCs with and without type edges), and `docs/T-044/measure/timing.py` with `timing-baseline-suite.txt` and `timing-t042-suite.txt` (per-file and per-test durations parsed from bun's per-test `[x ms]` markers in DRIVER logs). After deletion they stay findable in this repository's git history. What is unique in them, preserved here:
+
+- **Graph, two snapshots:** 102 modules at both; loc 30,217 → 30,713 (the design's 30,216 counting `templates.d.ts`, stale within hours — 0059 S5–S7 landed between). Highest in-degrees at HEAD: `log` 31/31, `switches` 28/24, `git` 28/25, `agent/types` 24/0 (type-only), `tasks` 23/15, `docpaths` 21/21, `stats` 17/15, `prompt` 16/16. Highest fan-out: `loop-preflight` 29/25, `session` 26/24, `runner` 26/24, `attempt` 26/22. SCC value+dynamic `[]`, value-only `[]`; type-only `[exit, failback, interactive, step]` — the SCC 0060 D5a wanted to merge and 0061 R8 dissolves by type extraction (this review §2).
+- **Timing, on the DRIVER's Linux gate machine:** the 1,750-test / 12,352-`expect()` suite state 0060 measured (design §1.4) summed 31.85 s of per-test time (32.06 s wall); 1,083 tests under 1 ms (0.31 s together), 1,496 (85%) under 10 ms (1.46 s); four tests ≥ 1 s take 10.29 s (32%), all four bound to real timers (the agent-pool bin-check timeout 3.01 s, two `runScript` timer cases at 2.86/2.44 s, the agent-claude window-wait at 1.99 s; `test/script.test.ts` is the slowest file at 6.53 s). The post-S6 snapshot (1,784 tests) summed 33.05 s with `agent-fake` grown to 5.80 s at 109 tests. These are the figures behind §1's F16 row and §6 A-1; 0060's 139 s is a macOS-platform figure.
+- **The review's three report-only AUTO-RESOLVEs** (from `docs/T-044/report.md` §5; its three further decisions were AUTO-DECISIONs):
+  1. AUTO-RESOLVE: the guardrail "the file contract stays byte-for-byte" collides with the ruled D5g, which cannot be done without
+     changing the AGENTS.md block's paragraph 3 and the wrap-up instruction -> reported as P0-4 and left for an explicit operator ruling
+     (changing what every target's sessions are told is the operator's call; the review only inventories it). 0061 R6 is that ruling's
+     resolution.
+  2. AUTO-RESOLVE: which suite timing should 0060 §6's analysis rest on? -> both figures reported, recommendations keyed to the DRIVER
+     machine's logged runs (the DRIVER runs the gate under this workspace's test principle; 0060's 139 s could not be reproduced there and
+     0060 names no platform — a test comment attributes ~300 ms per first exec to macOS).
+  3. AUTO-RESOLVE: what does "review" cover? -> the report plus the reproducible measurements under `docs/T-044/measure/`, with no edits
+     to the 0060 design or to code (the next task owned the rulings and the plan; editing the design there would have pre-empted the
+     operator's §10 decisions).
+
 <!-- auto: eof -->

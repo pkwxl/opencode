@@ -268,3 +268,33 @@ e2e 52 passing (one new --commit false retirement case).
 - **Old-record compatibility**: existing active records without baseline/model fields are uniformly treated as non-resumable (new session/
   rollback, the choice controlled by the S1 switch), avoiding half-hearted verification. The model-consistency check judges only "on record and mismatched"
   → no reuse; a missing record counts as a mismatch, the same reading as baseline.
+
+## 6. Field-audit provenance (added 2026-10-03): the interruption audit
+
+The raw field evidence behind §2.1 and 3.5 is `session-interruption-field-audit-20260915.md` (2026-09-15, written in Chinese; at deletion
+time it sits in `docs/temp/` of the target root — the status header above cites it "at the repository root", a path that has drifted). The
+docs-governance round rules the file for deletion; it remains findable in this repository's git history afterward. Its qualitative
+findings are already folded above (the R1 reuse cases, the R3 phantom handover document, the R5 forensic reconstruction, the
+context-overflow exposure, the quota-retry futility). The unique quantitative summary, preserved here:
+
+- **Scope**: the `.auto/logs/run-*.log` execution logs of two auto-migrate targets, 2026-09-10..2026-09-15, about 23 MB excluding the
+  `vfull-*` verification logs — kernel-spi-nor R-01 (5 runs, the largest single log 6.9 MB) and kernel-dm R-04 (08-22, five consecutive
+  runs) plus R-05 (09-13..15, largest 7.1 MB).
+- **Mechanism usage, final runs**: spi-nor 72 digest forks and 9 handover session switches; dm 119 digest forks and 27 handover switches.
+  Across both directories 36 handover documents were written by the "tests fail × context at limit" cycle (spi-nor 9 / dm 27). A digest
+  fork measured a 93% cache-hit rate (T-020-S02).
+- **Context at handover trigger**: 90.7k–264.3k against the 80k limit (spi-nor); 72.7k–251.8k against 64k (dm) — the 2–4× figures §2.1
+  cites. Sessions grew unbounded while tests stayed green.
+- **The old architecture, for contrast**: dm's R-04 (08-22) ran same-session cross-subtask reuse (♻) on kimi k3-256k with a 262.1k
+  window, accumulating 13% → 61% across subtasks — cache-friendly with a large single-failure surface; retired in September for the fork
+  architecture. Both directories ran the audit with `OPENCODE_AUTO_REUSE_SESSION=off` + `FORK=on/FORK_BASE=digest` (after 09-13) and an
+  empty `OPENCODE_AUTO_MODEL_FALLBACK`, so quota and timeout events relied entirely on blocking plus human pacing.
+- **The audit tables**: the raw file's §2 is an interruption typology by phase (analysis a / design d / migration m) with each incident
+  anchored to its run log and timestamp; its §4 is a seven-mechanism inventory table (① cross-run reuse of the interrupted session,
+  ② digest base + new session after session death, ③ digest-fork per subtask, ④ handover document, ⑤ new-session retry on transient
+  errors, ⑥ blocked-then-attempt-N+1, ⑦ the old same-session reuse) with per-mechanism field evidence and risk notes — ① succeeded 4/4,
+  ④ failed once in 36 (the S07 phantom document), ⑤ is structurally futile for upstream timeouts and account-level quota; its §7 is a
+  data-source index naming every run log and the config evidence (both targets' `opencode.json` carrying 4 duplicate `model` keys,
+  JSON last-wins).
+
+<!-- auto: eof -->

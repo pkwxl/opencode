@@ -378,4 +378,89 @@ The consequences for design:
       run's first session always runs on the budget. Left as D6's designed fallback. Seeding the window from the
       model registry would change every claude session's steering, and belongs to a design of its own.
 
+- **S7 measurement fold, 2026-10-03.** The record above rests on raw artifacts the docs-governance round rules
+  for deletion: `docs/T-043/ab/summary.md` (the printed summary tables), `docs/T-043/ab/true.stats.json` and
+  `docs/T-043/ab/auto.stats.json` (both arms' driver stats), and `docs/T-043/report.md` (the task report, its
+  AUTO-RESOLVEs folded below). After deletion the raw files stay findable in this repository's git history. This
+  fold carries what the measured record above does not already hold — the per-session tables, the class shares,
+  the transcript cross-check, the deliverable comparison, the corrected column and the rulings — so nothing
+  unique is lost with the artifacts.
+  - Setup beyond the record above: both arms started side by side at 18:46:12, claude 2.1.283, agent
+    `claude-opus-5-5`; the claude usage windows stood at 5h 51% and 7d 84% at the start; input was 0.1k in both
+    arms; inner exit codes 0 and 0; no quota wait (`waitMs` 0). `stats.json` `taskB`, arm `true`: 9 sessions,
+    9 steps, aiMs 1,284,108 (21.4 min), usage input 136 / output 63,731 / reasoning 73,229 / cacheRead 2,912,269 /
+    cacheWrite 287,186, cost $5.6197. Arm `auto`: 2 sessions, 2 steps, aiMs 660,894 (11.0 min), input 52 /
+    output 24,739 / reasoning 47,035 / cacheRead 1,300,830 / cacheWrite 120,885, cost $2.6629.
+  - Sessions, arm `true` (roles from the order in the run log; every subtask forked the digest base, prefix
+    23.8k tokens; S5 failed the artifact shape check once and was re-prompted through a fork):
+
+    | session | role | AI time | output | reasoning | cache read | cache write | claude cost | API-equiv. |
+    |---|---|---|---|---|---|---|---|---|
+    | 392d99df | understanding + decomposition | 6.1 min | 15.5k | 23.9k | 378.1k | 64.7k | $1.38 | $1.32 |
+    | d65cda54 | digest fork base | 0.2 min | 0.5k | 0.3k | 10.8k | 13.0k | $0.12 | $0.11 |
+    | f9621080 | S1 csv | 3.6 min | 9.1k | 14.2k | 396.5k | 32.7k | $0.81 | $0.78 |
+    | e258ed71 | S2 ini | 3.9 min | 10.6k | 14.9k | 420.6k | 40.8k | $0.92 | $0.89 |
+    | 014b19ee | S3 query | 3.0 min | 9.5k | 10.5k | 347.1k | 35.9k | $0.76 | $0.73 |
+    | a3b781f4 | S4 barrel exports | 0.5 min | 2.5k | 0.1k | 186.7k | 12.0k | $0.19 | $0.18 |
+    | be5fcb77 | S5 README + final checks | 2.8 min | 10.6k | 7.8k | 555.5k | 43.3k | $0.83 | $0.80 |
+    | 1c2c8ae2 | S5 shape-check re-prompt | 0.3 min | 0.8k | 0.5k | 206.8k | 4.1k | $0.10 | $0.10 |
+    | 126134f7 | wrap-up | 1.1 min | 4.6k | 1.1k | 410.2k | 40.6k | $0.52 | $0.49 |
+
+  - Sessions, arm `auto`: `db1abab8`, the lead (the whole task), 9.4 min, output 19.3k, reasoning 43.5k, cache
+    read 889.5k, cache write 82.7k, $2.10 ($2.03 API-equiv.); `0f6e98d4`, the wrap-up, 1.6 min, output 5.4k,
+    reasoning 3.5k, cache read 411.3k, cache write 38.2k, $0.57 ($0.54). The driver steered the usage notice
+    once, at 68.6k tokens — 54% of the 128k wall; with a known 1M window the wall would be 250k
+    (`min(max(128k, 250k), 800k)`), so the notice would not have fired at 27% of it. The lead answered "The rest
+    should fit in this session's budget, so I'm not splitting the task" and finished at 90.9k, with no
+    `subtasks.md`, no guard verdict and no stream — the fan-out path (and the claude-side `leadUsed` fix) was
+    therefore not exercised live, and is covered by the shell e2e over the fake claude CLI.
+  - API-equivalent shares by class (output including reasoning / cache write / cache read): `true` $2.70 (50%) /
+    $2.07 (38%) / $0.64 (12%); `auto` $1.41 (55%) / $0.87 (34%) / $0.29 (11%).
+  - Cross-check against the claude transcripts, deduplicated by `requestId` (whole run): `true` 9 files, 68
+    requests, input 0.1k, output incl. thinking 137.0k, cache read 2.91M, cache write 287.2k, API-equiv. $5.41;
+    `auto` 2 files, 26 requests, input 0.1k, output 71.8k, cache read 1.30M, cache write 120.9k, $2.57. The
+    stats agree with the transcripts (output plus reasoning 136.96k against 137.0k, and 71.77k against 71.8k;
+    cache classes equal; claude's own cost within 4% of the API-equivalent in both arms).
+  - Deliverables: both arms touch the same eight files (`src/{csv,ini,query,index}.ts`, the three test files,
+    `README.md`); `true` 8 files, +764, its own `bun test` 73 pass / 0 fail / 139 `expect()` calls; `auto`
+    8 files, +580, 76 pass / 0 fail / 103 `expect()` calls; both inner reports end with `Result: PASS`. The
+    pipeline wrote more test assertions and a longer README (139 against 103 `expect()` calls, 101 against 56
+    README lines); the adaptive lead wrote three more test cases.
+  - The corrected API-equivalent column: as printed, the summary script's stats-based column gave $3.96
+    (`true`) and $1.64 (`auto`) — it weighted `output` but not `reasoning`, while §1.1 fitted its weights with
+    reasoning counted as output, as claude's transcripts count it. With reasoning at the output weight the
+    column reads $5.41 and $2.57, equal to the transcript cross-check; those corrected figures are the ones this
+    §12 record uses. Re-running the paid A/B only to reprint a column was rejected; the script now carries that
+    weight.
+  - The six AUTO-RESOLVEs around the A/B (from `docs/T-043/report.md`). AUTO-DECISION: the report holds seven
+    AUTO-RESOLVEs; the seventh (does S7 fix the stream-fork defect found on claude, beyond documentation and
+    tests? -> yes, in this task) is the S7 implementation record above the measured section and is not repeated
+    here.
+    1. AUTO-RESOLVE: rewrite the shell README's `ondemand` and `true`-subtask handover paragraphs, which predate
+       0056? -> yes (S7 names the shell README, and both paragraphs describe the very context-budget protocol
+       auto's lead and streams run under; left stale, they contradict the `auto` section above them).
+    2. AUTO-RESOLVE: which two arms does the "one measured A/B run" compare? -> `--subtask true` (the planned
+       pipeline, what `auto` was when T-008 was measured) against `--subtask auto` (the new default); `off` is
+       not a third arm (the literal scope is one A/B; when the lead does not split, the `auto` arm is the
+       single-session reference itself, plus the split clause).
+    3. AUTO-RESOLVE: "two comparable tasks" -> the same task, run once per arm on identical copies of one seed
+       project (the most comparable pair there is; two different tasks would add their own variance to a sample
+       of one per arm).
+    4. AUTO-RESOLVE: where does the A/B run? -> a scratch project under `/tmp` (a small Bun library with one
+       module and its tests; the task adds three independent format modules with tests), not this repository
+       (the round's next tasks are not this task's to run, and the config is read-only during the run).
+    5. AUTO-RESOLVE: fix the unknown-window wall on a claude run's first turn in this task? -> no; recorded as
+       the finding above (it is D6's designed fallback when the window is unknown; a fix, such as seeding the
+       window from the model registry or from a previous run, changes steering for every claude session and
+       belongs to a design of its own).
+    6. AUTO-RESOLVE: what counts as done for "one measured A/B run"? -> PASS when both suites pass; both arms
+       complete (exit 0) and each deliverable passes its own tests; the adaptive arm costs no more than the
+       planned pipeline (§7's target `auto` ≤ `off`, with the pipeline as the measured reference); the figures
+       cross-check against the transcripts. A second, split-inducing task was not run (the literal scope is one
+       A/B; it costs more real quota; the split path is covered end to end by the fake-claude e2e).
+  - One further finding, not this design's: both inner runs listed "malformed marker" warnings among their
+    auto-answered questions — the sessions wrapped long AUTO-RESOLVE lines across several markdown lines, or
+    quoted the marker in prose. The existing reader flagging agent format drift; recorded here only because the
+    raw artifacts go.
+
 <!-- auto: eof -->

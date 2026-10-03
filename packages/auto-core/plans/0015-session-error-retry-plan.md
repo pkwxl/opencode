@@ -505,3 +505,36 @@ once the copy produces content; the existing 46 cases pass unchanged. `bun typec
 Companion piece: the other half of the same scene — the `nextSession` claim in `handover.json` was likewise overwritten one by one by 0-token
 stubs — a "claim restoration" is added to `attempt` under the same invariant; see
 plans/0023-test-handover-early-design.md §J.3。
+
+## Field-evidence provenance (added 2026-10-03): the provider-timeout analysis
+
+The raw field evidence behind the 2026-09-12 corrections above is `provider-timeout-analysis-20260912.md` (2026-09-12, written in
+Chinese, on the kernel-spi-nor auto-migrate incident — R-01, `zai-coding-plan/glm-5.3-flash`). The docs-governance round rules the file
+for deletion; it remains findable in this repository's git history afterward. Most of it is already folded here: the 1860s cost anatomy of
+one timeout and the fatal-error census (the "Factual baseline" table of correction two), and the fork-retry unreachability — a subtask has
+one prompt round, so at failure time `chain.id` is necessarily empty under `REUSE_SESSION=off`, and the retries even dropped the free
+12.8k digest prefix ("Why the existing fork retry did not catch it"). Three unique parts are preserved here so the deletion loses them:
+
+1. **The opencode 1.18.x binary-versus-source divergence.** The actually-running binary (`~/.opencode/bin/opencode`, `--version` 1.18.30;
+   the DB recorded 1.18.29) enforces `headerTimeout` and `chunkTimeout` 300 s defaults on **all** providers
+   (`let b = V.chunkTimeout ?? 300000, T = V.headerTimeout ?? 300000`), while the worktree source carried them only for `openai`
+   (`headerTimeout`) and not at all (`chunkTimeout`: unconfigured means no SSE wrap). The binary's retry policy also has an attempt cap
+   (first + 5 retries) that the source `session/retry.ts` `policy()` lacks, and the binary's `chunkTimeout` schema accepts `false` to
+   disable. Lesson: diagnosing live behavior from the worktree source yields wrong conclusions — work from the installed binary
+   (`strings <binary> | grep -o '.\{0,160\}headerTimeout.\{0,200\}'` locates the minified implementation). The timeouts are overridable
+   per provider via `provider.<id>.options.{headerTimeout,chunkTimeout}` in the project or global `opencode.json` (merged through
+   `mergeProvider`'s `mergeDeep`, no models.dev registry damage), taking effect after an opencode server restart.
+2. **The upstream-silence attribution.** The failure class is the provider accepting the request, opening the SSE stream, then emitting
+   zero increments for ~300 s — not client compute or network, uncorrelated with context size (slow steps' context median 12k; the
+   ≥290 s share stays in a flat 2.5–8.7% band across the 0–300k context buckets) and correlated with time of day (Beijing
+   15:00–18:00 peak, the worst hourly windows at 31%/28%/18% slow steps; the last three fatal errors landed 15:34/16:30/17:40 Beijing
+   time). Every fatal session already had 2–6 steps ≥ 250 s before it died.
+3. **The reproduction recipes.** The analysis is replayable against `~/.local/share/opencode/opencode.db` (sqlite, read-only; `message`
+   and `part` carry `(session_id, time_created)` and `(message_id, id)` indexes): the error census reads `message.data.error` per session;
+   step duration = `message.time_updated - time_created` (role=assistant); context size = `tokens.input + tokens.cache.read`; internal-retry
+   evidence = ≥ 2 `step-start` parts under one message (17 messages carried it, together burning ≈3.2 h — a lower bound, since header
+   timeouts leave no part trace; the 175 steps ≥ 290 s are the candidate upper bound); upstream-silence evidence = a `reasoning` part
+   whose payload stays ≈2 B across ~300 s while control steps stream 25–36 KB. The driver-side timeline comes from
+   `<target>/.auto/logs/run-*.log` (`↻` / `⛔` / 会话错误 markers) and `CURRENT.md`'s interruption note.
+
+<!-- auto: eof -->
