@@ -145,9 +145,6 @@ export function intentText(facts: PromptFacts, section: IntentSection, key: stri
 // counted above the context its session starts with — plans/0059 T3: a fresh
 // subtask session's harness and prompt alone can reach the whole half
 // budget; fine injects the fine-grained criteria).
-// taskContext: the understanding digest's line-count tier
-// (OPENCODE_AUTO_TASK_CONTEXT, see src/switches.ts); the understand template
-// renders contextLines from it (suggested wording, not a hard cut).
 type Opts = {
   mode?: ModeSpec
   testByDriver?: boolean
@@ -155,7 +152,6 @@ type Opts = {
   phase?: { id: string; entry: PhaseEntry }
   contextLimit?: number
   fine?: boolean
-  taskContext?: "off" | "small" | "medium" | "large"
   // The parallel level in effect for this execution surface (plans/0068
   // D18/S5): the decompose family and the whole-task split clause inject the
   // `## parallelism` subsection of the configured level; absent (none, or a
@@ -856,15 +852,6 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-// The understand digest's suggested line-count tiers
-// (OPENCODE_AUTO_TASK_CONTEXT, the switch layer is src/switches.ts): off is
-// the status quo (200, matching the pre-change hardcoded wording);
-// small/medium/large loosen step by step. Only the "suggested line count"
-// wording in the prompt changes — ensureDecomposed only checks that
-// context.md is non-empty, never truncates by or rejects on line count;
-// raising the tier changes no validation behavior.
-const TASK_CONTEXT_LINES: Record<"off" | "small" | "medium" | "large", number> = { off: 200, small: 300, medium: 400, large: 500 }
-
 // Driver notes appended to the task block (plans/0053 D16): one line per
 // effective prerequisite (explicit or implicit) that was closed, so the
 // session does not build on deliverables that never landed. Empty without
@@ -899,7 +886,11 @@ function baseCtx(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskD
     phaseName: entry.name,
     contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
     fine: Boolean(opts.fine),
-    contextLines: String(TASK_CONTEXT_LINES[opts.taskContext ?? "off"]),
+    // The digest's suggested line count, fixed at 200 (the wording knob was
+    // retired, ruling P-2 of plans/0070): suggested wording only —
+    // ensureDecomposed checks that context.md is non-empty, never truncates
+    // by or rejects on line count.
+    contextLines: "200",
   }
 }
 

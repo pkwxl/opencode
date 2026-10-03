@@ -6,9 +6,9 @@ contract, context budget, scenario mode) are fixed by `init` into `.opencode/aut
 (versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
 maintained exclusively by the driver: each task runs as one lead session that manages its own context (the
 default `subtask: auto`), or — under `subtask: true` — is first split into subtasks by a decompose session,
-then completed one subtask at a time by dispatched sessions (by default every session starts fresh; with
-`OPENCODE_AUTO_REUSE_SESSION=on` the previous session is reused when its context share was below 50% and it
-ended within 5 minutes; the driver ticks state as each session ends), and after wrap-up the driver marks the
+then completed one subtask at a time by dispatched sessions (every prompt opens a fresh session, each
+carrying its full context and depending on no previous session's memory; the former `OPENCODE_AUTO_REUSE_SESSION`
+knob is retired and ignored; the driver ticks state as each session ends), and after wrap-up the driver marks the
 task done. Checking and acceptance are planned work (acceptance tasks, the v acceptance phase): when the
 result line at the end of a task report says `Result: FAIL`, the driver blocks that task after committing and
 stops the run for a person to adjust the task (task-level acceptance `verify`, quality review `--review` and
@@ -105,7 +105,7 @@ describes how this run executes and how a person watches it → run.**
 | --- | --- | --- | --- |
 | `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
 | `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
-| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); under `subtask` `ondemand` and `auto` the context-budget wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (see [Execution pipeline](#execution-pipeline)) |
+| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline; under `subtask` `ondemand` and `auto` the context-budget wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (see [Execution pipeline](#execution-pipeline)) |
 | `subtask` | `off` / `auto` / `true` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
@@ -943,17 +943,12 @@ stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtas
    subtask directory's `todo.md`. Producing no valid file is retried once automatically with feedback;
    failing again blocks.
 2. **Execute subtask by subtask**: all execution sessions within a task (decompose/subtask/repair/wrap-up)
-   form one chain, and reuse within the chain is **off by default** — every prompt opens a new session (each
-   prompt carries its full context and does not depend on the previous session's memory); set
-   `OPENCODE_AUTO_REUSE_SESSION=on` to restore threshold-based reuse: the previous session is reused only
-   when its context share at the end was below 50%, its used tokens below half the configured `contextLimit`
-   (32k tokens by default) and it ended **no more than 5 minutes ago** (share and usage are always tracked,
-   independent of `--verbose`; when the model's context limit is unavailable the share is recorded as 100
-   and a new session is always opened; driver-managed scripts and bypass sessions can run long — past 5
-   minutes the context counts as stale and a new session starts automatically). Every session end
+   form one chain, and every prompt in the chain opens a **fresh session** (each prompt carries its full
+   context and does not depend on the previous session's memory; in-chain session reuse was removed, and the
+   former `OPENCODE_AUTO_REUSE_SESSION` knob is retired and ignored). Every session end
    unconditionally prints two stats lines: line 1 `◉ session ended: context n% (used/limit tokens), time X
    (cumulative Y / N turns)` (pure-AI time, accumulated across interruptions), line 2 the token breakdown
-   (in/out/thinking/cache-read/cache-write/hit-rate/cost); reused sessions and sessions taken over by
+   (in/out/thinking/cache-read/cache-write/hit-rate/cost); sessions taken over by
    interruption recovery print them too; task completion / phase close-out / round completion each add
    their own conclusion line (cumulative time and token breakdowns across interruptions at each level;
    stats live in `.auto/stats.json` in the target directory, the file deleted when zeroed).
@@ -1034,10 +1029,11 @@ when the task completes; the legacy `.auto/session.json` is read compatibly.
 
 **In-session recovery** (session interrupted mid-flight with no way to summarize progress — kill/crash/
 network failure): as long as the session still exists on the server, the driver simply **reuses it and
-continues** (no context loss, isomorphic to `opencode -r <session-id>`, no time window anymore; the takeover
-is exempt from `OPENCODE_AUTO_REUSE_SESSION` and the reuse thresholds, the recovery log carries the
+continues** (no context loss, isomorphic to `opencode -r <session-id>`, however long the interruption
+lasted — this takeover is the one place a recorded session is resumed rather than opened fresh, and no
+reuse knob governs it; the recovery log carries the
 inherited context usage, and the recovery note is cleared after use — the next prompt returns to the normal
-rules); the first prompt carries a recovery note asking the AI to verify actual progress with git
+fresh-session rules); the first prompt carries a recovery note asking the AI to verify actual progress with git
 status/diff and continue from where it broke off. **Handover files take precedence**: when a handover
 document was already written before the interruption (the `docs/<id>/handoff.md` of `subtask: ondemand` or
 `auto`, or handover-test's task-level/subtask-level `testhandoff.md` — a leftover at either
@@ -1188,8 +1184,8 @@ a whole-task session `docs/<task id>/testhandoff.md`; the handover applies to th
 the next subtask cannot misread the previous subtask's leftover handover. A missing document is retried once
 with feedback; still missing halts as an implicit block (with strict recovery on, one failure rolls the unit
 back and redoes it). The archived and current copies are both cleared when the execution scope completes;
-historical handover content lives in the git commit records. The driver then opens a new session (the
-context is over the limit, so the session-reuse rules start fresh automatically) and continues the task with
+historical handover content lives in the git commit records. The driver then opens a new session (the old
+session's context was over the limit) and continues the task with
 a continuation note (read the handover document first, then interpret that test's result); tests still go
 through the same protocol.
 

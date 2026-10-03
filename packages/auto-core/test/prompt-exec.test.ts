@@ -91,12 +91,8 @@ describe("renderDecompose", () => {
     expect(text).toContain("End the session as soon as the files are written")
   })
 
-  test("taskContext levels: off defaults to 200 lines, small/medium/large loosen to 300/400/500 lines", () => {
+  test("the digest's suggested line count is fixed at 200 (the wording knob was retired, ruling P-2 of plans/0070)", () => {
     expect(decOf(plan, task)).toContain("aim for 200 lines or fewer")
-    expect(decOf(plan, task, { taskContext: "off" })).toContain("aim for 200 lines or fewer")
-    expect(decOf(plan, task, { taskContext: "small" })).toContain("aim for 300 lines or fewer")
-    expect(decOf(plan, task, { taskContext: "medium" })).toContain("aim for 400 lines or fewer")
-    expect(decOf(plan, task, { taskContext: "large" })).toContain("aim for 500 lines or fewer")
   })
 
   test("D18 (plans/0068 S5): a level injects the decompose-side parallelism guidance beside the checklist; none stays byte-identical", () => {

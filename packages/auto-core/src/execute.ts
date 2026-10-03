@@ -406,9 +406,7 @@ export async function ensureDecomposed(
   for (let i = 0; ; i++) {
     // fine (OPENCODE_AUTO_DECOMPOSE_FINE=on) passes through into the decompose
     // prompt: injects the fine-grained criteria section
-    // (plans/0003-fork-decompose-design.md §5.1); taskContext
-    // (OPENCODE_AUTO_TASK_CONTEXT) passes through the suggested-line-count
-    // wording of context.md.
+    // (plans/0003-fork-decompose-design.md §5.1).
     const brief = shapeForked
     shapeForked = false
     const views = promptViews(plan, task)
@@ -417,7 +415,7 @@ export async function ensureDecomposed(
       task,
       brief
         ? feedback.trimStart()
-        : renderDecompose(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { ...opts, fine: autoSwitches().fine, taskContext: autoSwitches().taskContext }) + feedback,
+        : renderDecompose(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { ...opts, fine: autoSwitches().fine }) + feedback,
       opts,
       chain,
     )

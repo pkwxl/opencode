@@ -21,7 +21,6 @@ export const SWITCH_ENV = {
   steer: "OPENCODE_AUTO_STEER",
   step: "OPENCODE_AUTO_STEP",
   stuck: "OPENCODE_AUTO_STUCK",
-  taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
   ask: "OPENCODE_AUTO_ASK",
   model: "OPENCODE_AUTO_MODEL",
   modelFallback: "OPENCODE_AUTO_MODEL_FALLBACK",
@@ -73,6 +72,11 @@ export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
   // commit instead of the frozen snapshot. The default (sequential) behavior
   // is unchanged.
   OPENCODE_AUTO_HANDOVER_CONCURRENT: "concurrent test handover was removed; the tests run after the handover close-out",
+  // The understanding digest's line-count wording knob (ruling P-2 of
+  // plans/0070, discard): retired with its tiers; the suggested count is
+  // pinned at 200 lines in the prompt layer.
+  // AUTO-DECISION: the acceptance's "grep for TASK_CONTEXT returns nothing" reads as the live plumbing (types, parsing, pass-through, reports); this registry entry and its test must name the variable to produce the notice, and the registry's own contract forbids removing entries again.
+  OPENCODE_AUTO_TASK_CONTEXT: "the wording knob was removed; the suggested line count is fixed at 200",
 }
 
 // The notice lines the retired switches produce for an environment (pure;
@@ -97,13 +101,6 @@ export type StepMode = "off" | "phase" | "task" | "subtask"
 // every new session start (a migration session forked out by failover does not trigger
 // it, to prevent flapping).
 export type FailbackScope = "phase" | "task" | "subtask" | "session"
-
-// Digest line-count tier (OPENCODE_AUTO_TASK_CONTEXT) value domain: off is the status quo
-// (suggest within 200 lines); small/medium/large loosen per tier (300/400/500 lines, see
-// TASK_CONTEXT_LINES in src/prompt.ts) — only the "suggested line count" wording in the
-// prompt changes, no code-side truncation or validation (context.md never had a hard
-// line limit anyway; exceeding the suggested count is not rejected).
-export type TaskContextMode = "off" | "small" | "medium" | "large"
 
 // Session role vocabulary (staged model routing, see plans/0017-model-routing-design.md
 // C.1): fixed for the experiment period, no free naming; one-to-one with the B.5
@@ -232,12 +229,6 @@ export type Switches = {
   // A dryrun preflight session probes permissions by being refused over and over and is
   // never detected (independent of this switch).
   stuck: boolean
-  // Digest line-count tier (default off, zero change from the status quo): the
-  // small/medium/large tiers loosen context.md's suggested line ceiling (see
-  // TASK_CONTEXT_LINES in src/prompt.ts), for enlarging the budget to verify when the
-  // digest is suspected over-compressed by the "suggest 200 lines" wording and losing
-  // information.
-  taskContext: TaskContextMode
   // Question policy (default off, zero change from the status quo; design
   // plans/0020-auto-resolve-design.md §E): off = suppress — never call the question tool
   // for non-permission questions, decide autonomously; every divergence point that
@@ -325,7 +316,6 @@ const SWITCH_DEFAULTS: Switches = {
   steer: true,
   step: "off",
   stuck: true,
-  taskContext: "off",
   ask: false,
   model: { byLetter: {}, byType: {}, byRole: {}, fallback: [] },
   modelFailbackScope: "task",
@@ -521,13 +511,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
       `env ${SWITCH_ENV.step} invalid value: "${stepRaw}" (expected off|phase|task|subtask; empty string = unset, default off)`,
     )
   }
-  const taskContextRaw = env[SWITCH_ENV.taskContext]
-  const taskContext = taskContextRaw === undefined || taskContextRaw === "" ? SWITCH_DEFAULTS.taskContext : taskContextRaw
-  if (taskContext !== "off" && taskContext !== "small" && taskContext !== "medium" && taskContext !== "large") {
-    throw new Error(
-      `env ${SWITCH_ENV.taskContext} invalid value: "${taskContextRaw}" (expected off|small|medium|large; empty string = unset, default off)`,
-    )
-  }
   const failbackScopeRaw = env[SWITCH_ENV.modelFailbackScope]
   const modelFailbackScope =
     failbackScopeRaw === undefined || failbackScopeRaw === "" ? SWITCH_DEFAULTS.modelFailbackScope : failbackScopeRaw
@@ -553,7 +536,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     steer: onOff(SWITCH_ENV.steer, env[SWITCH_ENV.steer], SWITCH_DEFAULTS.steer),
     step: step as StepMode,
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
-    taskContext: taskContext as TaskContextMode,
     ask: onOff(SWITCH_ENV.ask, env[SWITCH_ENV.ask], SWITCH_DEFAULTS.ask),
     model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback], registry),
     modelFailbackScope: modelFailbackScope as FailbackScope,
@@ -585,7 +567,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.steer === SWITCH_DEFAULTS.steer ? undefined : `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
-    switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
     switches.ask === SWITCH_DEFAULTS.ask ? undefined : `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
     (() => {
       const routing = renderModelEnv(switches.model)
@@ -616,7 +597,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     `${SWITCH_ENV.step}=${switches.step}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
-    `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
     `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
     `${SWITCH_ENV.model}=${renderModelEnv(switches.model)}`,
     `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}`,
