@@ -25,7 +25,7 @@ afterAll(() => {
 })
 
 describe("parseSwitches (the experiment-switch environment layer)", () => {
-  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / stuck on / taskContext off / ask off / model off / strictResume off / hibernate unset)", () => {
+  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / stuck on / taskContext off / ask off / model off / strictResume on / hibernate unset)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
@@ -39,7 +39,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
-      strictResume: false,
+      strictResume: true,
       hibernate: undefined,
       agent: undefined,
       laneIsolation: false,
@@ -80,7 +80,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
-      strictResume: false,
+      strictResume: true,
       hibernate: undefined,
       agent: undefined,
       laneIsolation: false,
@@ -137,7 +137,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.taskContext]: "off",
         [SWITCH_ENV.ask]: "off",
         [SWITCH_ENV.modelFailbackScope]: "task",
-        [SWITCH_ENV.strictResume]: "off",
+        [SWITCH_ENV.strictResume]: "on",
       }),
     ).toEqual(parseSwitches({}))
   })
@@ -168,13 +168,13 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     expect(parseSwitches({ [SWITCH_ENV.ask]: "" }).ask).toBe(false)
   })
 
-  test("strictResume value domain: on/off, default off (the strict-resume switch, plans/0022-session-recovery-fidelity-design.md S3)", () => {
-    expect(parseSwitches({}).strictResume).toBe(false)
+  test("strictResume value domain: on/off, default on (promoted 2026-10 by ruling P-1 of plans/0070; off stays as the emergency-off) (the strict-resume switch, plans/0022-session-recovery-fidelity-design.md S3)", () => {
+    expect(parseSwitches({}).strictResume).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "on" }).strictResume).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "off" }).strictResume).toBe(false)
-    expect(parseSwitches({ [SWITCH_ENV.strictResume]: "" }).strictResume).toBe(false)
+    expect(parseSwitches({ [SWITCH_ENV.strictResume]: "" }).strictResume).toBe(true)
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/OPENCODE_AUTO_STRICT_RESUME/)
-    expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/default off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/default on/)
   })
 
   test("agent: opencode (default) | claude, a shell profile overrides it (MA.5, plans/0041)", () => {
@@ -321,7 +321,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
     )
   })
 
@@ -329,7 +329,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
@@ -353,10 +353,11 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     expect(formatSwitches(scoped)).toContain("OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session")
     const both = parseSwitches({ [SWITCH_ENV.model]: "kimi/k2", [SWITCH_ENV.modelFallback]: "b/y" })
     expect(nonDefaultSwitches(both)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2, OPENCODE_AUTO_MODEL_FALLBACK=b/y")
-    // strict resume: default off is silent, on stands as its own item
-    const strict = parseSwitches({ [SWITCH_ENV.strictResume]: "on" })
-    expect(nonDefaultSwitches(strict)).toBe("OPENCODE_AUTO_STRICT_RESUME=on")
-    expect(formatSwitches(strict)).toContain("OPENCODE_AUTO_STRICT_RESUME=on")
+    // strict resume: default on since 2026-10 (ruling P-1 of plans/0070) is silent, the emergency-off stands as its own non-default item
+    const strict = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
+    expect(strict.strictResume).toBe(false)
+    expect(nonDefaultSwitches(strict)).toBe("OPENCODE_AUTO_STRICT_RESUME=off")
+    expect(formatSwitches(strict)).toContain("OPENCODE_AUTO_STRICT_RESUME=off")
     // hibernate window: default unset is silent; once set it stands as its own item in the canonical HH:MM+H spelling
     const hibernating = parseSwitches({ [SWITCH_ENV.hibernate]: "4:00+6.5" })
     expect(nonDefaultSwitches(hibernating)).toBe("OPENCODE_AUTO_HIBERNATE=04:00+6.5")

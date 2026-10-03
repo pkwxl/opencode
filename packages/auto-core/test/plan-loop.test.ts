@@ -8,6 +8,8 @@ import { existsSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { FakeAgentOptions } from "./fixtures/agent"
 import { loopFixture, pastMessage, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { unitBaseline } from "../src/git"
+import { IMPLIED_MODEL } from "../src/models"
 import { readNextTask } from "../src/numbering"
 import { completePhase, establishRound, type PhaseUnit } from "../src/phases"
 import { saveProgress } from "../src/resume"
@@ -240,7 +242,12 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       const f = await fixture("am", { history: { ses_1: [pastMessage("ses_1")] } })
       await Bun.write(join(f.dir, "docs/R-01/P01-analysis/plan-input.md"), "Plan the analysis.\n")
       await f.commit("planning input")
-      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
+      // Strict resume's default flipped to on (2026-10, ruling P-1 of
+      // plans/0070), so the seeded record carries the strict fields a real
+      // interrupted strict run writes (baseline + effective model); reuse
+      // then survives the strict verification.
+      // AUTO-DECISION: seed the strict record shape instead of pinning the switch off (the loop fixture scrubs the ambient OPENCODE_AUTO_* layer by charter, and the promoted default is exactly the behavior under test)
+      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain("↻ session resume point takes precedence: the phase planning session(P01-analysis Analysis) was not closed out; re-entering that step to continue")
@@ -261,7 +268,9 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       const f = await fixture("m", { history: { ses_1: [pastMessage("ses_1")] } })
       await Bun.write(join(f.dir, "docs/R-01/P01-implement/plan-input.md"), "Port the retry policy.\n")
       await f.commit("planning input")
-      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
+      // The strict-fields shape, same as the phased case above (strict
+      // resume's default flipped to on 2026-10, ruling P-1 of plans/0070).
+      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain("✓ planned 1 task(s) (T-001) into docs/R-01/P01-implement/tasks.md")

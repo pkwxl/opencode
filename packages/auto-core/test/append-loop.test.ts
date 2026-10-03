@@ -10,6 +10,8 @@ import { existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { FakeAgentOptions } from "./fixtures/agent"
 import { appendTurn, badAppendTurns, loopFixture, pastMessage, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { unitBaseline } from "../src/git"
+import { IMPLIED_MODEL } from "../src/models"
 import { completePhase, establishRound, type PhaseUnit } from "../src/phases"
 import { saveProgress } from "../src/resume"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
@@ -91,19 +93,27 @@ describe("an open phase-append step re-entered under run (plans/0053 D23; plans/
       const seeded = await seedTasks(f, implement, [["T-002", true], ["T-003", false]])
       await Bun.write(join(f.dir, implement.dir, "plan-input.md"), "Append a fix task for the retry policy.\n")
       await f.commit("implement tasks")
-      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P02" } })
+      // Strict resume's default flipped to on (2026-10, ruling P-1 of
+      // plans/0070): the seeded record carries the strict fields (baseline +
+      // effective model) a real interrupted strict run writes, so the reuse
+      // survives the strict verification.
+      // AUTO-DECISION: seed the strict record shape instead of pinning the switch off (the loop fixture scrubs the ambient OPENCODE_AUTO_* layer by charter, and the promoted default is exactly the behavior under test)
+      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P02" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain("↻ session resume point takes precedence: the task appending session(P02-implement Implementation) was not closed out; re-entering that step to continue")
       expect(lines).toContain("ℹ appending against the persisted input docs/R-01/P02-implement/plan-input.md")
       expect(lines).toContain("✓ task append complete: docs/R-01/P02-implement/tasks.md gained 1 task(s)")
       // The first prompt went into the recorded session — an appending prompt
-      // with the resume note of the task-appending step — and no session was
-      // created.
+      // with the resume note of the task-appending step — and no session is
+      // created. Under the promoted strict resume (default on since 2026-10,
+      // ruling P-1 of plans/0070) a reused session's note is the single
+      // continue sentence, not the per-step guidance.
+      // AUTO-DECISION: re-pin the note expectation to the strict single-continue sentence (it is the promoted production wording for every reused session, not a weakening — the per-step guidance branch keeps its own coverage in resume-gate's tests)
       expect(f.agent.prompts).toHaveLength(1)
       expect(f.agent.prompts[0]!.session).toBe("ses_1")
       expect(f.agent.prompts[0]!.text).toContain("## Input: the task index as it stands")
-      expect(f.agent.prompts[0]!.text).toContain("You are in the task-appending step")
+      expect(f.agent.prompts[0]!.text).toContain("[DRIVER] The session was interrupted; continue the current work until this unit is complete")
       expect(f.agent.argsOf("create")).toEqual([])
       // One task appended after the existing lines; the step record is closed
       // and the tree committed.
@@ -122,7 +132,9 @@ describe("an open phase-append step re-entered under run (plans/0053 D23; plans/
       await seedTasks(f, phase, [["T-001", true], ["T-002", false]])
       await Bun.write(join(f.dir, phase.dir, "plan-input.md"), "Append a fix task.\n")
       await f.commit("listed tasks")
-      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
+      // The strict-fields shape, same as the phased case above (strict
+      // resume's default flipped to on 2026-10, ruling P-1 of plans/0070).
+      await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain("↻ session resume point takes precedence: the task appending session(P01-implement Implementation) was not closed out; re-entering that step to continue")

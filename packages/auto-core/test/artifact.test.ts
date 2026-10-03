@@ -18,6 +18,10 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 describe("requireArtifact phase-step recovery (spec.step)", () => {
   // Zero-wait ladder: this block only checks recovery-point semantics; retry backoff must not stretch it into minutes.
   const STEP_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
+  // Strict resume's default flipped to on (2026-10, ruling P-1 of plans/0070):
+  // the loose-reuse test below pins the pre-strict semantics, so it injects the
+  // emergency-off override explicitly.
+  const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
   // Dedicated fake client: records the create count and each prompt's target
   // session; messages returns one real assistant turn (tokens > 0) so
   // sessionUsage judges it reusable rather than an error stub; the event
@@ -78,7 +82,7 @@ describe("requireArtifact phase-step recovery (spec.step)", () => {
       await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { client, state } = artifactClient("ses_plan_old")
       let resetCalled = false
-      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)))
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), LOOSE)
       expect(value).toBe(4)
       expect(resetCalled).toBe(false) // reuse → keep the artifact scene, no reset
       expect(state.creates).toBe(0) // reuse, no new session
@@ -355,10 +359,12 @@ describe("requireArtifact standalone unit gate (spec.unitStart)", () => {
           }),
         },
       } as unknown as OpencodeClient)
+      // Strict resume's default flipped to on (2026-10, ruling P-1 of
+      // plans/0070): this loose-reuse pin injects the emergency-off explicitly.
       const value = await requireArtifact(client, planTask, "continuation prompt", { dir }, {
         ...unitSpec,
         step: { step: "phase-plan", unit: "R-01.P01" },
-      })
+      }, parseSwitches({ [SWITCH_ENV.strictResume]: "off" }))
       expect(value).toBe("output")
       expect(state.prompts).toEqual(["ses_alive"]) // reuses the original session; no fork over the dirty area
     } finally {
@@ -378,7 +384,10 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     [SWITCH_ENV.retryWaits]: "0,0",
     [SWITCH_ENV.recoveryWait]: "0",
   })
+  // Strict resume's default flipped to on (2026-10, ruling P-1 of plans/0070), so
+  // the loose counter-case pins the emergency-off override explicitly.
   const LOOSE = parseSwitches({
+    [SWITCH_ENV.strictResume]: "off",
     [SWITCH_ENV.model]: "*=kimi/k2",
     [SWITCH_ENV.retryWaits]: "0,0",
     [SWITCH_ENV.recoveryWait]: "0",

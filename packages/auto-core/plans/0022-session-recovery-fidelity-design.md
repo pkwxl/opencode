@@ -3,6 +3,10 @@
 > Status: initiated 2026-09-14, design finalized; **implementation completed 2026-09-15 (S1/S2/S3 all landed,
 > the OPENCODE_AUTO_STRICT_RESUME switch defaults to off and is in gradual rollout; see the §4 checklist)**
 > (plans/0021-commit-boundary-design.md decision D6).
+> 2026-10: the switch is promoted to **default-on** (ruling P-1 of
+> `plans/0070-driver-docs-governance-and-round-transition.md` — promote: 20-test coverage, 17+ days gray,
+> no field incidents); `OPENCODE_AUTO_STRICT_RESUME=off` remains the emergency-off override, and retiring the
+> knob entirely is a later, separately ruled unit.
 > 2026-09-15, evidence-based revision per a field-log audit of the two target directories (kernel-spi-nor / kernel-dm,
 > about 23MB of run logs, 2026-09-10..15): the reuse criteria gain a model-consistency check (3.1 ④),
 > R3 gains a handover-boundary write verification (new trigger in 3.3), fork base-point independence is made explicit (3.4), and correction suggestions for adjacent mechanisms

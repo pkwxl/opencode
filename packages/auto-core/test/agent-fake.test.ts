@@ -37,7 +37,7 @@ import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
 import { createServices, installServices, services, uninstallServices, type Clock } from "../src/services"
 import { flushStats } from "../src/stats"
-import { clampSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
+import { clampSwitches, parseSwitches, setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
 import { handoffSteer } from "../src/testrun"
 import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
@@ -2106,7 +2106,12 @@ describe("usage windows (plans/0057 §5.2)", () => {
 // recorded session is used only if its agent is this run's and its recorded
 // model is usable now — otherwise it is a dead session, and the resume takes
 // the existing path of a new session with the resume note.
+// Strict resume's default flipped to on (2026-10, ruling P-1 of
+// plans/0070): these binding verdicts are branch-independent, and the
+// records here are not git-backed (no unit baseline), so the cases pin the
+// non-strict branch — the switch goes explicit-off, the emergency-off.
 describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
+  const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
   const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
   // Friday 2026-09-25 12:00 UTC: w's only window (18:00-24:00) is closed.
@@ -2166,7 +2171,7 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
       await seededRecord(dir, { agent: "opencode", model: "w" })
       const agent = make()
       let resetCalled = false
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), DEFAULTS)
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
       expect(value).toBe(4)
       // Dead session: the original is never prompted or forked; the step is
       // redone in a new session (the existing redo path: reset + fresh
@@ -2195,7 +2200,7 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
     try {
       await seededRecord(dir, { agent: "claude-b", model: "b" })
       const agent = make()
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => {}), DEFAULTS)
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => {}), LOOSE)
       expect(value).toBe(4)
       expect(agent.prompts).toHaveLength(1)
       expect(agent.prompts[0]!.session).not.toBe("ses_old")
@@ -2215,7 +2220,7 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
       await seededRecord(dir, { agent: "opencode", model: "b" })
       const agent = make()
       let resetCalled = false
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), DEFAULTS)
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
       expect(value).toBe(4)
       expect(resetCalled).toBe(false)
       expect(agent.prompts).toHaveLength(1)
@@ -2887,20 +2892,38 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
   })
 
   test("a stream hinted at the wall that writes no handover document: one re-prompt in a fork of the ended session, the demand alone", async () => {
-    const { dir, agent, outcome, prompts } = await run((dir) => (ctx) => {
-      if (ctx.n === 1) return lead(dir, ctx)
-      if (ctx.text.includes("runs stream T-001.S01")) {
-        write(dir, "src/alpha.ts", "export const alpha = 1\n")
-        // Past the 80k wall: the hard-wall hint goes out, no document follows.
-        return [ev.message(ctx.session, `m_wall_${ctx.n}`, 85_000), ev.text(ctx.session, `t_${ctx.n}`, "done"), ev.idle(ctx.session)]
-      }
-      if (ctx.text.startsWith("The last time you ended the session a handover was due")) {
-        write(dir, "docs/T-001/handoff.md", "alpha is finished.\n\nStatus: done\n")
+    // Strict resume's default flipped to on (2026-10, ruling P-1 of
+    // plans/0070): this case pins the wall-demand mechanics (the hint, the
+    // single re-prompt, the fork lineage), so it plants the emergency-off
+    // around the run — the strict boundary write-verify is the dedicated
+    // strict suites' subject. The memo reset makes this pass parse the
+    // planted environment (the loop-isolation pattern).
+    // AUTO-DECISION: plant the env override plus a memo reset (runTask reads autoSwitches() with no injection point; this is the fixture-established pattern of test/loop-isolation.test.ts)
+    const savedStrict = process.env[SWITCH_ENV.strictResume]
+    process.env[SWITCH_ENV.strictResume] = "off"
+    setSwitchModelRegistry(undefined)
+    let ran: Awaited<ReturnType<typeof run>>
+    try {
+      ran = await run((dir) => (ctx) => {
+        if (ctx.n === 1) return lead(dir, ctx)
+        if (ctx.text.includes("runs stream T-001.S01")) {
+          write(dir, "src/alpha.ts", "export const alpha = 1\n")
+          // Past the 80k wall: the hard-wall hint goes out, no document follows.
+          return [ev.message(ctx.session, `m_wall_${ctx.n}`, 85_000), ev.text(ctx.session, `t_${ctx.n}`, "done"), ev.idle(ctx.session)]
+        }
+        if (ctx.text.startsWith("The last time you ended the session a handover was due")) {
+          write(dir, "docs/T-001/handoff.md", "alpha is finished.\n\nStatus: done\n")
+          return undefined
+        }
+        streams(dir, ctx.text)
         return undefined
-      }
-      streams(dir, ctx.text)
-      return undefined
-    })
+      })
+    } finally {
+      if (savedStrict === undefined) delete process.env[SWITCH_ENV.strictResume]
+      else process.env[SWITCH_ENV.strictResume] = savedStrict
+      setSwitchModelRegistry(undefined)
+    }
+    const { dir, agent, outcome, prompts } = ran
     try {
       expect(outcome).toEqual({ type: "completed" })
       expect(prompts).toHaveLength(4)

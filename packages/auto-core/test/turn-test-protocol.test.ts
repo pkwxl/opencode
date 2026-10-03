@@ -87,6 +87,11 @@ const writeHandoff = async (testRun: TestRun, text: string): Promise<void> => {
   await writeFile(testRun.handoffFile, text)
 }
 
+// Strict resume's default flipped to on (2026-10, ruling P-1 of
+// plans/0070): the loose backfill-retry cases pin the emergency-off
+// override explicitly, keeping their semantics default-independent.
+const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
+
 // One concern instance per case, driven one idle input at a time over a
 // recording fx. The measurement events go through the source first (the
 // spine observes every event of the session before the row runs), so a
@@ -280,7 +285,9 @@ describe("the test concern (idle: the asked verification)", () => {
   test("an incomplete document steers the backfill requirement once (retried, consumed)", async () => {
     const testRun = repoTestRun({ resumeWrapup: true })
     await writeHandoff(testRun, "# Handover\n\nhalf-written, no status line\n")
-    const { own, fx, idle } = setup({ test: testRun })
+    // Strict resume's default flipped to on (2026-10, ruling P-1 of
+    // plans/0070): the loose backfill-retry path pins the emergency-off.
+    const { own, fx, idle } = setup({ test: testRun, switches: LOOSE })
     await expect(idle({ transcript: transcript({ lastText: "still writing" }) })).resolves.toBe("consumed")
     expect(own).toEqual({ handover: false, asked: true, retried: true })
     expect(fx.steers).toHaveLength(1)
@@ -291,7 +298,7 @@ describe("the test concern (idle: the asked verification)", () => {
   test("a second incomplete document settles blocked naming the file and the last agent output", async () => {
     const testRun = repoTestRun({ resumeWrapup: true })
     await writeHandoff(testRun, "# Handover\n\nstill no status line\n")
-    const { own, fx, idle, blockedExtra } = setup({ test: testRun })
+    const { own, fx, idle, blockedExtra } = setup({ test: testRun, switches: LOOSE })
     await idle()
     await expect(idle({ transcript: transcript({ lastText: "the model's last words" }) })).resolves.toEqual({
       settle: {
@@ -316,7 +323,7 @@ describe("the test concern (idle: the asked verification)", () => {
 
   test("the backfill steer's failed dispatch settles blocked with the fixed question", async () => {
     const testRun = repoTestRun({ resumeWrapup: true })
-    const { fx, idle } = setup({ test: testRun, steerOk: false })
+    const { fx, idle } = setup({ test: testRun, steerOk: false, switches: LOOSE })
     await expect(idle()).resolves.toEqual({ settle: { kind: "blocked", question: `steer dispatch failed (asking to backfill ${testRun.handoffFile}); cannot continue the session, see the log.` } })
     expect(fx.calls).toEqual(["readText", "steer"])
   })

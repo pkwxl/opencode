@@ -1782,6 +1782,9 @@ const scenarios: TurnScenario[] = [
   // steer (the hard-requirement text naming the handoff path); the second
   // idle over the still invalid document blocks — the failed-twice
   // question carrying the handoff path and the last agent output.
+  // (Strict resume's default flipped to on 2026-10, ruling P-1 of
+  // plans/0070; this scenario keeps pinning the loose path, so the switch
+  // goes explicit-off.)
   repoScenario({
     id: "test-handover-backfill-twice-blocked",
     kinds: ["message", "part", "idle"],
@@ -1808,7 +1811,7 @@ const scenarios: TurnScenario[] = [
           undefined,
           testRun,
           undefined,
-          parseSwitches({}),
+          parseSwitches({ OPENCODE_AUTO_STRICT_RESUME: "off" }),
         )
         // The steer follows a real document read (Bun.file), so the
         // checkpoint yields to the macrotask queue (untilPublished).
@@ -1825,6 +1828,8 @@ const scenarios: TurnScenario[] = [
   // request is out (resumeWrapup), the document is missing, and the
   // backfill steer's dispatch fails — the ⚠ steer dispatch failed line
   // and the blocked exit with the fixed asking-to-backfill question.
+  // (Loose path pinned explicit-off: strict resume's default flipped to
+  // on 2026-10, ruling P-1 of plans/0070.)
   repoScenario({
     id: "test-handover-backfill-steer-failed",
     kinds: ["message", "part", "idle"],
@@ -1840,6 +1845,8 @@ const scenarios: TurnScenario[] = [
           h.opts,
           undefined,
           testRun,
+          undefined,
+          parseSwitches({ OPENCODE_AUTO_STRICT_RESUME: "off" }),
         )
       } finally {
         await rm(repo.dir, { recursive: true, force: true })

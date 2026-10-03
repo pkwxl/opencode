@@ -274,8 +274,12 @@ export type Switches = {
   // interrupted session is forked to continue. During the wait two consecutive Ctrl+C
   // force-quit (130) via the process-level SIGINT handler.
   recoveryWait: number
-  // Strict resume (plans/0022-session-recovery-fidelity-design.md, default off = the
-  // status quo): on adds the unit baseline and the effective model to the progress
+  // Strict resume (plans/0022-session-recovery-fidelity-design.md; default on since
+  // 2026-10 — promoted by ruling P-1 of plans/0070 after the gray rollout: 20-test
+  // coverage, 17+ days gray, no field incidents; the env override
+  // OPENCODE_AUTO_STRICT_RESUME=off stays as the emergency-off, retiring the knob
+  // entirely is a later, separately ruled unit): on adds the unit baseline and the
+  // effective model to the progress
   // record and verifies them at recovery (a foreign commit mixed in goes dirty; model
   // mismatch / dead session / --new-session rolls back to the unit baseline and reruns),
   // converges the reused session's recovery note to a single continue sentence, and
@@ -327,7 +331,7 @@ const SWITCH_DEFAULTS: Switches = {
   modelFailbackScope: "task",
   retryWaits: [0, 1, 2, 4, 8],
   recoveryWait: 30,
-  strictResume: false,
+  strictResume: true,
   hibernate: undefined,
   agent: undefined,
   laneIsolation: false,
