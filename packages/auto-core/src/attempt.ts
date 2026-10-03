@@ -35,6 +35,7 @@ import {
   toAgent,
   type ChainPrior,
 } from "./chain-transitions"
+import { formatClientError, formatTokens } from "./format"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
@@ -45,7 +46,7 @@ import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
 import { routingOf, selectContext } from "./routing"
 import { services } from "./services"
-import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
+import { clientOf, contextLimitsOf, missingAgentHint, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
 import type { Switches } from "./switches"

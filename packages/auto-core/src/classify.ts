@@ -36,6 +36,7 @@
 // loop, no session-driving, no agent start imports (import-direction rule).
 import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } from "./agent/types"
 import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
+import { formatClientError } from "./format"
 import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry } from "./models-schema"
@@ -43,7 +44,6 @@ import { renderClassifyError } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import type { ClassifierAnswer, ClassifyUsageSink, Router } from "./router"
 import type { RoutingFacts } from "./routing"
-import { formatClientError } from "./session-api"
 import type { Usage } from "./stats"
 
 // A run's call budget, the per-call timeout, the input size and the reset

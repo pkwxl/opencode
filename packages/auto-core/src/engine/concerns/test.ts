@@ -21,7 +21,7 @@ import { handoffComplete } from "../../handover"
 import { commitBlocked, strictResumeActive } from "../../unit-commit"
 import { renderTestResult, renderTestWrapup } from "../../prompt"
 import { promptFacts } from "../../prompt-facts"
-import { formatTokens } from "../../session-api"
+import { formatTokens } from "../../format"
 import { testHandoverDue } from "../../usage"
 import type { Advice, Concern, TurnContext, TurnFx, TurnState, TurnView } from "../contract"
 

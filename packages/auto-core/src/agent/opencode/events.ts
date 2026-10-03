@@ -133,7 +133,7 @@ function mapPart(part: Exclude<Part, { type: "retry" }>): AgentPart | undefined 
         cost: part.cost,
       }
     // Display-only kinds: the text matches today's verbose log line
-    // (session-api.ts describePart) without its two-space indent.
+    // (format.ts describePart) without its two-space indent.
     case "file":
       return { kind: "note", id: part.id, text: `file: ${part.filename ?? part.url}` }
     case "subtask":

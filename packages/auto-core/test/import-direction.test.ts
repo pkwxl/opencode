@@ -104,7 +104,8 @@ const CLASSIFIED: Record<string, Domain> = {
   protect: "document",
   // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
   // session-api.ts became a driver module (its SDK calls moved into the
-  // adapter; what remains seeds chains and formats output over AgentClient).
+  // adapter; what remains seeds chains and reads usage/liveness over
+  // AgentClient — the pure formatters moved on to the format leaf, 0069 D10).
   // driver (orchestration plane)
   "agent-choice": "driver",
   // The agent pool (plans/0055 §8.1, §12): one lazily started host per agent
@@ -213,8 +214,9 @@ const CLASSIFIED: Record<string, Domain> = {
     // kernel effects: the freeze pin, the pending-script resolution, the
     // run-and-feedback and the handover verification). Each owns one slice
     // of the turn state and reaches only the contract's types plus the
-    // unranked leaves below the session layer (session-api's describePart,
-    // isApproval and formatTokens, the stuck-hint and step-up template
+    // unranked leaves below the session layer (format's describePart,
+    // isApproval and formatTokens — the runtime leaf since 0069 D10 — the
+    // stuck-hint and step-up template
     // renders and the detector's constants, unit-commit's autoAnswer,
     // resolve's sameIssue/compactText, chain's statedInWording and
     // agentGaveUp, classify's ask and merge policies, the router's answer
@@ -236,6 +238,14 @@ const CLASSIFIED: Record<string, Domain> = {
   execute: "driver",
   exit: "driver",
   failback: "driver",
+  // The pure formatters over the agent plane's values (0069 §2.2 D10's
+  // split, T-125): describePart, formatTokens, formatClientError and
+  // isApproval, moved out of session-api.ts so the policies modules that
+  // need them (model-step, classify, the turn concerns) reach a runtime
+  // leaf instead of binding the engine's session-driving layer — the move
+  // that killed the permanent `policies → engine` edge (the SUBDOMAIN_EDGES
+  // entry removed with it).
+  format: "driver",
   gitignore: "driver",
   git: "driver",
   // The git service's home (the run services' commit-side seam): the moved
@@ -562,6 +572,13 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // is consumed by every sub-domain that renders (pipeline, engine, kernel,
   // policies alike), so no other placement fits its edge set.
   "prompt-facts": "runtime",
+  // The formatters leaf (0069 §2.2 D10, T-125): pure rendering over the
+  // agent plane's values, no I/O and no state, consumed by policies
+  // (model-step, classify, the turn concerns), engine (fx, session-api's
+  // own fork lines) and pipeline alike — a runtime leaf is the only
+  // placement every consumer's sub-domain reaches without a cross-domain
+  // exception (its landing shrank the allowlist: `policies → engine` died).
+  format: "runtime",
   "templates.d": "runtime",
   lock: "runtime",
   // AUTO-DECISION: run-status-schema (the run-status event table) sits in
@@ -583,6 +600,11 @@ const SUBDOMAIN: Record<string, Subdomain> = {
 // fails the suite, and a listed edge the graph no longer produces is stale
 // and must be removed. Two pairs are forbidden outright, in src/ and in this
 // table alike: `contract → any other sub-domain` and `engine → pipeline`.
+// Shrunk once already: `policies → engine` (0069 §2.2 D10, T-125) died when
+// session-api's pure formatters moved into the runtime leaf src/format.ts —
+// the seven edges the pair covered were all formatter imports, so the
+// removal itself proved the pair stale. A future `policies → engine` edge
+// must re-earn its place as a reviewed architecture event.
 const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
   ["engine", "contract"],
   ["engine", "kernel"],
@@ -596,7 +618,6 @@ const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
   ["pipeline", "policies"],
   ["pipeline", "runtime"],
   ["policies", "contract"],
-  ["policies", "engine"],
   ["policies", "kernel"],
   ["policies", "runtime"],
   ["runtime", "kernel"],
@@ -629,7 +650,7 @@ const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
     "engine/spine": 5,
     // The production TurnFx (plans/0061 §4.2/§4.3): beside the spine, under
     // watch — it reaches the contract's types, the journal and the unranked
-    // leaves below the session layer (log, session-api, testrun, git,
+    // leaves below the session layer (log, session-api, format, testrun, git,
     // handover, stats).
     "engine/fx": 6,
     // The turn's synthetic-input sources (plans/0061 §4.2/§4.4), taking the

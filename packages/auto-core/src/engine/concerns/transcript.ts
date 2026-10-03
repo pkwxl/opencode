@@ -10,7 +10,7 @@
 // The fresh flag names the part newly echoed this input — the stuck concern's
 // cell (the part row's next) reads it to feed only newly seen tool parts to
 // the detector.
-import { describePart } from "../../session-api"
+import { describePart } from "../../format"
 import type { Advice, Concern, TurnState } from "../contract"
 
 export const transcriptConcern: Concern<"transcript"> = {

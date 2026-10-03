@@ -9,6 +9,7 @@
 
 import type { SessionChain } from "./chain"
 import { bindAgent, resumeSession, setRoute } from "./chain-transitions"
+import { formatTokens } from "./format"
 import { baselineIntact, type UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { log } from "./log"
@@ -17,7 +18,7 @@ import type { Task } from "./tasks"
 import { recallProgress, saveProgress, type Phase, type StepKind } from "./resume"
 import { resumeNote } from "./resume-gate"
 import { routingOf, runSession } from "./session"
-import { clientOf, formatTokens, sessionAlive, sessionUsage } from "./session-api"
+import { clientOf, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
 import { commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 

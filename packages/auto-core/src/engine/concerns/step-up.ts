@@ -23,7 +23,7 @@
 import { enabledSteps, stepId, stepUpPoint } from "../../model-step"
 import { renderStepUp } from "../../prompt"
 import { promptFacts } from "../../prompt-facts"
-import { formatTokens } from "../../session-api"
+import { formatTokens } from "../../format"
 import { liveUsage } from "../../usage"
 import type { Advice, Concern, TurnContext, TurnFx, TurnState } from "../contract"
 

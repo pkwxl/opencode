@@ -1,20 +1,25 @@
-// Session helpers over the AgentClient (fork/usage/liveness/rename) + terminal
-// formatting + waiting for human answers. Since MA.3 (plans/0039) this file
+// Session helpers over the AgentClient (fork/usage/liveness/rename) + waiting
+// for human answers. Since MA.3 (plans/0039) this file
 // holds no SDK call: every agent request goes through the AgentClient, and
 // the SDK-facing half moved into src/agent/opencode/. It is a driver module
 // (it seeds chains, reads opts, logs). It contains no session-driving logic
 // (dispatch/retry/failover/subscription live in session.ts and watch.ts), so
 // it sits at the bottom of the graph: watch/session/runner may call it freely;
-// **it must not import the session-driving layer**.
+// **it must not import the session-driving layer**. The pure formatters it
+// once hosted (describePart, formatTokens, formatClientError, isApproval)
+// live in src/format.ts since 0069 §2.2 D10's split (T-125) — a runtime leaf
+// below every sub-domain, so the policies modules that need them no longer
+// bind this engine-side module.
 // Split from src/runner.ts (plans/0024-module-split-plan.md S5).
 
 import { createInterface } from "node:readline/promises"
 import { join } from "node:path"
-import type { AgentClient, AgentPart } from "./agent/types"
+import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { coldStart, nameSubject, seedFork } from "./chain-transitions"
 import type { ClientSource } from "./opts"
 import { commitTitle } from "./git"
+import { formatClientError, formatTokens } from "./format"
 import type { Interactive } from "./interactive"
 import { log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
@@ -305,47 +310,6 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
       ? `re-run ${program} to restore (the default contracts are rebuilt from templates at startup), then re-run`
       : `run ${bin} fix ${opts.dir} to restore, then re-run`
   return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
-}
-
-// Renders a non-text part into a readable output line (always via vlog,
-// leaving the keep/drop decision to the log layer: --verbose shows it on the
-// terminal and records it, the shell profile's auditLog writes it to the log
-// file); undefined means the part has no terminal-state content to output yet
-// (later update events will trigger again). Tool output and raw reasoning can
-// be long, truncated to the 2000-character cap. display-only pieces arrive as
-// notes already rendered by the adapter (0037 D6); the retry line is watch's
-// (retry signals are events, not parts).
-export function describePart(part: AgentPart): string | undefined {
-  if (part.kind === "reasoning") return part.final ? `  reasoning:\n${part.text.trim().slice(0, 2000)}` : undefined
-  if (part.kind === "tool") {
-    if (part.status === "completed") return `  tool ${part.tool}: ${part.title || "done"}`
-    if (part.status === "error") return `  tool ${part.tool} error: ${(part.error ?? "").slice(0, 2000)}`
-    return undefined
-  }
-  if (part.kind === "step-finish") return `  step finish (${part.reason}): input ${formatTokens(part.tokens.input)} / output ${formatTokens(part.tokens.output)} tokens`
-  if (part.kind === "step-start") return `  step start`
-  if (part.kind === "note") return `  ${part.text}`
-  return undefined
-}
-
-export function formatTokens(n: number): string {
-  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
-}
-
-// Makes client errors readable: a fetch exception (network down, request
-// aborted on timeout, etc.) is an Error instance, and JSON.stringify only
-// yields "{}"; taking its message is what lets wording like "request timed
-// out" into the blocked-problem text; everything else (the server's structured
-// error body) is serialized as before.
-export function formatClientError(error: unknown): string {
-  return error instanceof Error ? error.message : JSON.stringify(error)
-}
-
-// During a permission wait these answers (leading/trailing whitespace and case
-// ignored) count as approval.
-export function isApproval(answer: string): boolean {
-  return /^(allow|yes|y|ok|approve|always)$/i.test(answer.trim())
 }
 
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns

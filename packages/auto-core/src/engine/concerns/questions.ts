@@ -23,7 +23,7 @@
 // after the run's snapshot was taken.
 import { autoAnswer } from "../../unit-commit"
 import { compactText, sameIssue } from "../../resolve"
-import { isApproval } from "../../session-api"
+import { isApproval } from "../../format"
 import { emitStatus } from "../../run-status"
 import type { QuestionSettlement } from "../../run-status-schema"
 import type { Advice, Concern, TurnState } from "../contract"

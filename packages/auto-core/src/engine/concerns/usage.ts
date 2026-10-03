@@ -17,7 +17,7 @@
 // is the plan's ruled exception to the one-steer-per-quiet-point rule (F4)
 // — the audit's quiet point is idle-only. A failed steer dispatch settles
 // the turn blocked at either steer.
-import { formatTokens } from "../../session-api"
+import { formatTokens } from "../../format"
 import { fillUsageNote, steerWall, type Steer } from "../../testrun"
 import { steerDue } from "../../usage"
 import type { Advice, Concern, TurnState } from "../contract"

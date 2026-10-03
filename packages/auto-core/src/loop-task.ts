@@ -8,7 +8,10 @@
 // unit-scoped lane entry a spawned worker drives (runLaneUnit). Since S3 the
 // task loop's first branch is the readiness scheduler's concurrent lane loop
 // (runLaneLoop, D10's activation rule) — the loops above this module's
-// imports drive the lane choreography of src/lanes.ts.
+// imports drive the lane choreography of src/lanes.ts. Since 0069 §2.2 D5's
+// merge (T-125) the three shapes share their scaffolding through the helpers
+// below runTaskLoop: taskBracket (the unit-start bracket), taskBoundary (the
+// task-boundary hook set) and handleLaneExit (the shared lane-exit arms).
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
 import { relative } from "node:path"
@@ -153,6 +156,115 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   }
 }
 
+// —— The shared loop scaffolding (0069 §2.2 D5's merge) —— //
+
+// The task bracket (P2b, src/run-status.ts) every loop shape opens at its
+// unit's start, with the task-switch hook point (STATS_PLAN §3) beside it:
+// the banner, the shape's own dispatch line (the lead — "starting
+// execution", "dispatching an isolation lane", "dispatching a lane", the
+// lane worker's own), the task-start event, then the stats bucket switch —
+// reset the task bucket when the id changes and clear the per-session map;
+// the same id is idempotent, an interruption resuming the same task neither
+// resets nor double-counts.
+// AUTO-DECISION (the lane worker's site adopts the event-then-bucket order):
+// runLaneUnit historically switched the bucket before emitting task-start,
+// the only one of the four sites to do so; the two side effects share no
+// channel (the status event goes to the emitter's sinks, the bucket switch
+// to the stats store), so normalizing the order is what lets one bracket
+// serve all four sites with byte-identical observable behavior.
+async function taskBracket(directory: string, unit: string, title: string, lead: string, attempts: number): Promise<void> {
+  banner(`${unit} ${title}`)
+  log(`▶ ${unit} ${lead} (attempt ${attempts + 1})`)
+  emitStatus({ type: "task-start", task: unit, title })
+  await statsTask(directory, unit)
+}
+
+// The task-boundary hook set (§6.2: boundaries keep unit granularity) every
+// loop shape runs after a unit's close-out:
+//   - step pause (task boundary, OPENCODE_AUTO_STEP ≥ task): a hard pause
+//     after the terminal commit and before the next unit, Enter lets it
+//     proceed. dir is passed so the pause wait is deducted from the timing
+//     stats.
+//   - /exit checkpoint: the request flag lives in the run's control service
+//     on ctx, as the router state beside it does.
+//   - hibernate window (task boundary, OPENCODE_AUTO_HIBERNATE): after the
+//     final commit, a safe spot to check "are we inside the window now"; if
+//     so, sleep until window end + random delay before continuing
+//     (plans/0027-hibernate-design.md).
+//   - the /failback consumption point: the chain was destroyed with the
+//     unit's pipeline, no chain.model to clear; apply the model-order
+//     override (if any). Registry routing (plans/0055 §6.4): the chain's
+//     destruction is also where the task-scope down marks clear — the marks
+//     are run state, not chain state.
+// exitProbe: the scheduler's drain rule — under concurrency a /exit seen at
+// a landing stops dispatching and takes effect only after the last lane
+// lands (maybeExit would throw mid-drain and abandon in-flight work), so
+// the lane loop probes the request and records the label instead of
+// checkpointing here; the drain's end performs the deferred exit.
+async function taskBoundary(ctx: LoopCtx, label: string, exitProbe?: () => void): Promise<void> {
+  const { directory, repl } = ctx
+  await stepPause("task", label, { interactive: repl, dir: directory })
+  if (exitProbe === undefined) ctx.control.maybeExit("task", label)
+  else if (ctx.control.exitRequested()) exitProbe()
+  await hibernatePause(`${label} boundary`, { dir: directory })
+  ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
+  ctx.router.consumeFailback()
+}
+
+// What one lane exit means for the loop that held it (§6.2's failure matrix
+// in the parent's hands): land = the loop's own landing protocol proceeds
+// (the report rides along); orphan = D14's protocol decides — the isolation
+// loop keeps the scene for a re-run, the scheduler re-dispatches under the
+// cap; stop = the loop's exit code (2 = a blocked unit, 1 = a global
+// environment error).
+type LaneExitAction = { kind: "land"; report: LaneReport } | { kind: "orphan" } | { kind: "stop"; code: number }
+
+// The lane-exit handling both lane loops share (0069 D5's merge): the 0067
+// bus's lane identity (§6.7) first — the exit is a parent-level structured
+// event, the code beside whether a report was found (false is the orphan
+// signal) and its verdict — then the failure matrix's two shared arms:
+//   blocked     → failure keeps its commit: land the blocked lane's
+//                 committed work, mark the unit blocked, stop scheduling
+//                 and exit 2 naming the unit and its report;
+//   environment → global: stop scheduling, exit 1 with the relayed lines —
+//                 every line the worker printed was relayed as it arrived
+//                 (D13); the tail repeats the last of them at the failure
+//                 point.
+// The land and orphan arms are the loops' own: the landing protocol differs
+// (the isolation loop's zero-repair posture vs D21's level-derived repair)
+// and so does the orphan policy (keep the scene vs the capped re-dispatch).
+async function handleLaneExit(ctx: LoopCtx, phase: PhaseUnit, task: Pick<Task, "id" | "title">, exit: { code: number; output: string }, worktree: string): Promise<LaneExitAction> {
+  const { directory } = ctx
+  const report = await readLaneReport(worktree)
+  emitStatus({ type: "lane-exit", lane: task.id, code: exit.code, report: report !== undefined, ...(report?.result !== undefined ? { result: report.result } : {}) })
+  const outcome = laneOutcome(exit.code, report)
+  if (outcome.kind === "blocked") {
+    const landed = await landLane(ctx.git, directory, phase, task, outcome.report)
+    if (landed.type === "conflict") {
+      log(`⏸ ${task.id} blocked and its landing hit a conflict (the merge was aborted, the main tree is clean): ${landed.detail}. The lane scene is kept at ${lanePark(task.id)}`)
+    } else if (landed.type === "blocked") {
+      log(`⏸ ${task.id} blocked and its landing failed: ${landed.error}`)
+    } else {
+      log(`✓ ${task.id} blocked: its committed work landed (the reason is in the lane's report and log)`)
+    }
+    await block(directory, task.id)
+    const reason = outcome.report.blocked ?? `the task report concluded Result: ${outcome.report.result ?? "FAIL"}`
+    log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${reason}`)
+    for (const line of await taskResolveLines(directory, task.id)) log(line)
+    emitStatus({ type: "lane-block", lane: task.id, reason })
+    emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: reason })
+    return { kind: "stop", code: 2 }
+  }
+  if (outcome.kind === "environment") {
+    log(`⏸ ${task.id} lane worker failed with an environment error (exit ${exit.code}); scheduling stops:`)
+    for (const line of exit.output.trimEnd().split("\n").slice(-15).filter(Boolean)) log(`  ${line}`)
+    emitStatus({ type: "failure", message: `${task.id} lane worker environment error (exit ${exit.code})` })
+    emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `lane worker environment error (exit ${exit.code})` })
+    return { kind: "stop", code: 1 }
+  }
+  return outcome.kind === "land" ? { kind: "land", report: outcome.report } : { kind: "orphan" }
+}
+
 // One unit through today's serial path (the main-tree execution the task loop
 // has always run, and D4's serial degrade for a unit that cannot be isolated
 // — a lane-ineligible `Touches` declaration under the scheduler). Pure move
@@ -191,17 +303,10 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
       taskBaseline = gate.baseline
     }
   }
-  banner(`${task.id} ${task.title}`)
-  log(`▶ ${task.id} starting execution (attempt ${task.attempts + 1})`)
   // The task bracket (P2b, src/run-status.ts): the task unit's start — the
   // gates above passed, beginUnit recorded the baseline, and the unit
   // transition itself was booked by begin() inside runTask.
-  emitStatus({ type: "task-start", task: task.id, title: task.title })
-  // the task-switch hook point (STATS_PLAN §3): reset the task bucket (when
-  // the id changes) and clear the per-session map; the same id is
-  // idempotent — an interruption resuming the same task neither resets nor
-  // double-counts.
-  await statsTask(directory, task.id)
+  await taskBracket(directory, task.id, task.title, "starting execution", task.attempts)
   const start = Date.now()
   const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }))
   if (outcome.type === "dirty") {
@@ -306,26 +411,10 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
       return 2
     }
   }
-  // step pause (task boundary, OPENCODE_AUTO_STEP ≥ task): a hard pause
-  // after the task's terminal commit and before the next task, Enter lets
-  // it proceed. dir is passed so the pause wait is deducted from the timing
-  // stats.
-  await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
-  // /exit checkpoint (task boundary): the request flag lives in the run's
-  // control service on ctx, as the router state beside it does.
-  ctx.control.maybeExit("task", `task ${task.id} ${task.title}`)
-  // Hibernate window (task boundary, OPENCODE_AUTO_HIBERNATE): after the
-  // final commit, a safe spot to check "are we inside the window now"; if
-  // so, sleep until window end + random delay before continuing
-  // (plans/0027-hibernate-design.md).
-  await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
-  // the /failback consumption point (task boundary): the chain was
-  // destroyed with runTask, no chain.model to clear; apply the model-order
-  // override (if any). Registry routing (plans/0055 §6.4): the chain's
-  // destruction is also where the task-scope down marks clear — the marks
-  // are run state, not chain state.
-  ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
-  ctx.router.consumeFailback()
+  // the task-boundary hook set (step pause, /exit checkpoint, hibernate
+  // window, /failback consumption — taskBoundary's own comment carries the
+  // plans).
+  await taskBoundary(ctx, `task ${task.id} ${task.title}`)
   return 0
 }
 
@@ -349,6 +438,18 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
 //                 the automatic re-dispatch are S3's).
 // A landing conflict blocks immediately (the D21 `low` posture — zero session
 // repairs); the level-derived repair budget is S3's wiring.
+// AUTO-DECISION (0069 D5's "isolation loop = lane loop with slots=1"
+// suggestion, ruled off): the further collapse is rejected — the two loops
+// differ in five behavior deltas a slots=1 parameterization would have to
+// thread: the conflict posture (zero repairs here vs D21's level-derived
+// repair in the scheduler), the orphan policy (keep the scene for a re-run
+// here vs D14's capped in-place re-dispatch there), the wait-between
+// placement (before dispatch here vs after each landing there), the
+// blocked-resume line (only this loop logs it), and the done-log wording
+// (the attempt duration here vs the completed/unit-done split there);
+// holding the byte-identical floor through a five-way parameterized merge is
+// not trivial, so the D5 merge stops at the shared brackets, boundary hooks
+// and lane-exit handling (taskBracket/taskBoundary/handleLaneExit above).
 async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, repl } = ctx
   for (;;) {
@@ -364,13 +465,10 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     if (task.status === "blocked") {
       log(`↻ ${task.id} was blocked previously, resuming directly (block reason in the previous run's log)`)
     }
-    banner(`${task.id} ${task.title}`)
-    log(`▶ ${task.id} dispatching an isolation lane (attempt ${task.attempts + 1})`)
     // The task bracket (P2b): the unit's start — dispatch's begin() booked
     // the transition inside the spawned lane; the bucket switch is the
     // parent's, so the landed report books into the right task.
-    emitStatus({ type: "task-start", task: task.id, title: task.title })
-    await statsTask(directory, task.id)
+    await taskBracket(directory, task.id, task.title, "dispatching an isolation lane", task.attempts)
     const start = Date.now()
     const dispatched = await dispatchLane(ctx.git, directory, task)
     if (dispatched.type === "failed") {
@@ -379,14 +477,9 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       return 2
     }
     const exit = await laneExit(dispatched.worker, dispatched.output)
-    const report = await readLaneReport(dispatched.worktree)
-    // The 0067 bus's lane identity (§6.7): the exit is a parent-level
-    // structured event — the code beside whether a report was found (false
-    // is the orphan signal) and its verdict.
-    emitStatus({ type: "lane-exit", lane: task.id, code: exit.code, report: report !== undefined, ...(report?.result !== undefined ? { result: report.result } : {}) })
-    const outcome = laneOutcome(exit.code, report)
-    if (outcome.kind === "land") {
-      const landed = await landLane(ctx.git, directory, phase, task, outcome.report)
+    const action = await handleLaneExit(ctx, phase, task, exit, dispatched.worktree)
+    if (action.kind === "land") {
+      const landed = await landLane(ctx.git, directory, phase, task, action.report)
       if (landed.type === "conflict") {
         log(`⏸ ${task.id} landing conflict (the merge was aborted, the main tree is clean): ${landed.detail}. The lane scene is kept at ${lanePark(task.id)}; resolve the conflict manually or re-run to retry the lane in place`)
         emitStatus({ type: "lane-block", lane: task.id, reason: `landing conflict: ${landed.detail}` })
@@ -402,47 +495,14 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       if (!landed.teardown) log(`⚠ ${task.id} landed, but the lane's park cleanup left something behind (see the warnings above); the lane record is cleared`)
       ctx.ran++
       for (const line of await taskResolveLines(directory, task.id)) log(line)
-      log(`✓ ${task.id} done (lane landed: ${outcome.report.sessions} session(s), took ${formatDuration(Date.now() - start)})`)
+      log(`✓ ${task.id} done (lane landed: ${action.report.sessions} session(s), took ${formatDuration(Date.now() - start)})`)
       emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
       // The task boundary hooks (§6.2: boundaries keep unit granularity — a
       // step pause or /exit stops scheduling and proceeds after the landing).
-      await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
-      ctx.control.maybeExit("task", `task ${task.id} ${task.title}`)
-      await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
-      ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
-      ctx.router.consumeFailback()
+      await taskBoundary(ctx, `task ${task.id} ${task.title}`)
       continue
     }
-    if (outcome.kind === "blocked") {
-      // Failure keeps its commit: land the blocked lane's committed work,
-      // then stop scheduling and exit 2 naming the unit and its report.
-      const landed = await landLane(ctx.git, directory, phase, task, outcome.report)
-      if (landed.type === "conflict") {
-        log(`⏸ ${task.id} blocked and its landing hit a conflict (the merge was aborted, the main tree is clean): ${landed.detail}. The lane scene is kept at ${lanePark(task.id)}`)
-      } else if (landed.type === "blocked") {
-        log(`⏸ ${task.id} blocked and its landing failed: ${landed.error}`)
-      } else {
-        log(`✓ ${task.id} blocked: its committed work landed (the reason is in the lane's report and log)`)
-      }
-      await block(directory, task.id)
-      const reason = outcome.report.blocked ?? `the task report concluded Result: ${outcome.report.result ?? "FAIL"}`
-      log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${reason}`)
-      for (const line of await taskResolveLines(directory, task.id)) log(line)
-      emitStatus({ type: "lane-block", lane: task.id, reason })
-      emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: reason })
-      return 2
-    }
-    if (outcome.kind === "environment") {
-      // Environment errors are global: stop scheduling, exit 1 with the
-      // relayed lines — every line the worker printed was relayed as it
-      // arrived (D13); the tail repeats the last of them at the failure
-      // point.
-      log(`⏸ ${task.id} lane worker failed with an environment error (exit ${exit.code}); scheduling stops:`)
-      for (const line of exit.output.trimEnd().split("\n").slice(-15).filter(Boolean)) log(`  ${line}`)
-      emitStatus({ type: "failure", message: `${task.id} lane worker environment error (exit ${exit.code})` })
-      emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `lane worker environment error (exit ${exit.code})` })
-      return 1
-    }
+    if (action.kind === "stop") return action.code
     // orphan: no report — the worker did not control its exit.
     log(`⏸ ${task.id} lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(task.id)}. Re-run to re-dispatch the lane in the same worktree — it resumes from its own progress record`)
     emitStatus({ type: "lane-block", lane: task.id, reason: `lane worker exited without a report (exit ${exit.code}); the scene is kept at ${lanePark(task.id)}` })
@@ -554,10 +614,7 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // scheduling and exits 2 naming the error). A stream unit's dispatch seeds
   // its fresh worktree with the owning task's split record (S5).
   const dispatch = async (task: Task): Promise<boolean> => {
-    banner(`${task.id} ${task.title}`)
-    log(`▶ ${task.id} dispatching a lane (attempt ${task.attempts + 1})`)
-    emitStatus({ type: "task-start", task: task.id, title: task.title })
-    await statsTask(directory, task.id)
+    await taskBracket(directory, task.id, task.title, "dispatching a lane", task.attempts)
     const dispatched = await dispatchLane(ctx.git, directory, task, undefined, seeds.get(task.id))
     if (dispatched.type === "failed") {
       log(`⏸ ${dispatched.error}`)
@@ -630,15 +687,13 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       emitStatus({ type: "task-end", task: task.id, outcome: "unit-done" })
     }
     // The boundary hooks at each landing (§6.2: unit granularity — a step
-    // pause or /exit stops scheduling and drains, then proceeds).
-    await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
-    if (ctx.control.exitRequested()) {
+    // pause or /exit stops scheduling and drains, then proceeds): the probe
+    // form of the /exit checkpoint — the request seen here stops dispatching
+    // and takes effect after the last lane lands (taskBoundary's comment).
+    await taskBoundary(ctx, `task ${task.id} ${task.title}`, () => {
       scheduling = false
       exitLabel = `task ${task.id} ${task.title}`
-    }
-    await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
-    ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
-    ctx.router.consumeFailback()
+    })
     // --wait-between pauses between landings (D11's parent-side surfaces:
     // the lane boundary is the landing) — never before the first, mirroring
     // the isolation loop's between-lanes pause.
@@ -708,51 +763,17 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     const first = await Promise.race([...inFlight.values()].map((lane) => lane.worker.exited.then((code) => ({ lane, code }))))
     inFlight.delete(first.lane.task.id)
     const exit = { code: typeof first.code === "number" ? first.code : 137, output: await first.lane.output }
-    const report = await readLaneReport(first.lane.worktree)
-    // The 0067 bus's lane identity (§6.7): the exit is a parent-level
-    // structured event — the code beside whether a report was found (false
-    // is the orphan signal) and its verdict.
-    emitStatus({ type: "lane-exit", lane: first.lane.task.id, code: exit.code, report: report !== undefined, ...(report?.result !== undefined ? { result: report.result } : {}) })
-    const outcome = laneOutcome(exit.code, report)
-    if (outcome.kind === "land") {
-      if (!(await land(first.lane, outcome.report))) {
+    const action = await handleLaneExit(ctx, phase, first.lane.task, exit, first.lane.worktree)
+    if (action.kind === "land") {
+      if (!(await land(first.lane, action.report))) {
         scheduling = false
         if (stop === undefined) stop = 2
       }
       continue
     }
-    if (outcome.kind === "blocked") {
-      // Failure keeps its commit: land the blocked lane's committed work,
-      // then stop scheduling and exit 2 naming the unit and its report.
-      const landed = await landLane(ctx.git, directory, phase, first.lane.task, outcome.report)
-      if (landed.type === "conflict") {
-        log(`⏸ ${first.lane.task.id} blocked and its landing hit a conflict (the merge was aborted, the main tree is clean): ${landed.detail}. The lane scene is kept at ${lanePark(first.lane.task.id)}`)
-      } else if (landed.type === "blocked") {
-        log(`⏸ ${first.lane.task.id} blocked and its landing failed: ${landed.error}`)
-      } else {
-        log(`✓ ${first.lane.task.id} blocked: its committed work landed (the reason is in the lane's report and log)`)
-      }
-      await block(directory, first.lane.task.id)
-      const reason = outcome.report.blocked ?? `the task report concluded Result: ${outcome.report.result ?? "FAIL"}`
-      log(`⏸ ${first.lane.task.id} is blocked (the reason is recorded only in this log):\n${reason}`)
-      for (const line of await taskResolveLines(directory, first.lane.task.id)) log(line)
-      emitStatus({ type: "lane-block", lane: first.lane.task.id, reason })
-      emitStatus({ type: "task-end", task: first.lane.task.id, outcome: "blocked", detail: reason })
+    if (action.kind === "stop") {
       scheduling = false
-      if (stop === undefined) stop = 2
-      continue
-    }
-    if (outcome.kind === "environment") {
-      // Environment errors are global: stop scheduling, exit 1 with the
-      // relayed lines — every line the worker printed was relayed as it
-      // arrived (D13); the tail repeats the last of them at the failure
-      // point.
-      log(`⏸ ${first.lane.task.id} lane worker failed with an environment error (exit ${exit.code}); scheduling stops:`)
-      for (const line of exit.output.trimEnd().split("\n").slice(-15).filter(Boolean)) log(`  ${line}`)
-      emitStatus({ type: "failure", message: `${first.lane.task.id} lane worker environment error (exit ${exit.code})` })
-      emitStatus({ type: "task-end", task: first.lane.task.id, outcome: "blocked", detail: `lane worker environment error (exit ${exit.code})` })
-      scheduling = false
-      if (stop === undefined) stop = 1
+      if (stop === undefined) stop = action.code
       continue
     }
     // orphan: the worker exited without a report (crash, kill). The pid is
@@ -864,10 +885,9 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     log(`⏸ lane worker: ${plan.index} does not list ${stream?.task ?? unit}; re-dispatch it from the parent`)
     return 1
   }
-  banner(`${unit} ${task.title}`)
-  log(`▶ ${unit} lane worker: running the ${stream !== undefined ? "stream" : "unit"} (attempt ${task.attempts + 1})`)
-  await statsTask(directory, unit)
-  emitStatus({ type: "task-start", task: unit, title: task.title })
+  // The task bracket (P2b): the lane worker's own unit start (the
+  // event-then-bucket order, taskBracket's AUTO-DECISION above).
+  await taskBracket(directory, unit, task.title, `lane worker: running the ${stream !== undefined ? "stream" : "unit"}`, task.attempts)
   const taskBaseline = await ctx.git.unitBaseline(directory)
   const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(route.phase), ...(stream !== undefined ? { stream: stream.index } : {}) }))
   if (outcome.type === "dirty") {
