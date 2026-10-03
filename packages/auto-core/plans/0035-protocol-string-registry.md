@@ -1,5 +1,10 @@
 # 0035 Driver protocol string registry (M1.5): subtask-loop translation + lockstep registration
 
+> **Retired as history (ruled P-5, 2026-10-03):** the flip program closed 2026-09-28 and every driver
+> protocol string has been English since — the retirement condition this header names is met (confirmed
+> at M4 close-out, field canary at M6.3). Future protocol strings follow template conventions, not this
+> registry; the body below is history.
+
 > Milestone M1.5 of `plans/AUTO_NEXT_REFACTOR_PLAN.md` (root). Stage-assisting
 > document per D6: this is the registry that open question 11 asked M1.5 to
 > produce. It is consumed by the two protocol lockstep steps — **M2.4** (task

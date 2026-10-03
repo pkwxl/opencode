@@ -4,6 +4,9 @@
 > For current tasks and plans in progress see [PLAN.md](../PLAN.md); the authoritative documents for behavior conventions are the in-package AGENTS.md and README.md.
 > Design baselines by phase: Phases 3/4 see [plans/0009-verify-review-design.md](./0009-verify-review-design.md);
 > Phase 5 (--mode and --final-review) see [plans/0005-mode-final-review-design.md](./0005-mode-final-review-design.md).
+> Root plans (ruled P-6, 2026-10-03): "root plans/" citations refer to the person's target-root corpus
+> `plans/0001-0013` at the aseo target root — a numbering separate from this repository's `plans/NNNN`,
+> never committed to the opencode repository.
 
 ---
 
@@ -341,3 +344,5 @@ Section F of plans/0009-verify-review-design.md is revised as well if the implem
 - e2e needs working provider credentials; in CI without credentials, T-009 permits a mock provider or the
   same test infrastructure as `opencode run` (refer to the existing packages/opencode tests).
 - Once all tasks are complete, this file becomes the system's dogfood sample: opencode-auto executing its own plan.
+
+<!-- auto: eof -->
