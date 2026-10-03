@@ -32,7 +32,7 @@ import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { resetQuotaWindows } from "../src/quota-windows"
 import { recallProgress, saveProgress } from "../src/resume"
 import { runTask } from "../src/runner"
-import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
+import { WORKTREE_CHECK, forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
 import { createServices, installServices, services, uninstallServices, type Clock } from "../src/services"
@@ -363,6 +363,21 @@ describe("error signals", () => {
     expect(result.type).toBe("idle")
     expect(agent.argsOf("fork")).toEqual([])
     expect(agent.argsOf("create")).toHaveLength(2)
+  })
+
+  // The seeding walk's failed-fork arm (seedFromSources over the chain's
+  // fork sources): the fork request itself errs, so the dead source is
+  // dropped and the ladder retry falls back to a blank new session whose
+  // re-send carries the worktree-check note (the blank session inherited
+  // nothing of this attempt's output).
+  test("retryable error, fork request failing: the walk drops the dead source and the blank fallback's re-send carries the worktree-check note", async () => {
+    const agent = make({ turn: failing, fail: { fork: new Error("storage wiped") } })
+    const result = await runSession(agent.client, task, "p", opts, fresh(), undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+    expect(agent.argsOf("create")).toHaveLength(2)
+    expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2"])
+    expect(agent.prompts[1]!.text).toContain(WORKTREE_CHECK.trim())
   })
 })
 

@@ -8,7 +8,11 @@
 // mutations have all moved here).
 //
 // This file starts with the pure computation that was copied four times
-// (plans/0061 §1 F5): the fork-source list. (The no-registry model priority
+// (plans/0061 §1 F5): the fork-source list — and, beside it since the
+// 0069 §2.2 D1 extraction, the one fork-seeding walk (seedFromSources)
+// that the four seeding sites of the session loop share; its I/O is
+// injected as call parameters, so it adds no import and stays a walk over
+// the transitions below, not a new write site. (The no-registry model priority
 // chain that once lived here — modelOfChain over the env-switch policy — was
 // the env-policy path of the dispatch resolvers and left with it: every run
 // dispatches through selection now, the implicit registry included.) The
@@ -50,6 +54,69 @@ export function forkSources(chain: SessionChain): ForkSource[] {
   if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
   if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
   return sources.sort((a, b) => b.used - a.used)
+}
+
+// The one fork-seeding walk every retry-shaped path of the session loop
+// shares (the model failover, the provider-key rotation, the recovery
+// re-dispatch and the ladder retry — the four callers of forkSources above;
+// extracted as one helper in plans/0069 §2.2 D1): walk the chain's fork
+// sources most-valuable-first, fork a copy of the first source that yields
+// one, and seed the copy onto the chain through the named transitions
+// below. Every observable byte — the fork call's client and title, the
+// per-source log line, the two note forms — is the caller's, passed in as
+// parameters: session-api (forkSession, the note tail) imports this module,
+// so the walk cannot reach the session layer itself without a cycle, and
+// with all I/O injected it needs no import at all.
+// `sources` is the list forkSources answered for the chain — compute it
+// immediately before the call and reuse the same value for the fallback
+// logging after: the walk may drop stale records from the chain
+// (dropStaleFailed), so a list recomputed afterwards would disagree with
+// what was walked.
+// "The session this prompt was dispatched to" — recorded in chain.failed
+// for the retryable classes, already promoted to chain.id by attempt for
+// the non-retryable ones — decides the note (the caller passes both
+// forms): a source naming it means the copy holds the attempt's complete
+// context, so the re-send needs only the continuation note; any other
+// source (the chain's original session) means this attempt's partial
+// output is not in the copy, so the worktree-check form is required (see
+// session-api's worktreeNote).
+// `keepOriginal` selects the seeding transition: the ladder retry keeps
+// the chain's original session in `id` as the untouched recovery point the
+// next retry forks from again (retryOnFork); the three moves cannot keep
+// the slot — the forked copy takes over (moveOnFork).
+// Returns true when a copy was seeded; false when every source's fork
+// failed (or the list was empty) — the callers' blank-session fallbacks
+// differ in shape and log text, so they stay with the callers.
+// chain.failed is deliberately kept after the fork seeding (not cleared):
+// if the copy dies at 0 tokens (a run of consecutive quota failures,
+// 2026-09-17 virtio T-005), attempt's guard will not replace it with the
+// error stub, and the next round can still fork again from this most
+// valuable session; once the copy succeeds, attempt's close-out clears it.
+// Dead records whose fork has gone stale are cleaned up here in passing,
+// so later rounds do not keep forking a dead session.
+export async function seedFromSources(args: {
+  chain: SessionChain
+  sources: readonly ForkSource[]
+  fork: (source: ForkSource) => Promise<string | undefined>
+  onSource?: (source: ForkSource) => void
+  noteFull: string
+  notePartial: string
+  keepOriginal: boolean
+}): Promise<boolean> {
+  const failedID = args.chain.failed?.id ?? args.chain.id
+  for (const source of args.sources) {
+    const forked = await args.fork(source)
+    if (forked === undefined) {
+      dropStaleFailed(args.chain, source.id)
+      continue
+    }
+    args.onSource?.(source)
+    const note = source.id === failedID ? args.noteFull : args.notePartial
+    if (args.keepOriginal) retryOnFork(args.chain, forked, source, note)
+    else moveOnFork(args.chain, forked, source, note)
+    return true
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------
