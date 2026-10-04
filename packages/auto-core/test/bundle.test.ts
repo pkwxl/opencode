@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
+import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
 import { loadIntents, packSubsection } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
@@ -173,6 +173,33 @@ describe("bundle sources", () => {
       expect(parseIntentBundle(fromDir!).phases).toBe("spec-read,design,implement,test,audit")
       // A value that is neither: undefined (the plain pack-name path).
       expect(await resolveIntentBundle(join(dir, "nope"))).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the built-in cleanroom bundle ships: it lists, resolves, parses, and materializes into a working project", async () => {
+    expect(registeredIntentBundles()).toContain("cleanroom")
+    const files = await resolveIntentBundle("cleanroom")
+    expect(files).toBeDefined()
+    const bundle = parseIntentBundle(files!)
+    expect(bundle).toMatchObject({ name: "cleanroom", phases: "spec-read,design,implement,test,audit", mode: "cleanroom", stamps: { subtask: "ondemand" } })
+    // The load-bearing pack subsections survive wholesale pack replacement:
+    // the result line (the verdict the driver parses), the process-reference
+    // rule (the P1 scan's explanation), and the repair duties the bounded
+    // repair loop consumes as content.
+    const dir = tempDir()
+    try {
+      await materializeIntentBundle(dir, bundle)
+      const packs = loadIntents(dir)
+      const pack = packs.cleanroom!
+      expect(packSubsection(pack, "acceptance", "result-line")).toContain("Result: PASS")
+      expect(packSubsection(pack, "governance", "process-references")).toContain("DRIVER")
+      expect(packSubsection(pack, "governance", "repair")).toContain("regression check")
+      expect(packSubsection(pack, "phaseDuties", "spec-read")).toBeDefined()
+      expect(packSubsection(pack, "phaseDuties", "audit")).toBeDefined()
+      expect(loadModes(dir).cleanroom?.exec).toContain("never access")
+      expect(loadPhaseTypes(dir).find((entry) => entry.type === "audit")).toMatchObject({ gates: ["verdict"] })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

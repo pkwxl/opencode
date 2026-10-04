@@ -1,0 +1,5 @@
+{
+  "name": "cleanroom",
+  "phases": "spec-read,design,implement,test,audit",
+  "subtask": "ondemand"
+}

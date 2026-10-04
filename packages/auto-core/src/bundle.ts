@@ -16,6 +16,7 @@
 // parseModeFile) and resolves the manifest's phase sequence against the
 // builtins plus the bundle's own types, so a refused parse writes nothing;
 // materialization then writes the original file texts verbatim.
+import { readFileSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { parseIntentFile } from "./intent/load"
@@ -24,6 +25,11 @@ import { parseModeFile } from "./mode"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { parsePhaseTypeFile } from "./phases/custom"
 import { BUILTIN_PHASE_TYPES, PRESET_FORM, phasesProblem, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
+import cleanroomManifest from "../templates/bundles/cleanroom/bundle.json" with { type: "file" }
+import cleanroomSpecRead from "../templates/bundles/cleanroom/phases/spec-read.md" with { type: "file" }
+import cleanroomAudit from "../templates/bundles/cleanroom/phases/audit.md" with { type: "file" }
+import cleanroomPack from "../templates/bundles/cleanroom/intents/cleanroom.md" with { type: "file" }
+import cleanroomMode from "../templates/bundles/cleanroom/modes/cleanroom.md" with { type: "file" }
 
 export const BUNDLE_MANIFEST = "bundle.json"
 
@@ -191,8 +197,34 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
   return written
 }
 
+// The built-in bundles (the load.ts pattern: a shipped bundle = one directory
+// under templates/bundles/ + one table entry; the files embed at compile time
+// via `with { type: "file" }` — the only way the compiled binary sees them —
+// and read lazily on first resolve). The shipped cleanroom bundle (0079 §1.1's
+// validating instance) is the Clean-Room Redesign protocol: spec-read and
+// audit custom types around the builtin design/implement/test flow, the
+// cleanroom pack (the repair duties the bounded repair loop consumes as
+// content), and the cleanroom mode carrying the clean-room boundary.
+let builtinTable: Record<string, IntentBundleFiles> | undefined
+function builtinBundles(): Record<string, IntentBundleFiles> {
+  if (!builtinTable) {
+    builtinTable = {
+      cleanroom: {
+        "bundle.json": readFileSync(cleanroomManifest, "utf8"),
+        "phases/spec-read.md": readFileSync(cleanroomSpecRead, "utf8"),
+        "phases/audit.md": readFileSync(cleanroomAudit, "utf8"),
+        "intents/cleanroom.md": readFileSync(cleanroomPack, "utf8"),
+        "modes/cleanroom.md": readFileSync(cleanroomMode, "utf8"),
+      },
+    }
+  }
+  return builtinTable
+}
+
 // The shell registrations (the registerTemplate pattern): a shell ships
-// bundles in-process; registering a name again replaces it.
+// bundles in-process; registering a name again replaces it, and a
+// registration shadows the same-named built-in (registered > built-in, the
+// template library's precedence).
 const registered = new Map<string, IntentBundleFiles>()
 
 export function registerIntentBundle(name: string, files: IntentBundleFiles): void {
@@ -201,15 +233,18 @@ export function registerIntentBundle(name: string, files: IntentBundleFiles): vo
 }
 
 export function registeredIntentBundles(): string[] {
-  return [...registered.keys()].sort()
+  return [...new Set([...Object.keys(builtinBundles()), ...registered.keys()])].sort()
 }
 
-// Resolve a bundle source: a registered name, or a directory holding
-// bundle.json (its phases/ intents/ modes/ subtrees read in). undefined =
-// the source names no bundle (the value is a plain pack name instead).
+// Resolve a bundle source: a registered name (shell-shipped, or shadowing a
+// built-in), a built-in bundle name, or a directory holding bundle.json (its
+// phases/ intents/ modes/ subtrees read in). undefined = the source names no
+// bundle (the value is a plain pack name instead).
 export async function resolveIntentBundle(source: string): Promise<IntentBundleFiles | undefined> {
   const reg = registered.get(source)
   if (reg !== undefined) return { ...reg }
+  const builtin = builtinBundles()[source]
+  if (builtin !== undefined) return { ...builtin }
   return readBundleDirectory(source)
 }
 
