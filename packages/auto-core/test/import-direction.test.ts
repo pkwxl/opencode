@@ -258,6 +258,11 @@ const CLASSIFIED: Record<string, Domain> = {
   "git-ops": "driver",
   handover: "driver",
   hibernate: "driver",
+  // Branch-isolation landing (plans/0074 §2.3, U-L2): landUnit — the `land`
+  // command's orchestration half over git's landing primitives — plus the
+  // preflight leftover report; pipeline beside close, the person-invoked
+  // command core it mirrors.
+  land: "driver",
   interactive: "driver",
   // Key rings of the model registry (plans/0055 §4.3): per-provider rings,
   // the ring position and the spawn config content, in memory only; sits
@@ -539,6 +544,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "loop-preflight": "pipeline",
   "loop-progress": "pipeline",
   "loop-task": "pipeline",
+  // The branch-isolation landing command (plans/0074 U-L2): pipeline beside
+  // close — the person-invoked return path of a round's isolation, reaching
+  // git's kernel primitives and the runtime config/shell only.
+  land: "pipeline",
   plan: "pipeline",
   "plan-input": "pipeline",
   "prompt-plan": "pipeline",

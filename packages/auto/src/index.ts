@@ -22,6 +22,7 @@ import {
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
+import { landUnit } from "@opencode-ai/auto-core/land"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -68,9 +69,10 @@ const positional: string[] = []
 // never mistaken for the directory, auto-core plans/0053 D13; init's retired
 // -p/--prompt keeps swallowing one for the same reason, plans/0053 D31);
 // --verbose/--interactive/--dryrun/--test-by-driver/
-// --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
-// plus --cascade/--commit-changes/--stash-changes (shared by close and plan
-// --force-close) and --append (plan's alone) are boolean flags: presence means
+// --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/
+// --no-wrapup plus --cascade/--commit-changes/--stash-changes (shared by close and plan
+// --force-close), --append (plan's alone) and --keep/--abandon (land's alone,
+// plans/0074 U-L2) are boolean flags: presence means
 // true, and only a literally following true/false is swallowed. Every flag
 // accepts --flag=value; --prompt also has the short form -p, --interactive the
 // short form -i (boolean, swallows nothing), --mode the short form -m
@@ -126,7 +128,7 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -261,6 +263,17 @@ if (command !== "plan" && flags.has("new-task")) {
   console.error(`--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`)
   process.exit(1)
 }
+// --keep/--abandon are land's alone (plans/0074 §2.3, U-L2): the mid-round
+// retain and the undo path of the branch-isolation landing; every other
+// command refuses them with a pointer to land, the same pattern as --append
+// above, before any whitelist or command block runs.
+if (command !== "land" && (flags.has("keep") || flags.has("abandon"))) {
+  console.error(
+    `--keep and --abandon are land options: ${command ?? "this command"} takes neither. ` +
+      `Land a round's isolation branches with opencode-auto land <dir> [--keep | --abandon]`,
+  )
+  process.exit(1)
+}
 // Retired flags are usage errors with their own notice (the --commit false
 // retirement set the pattern; the whole flag joined the table when its config
 // key went), let through the whitelist so the notice replaces "unknown
@@ -320,6 +333,13 @@ const RESET_FLAGS = new Set(["force"])
 // config flags with the frozen-by-init notice, -p/--file with plan's input
 // notice — mirroring RESET_FLAGS for reset/fix.
 const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-changes"])
+// land (plans/0074 §2.3, U-L2) takes only its three: the booleans --keep
+// (retain the round branch: a mid-round landing), --abandon (discard it: the
+// undo path) and --merge (the explicit merge-commit landing mode; a boolean
+// here — _lane's --merge <branch> value flag of the same name is the hidden
+// machine surface, checked below for the swallowed-value trap). Everything
+// else is refused with a land-appropriate message, mirroring CLOSE_FLAGS.
+const LAND_FLAGS = new Set(["keep", "abandon", "merge"])
 for (const key of flags.keys()) {
   if (command === "reset" || command === "fix") {
     // fix accepts --dryrun beside -f/--force (reset does not)
@@ -354,6 +374,24 @@ for (const key of flags.keys()) {
     }
     const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
     console.error(`--${key} is not a close option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)`)
+    process.exit(1)
+  }
+  if (command === "land") {
+    if (LAND_FLAGS.has(key)) continue
+    // Globally retired flags keep their own notices below (they exit there);
+    // a scoped entry (init's -p) does not fire for land, so it must not be
+    // waved through here either — land's own refusals take it.
+    if (typeof RETIRED_FLAGS[key] === "string") continue
+    if (CONFIG_FLAGS.includes(key)) {
+      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; land takes no config options`)
+      process.exit(1)
+    }
+    if (key === "prompt" || key === "file") {
+      console.error(`${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); land takes no planning input`)
+      process.exit(1)
+    }
+    const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
+    console.error(`--${key} is not a land option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: land takes only --keep, --abandon and --merge (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge])`)
     process.exit(1)
   }
   if (command === "models") {
@@ -414,6 +452,22 @@ if (command === "close") {
     process.exit(1)
   }
 }
+// land's --merge is the landing-mode boolean, but --merge is also _lane's
+// value flag (the parent branch a conflict repair merges; VALUE_FLAGS holds
+// it for that), so a directory following land's --merge would be swallowed
+// as its value and the command would run on the wrong directory. Intercept
+// here, before the directory resolves: land's --merge accepts only the
+// boolean forms (bare / =true / =false).
+if (command === "land" && flags.has("merge")) {
+  const value = flags.get("merge")
+  if (value !== "" && value !== "true" && value !== "false") {
+    console.error(
+      `--merge here is land's landing-mode flag and takes no value (unlike _lane's --merge <branch>); ` +
+        `"${value}" was swallowed as its value. Pass it bare after the directory: opencode-auto land <dir> --merge`,
+    )
+    process.exit(1)
+  }
+}
 const directory = resolve(command === "close" ? positional[1] ?? "." : positional[0] ?? ".")
 
 // fix --dryrun: list the configuration findings read-only (the replacement
@@ -433,7 +487,7 @@ const fixDryrun = command === "fix" && flags.has("dryrun") && flags.get("dryrun"
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "fix" || command === "status" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "land" || command === "fix" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -743,6 +797,67 @@ if (command === "close") {
   process.exit(result.type === "closed" ? 0 : result.type === "refused" ? 1 : 2)
 }
 
+// land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5): the person-invoked
+// return path of branch isolation — land each designated nested repository's
+// round of work (its auto/R-NN branch) back onto its original branch as one
+// commit (default squash; --merge the explicit merge-commit alternative),
+// delete the round branch (--keep retains it: a mid-round landing, the branch
+// simply continues), print the landed SHA. --abandon discards the round
+// branch after a person-reviewed reset — the undo path; nothing lands.
+// Refusal is never an automated merge resolution: a moved original branch,
+// foreign commits in the round branch's range, a dirty repository or an
+// ambiguous original branch block (exit 2) naming what to settle. The
+// audit-trail trade-off: one commit on the deliverable, the full per-unit
+// trail stays in the driven root's git (the 0064 record model).
+// Exit codes under the contract: 0 landed / 1 usage / 2 blocked for human.
+// The argument checks above (the land whitelist, the boolean --merge form,
+// --keep/--abandon being land's alone) ran before the directory resolved;
+// landUnit owns every behavioural refusal and returns the complete printable
+// output, close's shape. Like close, land holds the run lock itself (the
+// branches it moves are what a running driver commits to), so it is not in
+// the refusal list above.
+if (command === "land") {
+  if (flagOn("keep") && flagOn("abandon")) {
+    console.error("--keep and --abandon are mutually exclusive: --keep retains auto/R-NN for a mid-round landing, --abandon discards it as the undo path")
+    process.exit(1)
+  }
+  if (flagOn("merge") && flagOn("abandon")) {
+    console.error("--merge is a landing mode and --abandon lands nothing: drop one of the two")
+    process.exit(1)
+  }
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    const legacy = await legacyModeFallback(directory)
+    console.error(
+      `nothing to land: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
+        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+    )
+    process.exit(1)
+  }
+  let config: ProjectConfig
+  try {
+    config = await loadProjectConfig(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
+    process.exit(1)
+  }
+  const lock = acquireRunLock(directory, "land")
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) console.error(line)
+    process.exit(1)
+  }
+  const landed = await landUnit(directory, {
+    isolate: config.isolate ?? [],
+    keep: flagOn("keep"),
+    abandon: flagOn("abandon"),
+    merge: flagOn("merge"),
+  })
+  lock.release()
+  for (const line of landed.lines) (landed.type === "landed" ? console.log : console.error)(line)
+  process.exit(landed.type === "landed" ? 0 : landed.type === "usage" ? 1 : 2)
+}
+
 // The amend hint of one config flag: how a person changes a key init froze.
 // Shared by run/plan's frozen-flag refusal and close's whitelist, so the hint
 // for a key is written once.
@@ -967,6 +1082,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
     build: config.build,
     parallel: config.parallel,
     scanExempt: config.scanExempt,
+    isolate: config.isolate,
     newSession: session.newSession,
   }
 }
@@ -1757,6 +1873,7 @@ console.error(`usage:
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
+  opencode-auto land [dir] [--keep] [--abandon] [--merge]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto reset [dir] [-f|--force]
@@ -1771,7 +1888,8 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
-         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), and close holds it around its writes; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
+         land [dir] lands each branch-isolated repository's round of work (config isolate, the auto/R-NN branch round establishment switched it onto) back onto its original branch as one commit — default git merge --squash (the deliverable's history gains exactly one commit; --merge takes a true merge commit instead) — deletes the round branch and prints the landed SHA. Landing mid-round is allowed with --keep: the branch is retained and checked back out — the round simply continues on it; a later land recognizes the previous landing and folds only the new commits. --abandon discards the round branch after a person-reviewed reset — the undo path: it checks the original branch back out, deletes auto/R-NN (its tip printed, recoverable via git reflog) and lands nothing. Refusal is never an automated merge resolution: the original branch moved, foreign commits mixed into auto/R-NN's range, a dirty repository or an ambiguous original branch all block (exit 2) naming what to settle; preflight warns about a leftover auto/R-NN of an abandoned round (recoverable state — land --abandon and plain git both address it). The audit-trail trade-off is stated, not hidden: one commit on the deliverable, the full per-unit trail in the driven root's git. Exit codes: 0 landed; 1 usage error; 2 blocked for human
+         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), close holds it around its writes, and land around its branch moves; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt is the planning input of plan (-p <text> | --file <path>); on every other command it is refused — init no longer writes the project brief: edit .opencode/auto/brief.md directly (init writes a stub there when the file is missing: ## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning; every planning session reads it). State the migration source and target there — --source-dir/--source-path/--dest-dir are retired

@@ -45,6 +45,7 @@ opencode-auto amend [dir] --<key-option> <value> ...   # rewrite only the given 
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
 opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent semantics and the context budget come from the project config; the unified commit after every session is always on)
+opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
@@ -85,7 +86,7 @@ remaining keys to defaults.
 
 **Breaking change**: `run` no longer accepts `-m/--mode`, `--agent`, `--context-limit`, `--subtask`,
 `--idle-time`, `--idle-max`, `--test-by-driver`, `--handover-test`, `--auto-number`,
-`--no-auto-number`, `--phases`, `--parallel`, `--scan-exempt` — any of them appearing is a usage error (exit code 1), and the
+`--no-auto-number`, `--phases`, `--parallel`, `--scan-exempt`, `--isolate` — any of them appearing is a usage error (exit code 1), and the
 message points at how to amend (`opencode-auto amend <dir> --<flag> <value>`, or edit the config file
 directly); these options are fixed as project attributes, see the next section. `--commit` is retired
 entirely (see the compatibility table below). `--implement-file`/
@@ -117,6 +118,7 @@ describes how this run executes and how a person watches it → run.**
 | `phases` | A subsequence of `admtvk` containing `m`, or a list of phase type ids containing `implement` (comma-separated string or JSON array) | `"m"` | Phased flow (a analysis → d design → m implementation → t test → v acceptance → k knowledge distillation; the list form may reference custom types under `.opencode/auto/phases/`); `"m"` = no phases declared, i.e. the implicit single phase `docs/R-01/P01-implement`, no handover sessions, tasks listed by a person or planned from a planning input (see [Planning tasks with AI](#planning-tasks-with-ai)). See [Phased flow](#phased-flow---phases) |
 | `parallel` | `none` / `low` / `medium` / `high` | `none` (key not written) | The parallel planning level (auto-core plans/0046; concurrent execution live since plans/0068): selects the `## parallelism` guidance injected into the planning prompts — and, on concurrent runs, into the decomposition prompts — so tasks are arranged for parallel execution, their `Depends:`/`Touches:` declarations keeping concurrent units disjoint. Execution width stays per run: `run --max-sessions 2` under a level executes the phase's units as lanes (see [Parallel execution](#parallel-execution-parallel---max-sessions)); `none`/absent means serial, and `--max-sessions` above 1 without a level is a usage error pointing at `init --parallel`. The level also sets the landing-conflict posture: `low` blocks on the first conflict, `medium`/`high` allow one repair re-dispatch before blocking |
 | `scanExempt` | An array of path globs relative to the target directory (`*`, `**`, `{a,b}`; no absolute path, no `..`) | none (key not written) | Deliverable files the driver's two content scans skip (auto-core plans/0059 X2): the process-document reference scan (the lines a unit added, at subtask close-out, and the whole tree at round close) and the document terminator scan at subtask close-out. For a deliverable where such strings are content — a tool's own test fixtures, prompt templates, sample documents. A glob naming a directory covers the files under it (`test/fixtures` = `test/fixtures/**`). Only deliverable paths are exempted: the task and round records stay held to their rules whatever the list says. Set with `init`/`amend --scan-exempt a,b` (the list replaces the stored one; `none` removes the key); shared with the repository like every key |
+| `isolate` | An array of repository-relative paths to nested git repositories (each holding a `.git`; no duplicates, nothing absolute or climbing out, never the target root) | none (key not written) | Branch-isolated nested repositories (auto-core plans/0074): at round establishment `plan` checks each designated clean repository onto the round branch `auto/R-NN` (a dirty one blocks exit 2 naming the repository and its paths) — every per-session driver commit, rollback and baseline then lands there while the original branch never moves; `opencode-auto land` returns the round onto the original branch as one commit. Set with `init`/`amend --isolate <rel-path>` (repeatable; the list replaces the stored one; `none` removes the key); see [Branch isolation and landing](#branch-isolation-and-landing-isolate-land) |
 | `source` / `destDir` | **Retired** | — | The migration source and target are intent, not config (2026-09-23, auto-core plans/0052 D2/D3): they go into `.opencode/auto/brief.md`, read by the planning sessions. An existing config carrying either key (any value) fails loading with exit 1; the message names the original value and the fix (copy it into brief.md, then delete the key — `fix` migrates it into the `## Source` / `## Target` sections and deletes the key); a no-argument `init` full overwrite drops them and prints each original value. Both key names are tombstoned for good, never reused |
 
 **Unified commit** (always on; the `commit` config key is retired): after any session ends and the driver has
@@ -656,6 +658,54 @@ further.
 opencode-auto plan <dir> --force-close T-005 --reason "direction changed" --append -p "do X instead"   # swap out a task
 opencode-auto plan <dir> --force-close R-01.P02 --reason "skipped this round"                     # skip the phase, plan the next one directly
 ```
+
+### Branch isolation and landing (isolate, land)
+
+A nested deliverable repository (say `opencode/` inside the driven root) that the driver commits into per
+session would receive one driver commit per session on whatever branch of it is checked out — unusable
+history for an upstream/PR-workflow repository. **Branch isolation** (auto-core plans/0074, ruled
+2026-10-04) fixes that by changing only which branch is checked out: the constitutional key `isolate`
+designates nested repositories (the config table above; `init`/`amend --isolate <rel-path>`, repeatable —
+the list replaces the stored one, `none` removes the key), and when `plan` establishes a round, each
+designated repository that is clean is checked out on a round branch `auto/R-NN` created from its current
+HEAD. Every per-session unified commit, rollback, baseline and foreign-commit check then lands on
+`auto/R-NN` exactly as before — the commit machinery is untouched, and **the original branch never moves**.
+A dirty designated repository at establishment blocks (exit 2) naming the repository and its paths; lane
+branches (`auto-lane/*`) live inside whichever branch is checked out, so lanes work unchanged on the round
+branch.
+
+`opencode-auto land [dir] [--keep] [--abandon] [--merge]` is the person-invoked **return path**: land each
+designated repository's round of work back onto its original branch **as one commit**, then delete the
+round branch and print the landed SHA.
+
+- **Default squash-one-commit**: `git merge --squash auto/R-NN` plus one commit (subject
+  `land auto/R-NN: N commit(s) of round R-NN`, no `Auto-Stage` trailer — it is the deliverable's own
+  history entry, not a driver session commit). `--merge` is the explicit alternative: a true merge commit
+  (`git merge --no-ff`), the round's commits entering the original branch's history as themselves.
+- **`--keep`** retains the round branch — the mid-round landing: whatever was checked out before the
+  landing (normally `auto/R-NN` itself) is checked back out, and the round simply continues on it; a later
+  `land` recognizes the previous landing and folds only the new commits.
+- **`--abandon`** is the undo path, after a person-reviewed reset: it checks the original branch back out,
+  deletes `auto/R-NN` (its tip printed — the work stays recoverable via `git reflog` until collection) and
+  lands nothing.
+- **Refusal is never an automated merge resolution** (exit 2, the reason naming each repository): the
+  original branch moved since isolation, foreign commits (no `Auto-Stage` trailer) mixed into the round
+  branch's range, a dirty repository, or an ambiguous original branch — exactly one local branch besides
+  the driver's `auto/R-*` and `auto-lane/*` families must remain. Every refusal is checked for every
+  designated repository before any landing starts, so a mixed set lands nothing; settle the named problems
+  and re-run — the command is re-runnable (an already-landed repository no longer holds the round branch
+  and is skipped). Exit codes: `0` landed; `1` usage error; `2` blocked for human.
+- **The audit-trail trade-off is stated, not hidden**: during the round the per-unit record lives in the
+  working repository + the isolated branch; after `land` the deliverable's history holds one commit, and
+  **the full per-unit trail remains in the driven root's git** — the 0064 record model (the driven root is
+  the process layer of record; the deliverable repository is the person's to curate).
+- A leftover `auto/R-NN` from an abandoned run is **recoverable state, not corruption**: preflight warns
+  about unlanded round branches of earlier rounds (naming the land-by-hand and branch-delete addresses);
+  `land --abandon` (the current round's branch) and plain git both address the rest.
+
+`land` holds the run lock around its branch moves — run it when no `run`/`plan` is live, exactly like
+`close`; landing mid-round is allowed under `--keep`, and the round's sessions keep committing to the
+retained branch.
 
 ## opencode server and agent selection
 

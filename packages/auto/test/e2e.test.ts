@@ -1390,6 +1390,177 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  // land (plans/0074 §2.3, U-L2): the person-invoked return path of branch
+  // isolation, pinned here at the shell's contract — the exit codes (0
+  // landed / 1 usage / 2 blocked for human) and the printed lines — over the
+  // round plan established on auto/R-01. The round's work commits carry the
+  // Auto-Stage trailer (what the foreign-commit refusal counts); the
+  // core-level behaviour matrix (git shapes, re-landing, the mixed set) is
+  // auto-core's test/land.test.ts.
+
+  test("land: exit 0 with the landed SHA printed, auto/R-01 deleted; --keep retains and re-checks it out and a later land folds only the new commits (plans/0074 U-L2)", async () => {
+    const { dir, nested } = await isolateFixture("auto-cli-land-")
+    try {
+      const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+      const setup = (await nested("rev-parse", "HEAD")).trim()
+      expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dir)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      const roundCommit = async (file: string, n: number) => {
+        await Bun.write(join(dir, "pkg", file), `${file}\n`)
+        await nested("add", "-A")
+        await nested("commit", "-qm", `T-001 implement the migration: execute ${n}`, "-m", "Auto-Stage: execute")
+      }
+      await roundCommit("one.txt", 1)
+      // --keep: the mid-round landing retains the branch and checks it back
+      // out — the round simply continues on it
+      const mid = await runCli(["land", dir, "--keep"])
+      expect(mid.code).toBe(0)
+      expect(mid.out).toContain(`on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 retained and checked out — the round simply continues on it`)
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(2)
+      // the round continues; the final landing recognizes the mid-round one
+      // and folds only the new commit
+      await roundCommit("two.txt", 2)
+      const tipTree = (await nested("rev-parse", "auto/R-01^{tree}")).trim()
+      const landed = await runCli(["land", dir])
+      expect(landed.code).toBe(0)
+      const sha = (await nested("rev-parse", "--short", "HEAD")).trim()
+      expect(landed.out).toContain(`✓ pkg: landed ${sha} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
+      expect(landed.out).toContain("the driven root is the process layer of record")
+      // exactly one more commit per landing, the setup history intact beneath
+      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(3)
+      expect((await nested("rev-parse", "HEAD~2")).trim()).toBe(setup)
+      expect((await nested("rev-parse", "HEAD^{tree}")).trim()).toBe(tipTree)
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
+      expect(await Bun.file(join(dir, "pkg", "one.txt")).text()).toBe("one.txt\n")
+      expect(await Bun.file(join(dir, "pkg", "two.txt")).text()).toBe("two.txt\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("land refusals block for a human (exit 2): the original branch moved, a dirty repository, foreign commits in the round branch's range — nothing lands (plans/0074 U-L2)", async () => {
+    const moved = await isolateFixture("auto-cli-land-moved-")
+    try {
+      const nested = moved.nested
+      const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+      expect((await runCli(["init", moved.dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(moved.dir)
+      expect((await runCli(["plan", moved.dir])).code).toBe(0)
+      await Bun.write(join(moved.dir, "pkg", "one.txt"), "one\n")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
+      // a human commit lands on the original branch after isolation: the
+      // landing's conflict surface by design
+      await nested("checkout", "-q", original)
+      await Bun.write(join(moved.dir, "pkg", "moved.txt"), "moved\n")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "a human move")
+      await nested("checkout", "-q", "auto/R-01")
+      const blocked = await runCli(["land", moved.dir])
+      expect(blocked.code).toBe(2)
+      expect(blocked.err).toContain("⏸ round R-01 cannot land yet:")
+      expect(blocked.err).toContain(`pkg: the original branch ${original} moved since auto/R-01 was isolated`)
+      expect(blocked.err).toContain("merge by hand, or reset")
+      // nothing was touched
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toContain("auto/R-01")
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+    } finally {
+      await rm(moved.dir, { recursive: true, force: true })
+    }
+    const dirty = await isolateFixture("auto-cli-land-dirty-")
+    try {
+      expect((await runCli(["init", dirty.dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dirty.dir)
+      expect((await runCli(["plan", dirty.dir])).code).toBe(0)
+      await Bun.write(join(dirty.dir, "pkg", "wip.txt"), "uncommitted\n")
+      const unclean = await runCli(["land", dirty.dir])
+      expect(unclean.code).toBe(2)
+      expect(unclean.err).toContain("landing requires clean repositories")
+      expect(unclean.err).toContain("pkg/wip.txt")
+      expect((await dirty.nested("branch", "--list", "auto/R-01")).trim()).toContain("auto/R-01")
+      // the wip becomes a plain (non-driver) commit on the round branch:
+      // the foreign-commit refusal, never an automated landing
+      await dirty.nested("add", "-A")
+      await dirty.nested("commit", "-qm", "a human touch on the round branch")
+      const foreign = await runCli(["land", dirty.dir])
+      expect(foreign.code).toBe(2)
+      expect(foreign.err).toContain("pkg: 1 non-driver commit(s) on auto/R-01 since the isolation point")
+      expect(foreign.err).toContain("foreign commits are never landed automatically")
+    } finally {
+      await rm(dirty.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("land --abandon removes the isolation branch after the person-reviewed reset (exit 0, the tip printed, nothing landed); land's usage errors exit 1 (plans/0074 U-L2)", async () => {
+    const { dir, nested } = await isolateFixture("auto-cli-land-abandon-")
+    try {
+      const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+      const setup = (await nested("rev-parse", "HEAD")).trim()
+      expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dir)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await Bun.write(join(dir, "pkg", "one.txt"), "one\n")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
+      const tip = (await nested("rev-parse", "--short", "auto/R-01")).trim()
+      const abandoned = await runCli(["land", dir, "--abandon"])
+      expect(abandoned.code).toBe(0)
+      expect(abandoned.out).toContain(`✓ pkg: abandoned auto/R-01 (was ${tip}, recoverable via git reflog until collection); back on ${original}, nothing landed`)
+      expect(abandoned.out).toContain("the driven root's git keeps the round's record")
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
+      expect((await nested("rev-parse", original)).trim()).toBe(setup)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+    // usage errors are exit 1: the contradictory flag pair, an unknown
+    // option, the value-swallowing --merge, --keep on another command, a
+    // config that designates nothing, no config at all
+    const usage = await isolateFixture("auto-cli-land-usage-")
+    try {
+      expect((await runCli(["init", usage.dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(usage.dir)
+      const pairs = await runCli(["land", usage.dir, "--keep", "--abandon"])
+      expect(pairs.code).toBe(1)
+      expect(pairs.err).toContain("--keep and --abandon are mutually exclusive")
+      const unknown = await runCli(["land", usage.dir, "--cascade"])
+      expect(unknown.code).toBe(1)
+      expect(unknown.err).toContain("--cascade is not a land option")
+      expect(unknown.err).toContain("land takes only --keep, --abandon and --merge")
+      const swallowed = await runCli(["land", "--merge", usage.dir])
+      expect(swallowed.code).toBe(1)
+      expect(swallowed.err).toContain("land's landing-mode flag and takes no value")
+      const elsewhere = await runCli(["run", usage.dir, "--keep"])
+      expect(elsewhere.code).toBe(1)
+      expect(elsewhere.err).toContain("--keep and --abandon are land options: run takes neither")
+    } finally {
+      await rm(usage.dir, { recursive: true, force: true })
+    }
+    const plain = await isolateFixture("auto-cli-land-plain-")
+    try {
+      expect((await runCli(["init", plain.dir])).code).toBe(0)
+      await commitFixture(plain.dir)
+      const empty = await runCli(["land", plain.dir])
+      expect(empty.code).toBe(1)
+      expect(empty.err).toContain("nothing to land: the config designates no branch-isolated repositories")
+      expect(empty.err).toContain("--isolate")
+    } finally {
+      await rm(plain.dir, { recursive: true, force: true })
+    }
+    const bare = await mkdtemp(join(tmpdir(), "auto-cli-land-bare-"))
+    try {
+      const nocfg = await runCli(["land", bare])
+      expect(nocfg.code).toBe(1)
+      expect(nocfg.err).toContain("nothing to land")
+      expect(nocfg.err).toContain("has no .opencode/auto/config.json")
+    } finally {
+      await rm(bare, { recursive: true, force: true })
+    }
+  })
+
   test("init with an explicit key holding an invalid value is a usage error (exit code 1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {

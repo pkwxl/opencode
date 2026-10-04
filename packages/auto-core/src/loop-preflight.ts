@@ -37,11 +37,12 @@ import {
 } from "./lanes"
 import { liveRunLock } from "./lock"
 import { log } from "./log"
+import { leftoverIsolationLines } from "./land"
 import { checkModelReferences, loadModels } from "./models"
 import type { ModelRegistry } from "./models-schema"
 import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
 import { phaseKey, readPhases, currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
-import { roundBriefPath } from "./docpaths"
+import { roundBriefPath, roundDirName } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
 import { phaseType, REQUIRED_TYPE, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import { trackSubtasks, watchFiles } from "./loop-progress"
@@ -147,6 +148,12 @@ export type RunAllOpts = {
   // config.scanExempt (plans/0059 X2): the deliverable paths the P1 scan and
   // the terminator scan skip, at subtask close-out and at round close.
   scanExempt?: string[]
+  // config.isolate (plans/0074, U-L2): the nested repositories under branch
+  // isolation. The run itself needs it for one report only: preflight warns
+  // about leftover auto/R-NN branches of abandoned rounds (recoverable
+  // state, §4) — the round's own isolation happened at establishment, and
+  // every commit-side mechanism works on whatever branch is checked out.
+  isolate?: string[]
   // --max-sessions (plans/0046 D9; live since plans/0068 S3, D10): the
   // concurrent AI sessions of the task loop — the scheduler's slot count
   // when the scheduler is active (≥ 2 and a parallel level). Above 1 with
@@ -417,6 +424,15 @@ export async function preflight(
       for (const file of gate.files) log(`  ${file}`)
       return { exit: 2 }
     }
+  }
+  // Branch-isolation leftovers (plans/0074 §4, U-L2): round branches of
+  // earlier rounds that still hold unlanded work — recoverable state, not
+  // corruption, so a warning naming the addresses (land by hand / remove),
+  // never a block: the run continues on the live round branch. A lane worker
+  // skips it — the parent owns the main tree's report. Read-only, hence
+  // under dryrun too.
+  if (!opts.lane && opts.isolate?.length) {
+    for (const line of await leftoverIsolationLines(directory, opts.isolate, `auto/${roundDirName(await currentRound(directory))}`)) log(line)
   }
   // Orphan recovery (plans/0068 D14, S3): the registry's lane entries of a
   // killed parent run — a live worker is awaited then landed (the cattle

@@ -381,12 +381,14 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promi
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // The count of commits without the Auto-Stage trailer inside the
-// baseline..HEAD range (= the number of external commits); an empty-string
-// sha means the repository had no commits when the unit started — check the
-// full history. Shared by unitViolations and the recovery-fidelity baseline
-// check / rollback.
-async function foreignCommits(root: string, sha: string): Promise<number> {
-  const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])])
+// `sha..<to>` range (= the number of external commits; to defaults to HEAD,
+// the unit close-out and recovery callers' shape). An empty-string sha means
+// the repository had no commits when the range started — check the full
+// history. Shared by unitViolations, the recovery-fidelity baseline check /
+// rollback, and `land`'s foreign-commit refusal over the round branch
+// (plans/0074 §2.3).
+export async function foreignCommits(root: string, sha: string, to: string = "HEAD"): Promise<number> {
+  const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..${to}`] : [to])])
   return bodies.out
     .split("\0")
     .filter((body) => body.trim())
@@ -807,6 +809,130 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
   return { type: "ok", isolated }
 }
 
+// —— Branch-isolation landing (plans/0074 §2.3, U-L2) ——
+//
+// The `land` command's git half (the orchestration, refusal lines and exit
+// semantics live in src/land.ts): read-only inspection primitives plus the
+// two landing operations. All of them operate on one repository root the
+// caller names — like isolateRound above, they know nothing of rounds or
+// task ids. The landing commit deliberately carries no Auto-Stage trailer:
+// it is the deliverable's own history entry (the person's to curate —
+// plans/0074 §2's audit-trail trade-off), not a driver session commit, and
+// no unit close-out ever scans the original branch's new range (the round's
+// checks ran on the isolation branch).
+
+// The repository's local branch names (refs/heads, short form). The caller
+// filters the families: the round branches (auto/R-*) and the lane branches
+// (auto-lane/*, which live inside whichever branch is checked out,
+// plans/0074 §2.4) are never a repository's original branch.
+export async function localBranches(root: string): Promise<string[]> {
+  const listed = await git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+  return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
+}
+
+// The full SHA of one revision (a branch name, HEAD, `<rev>^{tree}` …),
+// undefined when it does not resolve.
+export async function revSha(root: string, ref: string): Promise<string | undefined> {
+  const got = await git(root, ["rev-parse", "--verify", "--quiet", ref]).catch(() => undefined)
+  const sha = got?.code === 0 ? got.out.trim() : ""
+  return sha || undefined
+}
+
+// The full SHA of the merge base of two revisions, undefined when either side
+// does not resolve. The landing's isolation point: round-establishment
+// created auto/R-NN from the original branch's then-tip, so the merge base is
+// exactly where the fork happened — the anchor both refusal checks of `land`
+// (the moved original, the foreign-commit range) measure from.
+export async function mergeBaseFull(root: string, a: string, b: string): Promise<string | undefined> {
+  const base = await git(root, ["merge-base", a, b]).catch(() => undefined)
+  const sha = base?.code === 0 ? base.out.trim() : ""
+  return sha || undefined
+}
+
+// The commits of `<base>..<branch>`, newest first, each with its full commit
+// and tree SHA: the round branch's history since the isolation point. The
+// landing walks it to recognize a previous landing (a mid-round `--keep` land
+// left the original branch at a squash commit whose tree equals one of these
+// trees) and to count the commits one landing folds.
+export async function branchCommits(root: string, branch: string, base: string): Promise<{ sha: string; tree: string }[]> {
+  const log = await git(root, ["log", "--format=%H %T", `${base}..${branch}`]).catch(() => undefined)
+  if (!log || log.code !== 0) return []
+  return log.out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [sha = "", tree = ""] = line.split(" ")
+      return { sha, tree }
+    })
+}
+
+// Whether branch is fully contained in the repository's current HEAD
+// (merge-base --is-ancestor): a leftover round branch that holds no commit
+// HEAD lacks is merged — preflight's leftover report (plans/0074 §4) reports
+// only the unmerged ones, the true recoverable state.
+export async function mergedIntoHead(root: string, branch: string): Promise<boolean> {
+  const check = await git(root, ["merge-base", "--is-ancestor", branch, "HEAD"]).catch(() => undefined)
+  return check?.code === 0
+}
+
+// Check out a branch in the repository (the landing's move onto the original
+// branch, and --keep's move back onto the round branch). Same shape as the
+// worktree operations: ok, or git's first error line.
+export async function checkoutBranch(root: string, branch: string): Promise<WorktreeResult> {
+  const checkedOut = await git(root, ["checkout", branch])
+  if (checkedOut.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}` }
+}
+
+// The default landing (plans/0074 §5.3): `git merge --squash <branch>` —
+// never a commit of its own — followed by one commit under subject, so the
+// round's net change reaches the original branch as exactly one commit. The
+// guards in src/land.ts (the original branch at the isolation point or a
+// previous landing's tree) make the squash conflict-free by construction; a
+// conflict that still happens is aborted (the tree was clean before the
+// merge — the guards' precondition — so a hard reset to HEAD restores
+// exactly the pre-merge state; a conflicted squash carries no MERGE_HEAD,
+// which `git merge --abort` requires) and reported for manual landing.
+export async function squashOnto(root: string, branch: string, subject: string): Promise<LandResult> {
+  const squashed = await git(root, ["merge", "--squash", branch])
+  if (squashed.code !== 0) return squashFailure(root, squashed, "git merge --squash")
+  const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", subject])
+  if (committed.code === 0) return { type: "ok" }
+  // The squash is staged but would not conclude: undo it to the clean
+  // pre-merge state so the caller's scene stays describable.
+  await git(root, ["reset", "--hard", "HEAD"])
+  return { type: "failed", error: `${firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`} (the staged squash was reset away; the worktree is back to its pre-merge state)` }
+}
+
+// The explicit alternative landing (plans/0074 §5.3): `git merge --no-ff` —
+// the round's commits enter the original branch's history as themselves,
+// under one merge commit. Conflict handling mirrors landBranch: abort the
+// merge (a real merge carries MERGE_HEAD) and report.
+export async function mergeNoFf(root: string, branch: string, subject: string): Promise<LandResult> {
+  const merged = await git(root, [...(await identityArgs(root)), "merge", "--no-ff", "-m", subject, branch])
+  if (merged.code === 0) return { type: "ok" }
+  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
+  if (conflict) {
+    const aborted = await git(root, ["merge", "--abort"])
+    if (aborted.code === 0 && !(await changedFiles(root)).length) return { type: "conflict", detail: firstLine(merged.err || merged.out) }
+    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the repository must be handled manually` }
+  }
+  return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
+}
+
+// A failed squash's common tail: a conflict aborts back to the clean
+// pre-merge state (see squashOnto), anything else is the raw failure.
+async function squashFailure(root: string, failed: { code: number; out: string; err: string }, what: string): Promise<LandResult> {
+  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${failed.out}\n${failed.err}`)
+  if (conflict) {
+    const reset = await git(root, ["reset", "--hard", "HEAD"])
+    if (reset.code === 0 && !(await changedFiles(root)).length) return { type: "conflict", detail: firstLine(failed.err || failed.out) }
+    return { type: "failed", error: `resetting the conflicted squash failed (git reset --hard exit code ${reset.code}: ${firstLine(reset.err || reset.out)}); the repository must be handled manually` }
+  }
+  return { type: "failed", error: `${firstLine(failed.err || failed.out) || `${what} exit code ${failed.code}`}` }
+}
+
 // —— The git service (the run services' commit-side seam) ——
 
 // The run's git service: the commit-side operations the kernel and the
@@ -946,8 +1072,10 @@ export async function untrackedFiles(dir: string): Promise<Set<string>> {
 // "?? dir/" are nested repository directories (their inner files are listed
 // separately by that repository's own status), skipped to avoid duplication.
 // The XY status code is kept with each entry (the untracked criterion and the
-// listing share one parsing pass).
-async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
+// listing share one parsing pass). Exported since plans/0074: `land`'s dirty
+// gate lists one designated repository's uncommitted paths the same way
+// isolateRound's does.
+export async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
   const phys = await physicalDir(dir)
   const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     stdout: "pipe",

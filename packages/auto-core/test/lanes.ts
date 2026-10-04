@@ -46,6 +46,10 @@ export const REPO_LANE: readonly string[] = [
   // primitive and the establish route run branch/checkout operations.
   "test/isolate.test.ts",
   "test/knowledge.test.ts",
+  // Branch-isolation landing (plans/0074 U-L2): the landUnit suite drives
+  // isolateRound, commitTree and the landing's checkout/squash/merge/delete
+  // operations over real git repositories under temp dirs.
+  "test/land.test.ts",
   "test/lock.test.ts",
   // The isolation loop's suite (0069 §3.3's gap): drives runIsolationLoop
   // over real git repositories — worktrees, landing merges — so the repo

@@ -9,7 +9,7 @@
 // 1 naming the cause; with no registry preflight is unchanged. The operator
 // layer stays out of these tests (test/preload.ts empties XDG_CONFIG_HOME).
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
-import { chmod, mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { AgentHost } from "../src/agent/types"
@@ -588,5 +588,85 @@ describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
         expect(lines.filter((line) => line.includes("max sessions") || line.includes("concurrent sessions"))).toEqual([])
       }
     }
+  })
+})
+
+describe("preflight: branch-isolation leftovers (plans/0074 §4, U-L2)", () => {
+  // An initialized, committed project (the scheduler describe's `project`
+  // shape) whose tree additionally holds a nested repository pkg — ignored
+  // by the outer .gitignore — carrying an abandoned round's branch with
+  // unlanded work beside its original branch.
+  async function project(): Promise<string> {
+    const dir = await freshRepo()
+    dirs.push(dir)
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\npkg/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    const nested = join(dir, "pkg")
+    await mkdir(nested, { recursive: true })
+    await git(nested, "init", "-q")
+    await git(nested, "config", "user.email", "t@t")
+    await git(nested, "config", "user.name", "t")
+    await Bun.write(join(nested, "readme.txt"), "nested\n")
+    await git(nested, "add", "-A")
+    await git(nested, "commit", "-qm", "nested setup")
+    // An abandoned round's branch holding unlanded work (the current round
+    // is R-02: the live branch would be auto/R-02, not the leftover).
+    await git(nested, "checkout", "-q", "-b", "auto/R-01")
+    await Bun.write(join(nested, "lost.txt"), "unlanded\n")
+    await git(nested, "add", "-A")
+    await git(nested, "commit", "-qm", "abandoned round work")
+    await git(nested, "checkout", "-q", "-")
+    // The current round is R-02 (an empty round directory establishes the
+    // number; its phase index is not preflight's concern here) — so the
+    // live round branch is auto/R-02 and auto/R-01 is the leftover.
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  // The scheduler describe's `run`: preflight with the log lines captured,
+  // the ambient switch and proxy layer scrubbed, handles closed.
+  async function run(dir: string, opts: RunAllOpts = {}) {
+    const ambient = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_|^(https?|all|no)_proxy$/i.test(key))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, opts)
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      return { result, lines }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+  }
+
+  test("an unmerged auto/R-NN of an earlier round warns as recoverable state; the warning needs the isolate key and skips lane workers", async () => {
+    const dir = await project()
+    // Without the isolate key nothing is reported (no designated repositories).
+    const plain = await run(dir)
+    expect("exit" in plain.result).toBe(false)
+    expect(plain.lines.some((line) => line.includes("auto/R-01"))).toBe(false)
+    // With pkg designated, the leftover is reported as recoverable state,
+    // never a block: preflight passes.
+    const { result, lines } = await run(dir, { isolate: ["pkg"] })
+    expect("exit" in result).toBe(false)
+    expect(lines).toContain(
+      "⚠ pkg: auto/R-01 holds unlanded work from an earlier round — recoverable state, not corruption: " +
+        "land by hand (git checkout <original> && git merge --squash auto/R-01), or remove the branch (git branch -D auto/R-01)",
+    )
+    // A lane worker skips the report — the parent owns the main tree's
+    // (whatever else its scoped preflight decides about this fixture).
+    const lane = await run(dir, { isolate: ["pkg"], lane: { unit: "T-001" } })
+    expect(lane.lines.some((line) => line.includes("auto/R-01 holds"))).toBe(false)
   })
 })
