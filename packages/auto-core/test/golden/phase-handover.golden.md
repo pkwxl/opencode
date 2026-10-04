@@ -52,10 +52,8 @@ pitfalls the next phase would step in>
 
 ## Constraints
 
-1. The only file this session may write is docs/R-01/P02-implement/handover.md; the task and phase indexes, todo.md/done.md
-   and the other state files are maintained exclusively by the DRIVER — do not edit them, and do not change file
-   permissions via chmod or the like; git commits are made by the DRIVER after the session ends, do not run git
-   commit or similar commands yourself.
+1. The only file this session may write is docs/R-01/P02-implement/handover.md;
+   every other file, and every state file, is outside this session's write scope.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.

@@ -67,10 +67,8 @@ Phase: {{phaseId}}
 
 ## Constraints
 
-1. This session writes only the task index {{taskIndex}} and each task's docs/T-NNN/todo.md; do not create done.md
-   (the completion rename is the DRIVER's job); the phase index and the other state files are read-only — do not edit them,
-   and do not change file permissions via chmod or the like; git commits are made by the DRIVER after the session
-   ends, do not run git commit or similar commands yourself.
+1. This session writes only the task index {{taskIndex}} and each task's docs/T-NNN/todo.md — never done.md;
+   every other file, and every state file, is outside this session's write scope.
 {{> question-rule}}
 3. The task index must have at least one task: even if you conclude there is nothing to do, write one explanatory
    task and state the reason in its task document; producing no valid task causes a blocked shutdown.

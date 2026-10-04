@@ -100,7 +100,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Constraints
 
-1. Read-only analysis: the only file you may write this time is {{file}}; do not create or modify any other file; {{> state-rule}}
+1. Read-only analysis: the only file you may write this time is {{file}}; do not create or modify any other file.
 {{> question-rule}}
 3. Writing that document is a hard requirement: even if the existing migration results are sparse, write out the full section
    skeleton and explain why; producing no document, or a document missing the closing `DONE` mark at the end, makes the

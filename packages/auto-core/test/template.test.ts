@@ -42,17 +42,25 @@ describe("renderer", () => {
 
   test("partial references: a shared partial renders against the current context (variables usable inside)", () => {
     usePromptLibrary(undefined)
-    expect(renderText("{{> state-rule}}", {})).toContain("are maintained by the DRIVER alone")
-    expect(renderText("{{> state-rule}}", {})).toContain("Git commits are made by the DRIVER in one pass after the session ends")
+    // state-rule retired with the constitution consolidation (0072 U-B/T-131:
+    // its two rules live in the AGENTS.md block alone); question-rule is the
+    // variable-carrying partial now: its branch selection reads ctx vars and
+    // its zero-intent fallback carries the marker formats.
+    expect(renderText("{{> question-rule}}", {})).toContain("do not call the question tool")
+    expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
+    expect(renderText("{{> question-rule}}", { humanQuestions: true })).toContain("no automatic proxy answer")
   })
 
   test("when a partial stands alone on its line the line's leading indent applies to every line; an inline reference applies only from the second line on (stacking on the partial body's own indent)", () => {
     usePromptLibrary(undefined)
-    const standalone = renderText("before:\n   {{> state-rule}}\nafter", {})
-    expect(standalone.split("\n")[1]).toBe("   todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.")
-    expect(standalone.split("\n")[2]).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.")
-    const inline = renderText("before:\n   {{> state-rule}};tail", {})
-    expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;tail")
+    // A registered fixture partial (engine test, carrier-independent — the
+    // constitution ratchet owns the shipped sections' wording).
+    registerPartial("indent-fixture", "First rule line.\nSecond rule line.")
+    const standalone = renderText("before:\n   {{> indent-fixture}}\nafter", {})
+    expect(standalone.split("\n")[1]).toBe("   First rule line.")
+    expect(standalone.split("\n")[2]).toBe("   Second rule line.")
+    const inline = renderText("before:\n   {{> indent-fixture}};tail", {})
+    expect(inline.split("\n").at(-1)).toBe("   Second rule line.;tail")
   })
 })
 
@@ -63,14 +71,20 @@ describe("shared partial parsing", () => {
     expect(partials.b).toBe("Body B")
   })
 
-  test("the doc-layout section exists and carries no template variables; task templates referencing it render the permanent path rules", () => {
+  test("the doc-layout section exists and carries no template variables; task templates referencing it render the task-scoped placement rules", () => {
     usePromptLibrary(undefined)
     const text = renderText("{{> doc-layout}}", {})
     expect(text).toContain("Document placement rules")
     expect(text).toContain("docs/T-NNN/")
     expect(text).toContain("S<two-digit index>/index.md")
-    expect(text).toContain("these paths are permanent")
     expect(text).toContain("do not create flat task files at the top level of docs/")
+    // Slimmed to task-scoped placement (0072 U-B/T-131, K9): the permanence
+    // doctrine, the reference form and the DRIVER-ownership of state files
+    // are the AGENTS.md constitution's wordings now — the drift ratchet
+    // (test/constitution-ratchet.test.ts) holds them out of every carrier.
+    expect(text).not.toContain("these paths are permanent")
+    expect(text).not.toContain("managed by the DRIVER")
+    expect(text).not.toContain("phases.md")
     // No template variables: templates without taskId (phase-plan and friends) can reference it too
     expect(text).not.toMatch(/\{\{|\}\}/)
     // Referencing renders: decompose (the task-document writer) and phase-plan (the planner without taskId) both carry the section

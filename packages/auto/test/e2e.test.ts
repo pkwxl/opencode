@@ -1272,10 +1272,14 @@ describe("CLI: init freezes the project config", () => {
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(agents).toContain("Test principle:")
       expect(agents).toContain("build, test, compile, and lint")
-      // The agent contract carries the test protocol too (inline in contract item 2)
+      // The agent contract no longer restates the test protocol (0072 U-B,
+      // T-131: the AGENTS.md block owns it — asserted above); under
+      // test-by-driver its AGENTS.md note names the test section among the
+      // block's contents, and the protocol wording itself is gone.
       const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
-      expect(agent).toContain("Build, test, compile, lint and other commands that can be slow")
-      expect(agent).toContain("tmp/test.sh")
+      expect(agent).toContain("pointer/test/commit/summary/reference conventions")
+      expect(agent).not.toContain("Build, test, compile, lint")
+      expect(agent).not.toContain("tmp/test.sh")
       // An amend turning handover-test off keeps test-by-driver; turning
       // test-by-driver off too leaves the block differing from the render (the
       // test section should vanish), so the whole block refreshes

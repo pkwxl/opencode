@@ -92,19 +92,11 @@ sent back for correction; documents that already existed beforehand need no retr
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
-the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
-todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
-these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
-do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
-round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
-permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
-not create, rename or edit them.
+do not create flat task files at the top level of docs/.
 
 Constraints:
 1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
-   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
-Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
@@ -124,6 +116,5 @@ Git commits are made by the DRIVER in one pass after the session ends; do not ru
 3. Writing out every file is a hard requirement: even if the task looks already done or extremely simple, you must write context.md,
    shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
    and stops the run;
-4. The todo.md/done.md state files are managed by the DRIVER: you write todo.md only, and must neither create done.md nor rename them
-   yourself;
+4. You write each subtask's todo.md only — never done.md;
 5. End the session as soon as the files are written.

@@ -43,15 +43,46 @@ const REFS_SPEC = `Reference and storage conventions (stable references; see the
 2. References: references between documents, and references into code, are always written as paths relative to the target directory root (for example \`docs/T-003/S04/index.md\`, \`src/runner.ts:120\`, in backticks or as links), optionally with a \`:line\` anchor; the anchor may further carry an \`@<sha>\` version marker (for example \`src/runner.ts:120@abc1234\`, meaning that range is valid only for that historical revision). Do not reference state files inside round directories (the \`phases.md\` and \`tasks.md\` indexes, or phase \`todo.md\`/\`done.md\`); differences across rounds are expressed through separate \`docs/R-NN/\` directories, not by moving or renaming directories.
 3. Checking: DRIVER neither checks nor rewrites references. Confirm that a path exists before you write it, and keep the references your task touches valid — that is part of the task's own work and of its acceptance.`
 
-export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string {
-  const paragraphs = [
+// The constitution's paragraphs in block order (TEST_PRINCIPLE present only
+// under the switch). One source, two renderings (plans/0072 §2 U-B): the
+// AGENTS.md marker block below and the standalone preamble next to it —
+// both assemble exactly these paragraphs, so the two can never drift apart.
+function constitutionParagraphs(opts: { testByDriver?: boolean } = {}): string[] {
+  return [
     POINTER,
     opts.testByDriver ? TEST_PRINCIPLE : undefined,
     COMMIT_PRINCIPLE,
     SUMMARY_PRINCIPLE,
     REFS_SPEC,
   ].filter((p): p is string => Boolean(p))
-  return `${AGENTS_BLOCK_START}\n${paragraphs.join("\n\n")}\n${AGENTS_BLOCK_END}`
+}
+
+// The five constitution constants as one exported record: the single source
+// every other surface must not restate. The drift ratchet
+// (test/constitution-ratchet.test.ts) reads its probes from here, and any
+// future consumer of the wordings (error texts, docs generators) reads them
+// from here too — never a hand copy.
+export const CONSTITUTION = {
+  POINTER,
+  TEST_PRINCIPLE,
+  COMMIT_PRINCIPLE,
+  SUMMARY_PRINCIPLE,
+  REFS_SPEC,
+} as const
+
+// The constitution preamble (plans/0076's standalone work orders, T-137): the
+// same five paragraphs as the block, rendered without the AGENTS.md markers —
+// a standalone session may run in an agent that reads no AGENTS.md and never
+// sees the auto.md contract, so its work order carries the constitution
+// itself. The full constitution, never a trimmed selection. This export is
+// the seam T-131 lands: until T-137 wires the work-order export it has no
+// caller (a stub by design, named here so the consumer is discoverable).
+export function renderConstitutionPreamble(opts: { testByDriver?: boolean } = {}): string {
+  return constitutionParagraphs(opts).join("\n\n")
+}
+
+export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string {
+  return `${AGENTS_BLOCK_START}\n${renderConstitutionPreamble(opts)}\n${AGENTS_BLOCK_END}`
 }
 
 // Idempotently syncs AGENTS.md's opencode-auto block: renders the template

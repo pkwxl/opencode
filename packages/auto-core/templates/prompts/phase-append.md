@@ -116,10 +116,8 @@ Phase: {{phaseId}}
 ## Constraints
 
 1. This session writes only new lines at the end of the task index {{taskIndex}} and each new task's
-   docs/T-NNN/todo.md; never edit, reorder or renumber an existing index line, and never change an existing task's
-   document; do not create done.md (the completion rename is the DRIVER's job); the phase index and the other state files
-   are read-only — do not edit them, and do not change file permissions via chmod or the like; git commits are made
-   by the DRIVER after the session ends, do not run git commit or similar commands yourself.
+   docs/T-NNN/todo.md — never done.md; never edit, reorder or renumber an existing index line, and never change an
+   existing task's document; every other file, and every state file, is outside this session's write scope.
 {{> question-rule}}
 3. The append must add at least one new task: even if you conclude the input is already covered by the existing
    tasks, write one explanatory task and state the reason in its task document; producing no valid new task causes a

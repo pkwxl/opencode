@@ -85,8 +85,9 @@ describe("renderDecompose", () => {
     expect(text).toContain("## Artifacts")
     expect(text).toContain("modify no implementation code")
     expect(text).toContain("question tool")
-    // State files are exclusive: todo.md/done.md are maintained by the DRIVER alone
-    expect(text).toContain("must neither create done.md")
+    // The decompose session writes each subtask's todo.md only (0072 U-B/T-131
+    // slimmed the DRIVER-ownership restatement; the block owns the rule)
+    expect(text).toContain("You write each subtask's todo.md only — never done.md")
     expect(text).toContain("blocks the task and stops the run")
     expect(text).toContain("End the session as soon as the files are written")
   })
@@ -121,7 +122,8 @@ describe("renderDecompose", () => {
     // The blocked reason/answer is retired: no longer read out of PLAN.md into the prompt
     expect(text).not.toContain("strategy A or B?")
     expect(text).not.toContain("previously blocked")
-    expect(text).toContain("are maintained by the DRIVER alone")
+    // 0072 U-B/T-131: the state-rule restatement retired; the block owns it
+    expect(text).not.toContain("maintained by the DRIVER alone")
     // A proxy answer must record the decision process and label it AUTO-DECISION
     expect(text).toContain("must leave a record of how it was made")
     expect(text).toContain("AUTO-DECISION")
@@ -426,9 +428,11 @@ describe("renderSubtask output-placement intent externalization (M1.4, artifact 
       factsDir = dir
       const text = subOf(listPlan, listTask, subtask, { index: 2 })
       expect(text).not.toContain("Artifact placement convention")
-      // The core protocol is unaffected: the state-file pointer and the exclusivity clause stay (the tier-1 surface does not vanish with the intent pack)
+      // The core protocol is unaffected: the scope pointer and the completion
+      // decision stay (the tier-1 surface does not vanish with the intent
+      // pack); the state-rule restatement retired with 0072 U-B/T-131.
       expect(text).toContain("This subtask's scope declaration is in docs/T-004/S02/todo.md")
-      expect(text).toContain("managed by the DRIVER alone")
+      expect(text).toContain("The completion decision for this subtask — whether it is done — is the DRIVER's")
       expect(text).toContain("Constraints:")
       expect(text).not.toMatch(/\{\{|\}\}/)
       expect(text).not.toMatch(/\n\n\n/)
@@ -464,19 +468,24 @@ describe("renderSubtask", () => {
     expect(text).toContain("check for yourself whether this subtask is genuinely complete")
     expect(text).toContain("you may add to the content of docs/ but not modify it")
     expect(text).toContain("T-002: implement the migration")
-    // State files are maintained by the DRIVER; the agent is no longer asked to tick
-    expect(text).toContain("are maintained by the DRIVER alone")
+    // 0072 U-B/T-131: the state-rule restatement retired; the role-specific
+    // completion-decision sentence survives, the DRIVER-ownership wording
+    // (the block's) does not reach the prompt.
+    expect(text).toContain("The completion decision for this subtask — whether it is done — is the DRIVER's")
+    expect(text).not.toContain("maintained by the DRIVER alone")
     expect(text).not.toContain("change it to `- [x]`")
     expect(text).not.toContain("verify")
     expect(text).not.toContain("acceptance")
     expect(text).not.toContain("the verified field")
   })
 
-  test("no in-session commit demand: the unified commit is executed by the DRIVER after the session", () => {
+  test("no in-session commit demand: the prohibition lives in the constitution, the prompt no longer restates it", () => {
     const text = subOf(plan, task, subtask)
     expect(text).not.toContain("commit all uncommitted changes")
-    expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
-    expect(text).toContain("do not run git commit")
+    // 0072 U-B/T-131: state-rule retired; ground-state's "git commit
+    // records" (a keep) is the only remaining mention.
+    expect(text).not.toContain("any other commit command")
+    expect(text).not.toContain("do not make them yourself")
   })
 
   test("no context-handover protocol (ondemand-only, plans/0056); continuation still demands reading the handover document first", () => {
@@ -488,18 +497,22 @@ describe("renderSubtask", () => {
     expect(cont).toContain("then carry on from there")
   })
 
-  test("test-by-DRIVER: the test execution protocol is injected; when not enabled the whole block disappears", () => {
+  test("test-by-DRIVER: the protocol's operational extras are injected (the principle itself is the constitution's); when not enabled the whole block disappears", () => {
     const on = subOf(plan, task, subtask, { testByDriver: true })
     expect(on).toContain("Test execution protocol (--test-by-driver)")
     expect(on).toContain("tmp/test.sh")
-    expect(on).toContain("do not run compile, test, build, lint or similar commands directly inside the session")
-    expect(on).toContain("write the command as a script into the test/ directory")
-    expect(on).toContain("write the same script path into tmp/test.sh once more")
+    // 0072 U-B/T-131 (K6): only the operational extras stayed — the wait
+    // rhythm and the re-run mechanics; the principle's wording (which
+    // commands, why, how to request a run) is the AGENTS.md block's.
+    expect(on).toContain("after writing the script path into tmp/test.sh, end your turn to wait")
+    expect(on).toContain("write the same script path into tmp/test.sh once more to re-run it")
+    expect(on).not.toContain("or similar commands directly inside the session")
+    expect(on).not.toContain("write the command as a script into the test/ directory")
     // handover-test adds the handover-document note
     const handover = subOf(plan, task, subtask, { testByDriver: true, handoverTest: true })
     expect(handover).toContain("docs/T-002/testhandoff.md")
     expect(handover).toContain("so that a new session can interpret the test result and continue")
-    // When not enabled neither the protocol nor the handover wording appears (the normative mention in the shared doc-layout paragraph does not include the handover protocol itself)
+    // When not enabled neither the protocol nor the handover wording appears
     const off = subOf(plan, task, subtask)
     expect(off).not.toContain("Test execution protocol")
     expect(off).not.toContain("tmp/test.sh")
@@ -663,8 +676,11 @@ describe("renderWrapup", () => {
     expect(text).toContain("All subtasks of this task were completed one by one in earlier sessions; do not redo them")
     expect(text).toContain("docs/T-002/report.md")
     expect(text).not.toContain("git commit all uncommitted changes")
-    expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
-    expect(text).toContain("are maintained by the DRIVER alone")
+    // 0072 U-B/T-131: the state-rule restatement retired — the status line
+    // (role-specific) stays, the commit/state-file principles (the block's)
+    // no longer reach the render.
+    expect(text).toContain("The task status is recorded by the DRIVER in one pass after the session ends")
+    expect(text).not.toContain("any other commit command")
     expect(text).not.toContain("change the current task's status mark to [done]")
   })
 
@@ -842,9 +858,15 @@ describe("renderWhole", () => {
     expect(winddown).toContain("Status: done")
   })
 
-  test("no in-session commit demand (state-rule injects the commit principle)", () => {
+  test("no in-session commit demand (the commit principle travels in the AGENTS.md constitution, not the prompt)", () => {
     expect(wholeOf(plan, task)).not.toContain("git commit all uncommitted changes")
-    expect(wholeOf(plan, task)).toContain("Git commits are made by the DRIVER in one pass after the session ends")
+    // 0072 U-B/T-131: the state-rule partial (which restated the commit and
+    // state-file principles into 14 templates) retired — the block owns both
+    // wordings and the rendered prompt carries no restatement of either.
+    // (whole's ground-state names "git commit records" as a thing not to
+    // infer progress from — a keep, not a restatement.)
+    expect(wholeOf(plan, task)).not.toContain("any other commit command")
+    expect(wholeOf(plan, task)).not.toContain("do not make them yourself")
   })
 
   test("the handover steer demands the status line be written", () => {
@@ -1142,10 +1164,12 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     )
     expect(block).not.toContain("full scan of all live documents")
     expect(block).not.toContain("deleted/archived/historical")
-    // The wrap-up report item carries the same statement (the golden pins the
-    // full render; this pins the two sentences wherever the pack varies).
+    // The wrap-up report no longer restates the conventions (0072 U-B/T-131,
+    // K10): the instruction points at the AGENTS.md block, whose paragraph 3
+    // (pinned above) carries the no-checking statement alone.
     for (const text of [wrapOf(plan, task), wrapOf(plan, task, { solo: true, resolves: [driverResolve] })]) {
-      expect(text).toContain("DRIVER does not check references afterwards")
+      expect(text).toContain("follows the directory's reference conventions as the AGENTS.md block states them")
+      expect(text).not.toContain("DRIVER does not check references afterwards")
       expect(text).not.toContain("DRIVER's reference check")
       expect(text).not.toContain("carry a marker yourself")
     }

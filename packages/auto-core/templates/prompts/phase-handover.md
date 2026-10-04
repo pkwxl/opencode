@@ -87,10 +87,8 @@ Never write a line starting with `Accepted:` — the sign-off `Accepted: yes` is
 
 ## Constraints
 
-1. The only file{{#if acceptance}}s{{/if}} this session may write {{#if acceptance}}are {{handover}} and {{acceptance}}{{/if}}{{^acceptance}}is {{handover}}{{/if}}; the task and phase indexes, todo.md/done.md
-   and the other state files are maintained exclusively by the DRIVER — do not edit them, and do not change file
-   permissions via chmod or the like; git commits are made by the DRIVER after the session ends, do not run git
-   commit or similar commands yourself.
+1. The only file{{#if acceptance}}s{{/if}} this session may write {{#if acceptance}}are {{handover}} and {{acceptance}}{{/if}}{{^acceptance}}is {{handover}}{{/if}};
+   every other file, and every state file, is outside this session's write scope.
 {{> question-rule}}
 3. The handover document must be self-contained: when a section references an artifact, give its permanent path
    relative to the target directory (docs/T-NNN/…, docs/R-NN/P<nn>-<type>/…) so the reader can locate it without

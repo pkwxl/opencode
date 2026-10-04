@@ -70,10 +70,8 @@ Phase: R-01.P02
 4. End the session immediately once planning is done and the task index and all task documents are written.
 ## Constraints
 
-1. This session writes only the task index docs/R-01/P02-acceptance/tasks.md and each task's docs/T-NNN/todo.md; do not create done.md
-   (the completion rename is the DRIVER's job); the phase index and the other state files are read-only — do not edit them,
-   and do not change file permissions via chmod or the like; git commits are made by the DRIVER after the session
-   ends, do not run git commit or similar commands yourself.
+1. This session writes only the task index docs/R-01/P02-acceptance/tasks.md and each task's docs/T-NNN/todo.md — never done.md;
+   every other file, and every state file, is outside this session's write scope.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
@@ -96,11 +94,4 @@ Phase: R-01.P02
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
-the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
-todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
-these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
-do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
-round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
-permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
-not create, rename or edit them.
+do not create flat task files at the top level of docs/.

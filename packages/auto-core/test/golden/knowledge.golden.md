@@ -80,8 +80,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Constraints
 
-1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file; todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
-Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.

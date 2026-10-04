@@ -43,13 +43,15 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     }
     expect(text).not.toContain("- verify:")
     expect(text).not.toContain("PLAN.md")
-    // This session writes only the task index and task documents, creating no done.md; the other state files are untouchable
-    expect(text).toContain("This session writes only the task index docs/R-01/P02-implement/tasks.md and each task's docs/T-NNN/todo.md")
-    expect(text).toContain("do not create done.md")
-    expect(text).toContain("the phase index and the other state files are read-only")
+    // This session writes only the task index and task documents (0072
+    // U-B/T-131 slimmed the constraint to the role-scoped write list: the
+    // state-file, chmod and commit restatements are the constitution's — the
+    // contract and the AGENTS.md block carry them, the prompt no longer does)
+    expect(text).toContain("This session writes only the task index docs/R-01/P02-implement/tasks.md and each task's docs/T-NNN/todo.md — never done.md")
+    expect(text).toContain("every other file, and every state file, is outside this session's write scope")
     expect(text).not.toContain("CURRENT.md")
-    expect(text).toContain("do not change file permissions via chmod or the like")
-    expect(text).toContain("git commits are made by the DRIVER after the session")
+    expect(text).not.toContain("chmod")
+    expect(text).not.toContain("git commit")
     expect(text).toContain("AUTO-DECISION")
     expect(text).not.toContain("final-review reminder")
   })
@@ -175,7 +177,10 @@ describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
     expect(text).toContain("Task numbers increment continuously from T-001")
     expect(text).not.toContain("- verify:")
     expect(text).not.toContain("PLAN.md")
-    expect(text).toContain("do not change file permissions via chmod or the like")
+    // 0072 U-B/T-131: the chmod / commit restatements folded out of the
+    // planner prompts (the contract and the block own them)
+    expect(text).toContain("every other file, and every state file, is outside this session's write scope")
+    expect(text).not.toContain("chmod")
     expect(text).toContain("AUTO-DECISION")
   })
 
@@ -351,8 +356,10 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
     expect(text).toContain("Distill only")
     expect(text).toContain("do not modify any")
     expect(text).toContain("AUTO-DECISION")
-    expect(text).toContain("maintained exclusively by the DRIVER")
-    expect(text).toContain("git commits are made by the DRIVER after the session ends")
+    // 0072 U-B/T-131: the state-file / commit restatements folded out; the
+    // write-scope line carries the constraint alone
+    expect(text).toContain("every other file, and every state file, is outside this session's write scope")
+    expect(text).not.toContain("git commit")
   })
 
   test("k phase with no next phase: for-later-reference wording; still demands the four sections", () => {
@@ -450,8 +457,10 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
     expect(text).toContain("verifiable anchor")
     expect(text).toContain('labelled "rejected"')
     expect(text).toContain("the only file you may write this time is " + FILE)
-    expect(text).toContain("maintained by the DRIVER alone")
-    expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
+    // 0072 U-B/T-131: the state-rule restatement (state files / commits)
+    // retired from the prompt; the AGENTS.md block owns both wordings
+    expect(text).not.toContain("maintained by the DRIVER")
+    expect(text).not.toContain("git commit")
     expect(text).toContain("Distil only")
   })
 

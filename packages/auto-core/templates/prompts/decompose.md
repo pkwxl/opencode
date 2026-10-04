@@ -49,13 +49,12 @@ and two items that would change the same file are ordered with `Depends:` instea
 
 Constraints:
 1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
-   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; {{> state-rule}}
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions.
 {{> question-rule}}
 3. Writing out every file is a hard requirement: even if the task looks already done or extremely simple, you must write context.md,
    shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
    and stops the run;
-4. The todo.md/done.md state files are managed by the DRIVER: you write todo.md only, and must neither create done.md nor rename them
-   yourself;
+4. You write each subtask's todo.md only — never done.md;
 5. End the session as soon as the files are written.
 
 <!-- auto: eof -->

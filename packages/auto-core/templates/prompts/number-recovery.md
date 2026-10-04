@@ -31,6 +31,6 @@ number whose artifact was deleted, take the higher safe value instead — a numb
 
 ## Constraints
 
-1. The only file this session may write is .auto/next-task; no other file may be created or modified;{{> state-rule}}
+1. The only file this session may write is .auto/next-task; no other file may be created or modified.
 {{> question-rule}}
 3. Writing this record is a hard requirement: producing no valid record causes a blocked shutdown.

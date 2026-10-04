@@ -11,6 +11,5 @@ Task:
 
 Constraints:
 1. Only perform read-only probes; do not modify any implementation code and do not carry out the planned tasks;
-2. todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
-Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
-3. End the session as soon as the report is written; your final message restates the report's key points.
+2. End the session as soon as the report is written; your final message is this run's printed highlights — the DRIVER takes it as the report's
+   key points (the run asks for that one line, so it is not the closing summary the AGENTS.md constitution bans).

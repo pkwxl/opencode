@@ -373,7 +373,23 @@ describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
     expect(text).not.toContain("docs/agents/")
     // The retired task mirror is gone from the contract (plans/0054 D3)
     expect(text).not.toContain("CURRENT.md")
-    expect(text).toContain("docs/T-NNN/todo.md and docs/T-NNN/subtasks.md")
+    // 0072 U-B/T-131: the contract slimmed to driver-operational protocol —
+    // the pointer discipline (item 1), the state-file and test sentences
+    // (item 2) and the commit prohibition (item 5) folded back to the
+    // AGENTS.md block, the constitution's single source; the restatement of
+    // the task documents is gone with them (the constitution ratchet,
+    // test/constitution-ratchet.test.ts, holds every carrier to that).
+    expect(text).not.toContain("docs/T-NNN/todo.md and docs/T-NNN/subtasks.md")
+    expect(text).not.toContain("reread them after your context has been compacted")
+    expect(text).not.toContain("State files are read-only")
+    expect(text).not.toContain("Build, test, compile, lint")
+    expect(text).not.toContain("tmp/test.sh")
+    expect(text).not.toContain("Do not run git commit")
+    expect(text).not.toContain("nested .git sub-repositories")
+    // Role naming, the AGENTS.md note and problem handling stay (the
+    // contract's own layer, D1/D2 of the 0072 mapping)
+    expect(text).toContain("names your role for this turn (decompose / single subtask / wrap-up)")
+    expect(text).toContain("How to handle problems")
   })
 })
 

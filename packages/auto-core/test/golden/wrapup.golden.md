@@ -18,16 +18,12 @@ Migration/upgrade mode notes:
 
 All subtasks of this task were completed one by one in earlier sessions; do not redo them. This session only performs the wrap-up:
 
-1. Update the documents in docs/ affected by this task, so that the next session can understand the current progress from the files on disk alone;
+1. Update the documents in docs/ affected by this task;
 2. Write docs/T-002/report.md: an indexed report — one line per subtask (number + one-sentence conclusion +
    artifact path docs/T-002/S<NN>/index.md or code location); do not copy or rewrite the content of the subtask artifacts, add only
    two sections of your own, overall conclusion and open issues, so that later sessions and reviewers can learn what this task produced from the files on disk alone. Every reference in the
-   report (to a document or to code) must be a path relative to the target directory root (e.g. docs/T-002/S01/index.md,
-   src/foo.ts:42, in backticks or as a link, optionally with :line), and you must confirm the path exists before writing it — the
-   DRIVER does not check references afterwards; do not reference the state files inside the round directory docs/R-NN/
-   (the phase index phases.md, the task indexes tasks.md in the phase directories and the phase state files todo.md/done.md);
-3. The task status is recorded by the DRIVER in one pass after the session ends. todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
-Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+   report (to a document or to code) follows the directory's reference conventions as the AGENTS.md block states them;
+3. The task status is recorded by the DRIVER in one pass after the session ends.
    Result line: Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
    you found that the task's goal was not met. `Result: PASS` means every check the task asked for was actually run or observed
    and passed, with the evidence written in this report; `Result: FAIL` means a required check failed, could not be run, or the
@@ -56,11 +52,4 @@ sent back for correction; documents that already existed beforehand need no retr
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
-the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
-todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
-these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
-do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
-round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
-permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
-not create, rename or edit them.
+do not create flat task files at the top level of docs/.

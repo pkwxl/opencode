@@ -9,7 +9,13 @@ parameter decision. Ruled 2026-10-04: all three rulings accepted as recommended 
 **U-A executed 2026-10-04 (T-130):** the read-only contradiction audit is complete —
 4 contradictions, 12 duplications, 3 stale findings, and the full rule-to-layer mapping
 are in §6; the mapping goes to the person for approval as part of U-B's (T-131's)
-acceptance. Audit cadence (§4, in force from now): any later edit to a carrier — the
+acceptance. **U-B executed 2026-10-04 (T-131):** the consolidation is complete — the
+`agents-block.ts` constants are the single source (the `CONSTITUTION` export plus the
+`renderConstitutionPreamble` seam 0076's work orders consume), every carrier slimmed per
+the approved mapping, and the drift ratchet (`test/constitution-ratchet.test.ts`) holds
+the carrier surface to zero restatements; the record, the open items the frozen block
+keeps open (E2a's fold, K15, K17) and the deliberate non-changes are in §7. Audit
+cadence (§4, in force from now): any later edit to a carrier — the
 block (`src/agents-block.ts`), the contract (`templates/.opencode/agent/auto.md`), a
 partial (`templates/prompts/_partials.md`), a template/descriptor
 (`templates/prompts/*.md`, `templates/intents/default.md`) — reruns §6's contradiction
@@ -294,5 +300,83 @@ edit this triggers to a carrier reruns this section's contradiction case.
 AUTO-DECISION: closed this audit by appending the missing `<!-- auto: eof -->`
 terminator to this document (every sibling plan ends with one; the section above
 completes the body, and the eof discipline treats a finished document as terminated).
+
+## 7. U-B execution record (T-131, executed 2026-10-04)
+
+Consolidation executed per §2 U-B over §6's mapping. Paths relative to
+`packages/auto-core/`.
+
+**Single source.** `src/agents-block.ts` exports `CONSTITUTION` (the five constants as
+one record) and `renderConstitutionPreamble` (the same paragraphs without the AGENTS.md
+markers — the seam 0076's work-order export consumes; until T-137 wires that export the
+function has no caller, a named stub). `renderAgentsBlock` renders the preamble inside
+the markers; the block's rendered bytes are byte-identical before and after (verified
+against HEAD at both `testByDriver` states, and pinned by the ratchet suite's
+one-source-two-renderings test).
+
+**The contract** (`templates/.opencode/agent/auto.md`) slimmed to driver-operational
+protocol: item 1 keeps the role naming, drops the pointer restatement (K5); item 2 keeps
+the read-only/chmod sentence and the AGENTS.md note, drops the state-file and test
+sentences (K5, K6); item 5 (the commit prohibition) deleted (K5, K7); item 3 rewritten to
+its branch-invariant core — the question mode is named as the prompt's question rule's
+to state (K1), the decision-record clause (R1's dup) and the branch-specific
+automatic-reply sentence deleted, the `AUTO-DECISION` literal now the canonical
+punctuation (K13).
+
+**Partials.** `_partials.md`: `state-rule` deleted whole — both of its lines restate E2
+and E4, whose owner is the block — and its 14 include sites cleaned; `doc-layout`
+slimmed to task-scoped placement: the DRIVER-ownership clauses, the permanence doctrine
+and the reference-form sentence dropped (E2/E6 owners), the flat-file ban kept (K9).
+
+**Templates.** `whole.md`/`subtask.md`: the test protocol keeps only its operational
+extras — the end-turn-to-wait rhythm, the re-run mechanics and the handoverTest rhythm
+(K6); `subtask.md`'s state-file sentence slimmed to the role-specific completion
+decision (K8); the decompose family's constraint 4 slimmed to "you write each subtask's
+todo.md only — never done.md" (K8, all seven byte-identical files together); the four
+planning/handover constraints slimmed to their role-scoped write lists — the done.md,
+state-file, chmod and commit clauses dropped (E2/E2a/E4 dups, K8/K16); `wrapup.md`'s
+report item points at the AGENTS.md block's reference conventions instead of restating
+them (K10) and step 1 drops the duplicated rationale sentence (K14, the contract's item
+4 owns it); `dryrun.md`'s final message is named as the run's printed highlights channel
+— the one line the run asks for, explicitly not the constitution's banned closing
+summary (K2 resolved on the dryrun side); the builtin pack's t-phase duty is gated on
+`testByDriver` and reworded to the planner's use (K4).
+
+**Ratchet.** `test/constitution-ratchet.test.ts` (the chain-writes pattern): a
+constant-derived probe table per rule (each probe validated against `CONSTITUTION`, so
+the table cannot rot), a banned table carrying the retired restatement wordings verbatim
+(the regression arm — the collapsed paraphrases return loudly, not silently), a zero-hit
+flat rule over the carrier surface (the contract, `templates/prompts/` including
+`_partials.md`, `templates/intents/`, `templates/modes/`), planted-restatement and
+sanctioned-keeps self-tests, and the preamble/block equivalence. Verified end to end:
+planting the retired state-rule text into a carrier fails the suite naming file, line
+and finding; the clean tree passes.
+
+**Re-pins in the same unit.** 33 prompt goldens regenerated (both agent-contract states
+included); `test/template.test.ts` (state-rule fixtures → question-rule / a registered
+fixture; doc-layout assertions), `test/prompt-template.test.ts` (contract assertions),
+`test/prompt-exec.test.ts`, `test/prompt-phase.test.ts` re-pinned; `test/lanes.ts`
+gains the ratchet suite (unit lane). The claude adapter's translation tests needed no
+re-pin (they pin the translation over synthetic contracts; the real contract text they
+carry at runtime is the re-pinned golden).
+
+**Open after this unit** (the frozen block keeps them open): E2a's fold into the block
+and with it the 0076 hand-driven chmod gap; K15's intra-block harmonization; K17's
+stale REFS_SPEC header. **Deliberately not executed:** K11's mechanical dedup of the six
+byte-identical decompose files (they are goldens-pinned and byte-stable; the selection
+mechanism already exists); K12's shared handover core (R4's disposition is keep);
+K18/K19's stale maintainer comments (not carrier text; the audit cadence owns them).
+
+AUTO-RESOLVE: E2a's mapping recommendation ("fold into E2 at the block, closing the 0076
+gap") cannot execute in this unit — the block's rendered bytes are frozen by the 0072
+amendment -> the contract's read-only/chmod sentence stays as E2a's single surviving
+instance (the widest driver audience; all four planner copies deleted), and the gap
+stays open until a sanctioned block change (K15 and K17 stay open for the same reason).
+
+AUTO-DECISION: item 3 was rewritten to its branch-invariant core although T-131's scope
+sentence says only "question escalation and problem handling stay" (the mapping's D1
+row — the part the person approved — carries "owner, made branch-invariant (K1, K13)",
+§6.6 names that rewrite as U-B's work, no other task owns it, and 0077 explicitly
+excludes carrier moves; "stay" read as "stay in the contract", not "stay frozen").
 
 <!-- auto: eof -->

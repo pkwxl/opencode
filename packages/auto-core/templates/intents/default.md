@@ -85,7 +85,7 @@ Do not issue the same call again before you have written these out.
    - Split by test surface / scenario family: each item corresponds to one test file or to one family of closely related scenarios;
    - Keep writing tests apart from fixing defects: implementation defects that the tests expose are appended as separate fix items, not mixed
      into the test-writing item;
-   - Test execution follows the test execution protocol (with --test-by-driver enabled, scripts are handed to the DRIVER to run);
+   {{#if testByDriver}}- With --test-by-driver enabled, test items hand their checks to the DRIVER as test/ scripts;{{/if}}
 
 ### v acceptance
 
