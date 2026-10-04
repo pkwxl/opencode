@@ -1681,7 +1681,11 @@ if (command === "init" || command === "amend") {
   const roundComplete = !!phaseState && phaseState.phases.every((unit) => phaseState.done.has(unit.id))
   if (!roundComplete) {
     try {
-      await plannedPhaseUnits(directory, liveRound, config.phases)
+      // A bundle's phase types are not on disk until materialization, so the
+      // guard sees the bundle's parsed entries beside the loaded ones
+      // (plans/0079 §3: the stamped value must reconcile against the types
+      // the bundle will materialize, not the ones that predate it).
+      await plannedPhaseUnits(directory, liveRound, config.phases, bundle ? [...loadPhaseTypes(directory), ...bundle.types] : undefined)
     } catch (error) {
       console.error(
         `${error instanceof Error ? error.message : String(error)}. ` +

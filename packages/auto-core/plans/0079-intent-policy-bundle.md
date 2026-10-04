@@ -1,6 +1,6 @@
 # 0079 — Intent as a first-class policy bundle
 
-Status: **executing.** The design document for the intent layer's second stage: turning
+Status: **executed, 2026-10-04.** The design document for the intent layer's second stage: turning
 "intent" from a prompt-content pack (0031's degenerate form) into a named, materializable
 **policy bundle**, plus the one control-flow hook an intent's workflow needs (a bounded
 repair round). The concrete instance validating the design is the Clean-Room Redesign

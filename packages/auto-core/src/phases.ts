@@ -249,8 +249,12 @@ export async function syncPhaseIndex(dir: string, round: number, phases: string)
 // The phase units syncPhaseIndex would leave in the round, found without
 // writing: it throws exactly what the sync would throw. Lets init validate
 // before its first write (plans/0052 D7).
-export async function plannedPhaseUnits(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
-  const { units, existing, keep } = await phaseSync(dir, round, phases)
+// types defaults to the directory's loaded phase types; a caller installing
+// an intent bundle (plans/0079 §3) passes the bundle's parsed entries beside
+// them, so the guard reconciles the round against the value the bundle will
+// materialize, not the types that exist before its files land.
+export async function plannedPhaseUnits(dir: string, round: number, phases: string, types: readonly PhaseTypeEntry[] = loadPhaseTypes(dir)): Promise<PhaseUnit[]> {
+  const { units, existing, keep } = await phaseSync(dir, round, phases, types)
   return existing && keep === existing.phases.length && keep === units.length ? existing.phases : units
 }
 
@@ -289,8 +293,8 @@ export async function phaseTailDrift(dir: string, round: number, phases: string)
 
 // syncPhaseIndex's read and check half: the desired units, the current index
 // and the length of their shared prefix.
-async function phaseSync(dir: string, round: number, phases: string): Promise<{ units: PhaseUnit[]; existing: PhaseState | undefined; keep: number }> {
-  const desired = resolvePhases(phases, loadPhaseTypes(dir))
+async function phaseSync(dir: string, round: number, phases: string, types: readonly PhaseTypeEntry[] = loadPhaseTypes(dir)): Promise<{ units: PhaseUnit[]; existing: PhaseState | undefined; keep: number }> {
+  const desired = resolvePhases(phases, types)
   if (!desired) throw new Error(`invalid phases value "${phases}"`)
   const name = roundDirName(round)
   const units = desired.map((entry, i) => makeUnit(name, phaseId(i + 1), entry))

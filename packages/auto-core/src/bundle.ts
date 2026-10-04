@@ -47,6 +47,10 @@ export type IntentBundle = {
   mode?: string
   // Further config stamps the manifest may carry.
   stamps: { subtask?: SubtaskMode; parallel?: ParallelLevel; wrapup?: boolean }
+  // The bundle's parsed custom phase types: the entries a caller validating
+  // the stamped phases value before materialization needs beside the types
+  // already on disk (init's prefix guard).
+  types: PhaseTypeEntry[]
   // The materializable files (repository-relative suffix → text).
   files: { phases: Record<string, string>; pack?: string; mode?: string }
 }
@@ -91,12 +95,16 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
     layout.set(path, text)
   }
   // Phase types: parsed through the custom-type parser, so a bundle's types
-  // meet the same rules as a project's hand-dropped ones.
+  // meet the same rules as a project's hand-dropped ones. The parsed entries
+  // ride the bundle (the caller's pre-materialization checks need them).
   const phaseFiles: Record<string, string> = {}
+  const custom: PhaseTypeEntry[] = []
   const types: PhaseTypeEntry[] = [...BUILTIN_PHASE_TYPES]
   for (const path of [...layout.keys()].filter((key) => key.startsWith("phases/")).sort()) {
     const type = path.slice("phases/".length, -".md".length)
-    types.push(parsePhaseTypeFile(type, layout.get(path)!))
+    const entry = parsePhaseTypeFile(type, layout.get(path)!)
+    types.push(entry)
+    custom.push(entry)
     phaseFiles[type] = layout.get(path)!
   }
   // The phases value: the comma form of full type ids only (plans/0079 §5 —
@@ -156,6 +164,7 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
     phases,
     ...(modeStamp !== undefined ? { mode: modeStamp } : {}),
     stamps,
+    types: custom,
     files: {
       phases: phaseFiles,
       pack: layout.get(packPaths[0]!),
