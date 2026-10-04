@@ -569,6 +569,16 @@ if (command === "run") {
     console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
     process.exit(1)
   }
+  // --repair (auto-core plans/0079 §4): the bounded repair budget — how many
+  // automatic repair rounds a FAIL verdict (the task loop closes the task and
+  // appends rework) or a held verdict gate (a gate-evidence append) may drive
+  // before blocking for the human. Absent = none: the first FAIL blocks,
+  // today's behavior.
+  const repair = parseRepairBudget(flags.get("repair"))
+  if (repair === null) {
+    console.error("--repair takes 1..10 (automatic repair rounds before blocking for the human); defaults to none")
+    process.exit(1)
+  }
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
   if (maxSessions > 1 && !config.parallel) {
@@ -581,6 +591,7 @@ if (command === "run") {
     waitBetween,
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     maxSessions,
+    repair,
   })
   process.exit(code)
 }
@@ -631,6 +642,7 @@ if (command === "plan") {
     ["dryrun", "--dryrun", "the permission preflight: opencode-auto run <dir> --dryrun"],
     ["wait-between", "--wait-between", "the pause between tasks, and plan runs none"],
     ["max-sessions", "--max-sessions", "concurrent sessions of the task loop"],
+    ["repair", "--repair", "the bounded repair budget for FAIL verdicts"],
   ] as const) {
     if (flags.has(key)) {
       console.error(`${flag} is a run option (${what}); plan does not accept it`)
@@ -1185,6 +1197,15 @@ function parseMaxSessions(raw: string | undefined): number | null {
   return /^\d+$/.test(raw) && value >= 1 ? value : null
 }
 
+// --repair defaults to 0 (no automatic repair: a FAIL verdict blocks for the
+// human, today's behavior); 1..10 rounds when given — null marks an invalid
+// value (a bare flag among them: the budget is never implied).
+function parseRepairBudget(raw: string | undefined): number | null {
+  if (raw === undefined) return 0
+  const value = Number(raw)
+  return /^\d+$/.test(raw) && value >= 1 && value <= 10 ? value : null
+}
+
 // --subtask absent/bare = auto; null marks an invalid value. The four values
 // are the core's SUBTASK_MODES (auto-core plans/0059 D1: true is the planned
 // pipeline auto used to be, auto the adaptive default).
@@ -1486,6 +1507,10 @@ if (command === "init" || command === "amend") {
   }
   if (flags.has("max-sessions")) {
     console.error(`--max-sessions is a run option (concurrent AI sessions for this run); ${command} does not accept it`)
+    process.exit(1)
+  }
+  if (flags.has("repair")) {
+    console.error(`--repair is a run option (the bounded repair budget for FAIL verdicts, per run and never persisted); ${command} does not accept it`)
     process.exit(1)
   }
   // --name/--email (plans/0073 §2.2, init only — the amend whitelist above

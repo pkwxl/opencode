@@ -641,6 +641,7 @@ function schedulerCtx(server: AgentHost, opts: Partial<RunAllOpts>): LoopCtx {
     phases: "m",
     manual: true,
     ran: 0,
+    repairs: 0,
     router: holder.router,
     control: holder.control,
     git: createGitOps(),

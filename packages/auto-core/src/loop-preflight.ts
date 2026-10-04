@@ -165,6 +165,14 @@ export type RunAllOpts = {
   // no level is a usage error ("plan for parallelism first"); at 1 (the
   // default) nothing changes for any project whatever the level.
   maxSessions?: number
+  // --repair (plans/0079 §4): the bounded repair budget of this run — how
+  // many automatic repair rounds a FAIL verdict (a task report's Result line)
+  // or a held verdict gate may drive before blocking for the human, modeled
+  // on the bounded-recovery precedents (/exit, failover). Absent/0 = today's
+  // behavior: the first FAIL blocks (exit 2). Run-side width, never a config
+  // key; not in force under lanes or under plan's stop condition (the serial
+  // run path, v1).
+  repair?: number
   // plan's stop condition (plans/0053 D6): the run stops once a planning step
   // has succeeded, or where an execute route would start, and prints what to
   // review. Absent = run: the loop goes on through execution.

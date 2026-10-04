@@ -283,6 +283,7 @@ export async function loopFixture(
         phases,
         manual: phases === "m",
         ran: 0,
+        repairs: 0,
         input: planInput,
         // The run's router (loop.ts fills the field from the installed
         // services; the fixture's runs hold no routing decision state, and

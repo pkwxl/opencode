@@ -206,6 +206,7 @@ function isoCtx(root: string, server: AgentHost, opts: Partial<RunAllOpts> = {})
     phases: "m",
     manual: true,
     ran: 0,
+    repairs: 0,
     router: holder.router,
     control: holder.control,
     git: createGitOps(),

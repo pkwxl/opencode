@@ -46,7 +46,10 @@ export type ClientSource = AgentClient | ServerControl
 // Task outcomes. dirty (plans/0021-commit-boundary-design.md) = the dedicated
 // exit for a unit-start clean-gate failure: writes no runtime state, makes no
 // sweeping commit, the authority over git state stays with the human; the
-// caller halts directly with exit 2. unit-done (plans/0068 S5) = a lane
+// caller halts directly with exit 2. blocked may carry `repair` (plans/0079
+// §4): the block is a task report's FAIL verdict, the one block a run with a
+// --repair budget may trade for a bounded repair round (close the task,
+// append rework) instead of stopping for the human. unit-done (plans/0068 S5) = a lane
 // worker closed its unit without completing the task — a lead that stopped at
 // its taken split (the streams run as lanes of their own) or one stream of a
 // split: the unit's work is committed and the lane exits cleanly, and the
@@ -55,7 +58,7 @@ export type ClientSource = AgentClient | ServerControl
 export type Outcome =
   | { type: "completed" }
   | { type: "unit-done" }
-  | { type: "blocked"; question: string }
+  | { type: "blocked"; question: string; repair?: { reason?: string } }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
 

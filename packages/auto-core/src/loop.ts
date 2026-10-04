@@ -274,6 +274,9 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       manual: phases === "m",
       repl,
       ran: 0,
+      // The repair budget's spent counter (plans/0079 §4): run state only,
+      // a fresh process starts a fresh budget.
+      repairs: 0,
       input: opts.planInput,
       append: opts.append,
       routing,

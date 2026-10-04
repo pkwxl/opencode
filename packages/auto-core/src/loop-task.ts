@@ -16,6 +16,7 @@
 // §I D14). Does not depend on loop.ts.
 import { relative } from "node:path"
 import { join } from "node:path"
+import { closeUnit } from "./close"
 import type { Control } from "./exit"
 import { parseUnitDoc } from "./document/unit"
 import { subtaskStateSpec } from "./document/spec"
@@ -117,6 +118,11 @@ export type LoopCtx = {
   // false = the run's agents cannot fork, so auto's lead runs without its
   // split clause (plans/0059 D7); set once at run start by the degradation.
   leadSplit?: false
+  // The repair rounds this run has driven (plans/0079 §4): incremented as a
+  // round opens, read against opts.repair (the budget). Run state only,
+  // nothing persists it — an interrupted or re-run process starts a fresh
+  // budget, like every other run-side width fact.
+  repairs: number
 }
 
 // the main task loop: execute in turn all tasks in the current phase's task
@@ -319,6 +325,37 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
     return 2
   }
   if (outcome.type === "blocked") {
+    // The repair round (plans/0079 §4): a FAIL verdict with budget left
+    // automates the person's documented rework path — closeUnit the failed
+    // task (done for scheduling, the Closed: field recording the round), then
+    // hand the phase loop the evidence as an append input: its append branch
+    // (the same one plan --append drives) adds the repair tasks, which run in
+    // index order after the remaining work and re-verify. Every judgment
+    // stays the driver's — the verdict was parsed from the report, the close
+    // is the driver's own mechanism, and the appended tasks are planned work.
+    // Any refusal (explicit dependents without cascade, a dirty tree) or a
+    // spent budget falls through to today's block.
+    if (outcome.repair !== undefined && ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs) {
+      ctx.repairs++
+      const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}`
+      const closed = await closeUnit(directory, task.id, { reason, phases: ctx.phases, acceptanceGate: ctx.opts.acceptanceGate })
+      for (const line of closed.lines) log(`  ${line}`)
+      if (closed.type === "closed") {
+        emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${ctx.opts.repair})` })
+        log(`↻ ${task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${ctx.opts.repair})`)
+        ctx.input = {
+          text:
+            `Repair round ${ctx.repairs}: the task ${task.id} was closed — its report docs/${task.id}/report.md concluded ` +
+            `Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}. Read that report and the task's documents for what it ` +
+            `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
+            `and have the last task re-verify so the phase's verdict is rewritten honestly.`,
+        }
+        ctx.append = true
+        ctx.ran++
+        return 0
+      }
+      log(`⏸ the repair round could not close ${task.id}; blocking as usual`)
+    }
     await block(directory, task.id)
     log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
     // the proxy-answer highlight block (plans/0020-auto-resolve-design.md

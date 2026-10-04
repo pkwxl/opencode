@@ -12,9 +12,9 @@ import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
 import { sessionOpts } from "./opts"
-import { appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
+import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
-import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
+import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, phaseVerdictDoc, routePhase, type PhaseUnit } from "./phases"
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
@@ -37,8 +37,11 @@ import { loadPlan } from "./tasks"
 // idempotent: after an interruption the phase is still incomplete and its
 // tasks all done, the route is handover as before, and with the handover
 // document already complete the distillation is skipped and ②③ are made up
-// directly (C.2). Returns 0 = handover complete, 2 = the distillation session
-// implicitly blocked.
+// directly (C.2). Returns 0 = handover complete, or a repair round appended
+// under a --repair budget (plans/0079 §4 — the phase is not done; the loop
+// re-derives the execute route for the appended tasks and hands over again
+// when they close); 2 = the distillation session implicitly blocked, or a
+// gate holds with no budget or a refused repair.
 export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   const state = await phaseState(directory)
@@ -149,6 +152,28 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
   const gated = await completePhase(directory, phase, gates)
   if (gated.length) {
+    // The repair round (plans/0079 §4): a held verdict gate with budget left
+    // appends repair tasks over the gate evidence instead of stopping — the
+    // appending session runs here (appendPlan: the stale handover this
+    // distillation just wrote is removed per 0053 D25), the loop then
+    // re-derives the execute route for the appended tasks, and when they are
+    // done the phase distills again and the gate re-checks the rewritten
+    // verdict. Acceptance gates never repair — `Accepted: yes` is the human's
+    // alone; a failed append falls through to the gate stop.
+    if (ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs && gated.some((problem) => problem.startsWith("verdict"))) {
+      ctx.repairs++
+      log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the verdict gate holds ${phaseTitle(phase)} — appending repair tasks over the gate evidence`)
+      ctx.input = {
+        text:
+          `Repair round ${ctx.repairs}: the phase ${phaseTitle(phase)} is held by its verdict gate — ${gated.join("; ")}. ` +
+          `The verdict document docs/${phaseVerdictDoc(phase)} records why. Read it, then append repair tasks that fix what it found and ` +
+          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.`,
+      }
+      const code = await appendPlan(ctx, phase)
+      ctx.input = undefined
+      if (code === 0) return 0
+      log(`⏸ the repair append did not complete (exit ${code}); the gate stop follows`)
+    }
     logGateStop(directory, phase, gated, acceptance)
     return 2
   }

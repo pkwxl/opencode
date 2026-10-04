@@ -759,6 +759,11 @@ export async function runTask(
       enterPhase(chain, { kind: "wrapup" })
       return {
         type: "blocked",
+        // The repair fact (plans/0079 §4): this block is a FAIL verdict —
+        // the one block a run with a --repair budget may trade for a bounded
+        // repair round (the task loop closes the task and appends rework)
+        // instead of stopping for the human.
+        repair: { reason: result.reason },
         question:
           `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
           `accept the result with ${bin} close ${task.id} --reason <text>; ` +
