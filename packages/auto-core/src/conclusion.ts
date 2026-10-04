@@ -7,7 +7,7 @@
 import { formatDuration, formatTokens, formatUsageLine } from "./log"
 import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
-import { statsBoot, statsHistory, statsId, statsLaneRollup, statsTotals, type DigestStat, type DigestStats, type LaneRollup, type ModelStat, type TierStat, type StatsResume } from "./stats"
+import { statsBoot, statsDecomposeOf, statsHistory, statsId, statsLaneRollup, statsTotals, type DecomposeRun, type DigestStat, type DigestStats, type LaneRollup, type ModelStat, type TierStat, type StatsResume } from "./stats"
 
 // Startup resume banner (plans/STATS_PLAN.md §4.6): the snapshot is taken after
 // depreciation posting and before round rollover; round/phase/task are the
@@ -86,6 +86,10 @@ export async function roundResolveLines(directory: string | undefined): Promise<
 // are untrustworthy when the bucket identity mismatches); on guard failure
 // returns undefined, and the caller falls back to the pre-T-006 legacy text
 // (done) or prints nothing (blocked/incomplete never had a stats line).
+// Since plans/0075 §2.4 a third line may follow: the decompose line below,
+// appended when the run booked this task's execution-mode record — the round's
+// per-task lines then record the mode run and whether it came from the field
+// or the fallback (the falsifier evaluation's input).
 // AUTO-DECISION: "this process" is the wall-clock delta (wallMs −
 // boot.task.wallMs). The draft's Chinese phrase for "this process" sits next to the word AI and
 // could read as an AI subset; but the T-002 progress heartbeat line
@@ -104,10 +108,36 @@ export async function taskEndLines(directory: string | undefined, taskID: string
   const wall = formatDuration(totals.wallMs)
   const local = formatDuration(totals.wallMs - boot.task.wallMs)
   const since = local === wall ? "" : `, this process ${local}`
-  return [
+  const lines = [
     `elapsed ${wall} (AI ${formatDuration(totals.aiMs)}${since}), ${totals.sessions} sessions`,
     formatUsageLine(totals.usage),
   ]
+  lines.push(...decomposeLine(await statsDecomposeOf(directory, taskID)))
+  return lines
+}
+
+// The task-end decompose line (plans/0075 §2.4, one line, the existing
+// conclusion pattern): which execution mode the task ran under and where the
+// decision came from — the task document's Decompose field, auto's adaptive
+// fallback, or a hard --subtask override — with the capability downgrade
+// spelled out when the field's split could not run. The shape words are the
+// field's own vocabulary (split / whole / pipeline) when a decision was
+// recorded, the mode word otherwise (auto for the fallback, the override
+// value for a hard lever), so the falsifier evaluation of the planning
+// sessions' choices reads one calibrated line per task. No record (a task run
+// by a release before the field, or a stats document that never booked one)
+// adds nothing and the tri-state block keeps its exact prior shape.
+function decomposeLine(run: DecomposeRun | undefined): string[] {
+  if (!run) return []
+  const shape = run.field ?? (run.from === "fallback" ? "auto" : run.mode)
+  const from =
+    run.from === "field"
+      ? "the task document's Decompose field"
+      : run.from === "fallback"
+        ? "no Decompose field — the adaptive fallback"
+        : "--subtask override"
+  const downgrade = run.downgraded ? "; downgraded to whole — the fleet cannot fork sessions" : ""
+  return [`  decompose: ${shape} (${from}${downgrade})`]
 }
 
 // Phase-close line (§4.3, at the end of handoverPhase after commitTree):

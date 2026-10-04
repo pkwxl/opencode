@@ -333,7 +333,7 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
     const lines = await taskEndLines(directory, task.id)
     if (lines) {
       log(`⏸ ${task.id} blocked: ${lines[0]}`)
-      log(lines[1])
+      for (const line of lines.slice(1)) log(line)
     }
     // Commit the interruption scene too: preserve the breakpoint (the
     // unit's in-flight work) so it can be rolled back to.
@@ -353,7 +353,7 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
     const lines = await taskEndLines(directory, task.id)
     if (lines) {
       log(`⏸ ${task.id} incomplete: ${lines[0]}`)
-      log(lines[1])
+      for (const line of lines.slice(1)) log(line)
     }
     const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
     if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
@@ -365,7 +365,7 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
     const lines = await taskEndLines(directory, task.id)
     if (lines) {
       log(`✓ ${task.id} done: ${lines[0]}`)
-      log(lines[1])
+      for (const line of lines.slice(1)) log(line)
     } else {
       // Guard failure (stats not loaded / bucket identity mismatch) falls
       // back to the pre-T-006 wording.
@@ -930,7 +930,7 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   const lines = await taskEndLines(directory, task.id)
   if (lines) {
     log(`✓ ${task.id} done: ${lines[0]}`)
-    log(lines[1])
+    for (const line of lines.slice(1)) log(line)
   } else {
     log(`✓ ${task.id} done`)
   }

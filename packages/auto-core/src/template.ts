@@ -184,6 +184,7 @@ const PARTIAL_MARKERS: Record<string, string[]> = {
   // retired (plans/0054 D3); every pre-retirement overlay carries it too.
   "state-rule": ["todo.md → done.md"],
   "task-depends": ["Depends:", "Depends: none", "Touches:"],
+  "task-decompose": ["Decompose:"],
   "subtask-depends": ["Depends:", "Depends: none", "Touches:"],
   "question-rule": ["question tool", "AUTO-RESOLVE", "AUTO-DECISION"],
 }

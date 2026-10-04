@@ -4,6 +4,7 @@ import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSe
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
+import type { DecomposeMode } from "./document/unit"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
@@ -12,7 +13,7 @@ import { formatTokens } from "./format"
 import { removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
-import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
+import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type UnitStop } from "./opts"
 import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
@@ -20,7 +21,7 @@ import { begin, checklistTitle, markDone, reloadTask, type ChecklistItem, type P
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
-import { statsModelEvent } from "./stats"
+import { statsDecomposeRun, statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
 import { stepPause } from "./step"
@@ -30,6 +31,59 @@ import { reportResult, runWrapup } from "./wrapup"
 // Session-duration display uses the compact duration format: consolidated
 // into formatDurationCompact in src/log.ts (STATS_PLAN §5 — T-001 hoisted it
 // up; this task deletes the private copy here and imports instead).
+
+// —— The plan-recorded execution mode (plans/0075, ruled 2026-10-04) ——
+// The intelligence in the session, the decision an auditable artifact: the
+// planning session records its per-task execution-mode choice as the
+// `Decompose:` field of docs/T-NNN/todo.md, and --subtask auto executes it
+// mechanically — present: obey; absent: today's adaptive logic unchanged.
+// The hard values off/true/ondemand stay overrides that ignore the field
+// (capability degradation and test determinism keep their levers). The
+// mapping is the ruled one: split = auto's lead + its split streams (exactly
+// today's behavior, so obeying it changes nothing); whole = one whole-task
+// session to completion (ondemand's protocol); pipeline = the planned
+// decompose pipeline (true's path).
+export type DecomposeResolution = {
+  // The subtask mode the task runs under (the opts.subtask vocabulary).
+  mode: SubtaskMode
+  // Where the decision came from: the task document's field, auto's adaptive
+  // fallback (no field), or a hard --subtask override.
+  from: "field" | "fallback" | "override"
+  // The task's recorded field value when the decision read one.
+  field?: DecomposeMode
+  // The field said split but the fleet cannot fork (Opts.leadSplit === false,
+  // fixed at run start): downgraded to whole — logged, never blocking (the
+  // degrade/clampSwitches pattern; the downgrade path equals what a lead
+  // without its split clause already was, an ondemand session).
+  downgraded?: boolean
+}
+
+// One pure resolution of the effective subtask mode (deterministic in the
+// task's document and the run's levers, so every resume re-resolves the same
+// mode). Exported for the decompose-field tests.
+export function resolveDecompose(
+  requested: SubtaskMode | undefined,
+  field: DecomposeMode | undefined,
+  leadSplit: boolean | undefined,
+): DecomposeResolution {
+  const mode = requested ?? "auto"
+  if (mode !== "auto") return { mode, from: "override" }
+  if (field === undefined) return { mode, from: "fallback" }
+  if (field === "split") {
+    return leadSplit === false
+      ? { mode: "ondemand", from: "field", field, downgraded: true }
+      : { mode, from: "field", field }
+  }
+  return { mode: field === "pipeline" ? "true" : "ondemand", from: "field", field }
+}
+
+// The log line wording of an obeyed field value (the downgrade has its own
+// line at the call site).
+const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
+  split: "the lead may split the remaining work into streams",
+  whole: "one whole-task session carries the task to completion",
+  pipeline: "the planned decompose pipeline runs",
+}
 
 // Runs one task through the pipeline; the driver owns all state writes (the
 // todo.md → done.md renames, index ticks, .auto/), sessions never make them.
@@ -51,6 +105,11 @@ import { reportResult, runWrapup } from "./wrapup"
 // in the subtask loop below, as checklist items with driver-written todo.md
 // files, each in a fork of the lead) or rejects it, and a fork of the lead
 // finishes the task.
+// Since plans/0075, under auto a task whose todo.md field block carries
+// `Decompose: split | whole | pipeline` runs that recorded mode instead of the
+// adaptive one (resolveDecompose below: split = the lead behavior above,
+// whole = the ondemand path, pipeline = the true path); an absent field keeps
+// the adaptive logic, and the hard values off/true/ondemand ignore the field.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
@@ -106,7 +165,32 @@ export async function runTask(
   const switches = autoSwitches()
   const dir = opts.dir ?? plan.dir
   await begin(dir, task.id)
-  const mode = opts.subtask ?? "auto"
+  // The plan-recorded execution mode (plans/0075): resolved once here from
+  // the task's Decompose field, and every branch below reads the resolved
+  // mode — the whole pipeline (the lead clause, the decompose entry, the
+  // stream-lane guard, the resume gate's unit attribution) follows the one
+  // decision without re-consulting the field. Hard overrides (off/true/
+  // ondemand given on the CLI) ignore the field outright.
+  // AUTO-DECISION: the run-start surfaces (capability.ts degrade, the
+  // preflight's dispatchNeeds) keep reading the CLI value, not the per-task
+  // resolution (they run before any task document is read and reserve
+  // fleet-wide coverage; a pipeline field under --subtask auto still routes
+  // its decompose dispatch over the available entries at dispatch time)
+  // AUTO-DECISION: under --subtask auto with no field there is no log line
+  // (the adaptive default is silent exactly as before the field existed;
+  // the conclusion line records the fallback provenance instead)
+  const decompose = resolveDecompose(opts.subtask, task.decompose, opts.leadSplit)
+  const mode = decompose.mode
+  if (decompose.from === "field") {
+    await statsDecomposeRun(dir, { task: task.id, mode, from: decompose.from, field: decompose.field, ...(decompose.downgraded ? { downgraded: true } : {}) })
+    if (decompose.downgraded) {
+      log(`↻ ${task.id} its Decompose: split field cannot run — the fleet cannot fork sessions (capability degradation); downgraded to whole: one whole-task session runs to completion`)
+    } else {
+      log(`• ${task.id} Decompose: ${decompose.field} (the task document's recorded mode; --subtask auto obeys it) — ${DECOMPOSE_DESC[decompose.field!]}`)
+    }
+  } else {
+    await statsDecomposeRun(dir, { task: task.id, mode, from: decompose.from })
+  }
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
   // Strict resume (plans/0022-session-recovery-fidelity-design.md): when on,
   // records carry the unit baseline / effective model, verified on resume;

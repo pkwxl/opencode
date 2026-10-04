@@ -30,6 +30,9 @@ export const REPO_LANE: readonly string[] = [
   "test/capability.test.ts",
   "test/close.test.ts",
   "test/config-fix.test.ts",
+  // The plan-recorded execution mode (plans/0075): its end-to-end half drives
+  // runTask over real git repositories (freshRepo fixtures).
+  "test/decompose-field.test.ts",
   "test/document-roles.test.ts",
   "test/exec-session.test.ts",
   "test/git.test.ts",

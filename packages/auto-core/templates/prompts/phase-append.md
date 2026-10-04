@@ -108,6 +108,7 @@ Phase: {{phaseId}}
    For an appended task this matters at the seam: a missing `Depends:` means the previous line, so the first new task
    without the field depends on the last existing task — write `Depends:` explicitly whenever a new task does not
    need the task right before it.
+   {{> task-decompose}}
 3. Task numbers increment continuously from T-{{numberStart}}, and a number already used by an existing task or any
    historical task must not be reused; each new task focuses on one independently deliverable outcome; do not
    hand-write subtask checklist items (whether and how a task is split is decided at execution time);

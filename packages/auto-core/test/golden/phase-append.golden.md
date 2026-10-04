@@ -85,6 +85,13 @@ Phase: R-01.P02
    For an appended task this matters at the seam: a missing `Depends:` means the previous line, so the first new task
    without the field depends on the last existing task — write `Depends:` explicitly whenever a new task does not
    need the task right before it.
+   Optional execution-mode field, placed in the same field block beside `Phase:`: `Decompose: split` | `Decompose: whole` | `Decompose: pipeline`
+   records how the task should run under the default adaptive execution, and the DRIVER executes it mechanically. Weigh, per task, its size, the
+   dependency shape of its parts and the expected session count, and record your choice: `split` = one lead session works the task and may split
+   the remaining work into parallel streams; `whole` = one single session carries the task to completion; `pipeline` = a decomposition session
+   plans the task into subtasks first, then one session per subtask runs. The choice is a recorded decision and the field line is its artifact;
+   omit the field when you have no opinion (execution then stays adaptive). The field name and its three values are protocol strings the DRIVER
+   parses — write them verbatim and untranslated; any other value is rejected at load.
 3. Task numbers increment continuously from T-005, and a number already used by an existing task or any
    historical task must not be reused; each new task focuses on one independently deliverable outcome; do not
    hand-write subtask checklist items (whether and how a task is split is decided at execution time);

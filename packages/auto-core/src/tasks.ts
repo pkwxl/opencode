@@ -4,8 +4,9 @@
 //     `- [ ] T-014 <title>` line per task (U3; the tick is a redundant view,
 //     the driver ticks it when the task completes);
 //   - content: docs/T-NNN/todo.md — the title line `# T-014: <title>`, the
-//     field block (`Phase: R-01.P03`, optional `Depends:` / `Touches:`) and
-//     the body sections `## Goal` / `## Scope` / `## Acceptance` (U1);
+//     field block (`Phase: R-01.P03`, optional `Depends:` / `Touches:` /
+//     `Decompose:`, plans/0075) and the body sections `## Goal` / `## Scope` /
+//     `## Acceptance` (U1);
 //   - progress: todo.md → done.md, renamed by the driver inside the task's
 //     closing commit (U2).
 // Runtime state is not a document (U4, ruling R1): in_progress, blocked,
@@ -37,6 +38,7 @@ import type { PlanView, TaskView } from "./prompt"
 import {
   isUnitId,
   nextReady,
+  parseDecompose,
   parseIndex,
   parseUnitDoc,
   renameUnitDone,
@@ -47,6 +49,7 @@ import {
   unitStatePaths,
   UNIT_COMPLETE,
   UNIT_PENDING,
+  type DecomposeMode,
   type UnitDecl,
   type UnitRef,
 } from "./document/unit"
@@ -102,6 +105,14 @@ export type Task = {
   // absent = everything).
   depends?: string[] | "none"
   touches?: string[]
+  // The plan-recorded execution mode (`Decompose:` field, plans/0075): the
+  // planning session's recorded choice of how the task runs under
+  // --subtask auto — split (a lead session that may split the rest into
+  // streams), whole (one session to completion), pipeline (the planned
+  // decompose pipeline). Absent = no opinion (auto's adaptive logic decides
+  // at execution time). A document grammar, validated at load like the other
+  // fields; consumed per task by the runner's mode resolution.
+  decompose?: DecomposeMode
   // The subtask checklist from subtasks.md with effective done flags (state
   // files win over ticks once the protocol is active); empty before decompose.
   // Absent on the pseudo tasks of bypass sessions (planning, handover, …).
@@ -269,6 +280,7 @@ export function renderTaskTodo(input: {
   id: string
   title: string
   phase?: string
+  decompose?: string
   depends?: string
   touches?: string
   goal?: string
@@ -278,6 +290,7 @@ export function renderTaskTodo(input: {
   return [
     `# ${input.id}: ${input.title}`,
     ...(input.phase ? [`Phase: ${input.phase}`] : []),
+    ...(input.decompose !== undefined ? [`Decompose: ${input.decompose}`] : []),
     ...(input.depends !== undefined ? [`Depends: ${input.depends}`] : []),
     ...(input.touches !== undefined ? [`Touches: ${input.touches}`] : []),
     "",
@@ -440,9 +453,13 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
   const decls = parsed.entries.map((entry) => taskDecl(entry.id, docs.get(entry.id)!))
   const graph = unitProblems("task", decls, { external: await doneTaskIds(dir) })
   if (graph.length) {
+    // AUTO-DECISION: the wrapper says "grammar problems" (was "dependency
+    // problems") because unitProblems validates more than the graph since
+    // plans/0075 — a bad `Decompose:` value fails load through this same
+    // throw, and a dependency-worded wrapper would misname it.
     throw new Error(
-      `task index ${index} has dependency problems: ${graph.join("; ")}. ` +
-        "`Depends:` in docs/T-NNN/todo.md names tasks of this index or completed tasks (`Depends: none` for no prerequisite); fix it manually and re-run",
+      `task index ${index} has grammar problems: ${graph.join("; ")}. ` +
+        "`Depends:` in docs/T-NNN/todo.md names tasks of this index or completed tasks (`Depends: none` for no prerequisite); `Decompose:` accepts split, whole or pipeline (omit it for no opinion); fix the field lines manually and re-run",
     )
   }
   const own = new Set(parsed.entries.map((entry) => entry.id))
@@ -453,6 +470,9 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
     const done = scan.done.has(entry.id)
     const doc = docs.get(entry.id)!
     const unit = parseUnitDoc(doc)
+    // The validated grammar token (unitProblems has thrown by here on any
+    // unknown value, so parseDecompose answers for every present field).
+    const decompose = unit.decompose !== undefined ? parseDecompose(unit.decompose) : undefined
     const runtime = units.tasks[entry.id] ?? {}
     const forkBase = parseForkBase(runtime.forkBase)
     const split = parseSplitPoint(runtime.split)
@@ -470,6 +490,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
       ...(unit.touches !== undefined ? { touches: unit.touches } : {}),
+      ...(decompose !== undefined ? { decompose } : {}),
       checklist: await readChecklist(dir, entry.id),
     })
   }
@@ -484,7 +505,12 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
 // collect) would let the two drift apart.
 export function taskDecl(id: string, doc: string): UnitDecl {
   const unit = parseUnitDoc(doc)
-  return { id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}), ...(unit.touches !== undefined ? { touches: unit.touches } : {}) }
+  return {
+    id,
+    ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
+    ...(unit.touches !== undefined ? { touches: unit.touches } : {}),
+    ...(unit.decompose !== undefined ? { decompose: unit.decompose } : {}),
+  }
 }
 
 const declOf = (task: Task): UnitDecl => ({ id: task.id, ...(task.depends !== undefined ? { depends: task.depends } : {}) })

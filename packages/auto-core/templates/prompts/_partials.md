@@ -70,6 +70,14 @@ field a task depends on the task before it in the index (serial order), and `Dep
 `Touches: src/dma/, include/dma.h` lists the repository-relative paths the task will change (no absolute paths, no `..`); without it the
 task may touch anything. Both field names are protocol strings the DRIVER parses — write them verbatim; an empty value, a task depending on
 itself and a dependency cycle are rejected.
+## task-decompose
+Optional execution-mode field, placed in the same field block beside `Phase:`: `Decompose: split` | `Decompose: whole` | `Decompose: pipeline`
+records how the task should run under the default adaptive execution, and the DRIVER executes it mechanically. Weigh, per task, its size, the
+dependency shape of its parts and the expected session count, and record your choice: `split` = one lead session works the task and may split
+the remaining work into parallel streams; `whole` = one single session carries the task to completion; `pipeline` = a decomposition session
+plans the task into subtasks first, then one session per subtask runs. The choice is a recorded decision and the field line is its artifact;
+omit the field when you have no opinion (execution then stays adaptive). The field name and its three values are protocol strings the DRIVER
+parses — write them verbatim and untranslated; any other value is rejected at load.
 ## subtask-depends
 Optional dependency fields, placed as the first lines of a subtask's todo.md (before `## Scope`): `Depends: S01, S03` means the subtask
 starts only after the listed subtasks of this task are done — item N of the checklist is S<two-digit N>; without the field a subtask depends

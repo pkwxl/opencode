@@ -114,6 +114,27 @@ describe("loadPlan", () => {
     await expect(loadPlan(dir, phase)).rejects.toThrow("is not a task id")
   })
 
+  // The plan-recorded execution mode (plans/0075): write → parse → validate.
+  // The field round-trips through renderTaskTodo and the field block (todo.md
+  // and done.md alike), and an unknown value fails load with the standard
+  // grammar error.
+  test("Decompose round-trips on todo.md and done.md; an unknown value fails load", async () => {
+    await Bun.write(join(dir, phase.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }]))
+    await mkdir(join(dir, "docs/T-001"), { recursive: true })
+    const doc = renderTaskTodo({ id: "T-001", title: "a", phase: "R-01.P01", decompose: "pipeline", goal: "g", scope: "s", acceptance: "a" })
+    expect(doc).toContain("Phase: R-01.P01\nDecompose: pipeline\n")
+    await Bun.write(join(dir, "docs/T-001/todo.md"), doc)
+    expect((await loadPlan(dir, phase)).tasks[0]!.decompose).toBe("pipeline")
+    // The rename to done.md keeps the field readable.
+    await Bun.write(join(dir, "docs/T-001/done.md"), renderTaskTodo({ id: "T-001", title: "a", phase: "R-01.P01", decompose: "whole", goal: "g", scope: "s", acceptance: "a" }))
+    await rm(join(dir, "docs/T-001/todo.md"))
+    expect((await loadPlan(dir, phase)).tasks[0]!.decompose).toBe("whole")
+    // An unknown value is a load failure through the grammar check.
+    await Bun.write(join(dir, "docs/T-001/done.md"), renderTaskTodo({ id: "T-001", title: "a", phase: "R-01.P01", decompose: "sideways", goal: "g", scope: "s", acceptance: "a" }))
+    await expect(loadPlan(dir, phase)).rejects.toThrow('T-001 has an unknown Decompose value "sideways"')
+    await expect(loadPlan(dir, phase)).rejects.toThrow("grammar problems")
+  })
+
   test("taskBody drops the title, the field block and the terminator", () => {
     expect(taskBody("# T-001: a\nPhase: R-01.P01\nDepends: none\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")).toBe("## Goal\n\ng")
     expect(taskBody(renderTaskTodo({ id: "T-002", title: "b", goal: "g", scope: "s", acceptance: "a" }))).toBe(
@@ -450,6 +471,23 @@ describe("planning output", () => {
     expect(problems.some((p) => p.includes("touches an absolute path: /etc/x"))).toBe(true)
     await writeTask("T-002", { depends: "T-001" })
     expect((await plannedTaskProblems(dir, phase, { before: new Set() })).problems.some((p) => p.includes("dependency cycle: T-001 -> T-002 -> T-001"))).toBe(true)
+  })
+
+  // The planning collect validates the Decompose value set too (plans/0075):
+  // the session hears the problem line as retry feedback, and a valid field
+  // rides the decl (newTaskProblems → taskDecl) into the graph check.
+  test("the Decompose field: a valid value passes and rides the decl; an unknown value is reported", async () => {
+    await Bun.write(join(dir, phase.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }]))
+    await writeTask("T-001", { decompose: "split" })
+    expect(await newTaskProblems(dir, phase, "T-001", { before: new Set() })).toEqual({
+      problems: [],
+      decl: { id: "T-001", decompose: "split" },
+    })
+    expect(await plannedTaskProblems(dir, phase, { before: new Set() })).toEqual({ problems: [], ids: ["T-001"] })
+    await writeTask("T-001", { decompose: "sometimes" })
+    expect((await plannedTaskProblems(dir, phase, { before: new Set() })).problems).toContain(
+      "docs/R-01/P01-implement/tasks.md: T-001 has an unknown Decompose value \"sometimes\" (write split, whole, pipeline, or omit the field)",
+    )
   })
 
   test("the numbering start rejects lower ids", async () => {

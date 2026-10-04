@@ -50,6 +50,13 @@ Phase: R-01.P01
    `Touches: src/dma/, include/dma.h` lists the repository-relative paths the task will change (no absolute paths, no `..`); without it the
    task may touch anything. Both field names are protocol strings the DRIVER parses — write them verbatim; an empty value, a task depending on
    itself and a dependency cycle are rejected.
+   Optional execution-mode field, placed in the same field block beside `Phase:`: `Decompose: split` | `Decompose: whole` | `Decompose: pipeline`
+   records how the task should run under the default adaptive execution, and the DRIVER executes it mechanically. Weigh, per task, its size, the
+   dependency shape of its parts and the expected session count, and record your choice: `split` = one lead session works the task and may split
+   the remaining work into parallel streams; `whole` = one single session carries the task to completion; `pipeline` = a decomposition session
+   plans the task into subtasks first, then one session per subtask runs. The choice is a recorded decision and the field line is its artifact;
+   omit the field when you have no opinion (execution then stays adaptive). The field name and its three values are protocol strings the DRIVER
+   parses — write them verbatim and untranslated; any other value is rejected at load.
 3. Task numbers increment continuously from T-001, and must not reuse a number already taken by an
    existing task directory; each task focuses on one independently deliverable outcome, sized so a single session can
    finish it within a modest context budget; do not hand-write subtask checklist items (whether and how a task is

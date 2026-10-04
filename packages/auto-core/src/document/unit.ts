@@ -21,6 +21,10 @@
 // root; a missing `Touches` means "touches everything". Field names are
 // driver-parsed English protocol strings (plans/0035 §3), read
 // case-insensitively.
+// Beside them sits the plan-recorded execution mode (plans/0075), a task-level
+// grammar: `Decompose: split | whole | pipeline` in a task's field block. The
+// field-block reading here is shared by all levels (only a task document's
+// value is ever consumed); the value set is validated by unitProblems.
 import { rename } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -171,11 +175,30 @@ export async function tickIndexLine(file: string, id: string): Promise<void> {
 // A unit's dependency declaration. `depends`: undefined = field absent (G3
 // default: the previous sibling), "none" = explicit root, [] = empty value (a
 // problem). `touches`: undefined = touches everything, [] = empty value (a
-// problem).
+// problem). `decompose`: the raw `Decompose:` value when the field line exists
+// (plans/0075 — a task-level grammar; validated by unitProblems, so the raw
+// string rides the decl the same way an unparsed `Depends:` list cannot).
 export type UnitDecl = {
   id: string
   depends?: string[] | "none"
   touches?: string[]
+  decompose?: string
+}
+
+// The plan-recorded execution modes (plans/0075, ruled 2026-10-04): `split` =
+// auto's lead + its split streams; `whole` = one whole-task session to
+// completion; `pipeline` = the planned decompose pipeline. The value set is
+// grammar — anything else is a load failure.
+export const DECOMPOSE_MODES = ["split", "whole", "pipeline"] as const
+export type DecomposeMode = (typeof DECOMPOSE_MODES)[number]
+
+// A `Decompose:` field value normalized: the value comparison is
+// case-insensitive like every other field reading (`Depends: none`), the
+// returned word is the lowercase grammar token. undefined = absent or unknown
+// (the caller's validation reports the unknown case).
+export function parseDecompose(value: string): DecomposeMode | undefined {
+  const word = value.trim().toLowerCase()
+  return DECOMPOSE_MODES.includes(word as DecomposeMode) ? (word as DecomposeMode) : undefined
 }
 
 export type UnitDoc = {
@@ -184,6 +207,9 @@ export type UnitDoc = {
   fields: Record<string, string>
   depends?: string[] | "none"
   touches?: string[]
+  // The raw `Decompose:` value (trimmed, unnormalized — unitProblems judges
+  // it; parseDecompose normalizes for consumers).
+  decompose?: string
 }
 
 const listValue = (value: string): string[] =>
@@ -217,6 +243,7 @@ export function parseUnitDoc(text: string): UnitDoc {
   if (title !== undefined) doc.title = title
   if ("depends" in fields) doc.depends = /^none$/i.test(fields.depends!) ? "none" : listValue(fields.depends!)
   if ("touches" in fields) doc.touches = listValue(fields.touches!)
+  if ("decompose" in fields) doc.decompose = fields.decompose!
   return doc
 }
 
@@ -261,6 +288,14 @@ export function unitProblems(level: UnitLevel, units: readonly UnitDecl[], opts:
         if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) problems.push(`${unit.id} touches an absolute path: ${path}`)
         else if (path.split(/[\\/]/).includes("..")) problems.push(`${unit.id} touches a path with ..: ${path}`)
       }
+    }
+    // The plan-recorded execution mode (plans/0075): the value set is grammar,
+    // so an unknown (or empty) value is a problem like every other field's —
+    // absent is legal and means "no opinion".
+    if (unit.decompose !== undefined && parseDecompose(unit.decompose) === undefined) {
+      problems.push(
+        `${unit.id} has ${unit.decompose === "" ? "an empty" : `an unknown`} Decompose value${unit.decompose === "" ? "" : ` "${unit.decompose}"`} (write ${DECOMPOSE_MODES.join(", ")}, or omit the field)`,
+      )
     }
   }
   problems.push(...cycles(resolveDepends(units)))

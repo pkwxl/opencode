@@ -27,6 +27,7 @@
 // crashing) — an accepted boundary, no lock file added.
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
+import { DECOMPOSE_MODES, type DecomposeMode } from "./document/unit"
 import { currentRound } from "./phases"
 import { emitStatus } from "./run-status"
 
@@ -173,6 +174,36 @@ export type StatsDoc = {
   // figures below also folded into the phase/round buckets), and the
   // conclusion's lanes line reads the section through statsLaneRollup.
   lanes?: Record<string, LaneStat>
+  // The current task's plan-recorded execution mode (plans/0075 §2.4): what
+  // the runner resolved the task to run under and where the decision came
+  // from — the observability input of the task-end conclusion line (the
+  // falsifier evaluation reads whether the planning sessions' choices were
+  // any good). One record, replaced at every runTask start; absent until the
+  // first booking, so the persisted shape of a run without it is unchanged.
+  decompose?: DecomposeRun
+}
+
+// The per-task execution-mode record (plans/0075 §2.4): `mode` = the subtask
+// mode the task actually ran under (the opts.subtask vocabulary after the
+// field's mapping); `from` = where the decision came from — the task
+// document's Decompose field, auto's adaptive fallback (no field), or a hard
+// --subtask override; `field` = the task's recorded field value when one is
+// present; `downgraded` = the field said split but the fleet cannot fork
+// (Opts.leadSplit === false), so it ran as one whole-task session.
+// AUTO-DECISION: the mode words are restated here (opts.ts SUBTASK_MODES is
+// the frozen --subtask vocabulary) instead of imported — stats sits below
+// opts in the graph and the import-direction cycle check counts type edges,
+// so not even the type may cross; the words are constitutional and change
+// with a plan, at which point this restatement changes with them.
+type SubtaskModeWord = "off" | "auto" | "true" | "ondemand"
+const SUBTASK_WORDS: readonly SubtaskModeWord[] = ["off", "auto", "true", "ondemand"]
+
+export type DecomposeRun = {
+  task: string
+  mode: SubtaskModeWord
+  from: "field" | "fallback" | "override"
+  field?: DecomposeMode
+  downgraded?: boolean
 }
 
 // One landed lane's booked figures: the report's usage (a single token
@@ -419,9 +450,31 @@ function parseStatsDoc(raw: string): StatsDoc | undefined {
       sessions: parseSessions(p.sessions),
       history: { rounds: num(history.rounds), totals: parseTotals(history.totals) },
       lanes: parseLaneStats(p.lanes),
+      decompose: parseDecomposeRun(p.decompose),
     }
   } catch {
     return undefined
+  }
+}
+
+// The execution-mode record, leniently (the parseLaneStats mirror): a bad
+// record reads as missing — the conclusion line it feeds is observability, and
+// a corrupted entry must never weigh more than its absence. The enum fields
+// survive only with a legal value.
+function parseDecomposeRun(raw: unknown): DecomposeRun | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const r = raw as Record<string, unknown>
+  const task = str(r.task)
+  const mode = str(r.mode)
+  const from = str(r.from)
+  if (!task || !SUBTASK_WORDS.includes(mode as SubtaskModeWord) || !["field", "fallback", "override"].includes(from)) return undefined
+  const field = str(r.field)
+  return {
+    task,
+    mode: mode as SubtaskModeWord,
+    from: from as DecomposeRun["from"],
+    ...(DECOMPOSE_MODES.includes(field as DecomposeMode) ? { field: field as DecomposeMode } : {}),
+    ...(r.downgraded === true ? { downgraded: true } : {}),
   }
 }
 
@@ -1165,6 +1218,31 @@ export async function statsLaneRollup(dir: string | undefined): Promise<LaneRoll
     wallMs: sum((entry) => entry.wallMs),
     booked: entries.every((entry) => entry.booked === true),
   }
+}
+
+// ===== the plan-recorded execution mode (plans/0075 §2.4) =====
+
+// Books the current task's resolved execution mode (runTask's mode
+// resolution, src/runner.ts resolveDecompose): one record per task, replaced
+// wholesale — a re-run or resumed dispatch of the same task re-books the same
+// deterministic resolution, and the next task's booking retires the previous
+// one. Lazy-loaded like the other writers when no handle exists.
+export async function statsDecomposeRun(dir: string | undefined, run: DecomposeRun): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  handle.doc.decompose = run
+  queueWrite(dir, handle)
+}
+
+// Reads the execution-mode record of one task: the record itself when its task
+// matches, undefined otherwise (no record, another task's, or a leniently
+// dropped bad one). Like statsTotals this lazily loads; taskEndLines calls it
+// only after its statsId guard passed, so the handle is already present.
+export async function statsDecomposeOf(dir: string | undefined, task: string): Promise<DecomposeRun | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  const run = handle.doc.decompose
+  return run?.task === task ? run : undefined
 }
 
 // The failure-message classifier's token booking (plans/0055 §7.1 "Stats"):

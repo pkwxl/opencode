@@ -58,6 +58,7 @@ Phase: {{phaseId}}
    The title line, the `Phase:` field line, the three section headings, the index line and the closing terminator are
    parsed by the DRIVER — write them verbatim as above, do not translate or rephrase them;
    {{> task-depends}}
+   {{> task-decompose}}
 3. Task numbers increment continuously from T-{{numberStart}}, and must not reuse a number already taken by an
    existing task directory; each task focuses on one independently deliverable outcome, sized so a single session can
    finish it within a modest context budget; do not hand-write subtask checklist items (whether and how a task is

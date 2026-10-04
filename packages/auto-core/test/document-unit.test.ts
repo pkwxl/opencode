@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
   type UnitDecl,
   type UnitRef,
+  DECOMPOSE_MODES,
   nextReady,
+  parseDecompose,
   parseIndex,
   parsePhaseDir,
   parseUnitDoc,
@@ -241,6 +243,22 @@ describe("parseUnitDoc", () => {
   test("no title line: fields are still read from the top", () => {
     expect(parseUnitDoc("Depends: S01 S02\n").depends).toEqual(["S01", "S02"])
   })
+
+  // The plan-recorded execution mode (plans/0075): the field-block reading
+  // carries the raw value; parseDecompose normalizes it case-insensitively.
+  test("Decompose: the raw value rides the doc, parseDecompose normalizes it", () => {
+    const doc = parseUnitDoc("# T-014: DMA ring buffer\nPhase: R-01.P03\nDecompose: pipeline\n\n## Goal\n")
+    expect(doc.decompose).toBe("pipeline")
+    expect(doc.fields.decompose).toBe("pipeline")
+    expect(parseDecompose(doc.decompose!)).toBe("pipeline")
+    // Case-insensitive value, like `Depends: none`; unknown → undefined.
+    expect(parseDecompose("WHOLE")).toBe("whole")
+    expect(parseDecompose("split ")).toBe("split")
+    expect(parseDecompose("sideways")).toBeUndefined()
+    expect(parseDecompose("")).toBeUndefined()
+    // Absent field stays undefined.
+    expect(parseUnitDoc("# T-015: x\nPhase: R-01.P03\n").decompose).toBeUndefined()
+  })
 })
 
 const t = (id: string, rest: Partial<UnitDecl> = {}): UnitDecl => ({ id, ...rest })
@@ -315,6 +333,22 @@ describe("unitProblems (G4)", () => {
 
   test("duplicate unit ids are a problem", () => {
     expect(unitProblems("task", [t("T-001"), t("T-001")])).toEqual(["duplicate unit T-001"])
+  })
+
+  // The Decompose value set is grammar (plans/0075): the three ruled words
+  // pass (in any casing — the decl carries the raw string), anything else,
+  // including an empty value, is a problem.
+  test("Decompose: the ruled values pass, unknown and empty values are problems", () => {
+    for (const value of DECOMPOSE_MODES) {
+      expect(unitProblems("task", [t("T-001", { decompose: value })])).toEqual([])
+      expect(unitProblems("task", [t("T-001", { decompose: value.toUpperCase() })])).toEqual([])
+    }
+    expect(unitProblems("task", [t("T-001", { decompose: "sideways" })])).toEqual([
+      'T-001 has an unknown Decompose value "sideways" (write split, whole, pipeline, or omit the field)',
+    ])
+    expect(unitProblems("task", [t("T-001", { decompose: "" })])).toEqual([
+      "T-001 has an empty Decompose value (write split, whole, pipeline, or omit the field)",
+    ])
   })
 })
 
