@@ -115,6 +115,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/log.test.ts",
   "test/loop-conclusion.test.ts",
   "test/loop-progress.test.ts",
+  "test/manual-prompts-ratchet.test.ts",
   "test/model-step.test.ts",
   "test/model-window.test.ts",
   "test/mode.test.ts",

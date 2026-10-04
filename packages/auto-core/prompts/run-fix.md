@@ -26,9 +26,9 @@ do) — and `docs/<task id>/todo.md`, the task document, for the goal and accept
    alone; do not create, rename or delete `docs/<task id>/todo.md` or `done.md`.
 3. Do not edit `docs/<task id>/handoff.md` — it belongs to the verification channel; the next verification
    round rewrites or clears it.
-4. A decision that should have been the person's gets an `AUTO-RESOLVE: <question> -> <choice> (<reason>)` line
-   in the relevant document or code comment; a plain engineering call of your own gets
-   `AUTO-DECISION: <decision> (<reason>)`.
+4. A decision of your own must leave a record in the relevant document or code comment: a call that should have
+   been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other
+   call an `AUTO-DECISION: <decision> (<reason>)` line.
 5. Do not run git commit or any commit command — the verification session performs the close-out commits once
    the re-verification passes.
 6. Every Markdown document you create (or rewrite in full) ends, once finished, with a line holding only

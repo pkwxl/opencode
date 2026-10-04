@@ -86,6 +86,7 @@ plan only, do not implement anything.
    Phase: R-NN.P<nn>
    Depends: <same-level task ids, comma-separated>
    Touches: <repository-relative paths this task will change>
+   Decompose: <split | whole | pipeline>
 
    ## Goal
    <what this task delivers>
@@ -107,12 +108,19 @@ plan only, do not implement anything.
    a new task does not build on the one right before it (`Depends: none` declares no prerequisite; name
    same-level task ids only, completed tasks of earlier phases included). `Touches:` may be omitted when the
    task may touch anything (no absolute paths, no `..`). No empty values, no self-dependency, no cycles.
-5. Each new task focuses on one independently deliverable outcome. Do not hand-write subtask checklists —
+5. The execution-mode field `Decompose:`, in the same field block, is optional: `Decompose: split` (a lead
+   session works the task and may split the remainder into parallel streams), `Decompose: whole` (one session
+   carries the task to completion) or `Decompose: pipeline` (a decomposition session plans subtasks first, then
+   one session per subtask) — how the task should run under the driver's default adaptive execution. Weigh the
+   task's size, its parts' dependency shape and the expected session count; the choice is a recorded decision,
+   and omitting the field expresses no opinion. The field name and its three values are protocol strings the
+   driver parses — write them verbatim, untranslated; any other value is rejected at load.
+6. Each new task focuses on one independently deliverable outcome. Do not hand-write subtask checklists —
    whether and how a task is split is decided at execution time. Deliverable files the tasks will create must
    not reference process documents (`docs/T-*`, `docs/R-*`, `docs/phases/`, PLAN.md, `.auto/`) — process
    documents are not design dependencies. When the config sets a parallel level, plan so that tasks whose
    `Touches:` paths do not overlap can run side by side.
-6. The append must add at least one new task: even if the input turns out to be covered by the existing tasks,
+7. The append must add at least one new task: even if the input turns out to be covered by the existing tasks,
    write one explanatory task and state the reason in its document.
 
 ## Numbering

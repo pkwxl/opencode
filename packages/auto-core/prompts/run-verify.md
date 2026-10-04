@@ -39,15 +39,11 @@ else — and overwrite that handoff with the current gap list.
 ## The verdict
 
 - All checks pass → close the task out — the driver's completion sequence; the commits and state writes are
-  yours alone, in exactly this order:
+  yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session
+  (the work, then the report, then the state writes, each with its own commit):
   1. Delete `docs/<task id>/handoff.md` when present: a fixed round's gap list is stale state and must not land
-     in the commit.
-  2. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:
-     one short section per acceptance criterion — what was done, with the evidence (your inspection and its
-     outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open
-     issues, ending with the result line on a line of its own: `Result: PASS` (a protocol string, verbatim).
-     Every Markdown document you create ends with the terminator as above. When SKIP, write no report.
-  3. The work commit: `git add -A` + one `git commit` per repository (nested repositories first, then the
+     in a commit.
+  2. The work commit: `git add -A` + one `git commit` per repository (nested repositories first, then the
      enclosing one), message:
 
           <task id> exec <task title>
@@ -57,15 +53,29 @@ else — and overwrite that handoff with the current gap list.
 
      The subject is truncated past 100 characters. Write the `Auto-Task`/`Auto-Stage` trailers verbatim, never
      omit them.
+  3. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:
+     one short section per acceptance criterion — what was done, with the evidence (your inspection and its
+     outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open
+     issues, ending with the result line: the last line of body text before the terminator, on a line of its
+     own, `Result: PASS` — a protocol string, written exactly as given, never translated, bolded or
+     list-marked. Every Markdown document you create ends with the terminator as above. Then the wrap-up
+     commit: the same add + commit pass, message:
+
+          <task id> wrapup <task title>
+
+          Auto-Task: <task id>
+          Auto-Stage: wrapup
+
+     When SKIP, write no report and make no wrap-up commit.
   4. The completion writes: rename `docs/<task id>/todo.md` → `done.md`; tick the task's line in its phase's
      index (the `tasks.md` of the round/phase directory the document's `Phase:` field names:
      `- [ ] <task id>` → `- [x] <task id>`); if `.auto/units.json` holds a record for this task, remove it.
-  5. The close-out commit: the same add + commit pass, message:
+  5. The completion commit: the same add + commit pass, message:
 
-          <task id> carryover driver-state posting
+          <task id> done <task title>
 
           Auto-Task: <task id>
-          Auto-Stage: carryover
+          Auto-Stage: done
 
   Then end your reply, on a line of its own, with `Verification: PASS` (a protocol string for the master
   control, verbatim) — it certifies the task as verified, committed and state-advanced: the master control may

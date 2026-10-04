@@ -15,6 +15,7 @@ src/
   engine/      turn engine      — the spine, concerns, fx and sources of one session turn
   *.ts         driver (orchestration plane) + the flat intent/phases/document modules
 templates/     prompts, intent packs, modes, and init copy templates (embedded via `with { type: "file" }`)
+prompts/       the manual-driver suite — runbooks for running a phase through a coding agent (no code imports it)
 test/          one suite per module + fixtures/ + golden/ + import-direction.test.ts
 docs/          durable docs: this index, shell-contract.md, glossary.md
 plans/         numbered design/plan history (stage-assist, not maintained after it goes stale)
@@ -40,6 +41,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Modes | `-m/--mode` scenario guidance, sectioned-file templates | `src/mode.ts`, `templates/modes/` |
 | Template engine | Load/render prompt templates, partials, project overrides in `.opencode/auto/prompts/`, protocol-marker tiers | `src/template.ts`, `templates/prompts/_partials.md` (0033) |
 | Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md`; renders from a caller-built `PromptFacts` value and view types (off the driver since 0061 E2) | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers: `renderPhasePlan`, `renderImplementPlan`, `renderPhaseAppend`, 0053), `src/prompt-facts.ts` (the facts' composition helper), `templates/prompts/` |
+| Manual-driver suite | The `prompts/` runbooks a coding-agent session uses to run as the driver itself, child sessions as workers (run.md master control; run-task/run-verify/run-fix whole-task children; run-as-subtasks/resume-subtasks pipeline; plan-append); protocol literals pinned to the driver's commit grammar and template strings by the ratchet | `prompts/`, `test/manual-prompts-ratchet.test.ts` (0078) |
 
 ### phases — what a phase is
 

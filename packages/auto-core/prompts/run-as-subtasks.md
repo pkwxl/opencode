@@ -28,6 +28,9 @@ specified below.
 5. You can launch child sessions (your platform's subagent facility) that work in this same directory. Otherwise
    stop: the whole design rests on them.
 6. Read the config's `wrapup` key (default true): false skips Stage 3's report session.
+7. The config's `testByDriver` and `handoverTest` keys are both unset: this suite has no driver process to run
+   the test script or relay its result. Either key set → stop: the person runs the driver itself
+   (`opencode-auto run`) for this task, or `amend`s the config.
 
 ## Confirm the boundary, pick the task
 
@@ -76,8 +79,8 @@ Commit subjects and stages (T-NNN = the task, S<nn> = the two-digit subtask numb
 
 - Stage 1: subject `T-NNN decompose <task title>`, Auto-Stage `decompose`.
 - Stage 2, per subtask: subject `T-NNN S<nn> <subtask short title>`, Auto-Stage `subtask <n>`.
-- Stage 3: subject `T-NNN wrapup <task title>`, Auto-Stage `wrapup`; the close-out commit afterwards: subject
-  `T-NNN carryover driver-state posting`, Auto-Stage `carryover`.
+- Stage 3: subject `T-NNN wrapup <task title>`, Auto-Stage `wrapup`; the completion commit afterwards: subject
+  `T-NNN done <task title>`, Auto-Stage `done`.
 
 Terminator discipline, checked everywhere below: every Markdown document a child session created or rewrote in full
 must end, once finished, with a line holding only `<!-- auto: eof -->` as its last line of body text (only blank
@@ -103,7 +106,11 @@ into some file") — those are the business of the later subtask sessions.
    ## Constraints and premises
    ## Existing decisions and current state
    ## Risks and unknowns
-   Keep it compact and searchable (aim for a few dozen lines).
+   Keep it compact and searchable (aim for a few dozen lines). Cross-task reference discipline: point cross-task
+   references only at phase-level single sources (rulings, contracts, ledgers), never at a previous task's
+   wrap-up narrative — a completion narrative flowing in through a reference is misread by a downstream session
+   as a sign that this task is already done — and excerpt the points you need instead of sending the reader
+   back to a whole document.
 2. Write docs/T-NNN/shared.md, the shared-context reference index: one line per entry — path (or symbol) + one or
    two sentences saying where it sits. It is an index, not a copy; later subtask sessions read the listed files
    themselves, on demand, following the index.
@@ -120,9 +127,12 @@ into some file") — those are the business of the later subtask sessions.
    ## Artifacts (the path list, matching the checklist item's `Artifacts:` declaration)
    `Depends:` omitted = depends on the item before it; `Depends: none` = no prerequisite; name this task's S<nn>
    ids only. No empty values, no self-dependency, no cycles.
-5. Every Markdown document you create ends with a line holding only <!-- auto: eof --> as its last line of body
+5. A decision of your own must leave a record in the relevant document or code comment: a call that should have
+   been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other
+   call an `AUTO-DECISION: <decision> (<reason>)` line.
+6. Every Markdown document you create ends with a line holding only <!-- auto: eof --> as its last line of body
    text.
-6. Writing all four artifact groups is a hard requirement even if the task looks already done or extremely simple
+7. Writing all four artifact groups is a hard requirement even if the task looks already done or extremely simple
    (an atomic task decomposes into a single checklist item). Do not run git commit or any commit command; do not
    create, rename or delete any state file other than the docs/T-NNN/S<NN>/todo.md files above. End the session as
    soon as the files are written.
@@ -158,7 +168,8 @@ Loop:
    touch them.
 
    Authoritative state: task T-NNN "<task title>" is in progress, subtask ticks <d>/<n>; you are item <n> (S<nn>)
-   only. Previously completed tasks and other tasks' documents say nothing about this task's progress — never infer
+   only. The ticks are maintained by the driver once each subtask session ends and do not change during yours.
+   Previously completed tasks and other tasks' documents say nothing about this task's progress — never infer
    completion from them.
 
    The checklist item you own, verbatim:
@@ -180,9 +191,9 @@ Loop:
    another document); code artifacts go directly into the source tree. Every Markdown document you create (or
    rewrite in full) ends with a line holding only <!-- auto: eof --> as its last line of body text.
 
-   A decision that should have been the person's gets an `AUTO-RESOLVE: <question> -> <choice> (<reason>)` line in
-   the relevant document or code comment; a plain engineering call of your own gets `AUTO-DECISION: <decision>
-   (<reason>)`.
+   A decision of your own must leave a record in the relevant document or code comment: a call that should have
+   been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other
+   call an `AUTO-DECISION: <decision> (<reason>)` line.
 
    Do not run git commit or any commit command. Do not create, rename or delete docs/T-NNN/S<nn>/todo.md or
    done.md — the completion decision and the rename belong to the driver. End the session as soon as the subtask is
@@ -220,7 +231,9 @@ The subtask checklist of this task, with its ticks:
 Write docs/T-NNN/report.md, this task's wrap-up report: one line per subtask — number + one-sentence conclusion +
 artifact path (docs/T-NNN/S<nn>/index.md) or code location — without copying or rewriting the subtask artifacts,
 then two sections of your own, overall conclusion and open issues.
-End the report with the result line on a line of its own: `Result: PASS` or `Result: FAIL <one-line reason>`.
+Write the result line as the last line of body text of the report (before the terminator), on a line of its own:
+`Result: PASS` or `Result: FAIL <one-sentence reason>` — a protocol string, written exactly as given, never
+translated, bolded or list-marked.
 Write PASS only when every check the task requires was actually run or observed, with the evidence in this report;
 a non-acceptance task whose goal was met may omit the line. Every Markdown document you create ends with a line
 holding only <!-- auto: eof --> as its last line of body text. Do not run git commit or any commit command; end the
@@ -236,7 +249,7 @@ Then read the report's result line (the last line starting with `Result:`):
   person accepts the task with `close` or plans the rework. Do not tick the task done.
 - PASS, or no result line → the close-out: rename `docs/T-NNN/todo.md` → `done.md`, tick the task's line in the
   phase's `tasks.md` (`- [ ] T-NNN` → `- [x] T-NNN`), and if `.auto/units.json` holds a record for this task, remove
-  that record; commit these writes (`T-NNN carryover driver-state posting`, Auto-Stage `carryover`).
+  that record; commit these writes (`T-NNN done <task title>`, Auto-Stage `done`).
 
 ## Hands off — driver-adjacent rules
 

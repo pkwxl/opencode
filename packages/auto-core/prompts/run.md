@@ -11,8 +11,9 @@ child session and a re-verification. The verification judges the work's complete
 task session has already run the acceptance's executable checks (its tests, the typecheck or build) and
 repaired what they found, so the verification re-runs none of them — a defect only a re-run would catch is
 left for the person to judge once all tasks are done. A verification that passes performs the close-out itself —
-the unified work commit and the carryover commit exactly as the driver makes them after a whole-task session,
-plus the state writes (the handoff deletion, `todo.md` → `done.md`, the index tick) — and its `PASS` verdict
+the driver's completion commits exactly as it makes them after a whole-task session: the work commit, the
+wrap-up report's own commit, then the completion commit over the state writes (the handoff deletion,
+`todo.md` → `done.md`, the index tick) — and its `PASS` verdict
 tells you the task is safe to advance past. All implementation
 work happens in child sessions launched through the host coding agent's subagent facility; the master-control
 session itself writes no implementation code and makes no commits or state writes — every commit and every
@@ -37,6 +38,9 @@ checks specified below.
    three companion files are available to you verbatim. Otherwise stop: the whole design rests on them.
 6. Read the config's `wrapup` key (default true): it decides whether a passing verification also writes the
    task's wrap-up report (`docs/T-NNN/report.md`).
+7. The config's `testByDriver` and `handoverTest` keys are both unset: this suite has no driver process to run
+   the test script or relay its result. Either key set → stop: the person runs the driver itself
+   (`opencode-auto run`) for these tasks, or `amend`s the config.
 
 ## Keep your own context small
 
@@ -60,7 +64,7 @@ reply a child sends you to a few lines (the companions instruct them so).
 - After the task or a fix child session: HEAD must still equal the baseline you recorded for the current task
   (a cheap `git rev-parse HEAD`). A commit command there is a hard failure — stop and report. Only the
   verification child session on `PASS` commits (its close-out); after it, HEAD must have advanced by exactly
-  its two close-out commits and the worktree be clean again. Never push, stash, reset, rebase or amend.
+  its close-out commits and the worktree be clean again. Never push, stash, reset, rebase or amend.
 - Terminator discipline, enforced by the verification child sessions and by you for the report: every Markdown
   document a child session created or rewrote in full must end, once finished, with a line holding only
   `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). A missing or non-final
@@ -120,13 +124,13 @@ iteration.
      with `<task id>` filled — the session reads the gap list itself), check HEAD afterwards, then launch a fresh
      verification child session (step 4 again). A task gets at most two fix rounds.
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: HEAD advanced
-     from the baseline by exactly two commits with the subjects `T-NNN exec <task title>` then
-     `T-NNN carryover driver-state posting`; `git status --porcelain` lists nothing; `docs/T-NNN/done.md`
-     exists (no `todo.md`), the index line is ticked, and `docs/T-NNN/handoff.md` is gone. When the wrap-up line
-     was `WRITE`, also check `docs/T-NNN/report.md` mechanically — it exists and is non-empty, the terminator is
-     its last body line, and its last `Result:` line is `Result: PASS` (a tail of the file; do not read the
-     body). Anything missing → relaunch the verification child session once with the specific deficiency as
-     feedback; still failing → stop and report.
+     from the baseline by exactly its close-out commits — `T-NNN exec <task title>`, then (wrap-up line `WRITE`
+     only) `T-NNN wrapup <task title>`, then `T-NNN done <task title>`; `git status --porcelain` lists nothing;
+     `docs/T-NNN/done.md` exists (no `todo.md`), the index line is ticked, and `docs/T-NNN/handoff.md` is gone.
+     When the wrap-up line was `WRITE`, also check `docs/T-NNN/report.md` mechanically — it exists and is
+     non-empty, the terminator is its last body line, and its last `Result:` line is `Result: PASS` (a tail of
+     the file; do not read the body). Anything missing → relaunch the verification child session once with the
+     specific deficiency as feedback; still failing → stop and report.
 6. Next iteration: back to step 1 — the index now shows this task ticked and its `done.md` exists.
 
 ## Hands off — driver-adjacent rules

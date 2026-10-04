@@ -24,9 +24,9 @@ Read first: `docs/<task id>/todo.md` — your task document (title line, `Phase:
 
 1. todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER
    alone — do not make them yourself; do not create, rename or delete `docs/<task id>/todo.md` or `done.md`.
-2. A decision that should have been the person's gets an `AUTO-RESOLVE: <question> -> <choice> (<reason>)` line
-   in the relevant document or code comment; a plain engineering call of your own gets
-   `AUTO-DECISION: <decision> (<reason>)`.
+2. A decision of your own must leave a record in the relevant document or code comment: a call that should have
+   been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other
+   call an `AUTO-DECISION: <decision> (<reason>)` line.
 3. Do not run git commit or any commit command — a separate verification session judges this task complete and
    performs the close-out commits; you never commit.
 4. Every Markdown document you create (or rewrite in full) ends, once finished, with a line holding only
