@@ -65,6 +65,12 @@ async function insideWorkTree(directory: string): Promise<boolean> {
 // skipped; outside git (not in any work tree and no .gitignore) nothing is
 // done. Returns the entries actually appended (or, under dryRun, that would
 // be appended).
+// The non-git branch (plans/0073): init bootstraps a repository before
+// ensureInitGitignore runs (git.ts bootstrapRepository), so a production
+// init always has a work tree and writes the ignore set; the no-op remains
+// for the callers that reach a non-git directory directly (run's
+// ensureGitignore seam, the tests) — the production non-git tier is gone
+// with the bootstrap.
 async function appendEntries(directory: string, entries: string[], opts: { dryRun?: boolean }): Promise<string[]> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)

@@ -24,7 +24,7 @@ import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
-import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
+import { bootstrapRepository, commitIdentityProblem, writeLocalIdentity } from "@opencode-ai/auto-core/git"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
@@ -107,6 +107,12 @@ const VALUE_FLAGS = new Set([
   // branch (plans/0068 D7).
   "unit",
   "merge",
+  // --name/--email (plans/0073 §2.2): init's identity pair, written as
+  // repository-local git config when no global/GIT_* identity resolves —
+  // value flags (they swallow their argument); every command but init
+  // refuses them.
+  "name",
+  "email",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
 for (let i = 1; i < args.length; i++) {
@@ -753,6 +759,19 @@ function refuseFrozenFlags(command: "run" | "plan") {
   }
   // --amend is retired everywhere (RETIRED_FLAGS above: once init stopped
   // taking the flag, no command accepts it).
+  // --name/--email are init's alone (plans/0073 §2.2): the commit identity
+  // pair init writes as repository-local git config when no global/GIT_*
+  // identity resolves; run and plan never write git config, so they refuse
+  // the pair rather than silently ignoring it.
+  for (const key of ["name", "email"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is an init option (paired with --${key === "name" ? "email" : "name"}: the commit identity written as repository-local git config when init bootstraps a repository without a resolving identity); ` +
+          `${command} does not accept it`,
+      )
+      process.exit(1)
+    }
+  }
   // -f/--force belongs to init/reset/fix alone (it skips the overwrite
   // confirmation and the worktree cleanliness gate); run and plan write no
   // config and do no destructive overwrite, so it is meaningless there.
@@ -1203,6 +1222,27 @@ if (command === "init" || command === "amend") {
     console.error(`--max-sessions is a run option (concurrent AI sessions for this run); ${command} does not accept it`)
     process.exit(1)
   }
+  // --name/--email (plans/0073 §2.2, init only — the amend whitelist above
+  // already refused them there): the commit identity pair, written as
+  // repository-local git config when the identity probe below finds no
+  // resolving global/`GIT_*` identity. Not config keys — they never enter
+  // config.json; the pair must be complete (a commit needs both) and each
+  // value one non-empty line (they become git config values).
+  const identityName = flags.get("name")
+  const identityEmail = flags.get("email")
+  if (command === "init" && identityName !== undefined && identityEmail !== undefined) {
+    if (!identityName.trim() || !identityEmail.trim() || identityName.includes("\n") || identityEmail.includes("\n")) {
+      console.error("--name and --email each require a non-empty one-line value (they become the repository-local user.name/user.email; never --global)")
+      process.exit(1)
+    }
+  }
+  if (command === "init" && (identityName !== undefined) !== (identityEmail !== undefined)) {
+    console.error(
+      `--${identityName !== undefined ? "name" : "email"} requires its pair --${identityName !== undefined ? "email" : "name"}: ` +
+        "pass --name <name> --email <email> together (a commit identity needs both; init writes them as repository-local git config, never --global)",
+    )
+    process.exit(1)
+  }
   // No command reaching this block takes -p (init's is a scoped retired flag,
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
@@ -1327,14 +1367,57 @@ if (command === "init" || command === "amend") {
   // unified commit is the completion condition, so a repository whose git
   // cannot commit (no user.name / user.email, nothing to fall back to) is
   // refused before any write.
+  // The git bootstrap (plans/0073, ruled 2026-10-04): in a directory inside
+  // no git work tree, init first creates the repository itself — with the
+  // person's init.defaultBranch when set, `-b main` as the fallback — and
+  // prints it loudly (the driver's record and rollback need it; the loud
+  // print is the disclosure, there is deliberately no --no-git escape hatch).
+  // It runs here, before the identity probe and before ensureInitGitignore
+  // below, joining the everything-before-first-write check phase: a refusal
+  // after it still leaves no config written, and the empty repository it
+  // leaves behind is `rm -rf .git` away from undone. In-repo init is
+  // unchanged (the bootstrap is a no-op there).
   if (command === "init") {
-    const problem = await commitIdentityProblem(directory)
-    if (problem) {
+    const bootstrap = await bootstrapRepository(directory)
+    if (bootstrap.type === "failed") {
       console.error(
-        `git cannot commit in ${directory}: ${problem}. The driver commits after every session, so init requires a repository that can commit; ` +
-          `configure an identity first, e.g. git config --global user.name <name> and git config --global user.email <email> (drop --global to configure this repository only)`,
+        `cannot initialize a git repository in ${directory}: ${bootstrap.error}. ` +
+          "The driver commits after every session (the unified commit is the completion condition), so init requires one; " +
+          "create the repository yourself (git init) and re-run, or fix the underlying git problem",
       )
       process.exit(1)
+    }
+    if (bootstrap.type === "created") {
+      console.log(`✓ initialized git repository (branch ${bootstrap.branch}) in ${directory} — the driver's record and rollback need it`)
+    }
+    const problem = await commitIdentityProblem(directory)
+    if (problem) {
+      // Identity resolution order (plans/0073 §2.2): a resolving
+      // global/`GIT_*` identity (judged exactly as commitIdentityProblem
+      // judges) → proceed, nothing written — the passing probe is this
+      // branch's guard; the --name/--email pair → written as repository-local
+      // config in the repository at the target root (never --global; the
+      // tool never edits the person's global config); neither → refuse with
+      // today's message extended by the new-flags hint. The
+      // opencode-auto@local fallback (git.ts identityArgs) deliberately does
+      // NOT apply here — it covers only nested repositories the person
+      // brought in; the target root's history is the audit trail and keeps
+      // an attributable identity.
+      if (identityName !== undefined && identityEmail !== undefined) {
+        const error = await writeLocalIdentity(directory, { name: identityName, email: identityEmail })
+        if (error) {
+          console.error(`cannot write the repository-local commit identity in ${directory}: ${error}`)
+          process.exit(1)
+        }
+        console.log("✓ commit identity written as repository-local config (user.name/user.email from --name/--email; never --global)")
+      } else {
+        console.error(
+          `git cannot commit in ${directory}: ${problem}. The driver commits after every session, so init requires a repository that can commit; ` +
+            `configure an identity first, e.g. git config --global user.name <name> and git config --global user.email <email> ` +
+            `(drop --global to configure this repository only), or pass --name <name> --email <email> to have init write the repository-local identity`,
+        )
+        process.exit(1)
+      }
     }
   }
   for (const item of discarded) console.log(`⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
@@ -1618,7 +1701,7 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--name <name> --email <email>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
@@ -1629,7 +1712,7 @@ console.error(`usage:
   opencode-auto models [dir] [--probe]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
-       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)

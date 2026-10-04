@@ -6,6 +6,7 @@ import {
   addWorktree,
   baselineIntact,
   beginUnit,
+  bootstrapRepository,
   changedFiles,
   commitIdentityProblem,
   commitPending,
@@ -28,6 +29,7 @@ import {
   trackedSourceChanges,
   unitBaseline,
   unitViolations,
+  writeLocalIdentity,
   WORKTREE_TEARDOWN,
 } from "../src/git"
 import { noCommitGit } from "../src/git-ops"
@@ -157,6 +159,84 @@ describe("commitIdentityProblem(init's prerequisite: the repository must be able
       const problem = await commitIdentityProblem(dir)
       expect(problem).toContain("identity unknown")
       expect(problem).toContain("ident")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- init's git bootstrap and identity flags (plans/0073) ----
+
+// The branch a fresh `git init` takes on this host: init.defaultBranch when
+// the environment sets one, else the bootstrap's -b main fallback. Asking git
+// itself keeps the expectation host-independent (the ambient config layers —
+// including a GIT_CONFIG_GLOBAL the e2e side pins — are exactly what the
+// bootstrap honors).
+async function expectedDefaultBranch(): Promise<string> {
+  const proc = Bun.spawnSync(["git", "config", "--get", "init.defaultBranch"], { stdout: "pipe", stderr: "pipe" })
+  return proc.exitCode === 0 && proc.stdout.toString().trim() ? proc.stdout.toString().trim() : "main"
+}
+
+describe("bootstrapRepository (init's git bootstrap, plans/0073)", () => {
+  test("a non-git directory: the repository is created on init.defaultBranch (else main), discovered by repoRoots from then on; a second call and an in-repo call are no-ops", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      expect(await bootstrapRepository(dir)).toEqual({ type: "created", branch: await expectedDefaultBranch() })
+      // A real work tree from that moment: the commit-side gates see it.
+      expect((await git(dir, "rev-parse", "--is-inside-work-tree")).trim()).toBe("true")
+      expect(await repoRoots(dir)).toEqual([dir])
+      // Idempotent: inside a work tree the bootstrap is a no-op (in-repo
+      // init behavior unchanged), subdirectories included.
+      expect(await bootstrapRepository(dir)).toEqual({ type: "existing" })
+      await mkdir(join(dir, "sub"), { recursive: true })
+      expect(await bootstrapRepository(join(dir, "sub"))).toEqual({ type: "existing" })
+      // The unborn HEAD names the branch (no commit needed).
+      expect((await git(dir, "symbolic-ref", "--short", "HEAD")).trim()).toBe(await expectedDefaultBranch())
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a failed git init is reported, not swallowed (the caller refuses init on it)", async () => {
+    // A path git cannot treat as a repository root: a file where the .git
+    // directory would go makes init fail.
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      await writeFile(join(dir, ".git"), "not a gitfile target\n")
+      const result = await bootstrapRepository(dir)
+      expect(result.type).toBe("failed")
+      if (result.type === "failed") expect(result.error.length).toBeGreaterThan(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("writeLocalIdentity (init's --name/--email, plans/0073 §2.2)", () => {
+  test("writes repository-local user.name/user.email — a commit under them succeeds and the probe resolves", async () => {
+    const dir = await fresh()
+    try {
+      expect(await writeLocalIdentity(dir, { name: "Init Person", email: "init@example.com" })).toBeUndefined()
+      // Repository-local config (what init's flags promised: never --global).
+      expect((await git(dir, "config", "--local", "user.name")).trim()).toBe("Init Person")
+      expect((await git(dir, "config", "--local", "user.email")).trim()).toBe("init@example.com")
+      // The identity a commit applies resolves from then on.
+      expect(await commitIdentityProblem(dir)).toBeUndefined()
+      await writeFile(join(dir, "a.txt"), "a")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "first commit under the init identity")
+      expect((await git(dir, "log", "-1", "--pretty=%an")).trim()).toBe("Init Person")
+      expect((await git(dir, "log", "-1", "--pretty=%ae")).trim()).toBe("init@example.com")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a non-repository directory: git's error is returned, not thrown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      const error = await writeLocalIdentity(dir, { name: "n", email: "e" })
+      expect(error).toBeTruthy()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

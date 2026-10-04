@@ -40,7 +40,7 @@ bun run packages/auto/src/index.ts <subcommand> ...
 ## Usage
 
 ```sh
-opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json, the .opencode/agent/auto.md template and the .opencode/auto/brief.md project brief stub, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by plan
+opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json, the .opencode/agent/auto.md template and the .opencode/auto/brief.md project brief stub, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by plan. In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
 opencode-auto amend [dir] --<key-option> <value> ...   # rewrite only the given config keys, keep the rest (at least one key; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
@@ -165,17 +165,38 @@ guardrail (read-only: no completed phase is lost, no phase directory containing 
 re-syncing the phase index belongs to `plan`), the target directory's prompt-library overrides
 (`.opencode/auto/prompts/`) and the intent packs are all validated before the first write — any failure is
 exit code 1 with the config layer untouched (no config.json, no contract or AGENTS.md block refresh, no
-brief.md). When the target directory is inside a git repository there is also a **commit-capability
-prerequisite check**: the unified commit is the completion condition, so a repository that cannot commit (no
-user.name/user.email commit identity configured) is refused (exit code 1, the message says how to configure
-it) — run `git config --global user.name/user.email` first (or drop `--global` inside the repository) and
-retry. During `run` the file is made read-only together with opencode.json and AGENTS.md; make manual
-revisions outside a run.
+brief.md). The **commit-capability prerequisite** follows the same discipline:
+
+- **Git bootstrap** (auto-core plans/0073, ruled 2026-10-04): when the target directory is inside no git
+  work tree, `init` first initializes the repository itself — on the person's `init.defaultBranch` when set,
+  `main` as the fallback — and prints it loudly (`✓ initialized git repository (branch …) — the driver's
+  record and rollback need it`). There is deliberately **no `--no-git` escape hatch**: a git-less production
+  run was the silently-broken state this closes (no unified commit, no unit baselines, no rollback, no audit
+  trail), and the loud print is the disclosure. The bootstrap runs before the identity probe and before the
+  `.gitignore` write, so the ignore set, the first unified commit and every later gate see a real repository;
+  a refusal after it still leaves no config written, and the empty repository it leaves behind is
+  `rm -rf .git` away from undone. In-repo `init` is unchanged (the bootstrap is a no-op there). The
+  non-git production tier effectively disappears with this — the behavior-contract change is recorded in the
+  compatibility table below (the tests keep their seam: the non-git paths of the core functions remain, only
+  `init` bootstraps).
+- **Identity, in resolution order**: a resolving global/`GIT_*` identity (judged exactly as the commit-time
+  probe judges, `git var` under `user.useConfigOnly`) → proceed, nothing written; else `--name <name>
+  --email <email>` given at init → written as **repository-local** config in the repository at the target
+  root (never `--global` — the tool never edits the person's global config); neither → refused (exit code 1
+  before any write, the message saying how to configure an identity and naming the flags). The
+  `opencode-auto@local` fallback identity is deliberately never auto-written at init — it covers only the
+  nested repositories the person brought in; the target root's history is the audit trail of AI changes and
+  keeps an attributable identity.
+
+Run `git config --global user.name/user.email` first (or drop `--global` inside the repository, or pass
+`--name`/`--email`) and retry. During `run` the file is made read-only together with opencode.json and
+AGENTS.md; make manual revisions outside a run.
 
 Compatibility and migration:
 
 | Scenario | Behavior |
 | --- | --- |
+| `init` in a directory inside no git work tree (auto-core plans/0073) | **Breaking (behavior contract)**: `init` initializes the repository itself (branch: the configured `init.defaultBranch` when set, else `main`) and prints it loudly, instead of silently running on with every commit-side gate idle (no unified commit, no unit baselines, no rollback, no audit trail). No `--no-git` exists — the loud print is the disclosure. Identity as [above](#project-configuration-opencodeautoconfigjson): a resolving global identity passes, `--name`/`--email` are written as repository-local config, neither refuses with exit 1. The `.git` directory `init` created is not a `reset` artifact — undo it with `rm -rf .git` while it is still empty |
 | Old project (only `.auto/config.json` has a mode) | When the new file is missing, the old value is read as a fallback and run prints a hint to "run `fix` to write out the full config" (`fix` writes the new file from the old mode + defaults); once init / fix has written the new file the fallback ends (the old file is not deleted — it sits ignored by git until `reset` cleans it up) |
 | Old scripts like `run -m xxx` | Exit code 1 + amend guidance (breaking) |
 | Retired option `--commit` (any value, on any command) | Exit code 1 + retirement notice (committing cannot be turned off; a stored `commit: true` still loads and is ignored) |
@@ -212,6 +233,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subta
 | `--handover-test [true]` | Must be combined with `--test-by-driver` (otherwise a usage error, exit code 1), written to the config: when a test fails and the session context reaches `contextLimit`, the AI is asked to write a handover document and continue in a new session, preventing repeated trial-and-error inside a bloated context |
 | `--scan-exempt none\|<globs>` | The scan exemptions, written to the config's `scanExempt` key as a comma-separated glob list (commas inside `{a,b}` stay in the glob; default none, key not written; `none` deletes the key): deliverable paths the process-document reference scan and the document terminator scan skip. An empty list, an absolute glob or one containing `..` is a usage error |
 | `--auto-number` / `--no-auto-number` | Auto numbering switch, written to the config's `autoNumber` key (default `--auto-number` = on, `--no-auto-number` is the disabling toggle; both switches present without `=false` is a usage error): with it on, task numbers (T-NNN) never repeat in the target directory; the phase planning session continues numbering from the `.auto/next-task` record and recovers it first when missing. The `phases = "m"` planning session (see [Planning tasks with AI](#planning-tasks-with-ai)) also continues from that record. See [Phased flow](#phased-flow---phases) |
+| `--name <name> --email <email>` | The commit identity pair (auto-core plans/0073): when no global/`GIT_*` identity resolves in the repository at the target root — including one `init` just bootstrapped in a non-git directory — init writes them as **repository-local** `user.name`/`user.email` (never `--global`; the tool never edits the person's global config). A resolving global identity always wins and nothing is written. Not config keys (they never enter config.json); the pair must be given together (a commit identity needs both) with one-line non-empty values; every other command refuses them. Without them and without a resolving identity, init refuses (exit code 1) with the manual `git config` guidance |
 | `-f` / `--force` | Skip the overwrite confirmation and the clean-worktree check, for CI and automation scripts (shared with `reset` / `fix`); on `amend` / `run` it is a usage error (amend discards no keys, so there is no overwrite confirmation to skip) |
 
 Under `init` (the default full overwrite), the config-writing options above mean "not given falls back to the
@@ -331,7 +353,9 @@ Cleanup scope (an enumerated whitelist — no globs, no recursive deletion):
 
 **Explicitly untouched**: `docs/` (including round directories `R-NN` and task directories `T-NNN`), all
 runtime state in `.auto/` other than `config.json` (logs, `stats.json`, `resolves.json`, `progress.json`),
-and `tmp/`. These are human and AI work products or run traces, not `init` artifacts.
+`tmp/`, and the git repository itself — a `.git` that `init` bootstrapped (auto-core plans/0073) is not a
+config-layer artifact and survives `reset`; undo it by hand with `rm -rf .git` while it is still empty.
+These are human and AI work products or run traces, not `init` artifacts.
 
 Reclaiming only empty directories also preserves two things: your own prompt-override directory
 `.opencode/auto/prompts/` and your other agent contracts under `.opencode/agent/`.

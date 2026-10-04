@@ -909,8 +909,10 @@ async function hasChanges(root: string): Promise<boolean> {
 // tree, a commit identity must resolve (user.name/user.email config or the
 // GIT_*_NAME/GIT_*_EMAIL env vars; judged via `git var`, the same resolution a
 // commit applies) — the unified commit is the completion condition, so a
-// missing identity means every later commit fails. A non-git directory (where
-// the driver never commits) returns undefined.
+// missing identity means every later commit fails. A non-git directory
+// returns undefined (init bootstraps a repository first — bootstrapRepository
+// below — so the probe at init always sees a work tree; the non-git answer
+// remains for the other callers and the test seam).
 // The probes run with `-c user.useConfigOnly=true`: plain `git var` also
 // succeeds with an auto-detected ident (username@hostname, fabricated from the
 // machine without any config file) on machines where git can build one, while
@@ -923,6 +925,15 @@ async function hasChanges(root: string): Promise<boolean> {
 // fabricate them, so init would wrongly accept a repository whose commits all
 // fail; useConfigOnly makes the probe fail exactly when no explicit identity
 // resolves, while env-provided identity is still honored).
+//
+// Identity policy, target-root half (plans/0073 §2.2, the pair of the
+// identityArgs block below): init demands an explicit, attributable identity
+// for the repository at the target root — a resolving global/`GIT_*` identity
+// (this probe) → proceed, nothing written; else init's --name/--email flags →
+// written as repository-local config (writeLocalIdentity below, never
+// --global); else init refuses. The opencode-auto@local fallback is
+// deliberately NOT applied to the target root: the root repository's history
+// is the audit trail of AI changes, and it keeps a real person's name on it.
 export async function commitIdentityProblem(dir: string): Promise<string | undefined> {
   const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
     .then((result) => result.code === 0)
@@ -935,10 +946,83 @@ export async function commitIdentityProblem(dir: string): Promise<string | undef
   return undefined
 }
 
+// —— init's git bootstrap (plans/0073) ——
+
+// init's git bootstrap result: "existing" = the target directory already sits
+// inside a git work tree (nothing done — in-repo init behavior unchanged);
+// "created" = the repository was initialized, branch naming the HEAD branch
+// the bootstrap left (an unborn symbolic ref, read via symbolic-ref);
+// "failed" = git init itself failed (error = git's first line), the caller
+// refuses init rather than running on without the record.
+export type BootstrapResult = { type: "existing" } | { type: "created"; branch: string } | { type: "failed"; error: string }
+
+// init's git bootstrap (plans/0073): when the target directory sits inside no
+// git work tree, init creates the repository itself, so the unified commit,
+// the unit baselines, the rollback and the audit trail can never again be
+// silently absent (the retired non-git tier: commitIdentityProblem returned
+// undefined, repoRoots returned [], and every commit-side gate idled without
+// a word — the person discovered it only when looking for the history that
+// was never written).
+// Branch: the person's init.defaultBranch when they set one (any config layer
+// git reads; git init applies it on its own), `-b main` only as the fallback
+// (ruling 3 of 2026-10-04 — never git's own master-era default). In init only
+// (the caller's duty); no escape hatch exists — no --no-git, the caller's
+// loud print is the disclosure. Runs before the identity probe and before
+// ensureInitGitignore, joining init's everything-before-first-write check
+// phase: a refusal later in that phase still leaves no config written, and
+// the empty repository the bootstrap leaves behind is `rm -rf .git` away from
+// undone (plans/0073 §4's mitigation).
+export async function bootstrapRepository(dir: string): Promise<BootstrapResult> {
+  const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
+    .then((out) => out.code === 0)
+    .catch(() => false)
+  if (inRepo) return { type: "existing" }
+  // init.defaultBranch decides when the person set it (global/system/whatever
+  // git reads in this environment); its absence is the -b main fallback.
+  const setting = await git(dir, ["config", "--get", "init.defaultBranch"]).catch(() => undefined)
+  const created = await git(dir, setting?.code === 0 && setting.out.trim() ? ["init"] : ["init", "-b", "main"])
+  if (created.code !== 0) {
+    return { type: "failed", error: firstLine(created.err || created.out) || `git init exit code ${created.code}` }
+  }
+  // The unborn HEAD's symbolic name (symbolic-ref works before the first
+  // commit, where rev-parse HEAD does not) — what the caller prints loudly.
+  const named = await git(dir, ["symbolic-ref", "--short", "HEAD"])
+  const branch = named.code === 0 ? named.out.trim() : ""
+  if (!branch) return { type: "failed", error: "the created repository's branch is unreadable (git symbolic-ref failed)" }
+  return { type: "created", branch }
+}
+
+// The flag half of the identity policy (plans/0073 §2.2, the pair of the
+// comment blocks at commitIdentityProblem above and identityArgs below):
+// --name/--email given at init are written as **repository-local** git config
+// (user.name/user.email in the repository at the target root — never
+// --global; the tool never edits the person's global config). The caller
+// reaches here only when the probe found no resolving global/`GIT_*`
+// identity; a resolving one always wins and nothing is written. Returns
+// git's first error line, or undefined on success.
+export async function writeLocalIdentity(dir: string, identity: { name: string; email: string }): Promise<string | undefined> {
+  for (const [key, value] of [["user.name", identity.name], ["user.email", identity.email]] as const) {
+    const set = await git(dir, ["config", key, value])
+    if (set.code !== 0) return firstLine(set.err || set.out) || `git config ${key} exit code ${set.code}`
+  }
+  return undefined
+}
+
 // git identity fallback: when the repository has no user.email configured,
 // commit under a fixed identity so a pristine environment does not fail the
 // commit (-c applies to that one call only; configured repositories are
 // unaffected).
+//
+// Identity policy, nested-repository half (plans/0073 §2.3, the pair of the
+// comment block at commitIdentityProblem above): this fallback covers only
+// the **nested repositories the person brought in** — repositories whose
+// discovery repoRoots finds under the target tree, whose identity the person
+// never promised and whose unattributable commits the parent's Auto-Nested
+// lines still record. The **target root** is the other policy: init demands
+// an explicit identity there (a resolving global/`GIT_*` identity, or
+// --name/--email written as local config by writeLocalIdentity above, or
+// refusal) — the root's history is the audit trail of AI changes and keeps a
+// real name; opencode-auto@local is deliberately never auto-written at init.
 async function identityArgs(root: string): Promise<string[]> {
   const email = await git(root, ["config", "user.email"])
   if (email.code === 0 && email.out.trim()) return []

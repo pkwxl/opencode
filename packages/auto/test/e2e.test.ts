@@ -626,6 +626,23 @@ async function runCli(args: string[], env?: Record<string, string>) {
   return { code: await proc.exited, out, err }
 }
 
+// Commit everything under a fixture repository — the production person's
+// "review and commit" step between init/plan and the next gated command.
+// Since init bootstraps a repository in a fresh directory (auto-core
+// plans/0073), every artifact an init/plan/completePhase writes stays
+// uncommitted until someone commits it: the overwrite clean-tree gate, the
+// round-start gate and run's pre-run baseline all bind from the moment the
+// bootstrap creates the repository. The env is passed explicitly (Bun's
+// default spawn env is the start snapshot; the pinned suite identity rides
+// process.env, gitOf's rule).
+async function commitFixture(dir: string) {
+  for (const args of [["add", "-A"], ["commit", "-qm", "fixture checkpoint"]]) {
+    const proc = Bun.spawn(["git", "-C", dir, ...args], { env: { ...process.env }, stdout: "ignore", stderr: "pipe" })
+    const err = await new Response(proc.stderr).text()
+    if ((await proc.exited) !== 0) throw new Error(`git -C ${dir} ${args.join(" ")}: ${err}`)
+  }
+}
+
 // A git helper over a fixture dir: asserts exit 0 and returns stdout. The
 // close / --force-close / new-project-flow fixtures all commit through it.
 // The env is passed explicitly: Bun's default spawn env is the snapshot from
@@ -958,6 +975,9 @@ describe("CLI: init freezes the project config", () => {
     try {
       expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand", "--agent", "claude"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
+      // The bootstrap's repository holds the artifacts uncommitted; the
+      // overwrite init's clean-tree gate needs the production commit between
+      await commitFixture(dir)
       // A bare init: the four keys changed above all return to their defaults
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
@@ -1007,6 +1027,7 @@ describe("CLI: init freezes the project config", () => {
       const first = await readConfig(dir)
       const agentFirst = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agentsFirst = await Bun.file(join(dir, "AGENTS.md")).text()
+      await commitFixture(dir)
       for (let i = 0; i < 2; i++) {
         expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "ondemand"])).code).toBe(0)
       }
@@ -1016,6 +1037,7 @@ describe("CLI: init freezes the project config", () => {
       // Three bare inits in a row stay constant too
       expect((await runCli(["init", dir])).code).toBe(0)
       const bare = await readConfig(dir)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(bare)
@@ -1028,6 +1050,7 @@ describe("CLI: init freezes the project config", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "128"])).code).toBe(0)
+      await commitFixture(dir)
       const file = join(dir, ".opencode/auto/config.json")
       const stored = { ...(await readConfig(dir)), source: { dir: "legacy", path: "pkg" }, destDir: "app", commit: false }
       await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
@@ -1050,12 +1073,16 @@ describe("CLI: init freezes the project config", () => {
       // the full overwrite discards them anyway: it succeeds (no longer blocked by a
       // stored retired key, DF2) and names each discarded key with its value
       await Bun.write(file, JSON.stringify({ ...stored, commit: false }, null, 2) + "\n")
+      // The person commits their hand edit (the overwrite gate is git-bound
+      // since init bootstraps the repository)
+      await commitFixture(dir)
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("full overwrite drops the retired key commit = false")
       expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in .opencode/auto/brief.md')
       expect(init.out).toContain('full overwrite drops the retired key destDir = "app"')
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).out).not.toContain("retired key")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1073,17 +1100,21 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
       expect(init.out).toContain("auto-number on")
       expect(init.out).not.toContain("numbering record")
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       // --no-auto-number overrides back to false; an amend not naming the key
       // keeps it, a bare init falls back to the default true
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
       expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
       // The =false form counts as not given (under the full overwrite, the
       // default true)
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--auto-number=false"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
       // Both switches at once without =false → usage error
@@ -1101,6 +1132,7 @@ describe("CLI: init freezes the project config", () => {
       // Default (neither key given) freezes true
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
+      await commitFixture(dir)
       // --no-wrapup freezes false; the summary now reads "wrapup off"
       const off = await runCli(["init", dir, "--no-wrapup"])
       expect(off.code).toBe(0)
@@ -1110,15 +1142,19 @@ describe("CLI: init freezes the project config", () => {
       // without amend falls back to the default true
       expect((await runCli(["amend", dir, "--context-limit", "64"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--no-wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
       // --wrapup overrides back to true
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
       // The =false form counts as not given (under the full overwrite, the
       // default true)
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--no-wrapup=false"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
       // Both switches at once without =false → usage error
@@ -1137,6 +1173,7 @@ describe("CLI: init freezes the project config", () => {
       expect(plain.code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("agent")
       expect(plain.out).toContain("· agent opencode ·")
+      await commitFixture(dir)
       const claude = await runCli(["init", dir, "--agent", "claude"])
       expect(claude.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
@@ -1168,6 +1205,7 @@ describe("CLI: init freezes the project config", () => {
       expect(plain.code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("parallel")
       expect(plain.out).not.toContain("parallel")
+      await commitFixture(dir)
       // a level is frozen and shown in the summary
       const high = await runCli(["init", dir, "--parallel", "high"])
       expect(high.code).toBe(0)
@@ -1178,7 +1216,9 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
       expect((await runCli(["amend", dir, "--parallel", "none"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("parallel")
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("parallel")
       // bad level, and --max-sessions outside run, are usage errors
@@ -1208,6 +1248,7 @@ describe("CLI: init freezes the project config", () => {
       expect(plain.code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
       expect(plain.out).not.toContain("scan-exempt")
+      await commitFixture(dir)
       // a comma list is split (brace groups keep their commas) and trimmed
       const set = await runCli(["init", dir, "--scan-exempt", "test/fixtures/**, templates/{prompts,intents}"])
       expect(set.code).toBe(0)
@@ -1220,8 +1261,10 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toMatchObject({ scanExempt: ["fixtures"] })
       expect((await runCli(["amend", dir, "--scan-exempt", "none"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
+      await commitFixture(dir)
       // a plain init is the stateless overwrite: the key falls back to none
       expect((await runCli(["init", dir, "--scan-exempt", "fixtures"])).code).toBe(0)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
       // an absolute glob, one climbing out, and an empty list are usage errors
@@ -1355,10 +1398,12 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       // value changes it
       expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
       // A bare init without amend is a full overwrite: phases falls back to the
       // default "m" (no completed phases, so the prefix guard does not bind)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "m" })
     } finally {
@@ -1387,6 +1432,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       // longer rewrite the tail phases — the new value's difference from the
       // index surfaces as a drift for plan's re-sync route to handle (its
       // behavior is D34's)
+      await commitFixture(dir)
       const ok = await runCli(["init", dir, "--phases", "admt"])
       expect(ok.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admt" })
@@ -1405,6 +1451,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       // Once this round completes the guard opens up: any valid value applies
       // to the next round plan establishes (D32)
       await completeLetters(dir, ["d", "m"])
+      await commitFixture(dir)
       const fresh = await runCli(["init", dir, "--phases", "amt"])
       expect(fresh.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
@@ -1543,6 +1590,8 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("git cannot commit")
       expect(refused.err).toContain("user.email")
+      // plans/0073: the refusal names the new identity flags
+      expect(refused.err).toContain("--name <name> --email <email>")
       // The check runs before any write (validate-then-write, plans/0052 D7)
       expect(await readdir(dir)).toEqual([".git"])
       // With an identity configured, init proceeds and writes the full ignore
@@ -1563,6 +1612,139 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
   })
 
 })
+
+// init's git bootstrap and identity resolution (auto-core plans/0073, ruled
+// 2026-10-04): a non-git target directory is bootstrapped into a real
+// repository in one go — git init (init.defaultBranch when the person set
+// one, -b main as the fallback), printed loudly; the identity resolves
+// globally, or via --name/--email written as repository-local config, or
+// init refuses. The non-git production tier this replaces was silently
+// broken (no unified commit, no baselines, no rollback, no audit trail).
+describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
+  // An env shielding every identity source (the existing prerequisite case's
+  // trick): a nonexistent GIT_CONFIG_GLOBAL is no global config, so the
+  // repository has no identity at all.
+  const noIdentityEnv = (home: string) => ({
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, "xdg"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: join(home, "gitconfig"),
+  })
+
+  test("a non-git directory: the repository is bootstrapped loudly on main, the full ignore set lands in it, and the resolving global identity writes nothing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // The suite's pinned GIT_CONFIG_GLOBAL carries the identity and
+      // defaultBranch=main (T-127), so this init takes the global-identity
+      // branch of the resolution order.
+      const init = await runCli(["init", dir])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain(`✓ initialized git repository (branch main) in ${dir} — the driver's record and rollback need it`)
+      const git = gitOf(dir)
+      expect((await git("rev-parse", "--is-inside-work-tree")).trim()).toBe("true")
+      expect((await git("symbolic-ref", "--short", "HEAD")).trim()).toBe("main")
+      // The identity resolved globally: nothing written locally (never a
+      // config write for what already resolves).
+      const localName = Bun.spawnSync(["git", "-C", dir, "config", "--local", "--get", "user.name"])
+      expect(localName.exitCode).not.toBe(0)
+      // The ignore set went into the bootstrapped repository (ensureInitGitignore
+      // sees the work tree the bootstrap created).
+      expect(init.out).toContain("updated: .gitignore")
+      const gitignore = await Bun.file(join(dir, ".gitignore")).text()
+      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json"]) {
+        expect(gitignore).toContain(`${entry}\n`)
+      }
+      expect(init.out).toContain(`next: opencode-auto plan ${dir}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the person's init.defaultBranch decides the branch (no -b main override); --name/--email land as repository-local config and the global file is untouched", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    const home = await mkdtemp(join(tmpdir(), "auto-cli-home-"))
+    try {
+      // A global config with defaultBranch=trunk and NO identity: the branch
+      // comes from the setting, the identity from the flags.
+      const global = join(home, "gitconfig")
+      await Bun.write(global, "[init]\n\tdefaultBranch = trunk\n")
+      const init = await runCli(["init", dir, "--name", "Boot Person", "--email", "boot@example.com"], {
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, "xdg"),
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: global,
+      })
+      expect(init.code, `${init.out}\n${init.err}`).toBe(0)
+      expect(init.out).toContain("initialized git repository (branch trunk)")
+      expect(init.out).toContain("commit identity written as repository-local config")
+      const git = gitOf(dir)
+      expect((await git("symbolic-ref", "--short", "HEAD")).trim()).toBe("trunk")
+      expect((await git("config", "--local", "user.name")).trim()).toBe("Boot Person")
+      expect((await git("config", "--local", "user.email")).trim()).toBe("boot@example.com")
+      // Never --global: the person's global file is byte-identical (no [user]
+      // section added), and a commit under the local identity works.
+      expect(await Bun.file(global).text()).toBe("[init]\n\tdefaultBranch = trunk\n")
+      await Bun.write(join(dir, "a.txt"), "a")
+      await git("add", "-A")
+      await git("commit", "-qm", "first commit")
+      expect((await git("log", "-1", "--pretty=%ae")).trim()).toBe("boot@example.com")
+      expect(init.out).toContain("updated: .gitignore")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test("no identity and no flags: init refuses naming the flags, leaving the bootstrapped empty repository and no config layer (rm -rf .git away from undone)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    const home = await mkdtemp(join(tmpdir(), "auto-cli-home-"))
+    try {
+      const refused = await runCli(["init", dir], noIdentityEnv(home))
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("git cannot commit")
+      expect(refused.err).toContain("--name <name> --email <email>")
+      // The bootstrap ran before the refusal (its loud print is on stdout),
+      // but nothing else was written: validate-then-write holds for the
+      // config layer; the empty repository is the disclosed leftover.
+      expect(refused.out).toContain(`✓ initialized git repository (branch main) in ${dir}`)
+      expect(await readdir(dir)).toEqual([".git"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test("--name/--email also serve an existing repository without identity (in-repo init unchanged otherwise); a partial pair is a usage error; run refuses the flags", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    const home = await mkdtemp(join(tmpdir(), "auto-cli-home-"))
+    try {
+      await Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" }).exited
+      // AUTO-DECISION (uniform flag path): the identity flags apply wherever
+      // the probe fails — the freshly bootstrapped repository (the plan's
+      // primary case) and an existing one alike; "drop --global to configure
+      // this repository only" is exactly what they automate. In-repo init
+      // without the flags is unchanged (the prerequisite case above).
+      const init = await runCli(["init", dir, "--name", "Local Person", "--email", "local@example.com"], noIdentityEnv(home))
+      expect(init.code, `${init.out}\n${init.err}`).toBe(0)
+      expect(init.out).not.toContain("initialized git repository")
+      const git = gitOf(dir)
+      expect((await git("config", "--local", "user.name")).trim()).toBe("Local Person")
+      expect((await git("config", "--local", "user.email")).trim()).toBe("local@example.com")
+      // The pair must be complete (a commit identity needs both)
+      const lonely = await runCli(["init", dir, "-f", "--name", "x"], noIdentityEnv(home))
+      expect(lonely.code).toBe(1)
+      expect(lonely.err).toContain("--name requires its pair --email")
+      // run never writes git config: the flags are refused there
+      const onRun = await runCli(["run", dir, "--name", "x", "--email", "y@z"])
+      expect(onRun.code).toBe(1)
+      expect(onRun.err).toContain("--name is an init option")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+})
+
 
 // The init shortcut retired with auto-core's implement.ts (plans/0053 D13): its
 // planning session is plan's now (-p | --file). The flags stay value-parsed and
@@ -1629,6 +1811,7 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
       // An overwrite init (no round established): the same closing line, still
       // no round established
+      await commitFixture(dir)
       const overwrite = await runCli(["init", dir, "--phases", "amt"])
       expect(overwrite.code).toBe(0)
       expect(overwrite.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
@@ -1636,6 +1819,7 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       // Once plan has established the round, an overwrite init's closing line
       // is the plain plan pointer (no longer claiming to establish R-01)
       expect((await runCli(["plan", dir])).code).toBe(0)
+      await commitFixture(dir)
       const again = await runCli(["init", dir])
       expect(again.code).toBe(0)
       expect(again.out).toContain(`next: opencode-auto plan ${dir}`)
@@ -1695,6 +1879,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
       // done): init --phases am is allowed (a compatible value), but the index
       // is never rewritten — the difference surfaces as a drift for plan to
       // handle (D31/D34)
+      await commitFixture(dir)
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement\n")
       expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
@@ -1718,10 +1903,12 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       expect((await runCli(["plan", dir])).code).toBe(0)
+      await commitFixture(dir)
       const index = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
       // An invalid index line → preflight exits 1, the message pointing a
       // person at the fix
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [ ] P01 nonsense\n")
+      await commitFixture(dir)
       const broken = await runCli(["run", dir])
       expect(broken.code).toBe(1)
       expect(broken.out).toContain("phase flow blocked")
@@ -1730,6 +1917,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
       // environment error
       await Bun.write(join(dir, "docs/R-01/phases.md"), index)
       await rm(join(dir, "docs/R-01/P03-test/todo.md"))
+      await commitFixture(dir)
       const missing = await runCli(["run", dir])
       expect(missing.code).toBe(1)
       expect(missing.out).toContain("P03-test/ has neither todo.md nor done.md")
@@ -1739,6 +1927,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
       await Bun.write(join(dir, "docs/R-01/P03-test/todo.md"), "# R-01.P03: test\n")
       await completeLetters(dir, ["a"])
       await rm(join(dir, ".opencode/agent/auto.md"))
+      await commitFixture(dir)
       const banner = await runCli(["run", dir])
       expect(banner.out).toContain("phases: P01-analysis✓ P02-implement▶ P03-test")
       expect(banner.out).toContain("agent contract file missing")
@@ -2116,6 +2305,9 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       const stored = { ...kept, commit: false, verifyIdle: 20, source: { dir: "legacy", path: "pkg" }, destDir: "app" }
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify(stored, null, 2) + "\n")
       await rm(join(dir, ".opencode/agent/auto.md"))
+      // The person's hand edit commits before fix (fix's own clean-tree gate
+      // is git-bound since init bootstraps the repository)
+      await commitFixture(dir)
       const fix = await runCli(["fix", dir])
       expect(fix.code).toBe(0)
       expect(fix.out).toContain("  fix: .opencode/auto/config.json: commit: false is retired")
@@ -2145,6 +2337,7 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...CONFIG_DEFAULTS, verify: true, handoverTest: true }, null, 2) + "\n")
       await rm(join(dir, ".opencode/agent/auto.md"))
+      await commitFixture(dir)
       const fix = await runCli(["fix", dir])
       expect(fix.code).toBe(1)
       expect(fix.out).toContain("  manual: .opencode/auto/config.json: handoverTest requires testByDriver: true")
@@ -2576,10 +2769,12 @@ describe("CLI: the phase-index drift (auto-core plans/0053 D34)", () => {
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       expect((await runCli(["plan", dir])).code).toBe(0)
+      await commitFixture(dir)
       // A person drops the unstarted test phase from the index by hand (its
       // directory stays): the index's unstarted tail no longer matches config.
       const edited = "- [ ] P01 analysis\n- [ ] P02 implement\n"
       await Bun.write(join(dir, "docs/R-01/phases.md"), edited)
+      await commitFixture(dir)
       const stopped = await runCli(["run", dir])
       expect(stopped.code).toBe(1)
       expect(stopped.out).toContain(
@@ -3421,6 +3616,7 @@ describe("CLI: the project brief stub (plans/0052 D9)", () => {
       expect(first.out).toContain("created: .opencode/auto/brief.md (project brief stub")
       expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
       await Bun.write(brief, `${renderProjectBrief()}\nMigrate legacy/pkg to app/.\n`)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).out).toContain("already exists, skipped: .opencode/auto/brief.md")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
       const reset = await runCli(["reset", dir])
@@ -3432,6 +3628,9 @@ describe("CLI: the project brief stub (plans/0052 D9)", () => {
       const refused = await runCli(["init", dir, "-p", "intent"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("--prompt is retired")
+      // reset's deletions commit before the re-init (the overwrite gate is
+      // git-bound since init bootstraps the repository)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
     } finally {
@@ -3450,6 +3649,7 @@ describe("CLI: reset de-initialization", () => {
       await writeFile(join(dir, ".auto", "logs", "run.log"), "log\n")
       await mkdir(join(dir, "docs", "T-001"), { recursive: true })
       await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: my task\n")
+      await commitFixture(dir)
 
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
@@ -3474,10 +3674,14 @@ describe("CLI: reset de-initialization", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
       const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
       const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect((await runCli(["reset", dir])).code).toBe(0)
+      // reset's deletions commit before the re-init (the overwrite gate is
+      // git-bound since init bootstraps the repository)
+      await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(agent)
@@ -3491,6 +3695,7 @@ describe("CLI: reset de-initialization", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
       await writeFile(join(dir, "opencode.json"), '{"model":"my own config"}\n')
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
@@ -3539,10 +3744,22 @@ describe("CLI: the worktree cleanliness gate", () => {
     await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "wip")
   }
 
-  test("non-git directories are not bound by the gate (the same rule as ensureGitignore)", async () => {
+  test("a directory init bootstrapped into a repository is bound by the gate like any other (plans/0073; the non-git tier is gone)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir])).code).toBe(0)
+      const first = await runCli(["init", dir])
+      expect(first.code).toBe(0)
+      expect(first.out).toContain("initialized git repository (branch main)")
+      // The bootstrap made the directory a worktree, so the overwriting init
+      // runs the cleanliness gate (the old non-git tier — where neither the
+      // gate nor any commit-side mechanism ever fired — is the silently-broken
+      // state the bootstrap closed)
+      const dirty = await runCli(["init", dir])
+      expect(dirty.code).toBe(1)
+      expect(dirty.err).toContain("requires a clean worktree")
+      // Once committed, init and reset run their default flows through (the
+      // second init writes byte-identical artifacts, so the tree stays clean)
+      await commitAll(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect((await runCli(["reset", dir])).code).toBe(0)
     } finally {
@@ -3887,6 +4104,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-max-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
       // No level: the request is refused rather than silently run serially
       // ("plan for parallelism first").
       const two = await runCli(["run", dir, "--max-sessions", "2"])
@@ -3898,6 +4116,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       // would start an agent; the usage error is the cheap deterministic
       // witness that the width was accepted).
       expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      await commitFixture(dir)
       const steered = await runCli(["run", dir, "--max-sessions", "2", "--interactive"])
       expect(steered.code).toBe(1)
       // preflight's refusal rides the run log's stdout (the run log is open).
@@ -3971,10 +4190,16 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
     try {
       const run = await agent.run(["run", dir, "--max-sessions", "2"])
       expect(run.code, `${run.out}\n${run.err}`).toBe(2)
-      // The first lane landed; the second's landing hit the real conflict
-      // (both lanes wrote both modules — the declared Touches lied).
-      expect(run.out).toContain("T-001 done (lane landed:")
-      expect(run.out).toContain("T-002 landing conflict")
+      // The two lanes run identical fake work as concurrent workers, and
+      // landings are serial in completion order, so which lane lands first is
+      // scheduling luck, not a guarantee (a probe of the pristine suite
+      // failed the old T-001-first literal 4/8 runs). Whichever it is: the
+      // first lane landed, the second's landing hit the real conflict (both
+      // lanes wrote both modules — the declared Touches lied).
+      const first = run.out.includes("T-001 done (lane landed:") ? "T-001" : "T-002"
+      const second = first === "T-001" ? "T-002" : "T-001"
+      expect(run.out).toContain(`${first} done (lane landed:`)
+      expect(run.out).toContain(`${second} landing conflict`)
       // D21 at medium: exactly one repair re-dispatch through the merge
       // instruction. The real conflict is semantic (both lanes rewrote the
       // same files differently), the repair worker's driver-side merge
@@ -3985,14 +4210,14 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       // `main` is no host luck: the fixture's initial branch is pinned by the
       // suite's global git config (T-127), so the instruction naming it is the
       // real main-tree branch, and the literal cannot drift with the host.
-      expect(run.out).toContain("merge main into auto-lane/T-002")
-      expect(run.out).toContain("T-002 is blocked")
+      expect(run.out).toContain(`merge main into auto-lane/${second}`)
+      expect(run.out).toContain(`${second} is blocked`)
       expect(run.out).toContain("blocked and its landing hit a conflict")
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskStatePaths("T-002").complete)).exists()).toBe(false)
+      expect(await Bun.file(join(dir, taskStatePaths(first).complete)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskStatePaths(second).complete)).exists()).toBe(false)
       // The blocked lane's scene is kept; the main tree is clean.
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual(["T-002"])
-      expect((await git("branch", "--list", "auto-lane/T-002")).trim()).toContain("auto-lane/T-002")
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([second])
+      expect((await git("branch", "--list", `auto-lane/${second}`)).trim()).toContain(`auto-lane/${second}`)
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
       await agent.done()
