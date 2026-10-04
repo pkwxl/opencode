@@ -1206,11 +1206,12 @@ function parseRepairBudget(raw: string | undefined): number | null {
   return /^\d+$/.test(raw) && value >= 1 && value <= 10 ? value : null
 }
 
-// --subtask absent/bare = auto; null marks an invalid value. The four values
-// are the core's SUBTASK_MODES (auto-core plans/0059 D1: true is the planned
-// pipeline auto used to be, auto the adaptive default).
+// --subtask absent/bare = off (the default since 2026-10-04; auto was
+// plans/0059 D1's original default); null marks an invalid value. The four
+// values are the core's SUBTASK_MODES (auto-core plans/0059 D1: true is the
+// planned pipeline auto used to be, auto the adaptive mode).
 function parseSubtask(raw: string | undefined): SubtaskMode | null {
-  if (raw === undefined || raw === "") return "auto"
+  if (raw === undefined || raw === "") return "off"
   return (SUBTASK_MODES as readonly string[]).includes(raw) ? (raw as SubtaskMode) : null
 }
 
@@ -1306,7 +1307,7 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   }
   const subtask = parseSubtask(flags.get("subtask"))
   if (subtask === null) {
-    console.error(`--subtask takes ${SUBTASK_MODES.join("|")}; defaults to auto`)
+    console.error(`--subtask takes ${SUBTASK_MODES.join("|")}; defaults to off`)
     process.exit(1)
   }
   const contextLimit = parseContextLimit(flags.get("context-limit"))

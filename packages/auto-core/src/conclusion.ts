@@ -122,19 +122,22 @@ export async function taskEndLines(directory: string | undefined, taskID: string
 // fallback, or a hard --subtask override — with the capability downgrade
 // spelled out when the field's split could not run. The shape words are the
 // field's own vocabulary (split / whole / pipeline) when a decision was
-// recorded, the mode word otherwise (auto for the fallback, the override
-// value for a hard lever), so the falsifier evaluation of the planning
+// recorded, the mode word otherwise (the fallback's — auto when a configured
+// auto had no field, off when no lever was set at all; the override value for
+// a hard lever), so the falsifier evaluation of the planning
 // sessions' choices reads one calibrated line per task. No record (a task run
 // by a release before the field, or a stats document that never booked one)
 // adds nothing and the tri-state block keeps its exact prior shape.
 function decomposeLine(run: DecomposeRun | undefined): string[] {
   if (!run) return []
-  const shape = run.field ?? (run.from === "fallback" ? "auto" : run.mode)
+  const shape = run.field ?? run.mode
   const from =
     run.from === "field"
       ? "the task document's Decompose field"
       : run.from === "fallback"
-        ? "no Decompose field — the adaptive fallback"
+        ? run.mode === "auto"
+          ? "no Decompose field — the adaptive fallback"
+          : "no --subtask — the default"
         : "--subtask override"
   const downgrade = run.downgraded ? "; downgraded to whole — the fleet cannot fork sessions" : ""
   return [`  decompose: ${shape} (${from}${downgrade})`]

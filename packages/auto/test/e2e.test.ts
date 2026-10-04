@@ -911,7 +911,7 @@ describe("CLI: init freezes the project config", () => {
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
         contextLimit: 64,
-        subtask: "auto",
+        subtask: "off",
         idleTime: 10,
         idleMax: 0,
         testByDriver: false,
@@ -928,7 +928,7 @@ describe("CLI: init freezes the project config", () => {
   const DEFAULT_CONFIG = {
     mode: "migrate",
     contextLimit: 64,
-    subtask: "auto",
+    subtask: "off",
     idleTime: 10,
     idleMax: 0,
     testByDriver: false,
@@ -953,7 +953,7 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("--subtask takes true, the planned pipeline (auto-core plans/0059 D1); a stored JSON boolean true reads as it, and bare --subtask stays auto", async () => {
+  test("--subtask takes true, the planned pipeline (auto-core plans/0059 D1); a stored JSON boolean true reads as it, and bare --subtask takes the default off", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--subtask", "true"])).code).toBe(0)
@@ -3759,14 +3759,14 @@ describe("CLI: run under --subtask auto over the claude adapter (auto-core plans
   const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
 
   // A committed project with one pending task under the default config
-  // (subtask auto, wrap-up on); `lead` = the lead's reported context.
+  // (--subtask auto explicit since the default flipped to off, wrap-up on); `lead` = the lead's reported context.
   const setup = async (lead: number) => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-auto-"))
     const log = join(await mkdtemp(join(tmpdir(), "auto-cli-turns-")), "turns.jsonl")
     const agent = await fakeClaude({ FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_LEAD_CONTEXT: String(lead) })
     const git = gitOf(dir)
     await git("init")
-    expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
     expect((await agent.run(["plan", dir])).code).toBe(0)
     await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
     await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
@@ -4160,7 +4160,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     const agent = await fakeClaude(extra)
     const git = gitOf(dir)
     await git("init")
-    expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
     expect((await runCli(["plan", dir])).code).toBe(0)
     await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
     await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
@@ -4224,7 +4224,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     } as unknown as AgentHost
     try {
       await git("init")
-      expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
       expect((await runCli(["plan", dir])).code).toBe(0)
       await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
       await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
@@ -4299,7 +4299,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     const parkThere = async () => stat(worktree).then(() => true, () => false)
     try {
       await git("init")
-      expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
       expect((await runCli(["plan", dir])).code).toBe(0)
       await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
       await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
@@ -4425,7 +4425,7 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
     const agent = await fakeClaude()
     const git = gitOf(dir)
     await git("init")
-    expect((await runCli(["init", dir, "--parallel", parallel])).code).toBe(0)
+    expect((await runCli(["init", dir, "--parallel", parallel, "--subtask", "auto"])).code).toBe(0)
     expect((await runCli(["plan", dir])).code).toBe(0)
     await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)
     for (const [id, title, touches] of tasks) await Bun.write(join(dir, taskStatePaths(id).pending), doc(id, title, touches))
@@ -4608,7 +4608,7 @@ describe("CLI: stream lanes (auto-core plans/0068 S5)", () => {
         .map((line) => JSON.parse(line) as Turn)
     try {
       await git("init")
-      expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      expect((await runCli(["init", dir, "--parallel", "low", "--subtask", "auto"])).code).toBe(0)
       expect((await runCli(["plan", dir])).code).toBe(0)
       await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
       await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
@@ -4721,7 +4721,7 @@ describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
     const setupSha = (await nested("rev-parse", "HEAD")).trim()
     await git("init")
     const mainBranch = (await git("symbolic-ref", "--short", "HEAD")).trim()
-    expect((await runCli(["init", dir, "--isolate", "pkg", ...init])).code).toBe(0)
+    expect((await runCli(["init", dir, "--isolate", "pkg", "--subtask", "auto", ...init])).code).toBe(0)
     const plan = await runCli(["plan", dir])
     expect(plan.code, `${plan.out}\n${plan.err}`).toBe(0)
     await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)

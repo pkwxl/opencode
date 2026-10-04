@@ -112,10 +112,10 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("subtask takes off|auto|true|ondemand; the JSON boolean true is the pipeline's \"true\"; the default stays auto (plans/0059 D1, D8)", async () => {
+  test("subtask takes off|auto|true|ondemand; the JSON boolean true is the pipeline's \"true\"; the default is off (2026-10-04 flip; auto was 0059 D1's)", async () => {
     const dir = tempDir()
     try {
-      expect(CONFIG_DEFAULTS.subtask).toBe("auto")
+      expect(CONFIG_DEFAULTS.subtask).toBe("off")
       for (const value of ["off", "auto", "true", "ondemand"] as const) {
         writeConfig(dir, JSON.stringify({ subtask: value }))
         expect((await loadProjectConfig(dir)).subtask).toBe(value)
@@ -381,10 +381,10 @@ describe("mergeProjectConfig and formatProjectConfig", () => {
 
   test("the summary line carries every key's effective value (phases appended last)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "mode migrate · agent opencode · subtask auto · watchdog idle 10m/max unset · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent opencode · subtask off · watchdog idle 10m/max unset · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "mode migrate · agent claude · subtask auto · watchdog idle 10m/max 30m · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent claude · subtask off · watchdog idle 10m/max 30m · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
     // the tests-run-by-driver key enters the summary; the handover modifier follows handoverTest

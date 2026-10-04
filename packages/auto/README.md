@@ -4,8 +4,8 @@ A command-line tool that drives [opencode](https://opencode.ai) to implement wor
 in task units (the phase's task index `tasks.md` + `docs/T-NNN/`). Constitutional project options (the agent
 contract, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
 (versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
-maintained exclusively by the driver: each task runs as one lead session that manages its own context (the
-default `subtask: auto`), or — under `subtask: true` — is first split into subtasks by a decompose session,
+maintained exclusively by the driver: each task runs as one whole-task session (the
+default `subtask: off`; `auto` adds adaptive decomposition), or — under `subtask: true` — is first split into subtasks by a decompose session,
 then completed one subtask at a time by dispatched sessions (every prompt opens a fresh session, each
 carrying its full context and depending on no previous session's memory; the former `OPENCODE_AUTO_REUSE_SESSION`
 knob is retired and ignored; the driver ticks state as each session ends), and after wrap-up the driver marks the
@@ -107,7 +107,7 @@ describes how this run executes and how a person watches it → run.**
 | `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
 | `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
 | `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline; under `subtask` `ondemand` and `auto` the context-budget wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (see [Execution pipeline](#execution-pipeline)) |
-| `subtask` | `off` / `auto` / `true` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
+| `subtask` | `off` / `auto` / `true` / `ondemand` | `off` (changed from `auto` on 2026-10-04) | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `verify` | **Retired** | — | Task-level acceptance was retired (2026-09-21): an existing config with `verify: true` fails loading with exit 1 (delete the key — `fix` does it — and plan acceptance as tasks or use the v phase); `false` or absent is ignored |
@@ -229,7 +229,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subta
 | `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); the comma form of full type ids (`--phases spec-read,design,implement,test,audit`, custom types included) is the expressive spelling — any order, repeats allowed, `implement` required. When completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
 | `--intent <name>` | The active intent pack, written to the config's `intent` key (auto-core plans/0079; default = the built-in `default` pack, key not written): the name must be a pack the loader resolves in this directory (built-in plus `.opencode/auto/intents/`). On `init` the value may instead name an **intent bundle** — a registered bundle, or a directory holding a `bundle.json` manifest with `phases/`, `intents/` and `modes/` files — which init validates as a whole (nothing written on a parse failure), materializes into the ordinary `.opencode/auto/` surfaces, and stamps `intent`, `phases`, `mode` and any manifest config keys (explicit flags win over the manifest; the bundle's phase sequence uses the comma form of full type ids only). `amend` takes plain pack names |
 | `--parallel <none\|low\|medium\|high>` | The parallel planning level, written to the config's `parallel` key (default/`none` writes no key): the planning prompts arrange tasks for parallel execution at that level; pair it with `run --max-sessions` for concurrent execution — see [Parallel execution](#parallel-execution-parallel---max-sessions) |
-| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams, each run in a fork of the lead, when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
+| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `off` — changed from `auto` on 2026-10-04): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams, each run in a fork of the lead, when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
 | `--context-limit [n]` | The context budget baseline (unit: thousand tokens, default/bare flag 64), written to the config; a new session starts once the previous session's used tokens reach half of it (32k by default), effective alongside the 50% share threshold |
@@ -981,9 +981,9 @@ The registry's effective table: see [Model registry overview (models)](#model-re
 
 The driver runs a pipeline for every task, and **index ticks, the `todo.md` → `done.md` rename and
 `.auto/units.json` are written by the driver alone**. How a task executes is decided by the project config's
-`subtask` key (`auto` is the default):
+`subtask` key (`off` is the default — changed from `auto` on 2026-10-04):
 
-`subtask: auto` (adaptive decomposition, the default; auto-core plans/0059): the task runs as one lead
+`subtask: auto` (adaptive decomposition; auto-core plans/0059): the task runs as one lead
 session under the same context-budget protocol as `subtask: ondemand` below, and its prompt carries a split
 rule. By default the lead finishes the task itself, handing over by time as `ondemand` does. It may split
 only when the remaining work is 2–5 substantial streams that each change their own files, and only once the
@@ -1011,7 +1011,8 @@ Without usage notices (`OPENCODE_AUTO_STEER=off`, or an agent that takes no mid-
 that cannot fork sessions (every stream is a fork of the lead; under a model registry, any agent the run may
 use — the run start prints a degradation note naming it), or when the task already has a checklist written by
 hand, the lead gets no split rule and runs exactly as `ondemand`. A
-stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtask true` keeps the pipeline.
+stored `"subtask": "auto"` keeps this meaning with no migration; `amend --subtask off` returns to one whole-task
+session per task.
 
 `subtask: true` (the planned pipeline — what `auto` meant before auto-core plans/0059):
 
@@ -1047,7 +1048,8 @@ stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtas
    `session` fork base.
 3. **Wrap-up**: see the common part below.
 
-`subtask: off` (splitting disabled): one session completes the whole task, then the common wrap-up runs; if
+`subtask: off` (splitting disabled — the **default**, changed from `auto` on 2026-10-04): one session completes
+the whole task, then the common wrap-up runs; if
 the session fails to finish there is **no repair rerun** — the driver reverts the task status to `pending`
 and halts with exit code 2, for a person to improve the task documents and rerun.
 

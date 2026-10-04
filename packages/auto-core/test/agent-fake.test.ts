@@ -2486,26 +2486,29 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     }
   }
 
-  test("auto — the default — runs one lead session: ondemand's whole-task session with the context-budget protocol plus the split clause, no decompose", async () => {
+  test("auto runs one lead session: ondemand's whole-task session with the context-budget protocol plus the split clause, no decompose", async () => {
     const ondemand = await run("ondemand")
     expect(ondemand.outcome).toEqual({ type: "completed" })
     expect(ondemand.prompts).toHaveLength(1)
     expect(ondemand.prompts[0]).toContain("Context-budget protocol")
     expect(ondemand.prompts[0]).not.toContain("Split rule")
     const auto = await run("auto")
-    for (const lead of [auto, await run(undefined)]) {
-      expect(lead.outcome).toEqual({ type: "completed" })
-      expect(lead.prompts).toEqual(auto.prompts)
-      expect(lead.prompts).toHaveLength(1)
-      expect(lead.prompts[0]).toContain("Context-budget protocol")
-      expect(lead.prompts[0]).toContain("Split rule (adaptive decomposition)")
-      expect(lead.creates).toBe(1)
-    }
-    // off is the same whole-task session without the protocol.
+    expect(auto.outcome).toEqual({ type: "completed" })
+    expect(auto.prompts).toHaveLength(1)
+    expect(auto.prompts[0]).toContain("Context-budget protocol")
+    expect(auto.prompts[0]).toContain("Split rule (adaptive decomposition)")
+    expect(auto.creates).toBe(1)
+    // off is the same whole-task session without the protocol — and since the
+    // 2026-10-04 flip the unset lever (the default) reads as off, not auto.
     const off = await run("off")
-    expect(off.outcome).toEqual({ type: "completed" })
-    expect(off.prompts).toHaveLength(1)
-    expect(off.prompts[0]).not.toContain("Context-budget protocol")
+    const unset = await run(undefined)
+    for (const quiet of [off, unset]) {
+      expect(quiet.outcome).toEqual({ type: "completed" })
+      expect(quiet.prompts).toEqual(off.prompts)
+      expect(quiet.prompts).toHaveLength(1)
+      expect(quiet.prompts[0]).not.toContain("Context-budget protocol")
+      expect(quiet.prompts[0]).not.toContain("Split rule")
+    }
   })
 
   test("true's subtasks fork the digest base and are told only the digest is inherited, see the other items by title, and the last one runs the full verification (plans/0059 T1, T2, T5)", async () => {

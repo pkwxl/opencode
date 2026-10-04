@@ -113,7 +113,7 @@ export type ProjectConfig = {
 export const CONFIG_DEFAULTS: ProjectConfig = {
   mode: "migrate",
   contextLimit: 64,
-  subtask: "auto",
+  subtask: "off",
   idleTime: 10,
   idleMax: 0,
   testByDriver: false,

@@ -76,8 +76,9 @@ export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; 
 // subtask's final commit / a hidden task's spec.commit).
 export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
 
-// --subtask's four levels (plans/0059 D1): off (one session to completion) /
-// auto (adaptive decomposition, the default: one lead session works the whole
+// --subtask's four levels (plans/0059 D1): off (one session to completion —
+// the default since 2026-10-04, flipping 0059 D1's `auto`) /
+// auto (adaptive decomposition: one lead session works the whole
 // task under ondemand's protocol and splits the rest off only when the
 // driver's guard finds that it pays, plans/0059 D2–D4) / true (the planned
 // pipeline: a decompose session, one session per subtask, a wrap-up — what

@@ -4,6 +4,7 @@
 // with the lane option and writes the `.auto/lane.json` report the parent
 // reads). Spawned by a test's laneLauncher override (setShellProfile),
 // never from a CLI; `bun test` never collects this file directly.
+import { loadProjectConfig } from "@opencode-ai/auto-core/config"
 import { runLaneWorker } from "@opencode-ai/auto-core/loop"
 
 const args = process.argv.slice(2)
@@ -13,4 +14,8 @@ if (!args[0] || !unit) {
   console.error("usage: lane-worker <dir> --unit <task id>")
   process.exit(1)
 }
-process.exit(await runLaneWorker(args[0], { lane: { unit } }))
+// The config keys a worker's sessions read ride the shell's option threading
+// (the CLI `_lane` entry does the same): subtask decides the unit's pipeline
+// shape, and this fixture is the shell stand-in.
+const config = await loadProjectConfig(args[0]).catch(() => undefined)
+process.exit(await runLaneWorker(args[0], { lane: { unit }, ...(config ? { subtask: config.subtask } : {}) }))

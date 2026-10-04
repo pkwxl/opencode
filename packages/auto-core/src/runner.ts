@@ -60,13 +60,16 @@ export type DecomposeResolution = {
 
 // One pure resolution of the effective subtask mode (deterministic in the
 // task's document and the run's levers, so every resume re-resolves the same
-// mode). Exported for the decompose-field tests.
+// mode). Exported for the decompose-field tests. An unset lever is the
+// constitutional default `off` (2026-10-04 flip; provenance "fallback" — a
+// configured `auto` with no field keeps the adaptive fallback).
 export function resolveDecompose(
   requested: SubtaskMode | undefined,
   field: DecomposeMode | undefined,
   leadSplit: boolean | undefined,
 ): DecomposeResolution {
-  const mode = requested ?? "auto"
+  const mode = requested ?? "off"
+  if (requested === undefined) return { mode, from: "fallback" }
   if (mode !== "auto") return { mode, from: "override" }
   if (field === undefined) return { mode, from: "fallback" }
   if (field === "split") {
@@ -97,7 +100,8 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // session continues from it; the driver's hard-wall hint (2x
 // --context-limit, raised to a quarter of a large model window and clamped to
 // 80% of it) is the last resort.
-// --subtask auto (default, adaptive decomposition, plans/0059 D2–D5): one lead
+// --subtask auto (adaptive decomposition, plans/0059 D2–D5; the default was
+// auto until the 2026-10-04 flip to off): one lead
 // session — a whole-task session under ondemand's protocol, whose prompt
 // carries the split clause. The lead either finishes (or hands over by time,
 // as ondemand does), or ends by writing the remaining streams into

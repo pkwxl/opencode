@@ -27,13 +27,14 @@ import type { Opts } from "../src/opts"
 
 describe("resolveDecompose (the plan-recorded mode, plans/0075)", () => {
   test("auto obeys a present field: split stays auto, whole maps to ondemand, pipeline to true", () => {
-    expect(resolveDecompose(undefined, "split", undefined)).toEqual({ mode: "auto", from: "field", field: "split" })
+    expect(resolveDecompose("auto", "split", undefined)).toEqual({ mode: "auto", from: "field", field: "split" })
     expect(resolveDecompose("auto", "whole", undefined)).toEqual({ mode: "ondemand", from: "field", field: "whole" })
     expect(resolveDecompose("auto", "pipeline", undefined)).toEqual({ mode: "true", from: "field", field: "pipeline" })
   })
 
-  test("auto without a field falls back to the adaptive logic, provenance fallback", () => {
-    expect(resolveDecompose(undefined, undefined, undefined)).toEqual({ mode: "auto", from: "fallback" })
+  test("an unset lever falls back to the default off; a configured auto without a field keeps the adaptive fallback", () => {
+    expect(resolveDecompose(undefined, undefined, undefined)).toEqual({ mode: "off", from: "fallback" })
+    expect(resolveDecompose(undefined, "split", undefined)).toEqual({ mode: "off", from: "fallback" })
     expect(resolveDecompose("auto", undefined, false)).toEqual({ mode: "auto", from: "fallback" })
   })
 
@@ -250,6 +251,8 @@ describe("taskEndLines decompose line (the round's per-task observability)", () 
     await statsTask(dir, "T-001")
     await statsDecomposeRun(dir, { task: "T-001", mode: "auto", from: "fallback" })
     expect((await lines()).at(-1)).toBe("  decompose: auto (no Decompose field — the adaptive fallback)")
+    await statsDecomposeRun(dir, { task: "T-001", mode: "off", from: "fallback" })
+    expect((await lines()).at(-1)).toBe("  decompose: off (no --subtask — the default)")
     await statsDecomposeRun(dir, { task: "T-001", mode: "true", from: "override" })
     expect((await lines()).at(-1)).toBe("  decompose: true (--subtask override)")
     await statsDecomposeRun(dir, { task: "T-001", mode: "off", from: "override" })
