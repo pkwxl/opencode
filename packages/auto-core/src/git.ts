@@ -735,6 +735,78 @@ export async function mergeLaneUpstream(dir: string, branch: string, task: { id:
   return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
 }
 
+// —— Branch isolation (plans/0074 §2.2, U-L1) ——
+//
+// Round-establishment isolation: each repository the config's isolate key
+// designates gets the round branch (auto/R-NN, the caller's protocol string)
+// created from its current HEAD and checked out, so every later per-session
+// unified commit, rollback, SHA baseline and foreign-commit check lands on
+// that branch unchanged — commitTree, rollbackUnit and the baseline functions
+// above are untouched by design; only which branch is checked out differs,
+// which is why repoRoots walking, the init gitignore's nested-repo entries
+// and the Auto-Nested lines keep working. The original branch never moves.
+
+// One isolation attempt's outcome: ok lists the repositories now on the round
+// branch (repository-relative paths); dirty names the designated repositories
+// that are not clean — a precondition of the same class as the run-start
+// clean gate, so the caller blocks for human attention listing each repo's
+// uncommitted paths (relative to the target directory); failed carries one
+// repository's git error (branch creation or checkout), with nothing written
+// by this function on that path beyond the branches already switched (a
+// branch at HEAD changes no file content, so the scene stays recoverable —
+// the re-run's idempotent skips finish the rest).
+export type IsolationResult =
+  | { type: "ok"; isolated: string[] }
+  | { type: "dirty"; repos: { rel: string; files: string[] }[] }
+  | { type: "failed"; error: string }
+
+// Isolate every designated repository onto the round branch. Idempotent: a
+// repository already on the branch (an interrupted establishment re-run) is
+// counted as isolated without touching git; a branch left by an earlier
+// attempt of the same round is checked out as it is (its commits are this
+// round's recoverable state, plans/0074 §4). Dirty repositories are all
+// reported in one refusal; branch operations start only when every designated
+// repository is clean.
+export async function isolateRound(dir: string, isolate: readonly string[], branch: string): Promise<IsolationResult> {
+  const dirty: { rel: string; files: string[] }[] = []
+  const clean: string[] = []
+  for (const rel of isolate) {
+    // The designated path is a repository root (the config validated a .git
+    // entry), so its own status — the same porcelain pass changedFiles runs
+    // per repoRoot — covers it whole; paths relative to the target directory.
+    const files = (await statusEntries(dir, join(dir, rel))).map((entry) => entry.rel)
+    if (files.length) dirty.push({ rel, files })
+    else clean.push(rel)
+  }
+  if (dirty.length) return { type: "dirty", repos: dirty }
+  const isolated: string[] = []
+  for (const rel of clean) {
+    const root = join(dir, rel)
+    try {
+      if ((await currentBranch(root)) === branch) {
+        isolated.push(rel)
+        continue
+      }
+      const exists = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])
+      if (exists.code !== 0) {
+        const created = await git(root, ["branch", branch])
+        if (created.code !== 0) {
+          return { type: "failed", error: `${rel}: ${firstLine(created.err || created.out) || `git branch exit code ${created.code}`}` }
+        }
+      }
+      const checkedOut = await git(root, ["checkout", branch])
+      if (checkedOut.code !== 0) {
+        return { type: "failed", error: `${rel}: ${firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}`}` }
+      }
+      isolated.push(rel)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      return { type: "failed", error: `${rel}: ${firstLine(text)}` }
+    }
+  }
+  return { type: "ok", isolated }
+}
+
 // —— The git service (the run services' commit-side seam) ——
 
 // The run's git service: the commit-side operations the kernel and the

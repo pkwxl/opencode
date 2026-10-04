@@ -41,6 +41,10 @@ export const REPO_LANE: readonly string[] = [
   // manifest classifies a file by what it actually does at runtime.
   "test/lanes-scheduler.test.ts",
   "test/interactive-seam.test.ts",
+  // Branch isolation (plans/0074 U-L1): git repositories under temp dirs —
+  // the config validation probes real .git directories, the isolation
+  // primitive and the establish route run branch/checkout operations.
+  "test/isolate.test.ts",
   "test/knowledge.test.ts",
   "test/lock.test.ts",
   // The isolation loop's suite (0069 §3.3's gap): drives runIsolationLoop

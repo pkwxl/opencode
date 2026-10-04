@@ -9,6 +9,7 @@ import {
   CONFIG_FILE,
   PARALLEL_LEVELS,
   formatProjectConfig,
+  isolateProblem,
   legacyModeFallback,
   loadOverwriteBaseline,
   loadProjectConfig,
@@ -113,7 +114,18 @@ const VALUE_FLAGS = new Set([
   // refuses them.
   "name",
   "email",
+  // --isolate (plans/0074 §5.4, U-L1): a branch-isolated nested repository,
+  // by repository-relative path; a value flag like every config flag, but
+  // repeatable — see REPEAT_FLAGS below.
+  "isolate",
 ])
+// Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
+// one value, so the values are collected in their own table instead of the
+// single-value flags map (which keeps only the last occurrence as a presence
+// marker, for the whitelist pass and the amend "name at least one key" check
+// that read flags.has). parseConfigFlags reads the values from repeatFlags.
+const REPEAT_FLAGS = new Set(["isolate"])
+const repeatFlags = new Map<string, string[]>()
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
@@ -151,17 +163,32 @@ for (let i = 1; i < args.length; i++) {
   }
   const eq = arg.indexOf("=")
   if (eq !== -1) {
+    if (REPEAT_FLAGS.has(arg.slice(2, eq))) {
+      pushRepeat(arg.slice(2, eq), arg.slice(eq + 1))
+      continue
+    }
     flags.set(arg.slice(2, eq), arg.slice(eq + 1))
     continue
   }
   const key = arg.slice(2)
   const next = args[i + 1]
   if ((VALUE_FLAGS.has(key) && next !== undefined) || (BOOLEAN_FLAGS.has(key) && (next === "true" || next === "false"))) {
-    flags.set(key, next)
+    if (REPEAT_FLAGS.has(key)) pushRepeat(key, next!)
+    else flags.set(key, next)
     i++
     continue
   }
+  if (REPEAT_FLAGS.has(key)) pushRepeat(key, "")
   flags.set(key, "")
+}
+
+// Collect one occurrence of a repeatable flag (values in repeatFlags; the
+// flags map keeps the last value as the presence marker).
+function pushRepeat(key: string, value: string) {
+  const list = repeatFlags.get(key) ?? []
+  list.push(value)
+  repeatFlags.set(key, list)
+  flags.set(key, value)
 }
 
 // `continue` is retired (auto-core plans/0053 D33): plan owns the rounds —
@@ -276,7 +303,7 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
-const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt"]
+const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
 // agents and spends tokens); status stays flagless.
 const MODELS_FLAGS = new Set(["probe"])
@@ -654,7 +681,7 @@ if (command === "plan") {
       process.exit(closed.type === "refused" ? 1 : 2)
     }
   }
-  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, scanExempt: config.scanExempt, input, append, newTask, autoNumber: config.autoNumber })
+  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, scanExempt: config.scanExempt, isolate: config.isolate, input, append, newTask, autoNumber: config.autoNumber })
   if (prelude.type === "stop") {
     for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
     lock.release()
@@ -1017,10 +1044,10 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
 
 // The config flags of init/amend, parsed once (plans/0052 D25): the
 // value checks, and the keys explicitly given (`explicit`, merged over the
-// baseline). --agent opencode, --parallel none and --scan-exempt none are
-// returned separately, since they drop their key instead of setting it. A bad
-// value exits 1.
-function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>; phases?: string; agent?: string; parallel?: string; scanExempt?: string } {
+// baseline). --agent opencode, --parallel none, --scan-exempt none and
+// --isolate none are returned separately, since they drop their key instead
+// of setting it. A bad value exits 1.
+function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>; phases?: string; agent?: string; parallel?: string; scanExempt?: string; isolate?: string } {
   // --agent (M6.1): the coding agent, frozen like every project attribute;
   // opencode = the key is absent from config.json.
   const agent = flags.get("agent")
@@ -1099,10 +1126,33 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
     }
     phases = PRESET_FORM.test(raw) ? raw : parsed.map((entry) => entry.type).join(",")
   }
+  // --isolate (plans/0074 §5.4, U-L1): branch-isolated nested repositories,
+  // one path per repeated flag occurrence; the list replaces the stored one
+  // (scan-exempt's semantics), none removes the key. Each path is validated
+  // against the directory — an existing .git-holding directory that is not
+  // the target root — so a typo is a usage error here; the config load
+  // repeats the same checks for hand edits.
+  // AUTO-DECISION: the flag replaces the whole list instead of adding to it
+  // (and `none` clears it) — amend per key stays a one-shot statement of the
+  // resulting value, the same contract --scan-exempt established; a per-key
+  // add/remove pair would need two more flags for one ruling's surface.
+  const isolateRaw = repeatFlags.get("isolate") ?? []
+  const isolateNone = isolateRaw.length === 1 && isolateRaw[0] === "none"
+  if (!isolateNone && isolateRaw.length) {
+    const problems = isolateRaw.flatMap((path) => isolateProblem(directory, path) ?? [])
+    if (problems.length) {
+      console.error(
+        `--isolate takes none or nested-repository paths relative to the target directory, one repository per repeated flag ` +
+          `(e.g. --isolate packages/app --isolate tools/cli): ${problems.join("; ")}`,
+      )
+      process.exit(1)
+    }
+  }
   // Only explicitly given keys enter the merge: bare --subtask and its kin
   // take their own defaults, and options never given leave the existing config
   // alone.
   const explicit: Partial<ProjectConfig> = {}
+  if (!isolateNone && isolateRaw.length) explicit.isolate = isolateRaw
   if (agent === "claude") explicit.agent = agent
   if (flags.has("subtask")) explicit.subtask = subtask
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
@@ -1135,7 +1185,7 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   }
   if (flags.has("wrapup") && flags.get("wrapup") !== "false") explicit.wrapup = true
   if (flags.has("no-wrapup") && flags.get("no-wrapup") !== "false") explicit.wrapup = false
-  return { explicit, phases, agent, parallel, scanExempt }
+  return { explicit, phases, agent, parallel, scanExempt, ...(isolateNone ? { isolate: "none" as const } : {}) }
 }
 
 if (command === "init" || command === "amend") {
@@ -1246,7 +1296,7 @@ if (command === "init" || command === "amend") {
   // No command reaching this block takes -p (init's is a scoped retired flag,
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
-  const { explicit, agent, parallel, scanExempt } = parseConfigFlags(directory)
+  const { explicit, agent, parallel, scanExempt, isolate } = parseConfigFlags(directory)
   // The one watershed between full overwrite and per-key revision: the default
   // takes the builtin defaults table as its baseline (keys not given fall back
   // to the defaults), while the amend command takes the existing on-disk
@@ -1273,7 +1323,8 @@ if (command === "init" || command === "amend") {
   // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
   // AUTO-DECISION: scanExempt is not kept here — it has its flag
   // (--scan-exempt), so it follows the stateless overwrite like parallel; a
-  // single key is changed with amend.
+  // single key is changed with amend. isolate (plans/0074) has its flag too
+  // (--isolate) and follows the same rule.
   const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
   const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
   // handoverTest requires testByDriver: when either is explicit, the check
@@ -1319,10 +1370,11 @@ if (command === "init" || command === "amend") {
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
-  // --parallel none / --scan-exempt none / --agent opencode drop their keys
-  // (an amend would otherwise keep the old value).
+  // --parallel none / --scan-exempt none / --isolate none / --agent opencode
+  // drop their keys (an amend would otherwise keep the old value).
   if (parallel === "none") delete config.parallel
   if (scanExempt === "none") delete config.scanExempt
+  if (isolate === "none") delete config.isolate
   if (agent === "opencode") delete config.agent
   // The read-only prefix guard, one per command (plans/0053 D31–D32): init
   // and amend no longer re-sync the index, so the guard only keeps the config
@@ -1701,17 +1753,17 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--name <name> --email <email>] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
 
-options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
@@ -1732,6 +1784,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. With --max-sessions above 1 it also switches the run to concurrent lanes (each task isolated in its own git worktree, merged back serially) and sets the landing-conflict posture (low blocks on the first conflict; medium/high allow one repair merge before blocking); the level is required for concurrency
        --scan-exempt none|<globs> comma-separated path globs, relative to the target directory, of deliverable files the driver's content scans skip (default none): the process-document reference scan (unit close-out and round close) and the document terminator scan. For deliverables where such strings are content, e.g. a tool's own test fixtures or prompt templates; a glob naming a directory covers the files under it; only deliverable paths are exempted (process documents and the agent-contract surfaces are never scanned for references anyway); the list replaces the stored one, none removes it
+        --isolate <rel-path> (repeatable) branch isolation of nested repositories (default none): at round establishment each designated repository — named by a repository-relative path holding a .git, never the target root — is switched onto the branch auto/R-NN, so the driver's per-session commits land there while the repository's original branch never moves; a designated repository that is not clean at establishment blocks the round for human attention. The list replaces the stored one, none removes it
         --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 requires a parallel level (init --parallel) and runs the phase's tasks as concurrent lanes (isolated worktrees, serial landings); --interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)
         --commit is retired: committing cannot be turned off — after any session ends the driver recursively commits all changes (git history is the audit trail of AI changes; --commit false and the old alias none were retired on 2026-09-15, and with the config key gone the flag went entirely). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value fails loading (opencode-auto fix <dir> drops the key)
         --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)

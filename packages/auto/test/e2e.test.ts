@@ -1286,6 +1286,110 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  // A branch-isolation fixture: the target directory plus one clean nested
+  // repository (pkg) on main (the pinned init.defaultBranch), ready to be
+  // named by --isolate; a second nested repository (tools/cli) gives the
+  // repeatable flag a second path.
+  async function isolateFixture(prefix: string) {
+    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const nestedOf = async (rel: string) => {
+      await mkdir(join(dir, rel), { recursive: true })
+      const nested = gitOf(join(dir, rel))
+      await Bun.write(join(dir, rel, "readme.txt"), "nested\n")
+      await nested("init", "-q")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "nested setup")
+      return nested
+    }
+    return { dir, nested: await nestedOf("pkg"), tools: await nestedOf("tools/cli") }
+  }
+
+  test("init/amend --isolate freezes the branch-isolated repositories (repeatable); none drops the key; the target root and a nonexistent path are usage errors (plans/0074 U-L1)", async () => {
+    const { dir } = await isolateFixture("auto-cli-iso-")
+    try {
+      // default: no key written, no summary mention
+      const plain = await runCli(["init", dir])
+      expect(plain.code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("isolate")
+      expect(plain.out).not.toContain("isolate")
+      await commitFixture(dir)
+      // the flag is repeatable: one repository per occurrence, the list shown joined
+      const set = await runCli(["init", dir, "--isolate", "pkg", "--isolate", "tools/cli"])
+      expect(set.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ isolate: ["pkg", "tools/cli"] })
+      expect(set.out).toContain("· isolate pkg,tools/cli")
+      // amend keeps it, amend --isolate replaces the list, none removes the key
+      expect((await runCli(["amend", dir, "--wrapup"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ isolate: ["pkg", "tools/cli"] })
+      expect((await runCli(["amend", dir, "--isolate", "pkg"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ isolate: ["pkg"] })
+      expect((await runCli(["amend", dir, "--isolate", "none"])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("isolate")
+      await commitFixture(dir)
+      // a plain init is the stateless overwrite: the key falls back to none
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("isolate")
+      // the target root and a nonexistent path are usage errors, and a path
+      // without a .git names what isolate designates
+      const root = await runCli(["init", dir, "--isolate", "."])
+      expect(root.code).toBe(1)
+      expect(root.err).toContain("--isolate takes none or nested-repository paths")
+      expect(root.err).toContain("is the target root itself")
+      const missing = await runCli(["amend", dir, "--isolate", "missing"])
+      expect(missing.code).toBe(1)
+      expect(missing.err).toContain("does not exist under")
+      await mkdir(join(dir, "plain"))
+      expect((await runCli(["amend", dir, "--isolate", "plain"])).err).toContain("holds no .git")
+      // run refuses the flag as frozen by init, pointing at amend
+      const frozen = await runCli(["run", dir, "--isolate", "pkg"])
+      expect(frozen.code).toBe(1)
+      expect(frozen.err).toContain("--isolate was frozen by init")
+      expect(frozen.err).toContain("opencode-auto amend <dir> --isolate <value>")
+      // a hand-edited bad value is refused at load, naming the key
+      await Bun.write(join(dir, ".opencode", "auto", "config.json"), JSON.stringify({ isolate: "pkg" }))
+      const load = await runCli(["amend", dir, "--wrapup"])
+      expect(load.code).toBe(1)
+      expect(load.err).toContain("isolate must be an array of nested-repository paths")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("plan establishing a round isolates each designated repository on auto/R-NN; a dirty one blocks exit 2 naming the repository and its paths (plans/0074 U-L1)", async () => {
+    const { dir, nested } = await isolateFixture("auto-cli-iso-plan-")
+    try {
+      const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+      const setup = (await nested("rev-parse", "--short", original)).trim()
+      expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dir)
+      // clean: the round opens with the repository switched onto auto/R-01
+      const plan = await runCli(["plan", dir])
+      expect(plan.code).toBe(0)
+      expect(plan.out).toContain("✓ round R-01 established")
+      expect(plan.out).toContain("✓ branch isolation: pkg on auto/R-01")
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect((await nested("rev-parse", "--short", original)).trim()).toBe(setup)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+    const dirty = await isolateFixture("auto-cli-iso-dirty-")
+    try {
+      expect((await runCli(["init", dirty.dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dirty.dir)
+      await Bun.write(join(dirty.dir, "pkg", "wip.txt"), "uncommitted\n")
+      const blocked = await runCli(["plan", dirty.dir])
+      expect(blocked.code).toBe(2)
+      expect(blocked.err).toContain("a repository designated by config isolate is not clean")
+      expect(blocked.err).toContain("pkg:")
+      expect(blocked.err).toContain("pkg/wip.txt")
+      // nothing was established and no branch was touched
+      expect(await Bun.file(join(dirty.dir, "docs", "R-01", "phases.md")).exists()).toBe(false)
+      expect((await dirty.nested("branch", "--list", "auto/*")).trim()).toBe("")
+    } finally {
+      await rm(dirty.dir, { recursive: true, force: true })
+    }
+  })
+
   test("init with an explicit key holding an invalid value is a usage error (exit code 1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {

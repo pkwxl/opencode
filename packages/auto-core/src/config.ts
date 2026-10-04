@@ -8,8 +8,9 @@
 // the new file is missing; once the new file is written it is never read
 // again; run does not clean it up (it naturally sinks inside gitignore), but
 // it belongs to the config layer, and reset removes it along with the rest.
+import { existsSync, statSync } from "node:fs"
 import { chmod } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
@@ -89,6 +90,15 @@ export type ProjectConfig = {
   // naming a directory covers the files under it. Absent (or []) = none; set
   // with init/amend --scan-exempt, shared with the repository like every key.
   scanExempt?: string[]
+  // Branch isolation (plans/0074, ruled 2026-10-04 §5.4): nested repositories,
+  // by repository-relative path, that a round's establishment puts on the
+  // branch auto/R-NN so the driver's per-session commits land there while the
+  // repository's original branch never moves. The name avoids the tombstoned
+  // source/destDir. The target root itself is never a member (validated) — it
+  // is the driver's record repository, and its history is the audit trail.
+  // Absent (or []) = none; set with init/amend --isolate (repeatable), shared
+  // with the repository like every key.
+  isolate?: string[]
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -259,7 +269,8 @@ export function formatProjectConfig(config: ProjectConfig): string {
     (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
     (config.build ? " · build set" : "") +
     (config.parallel ? ` · parallel ${config.parallel}` : "") +
-    (config.scanExempt?.length ? ` · scan-exempt ${config.scanExempt.join(",")}` : "")
+    (config.scanExempt?.length ? ` · scan-exempt ${config.scanExempt.join(",")}` : "") +
+    (config.isolate?.length ? ` · isolate ${config.isolate.join(",")}` : "")
   )
 }
 
@@ -319,6 +330,7 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     build: record.build === undefined ? undefined : stringOf("build", record.build),
     parallel: parallelOf(record.parallel),
     scanExempt: scanExemptOf(record.scanExempt),
+    isolate: isolateOf(record.isolate, dir),
   }
 }
 
@@ -383,6 +395,54 @@ export function splitGlobList(text: string): string[] {
   }
   out.push(current)
   return out.map((glob) => glob.trim()).filter(Boolean)
+}
+
+// isolate (plans/0074 §2.1, U-L1): an array of repository-relative paths to
+// nested repositories under branch isolation; absent or [] = none. The shape
+// rules are scanExempt's (relative, nothing climbing out); beyond them each
+// path must name an existing directory holding a .git entry (a repository
+// repoRoots finds — isolation's branch operations run there) and must not be
+// the target root itself: the root is the driver's record repository, never a
+// member. Validated at load so a hand edit hears the same refusal init does.
+// AUTO-DECISION: the .git requirement goes beyond the acceptance's "rejects
+// the target root or a nonexistent path" — a designated path that is no
+// repository would otherwise pass load and die at round establishment with a
+// bare git error (or worse, a subdirectory of a repository, where no branch
+// checkout means isolation); the key's ruled surface is "paths to nested
+// repositories", so load enforces exactly that.
+function isolateOf(value: unknown, dir: string): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${CONFIG_FILE} isolate must be an array of nested-repository paths (relative to the target directory)`)
+  }
+  const problems = value.flatMap((path) => isolateProblem(dir, path) ?? [])
+  if (problems.length) throw new Error(`${CONFIG_FILE} isolate: ${problems.join("; ")}`)
+  if (new Set(value).size !== value.length) throw new Error(`${CONFIG_FILE} isolate lists a path twice`)
+  return value.length ? value : undefined
+}
+
+// Why one isolate path is unusable, undefined when it is fine. The checks
+// beyond the shape rules need the filesystem, hence the sync probes — the
+// config load stays synchronous, and init/amend's --isolate parse reuses this
+// so both layers answer the same (the shell's fast feedback, the load's
+// hand-edit backstop).
+export function isolateProblem(dir: string, path: string): string | undefined {
+  if (!path.trim()) return "an empty path"
+  if (path.trim() !== path) return `"${path}" has surrounding whitespace`
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return `"${path}" is absolute (isolate paths are relative to the target directory)`
+  if (path.replaceAll("\\", "/").split("/").includes("..")) return `"${path}" climbs out of the target directory (..)`
+  const root = resolve(dir)
+  const abs = resolve(dir, path)
+  if (abs === root) {
+    return `"${path}" is the target root itself — the root is the driver's record repository and is never a member of isolate`
+  }
+  const info = statSync(abs, { throwIfNoEntry: false })
+  if (!info) return `"${path}" does not exist under ${dir}`
+  if (!info.isDirectory()) return `"${path}" is not a directory`
+  if (!existsSync(join(abs, ".git"))) {
+    return `"${path}" holds no .git — isolate designates nested repositories (the directories repoRoots finds)`
+  }
+  return undefined
 }
 
 // acceptanceGate: an array of distinct known phase type ids; absent or [] = none.

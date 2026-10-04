@@ -28,6 +28,7 @@ import {
   type PhaseUnit,
 } from "./phases"
 import type { PlanInput } from "./plan-input"
+import { isolateRound } from "./git"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
@@ -56,7 +57,7 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 // rows 9–11 apply the progress-record guard (D26); --append without input
 // is a usage error everywhere; row 11 refuses while a step is open (its
 // snapshot and resume machinery must not be bypassed).
-export async function planPrelude(dir: string, opts: { phases: string; build?: string; scanExempt?: string[]; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
+export async function planPrelude(dir: string, opts: { phases: string; build?: string; scanExempt?: string[]; isolate?: string[]; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
@@ -105,7 +106,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
       if (previous.type === "stop") return previous
       lines.push(...previous.lines)
     }
-    return establish(dir, round, opts.phases, lines)
+    return establish(dir, round, opts.phases, lines, opts.isolate)
   }
   const route = await routePhase(dir, { loadPlan, bin })
   // Row 2: m mode never gets here (its single phase stays open).
@@ -125,7 +126,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
-    return establish(dir, round + 1, opts.phases, roundCloseLines(close))
+    return establish(dir, round + 1, opts.phases, roundCloseLines(close), opts.isolate)
   }
   // Row 3 (plans/0053 D34): the phase index drifted from the phases value —
   // config `phases` changed after the round was established. plan owns the
@@ -356,9 +357,41 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 }
 
 // Establish a round (no AI, left uncommitted for the round-start gate G1)
-// and print the G1 lines (plans/0053 D15).
-async function establish(dir: string, round: number, phases: string, before: string[]): Promise<PlanPrelude> {
+// and print the G1 lines (plans/0053 D15). Branch isolation (plans/0074 §2.2)
+// happens here — the natural point where round-scoped state is created: each
+// repository the config's isolate key designates is switched onto the round
+// branch auto/R-NN before anything is written, so a dirty designated
+// repository blocks (exit 2, the same class as the run-start clean gate)
+// naming the repo and its paths with no write done, and a git failure also
+// stops with the round unwritten — the re-run's idempotent isolation finishes
+// what a crash between the branch switches and establishRound left.
+// AUTO-DECISION (ordering): the whole isolation — dirty check and branch
+// switch — runs before establishRound, not after it. Afterward a git failure
+// would leave the phase index written (the round routes on, isolation never
+// re-runs, later commits silently land on the original branch); before it, a
+// failure or block leaves no round state and the re-run retries everything,
+// and a crash between the two leaves only content-neutral branches (a branch
+// at HEAD changes no file), which the idempotent skips finish.
+async function establish(dir: string, round: number, phases: string, before: string[], isolate?: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
+  const name = roundDirName(round)
+  const branch = `auto/${name}`
+  let isolated: string[] = []
+  if (isolate?.length) {
+    const result = await isolateRound(dir, isolate, branch)
+    if (result.type === "dirty") {
+      return stop(2, [
+        ...before,
+        `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
+          `handle it manually (commit/clean) and re-run:`,
+        ...result.repos.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
+      ])
+    }
+    if (result.type === "failed") {
+      return stop(1, [...before, `branch isolation failed, nothing was written: ${result.error}; fix the repository and re-run: ${bin} plan ${dir}`])
+    }
+    isolated = result.isolated
+  }
   let state: PhaseState | undefined
   try {
     await establishRound(dir, { phases, round })
@@ -367,11 +400,14 @@ async function establish(dir: string, round: number, phases: string, before: str
     return stop(1, [...before, `round establishment failed: ${error instanceof Error ? error.message : String(error)}`])
   }
   const units = state!.phases
-  const name = roundDirName(round)
+  // The isolation line rides both G1 shapes: the round's commits land on the
+  // round branch, the original branch never moves.
+  const isolatedLine = isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []
   if (phases === "m") {
     return stop(0, [
       ...before,
       `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
+      ...isolatedLine,
       `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(units[0]!)} by hand, ` +
         `or run: ${bin} plan ${dir} -p <text> | --file <path>`,
     ])
@@ -379,6 +415,7 @@ async function establish(dir: string, round: number, phases: string, before: str
   return stop(0, [
     ...before,
     `✓ round ${name} established: ${units.map(phaseLabel).join(", ")}`,
+    ...isolatedLine,
     `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
       `then run: ${bin} plan ${dir} to plan ${phaseRefText(units[0]!)} (or run to plan and execute)`,
   ])
