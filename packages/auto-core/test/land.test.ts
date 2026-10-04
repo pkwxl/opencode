@@ -268,6 +268,30 @@ describe("landUnit (plans/0074 §2.3, U-L2: the landing command core)", () => {
   )
 
   test(
+    "a lane-family branch inside the designated repository is never mistaken for the original (plans/0074 §2.4: lane branches live inside whichever branch is checked out)",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir)
+      const original = await branchOf(pkg)
+      const setup = await fullShaOf(pkg, original)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      // A lane branch the repository holds beside the round branch (the
+      // nested repository was itself lane-driven once, or a lane park of an
+      // interrupted attempt was salvaged by hand): the original-branch
+      // derivation skips the lane family exactly like the round family.
+      await git(pkg, "branch", "auto-lane/T-009", "auto/R-01")
+      const landed = await landUnit(dir, { isolate: ["pkg"] })
+      expect(landed.type).toBe("landed")
+      expect(landed.lines[0]).toMatch(/^✓ pkg: landed [0-9a-f]+ on \S+ \(1 commit\(s\) of auto\/R-01 as one\); auto\/R-01 deleted$/)
+      expect(await branchOf(pkg)).toBe(original)
+      expect(await commitCount(pkg, original)).toBe(2)
+      expect(await fullShaOf(pkg, "HEAD~1")).toBe(setup)
+      expect(await hasBranch(pkg, "auto-lane/T-009")).toBe(true)
+      expect(await hasBranch(pkg, "auto/R-01")).toBe(false)
+    }),
+  )
+
+  test(
     "a mixed set lands nothing: one repository's refusal blocks every repository's landing",
     withDir(async (dir) => {
       const pkg = await nestedRepo(dir, "pkg")

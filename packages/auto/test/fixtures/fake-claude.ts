@@ -161,7 +161,16 @@ function execute(text: string): boolean {
     // round then touch disjoint files, the shape a conflict-free landing
     // needs; the default both-modules shape stays for the conflict cases.
     if (process.env.FAKE_CLAUDE_FORK_MODULES) {
-      write(`src/${task}.ts`, `export const module = ${JSON.stringify(task)}\n`)
+      // FAKE_CLAUDE_NESTED (plans/0074 U-L3's e2e): `<task>:<dir>` — that one
+      // task's module lands inside the nested repository <dir>, the shape a
+      // branch-isolated round delivers: the driver's unified commit commits
+      // it in the nested repository, on whichever branch that repository has
+      // checked out (the round branch auto/R-NN). Every other write — the
+      // other tasks' modules, the lead's foundation, the wrap-up's report —
+      // stays where it always goes.
+      const nested = process.env.FAKE_CLAUDE_NESTED ?? ""
+      const rel = nested.startsWith(`${task}:`) ? `${nested.slice(task.length + 1)}/src/${task}.ts` : `src/${task}.ts`
+      write(rel, `export const module = ${JSON.stringify(task)}\n`)
       return true
     }
     write("src/alpha.ts", `export const alpha = ${JSON.stringify(task)}\n`)

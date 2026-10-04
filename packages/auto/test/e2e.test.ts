@@ -4684,3 +4684,180 @@ describe("CLI: stream lanes (auto-core plans/0068 S5)", () => {
     }
   }, 300_000)
 })
+
+// Branch isolation's round trip (plans/0074 §2, U-L3): the e2e the design unit
+// owes — designate → establish (isolate) → run the round's units → `land`,
+// the deliverable's history ending with exactly one commit while its original
+// branch otherwise never moved and auto/R-NN is gone. The lanes interplay
+// (§2.4) rides the same entry: lanes branch and land in the MAIN repository,
+// orthogonal to isolation — the lane park's copy of the nested repository
+// sits on the round branch like the main tree's does — and a unit whose
+// declared Touches reach the nested repository is not lane-eligible
+// (plans/0068 D15) and serializes in the main tree, so its work lands on the
+// isolation branch during the round; `land` then squashes the round into the
+// deliverable's one commit. The fake's fork writes the nested task's module
+// inside pkg (FAKE_CLAUDE_NESTED, the knob beside FAKE_CLAUDE_FORK_MODULES).
+describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
+  const doc = (id: string, title: string, touches: string) =>
+    [`# ${id}: ${title}`, "Phase: R-01.P01", "Depends: none", `Touches: ${touches}`, "", "## Goal", "", `Deliver ${title}.`, "", "## Scope", "", "One module, read back.", "", "## Acceptance", "", "The module reads back.", "", "<!-- auto: eof -->", ""].join("\n")
+
+  // A committed project whose nested repository pkg holds one clean commit
+  // (on the pinned init.defaultBranch), ready to be designated by --isolate;
+  // plan establishes the round and isolates pkg on auto/R-01 before the task
+  // documents land (the person's commit that precedes every gated run).
+  // `init` carries extra init flags (the lanes case's parallel level);
+  // `extra` goes into the fake agent's environment (the fixture knobs).
+  const setup = async (prefix: string, tasks: [string, string, string][], init: string[] = [], extra: Record<string, string> = {}) => {
+    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const agent = await fakeClaude(extra)
+    const git = gitOf(dir)
+    await mkdir(join(dir, "pkg"), { recursive: true })
+    const nested = gitOf(join(dir, "pkg"))
+    await Bun.write(join(dir, "pkg", "readme.txt"), "nested\n")
+    await nested("init", "-q")
+    await nested("add", "-A")
+    await nested("commit", "-qm", "nested setup")
+    const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+    const setupSha = (await nested("rev-parse", "HEAD")).trim()
+    await git("init")
+    const mainBranch = (await git("symbolic-ref", "--short", "HEAD")).trim()
+    expect((await runCli(["init", dir, "--isolate", "pkg", ...init])).code).toBe(0)
+    const plan = await runCli(["plan", dir])
+    expect(plan.code, `${plan.out}\n${plan.err}`).toBe(0)
+    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)
+    for (const [id, title, touches] of tasks) await Bun.write(join(dir, taskStatePaths(id).pending), doc(id, title, touches))
+    await git("add", "-A")
+    await git("commit", "-qm", "baseline")
+    return { dir, agent, git, nested, original, setupSha, mainBranch, plan }
+  }
+
+  test("isolate → establish → run → land: the round's nested work becomes exactly one commit on the original branch, auto/R-01 gone, the trail in the driven root", async () => {
+    const { dir, agent, git, nested, original, setupSha, plan } = await setup("auto-cli-iso-round-", [["T-001", "the nested widget", "pkg/"]], [], {
+      FAKE_CLAUDE_FORK_MODULES: "1",
+      FAKE_CLAUDE_NESTED: "T-001:pkg",
+    })
+    try {
+      // designate → establish: the round opened with pkg isolated on the
+      // round branch, the original tip intact beneath it.
+      expect(plan.out).toContain("✓ branch isolation: pkg on auto/R-01")
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
+      // run the round: the unit's fork delivers its module inside pkg.
+      const run = await agent.run(["run", dir])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      // During the round the deliverable's work lives on the isolation branch
+      // only: the driver's unified commits (Auto-Stage trailers) moved
+      // auto/R-01; the original branch never moved.
+      expect(await Bun.file(join(dir, "pkg", "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect(await nested("log", "--format=%B", `${original}..auto/R-01`)).toContain("Auto-Stage: execute")
+      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
+      // The task completed; both trees clean.
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      expect((await nested("status", "--porcelain")).trim()).toBe("")
+      // land: exactly one commit on the deliverable's branch.
+      const landed = await runCli(["land", dir])
+      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0)
+      const sha = (await nested("rev-parse", "--short", "HEAD")).trim()
+      expect(landed.out).toContain(`✓ pkg: landed ${sha} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
+      expect(landed.out).toContain("the driven root is the process layer of record")
+      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(2)
+      expect((await nested("rev-parse", "HEAD~1")).trim()).toBe(setupSha)
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
+      expect(await Bun.file(join(dir, "pkg", "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
+      expect((await nested("status", "--porcelain")).trim()).toBe("")
+      // The landing commit is the deliverable's own history entry: no
+      // Auto-Stage trailer.
+      expect(await nested("log", "-1", "--format=%B")).not.toContain("Auto-Stage:")
+      // The full per-unit trail stays in the driven root's git (0064's
+      // record model): its own commits recorded the nested repository's SHAs
+      // along the way.
+      expect(await git("log", "--format=%B")).toContain("Auto-Nested: pkg @")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 240_000)
+
+  test("lanes inside isolation: the lane parks and lands in the main repository while pkg rides auto/R-01; the nested unit serializes onto the isolation branch and land squashes the round", async () => {
+    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-iso-lane-gate-"))
+    const gate = join(gateDir, "go")
+    const { dir, agent, git, nested, original, setupSha, mainBranch } = await setup(
+      "auto-cli-iso-lane-",
+      [
+        ["T-001", "the root module", "src/"],
+        ["T-002", "the nested widget", "pkg/"],
+      ],
+      ["--parallel", "low"],
+      { FAKE_CLAUDE_FORK_MODULES: "1", FAKE_CLAUDE_NESTED: "T-002:pkg", FAKE_CLAUDE_GATE: gate },
+    )
+    const units = async () =>
+      JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as {
+        tasks: Record<string, { pid?: number }>
+      }
+    try {
+      const running = agent.run(["run", dir, "--max-sessions", "2"])
+      // Wait until the lane is in flight: the registry names its worker pid
+      // (its lead parked at the fake's gate).
+      let pid: number | undefined
+      for (let i = 0; i < 1200 && pid === undefined; i++) {
+        await Bun.sleep(50)
+        pid = (await units()).tasks["T-001"]?.pid
+      }
+      expect(pid).toBeGreaterThan(0)
+      // §2.4's orthogonality, pinned mid-round: the lane's branch and park
+      // live in the MAIN repository (on its main branch, untouched by
+      // isolation), while the nested repository rides the round branch — the
+      // main tree's pkg and the park's copied pkg both sit on auto/R-01, the
+      // original branch never moved by any of it.
+      expect((await git("branch", "--list", "auto-lane/T-001")).trim()).toContain("auto-lane/T-001")
+      expect((await git("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(mainBranch)
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      const parkPkg = gitOf(join(dir, ".auto", "worktrees", "T-001", "pkg"))
+      expect((await parkPkg("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
+      await Bun.write(gate, "released\n")
+      const run = await running
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      // The round ran both ways: T-001 as a lane (the serialized landing in
+      // the main repository), T-002 through D15's serial degrade — alone, in
+      // the main tree, after the lanes drained.
+      expect(run.out).toContain("T-001 dispatching a lane")
+      expect(run.out).toContain("T-001 done (lane landed:")
+      expect(run.out).toContain("T-002 cannot be isolated (its declared Touches reach a nested repository); running it serially in the main tree after the lanes drained (D15)")
+      expect(await Bun.file(join(dir, "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
+      expect(await Bun.file(join(dir, "pkg", "src", "T-002.ts")).text()).toBe('export const module = "T-002"\n')
+      // During the round: the lane's serialized landing is in the MAIN
+      // repository's history (park and branch torn down after it), while the
+      // nested unit's work sits on the isolation branch as driver commits —
+      // the original branch still never moved.
+      expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
+      expect((await git("branch", "--list", "auto-lane/*")).trim()).toBe("")
+      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
+      expect(await nested("log", "--format=%B", `${original}..auto/R-01`)).toContain("Auto-Stage: execute")
+      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
+      // land squashes the round's nested work into the deliverable's one
+      // commit; the lane's module stays in the main repository's history.
+      const landed = await runCli(["land", dir])
+      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0)
+      const sha = (await nested("rev-parse", "--short", "HEAD")).trim()
+      expect(landed.out).toContain(`✓ pkg: landed ${sha} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
+      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(2)
+      expect((await nested("rev-parse", "HEAD~1")).trim()).toBe(setupSha)
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
+      expect(await Bun.file(join(dir, "pkg", "src", "T-002.ts")).text()).toBe('export const module = "T-002"\n')
+      expect(await nested("log", "-1", "--format=%B")).not.toContain("Auto-Stage:")
+      expect((await nested("status", "--porcelain")).trim()).toBe("")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await Bun.write(gate, "released\n").catch(() => {})
+      await agent.done()
+      await rm(gateDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 240_000)
+})
