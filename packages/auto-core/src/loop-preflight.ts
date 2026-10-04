@@ -108,6 +108,11 @@ export type RunAllOpts = {
   // passed through to runTask.
   testByDriver?: boolean
   handoverTest?: boolean
+  // The active intent pack's name (plans/0079 §2: config `intent`, frozen by
+  // init — often a materialized intent bundle's pack). The name rides the
+  // session options to the render facts; the pack itself loads per render
+  // call. Absent = the built-in default pack.
+  intent?: string
   // -m/--mode scenario mode (default migrate), passed through to runTask's
   // prompt rendering.
   mode?: ModeSpec
@@ -260,7 +265,7 @@ export async function preflight(
   let renderFacts: PromptFacts | undefined
   try {
     usePromptLibrary(directory)
-    renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore === "execute" })
+    renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore === "execute", intent: opts.intent })
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
     const types = loaded.map((entry) => entry.type)
@@ -286,6 +291,14 @@ export async function preflight(
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
+  }
+  // The active pack's provenance (plans/0079 §2, the moment 0031 froze
+  // IntentSource for): the config's intent key names the pack, the log says
+  // which surface supplied it — a project file (a materialized intent
+  // bundle's pack among them) or the built-in.
+  if (opts.intent !== undefined) {
+    const project = await Bun.file(join(directory, ".opencode", "auto", "intents", `${opts.intent}.md`)).exists()
+    log(`ℹ intent pack ${opts.intent} (${project ? "project" : "builtin"})`)
   }
   // The driver's own traffic (plans/0055 §8.10): it reaches a managed opencode
   // server over loopback with Bun's fetch, which does not bypass loopback on

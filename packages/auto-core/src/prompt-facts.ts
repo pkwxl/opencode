@@ -15,13 +15,15 @@ import { promptTemplateNames } from "./template"
 
 // dir selects the intent-pack overlay (the target directory's
 // .opencode/auto/intents/; undefined = the built-ins alone, the module
-// default before E2). humanQuestions carries plan's attended-human mode
-// (Opts.humanQuestions / stopBefore === "execute"): the question-rule
-// partial renders its human-answer branch.
+// default before E2). intent names the active pack (plans/0079 §2: the
+// config's `intent` key rides Opts here, defaulting to the built-in pack —
+// the same degenerate selection the run's preflight validated). humanQuestions
+// carries plan's attended-human mode (Opts.humanQuestions / stopBefore ===
+// "execute"): the question-rule partial renders its human-answer branch.
 // The structural input lets a caller pass its Opts directly.
-export function promptFacts(input: { dir?: string; humanQuestions?: boolean } = {}): PromptFacts {
+export function promptFacts(input: { dir?: string; humanQuestions?: boolean; intent?: string } = {}): PromptFacts {
   return {
-    pack: resolveIntent(loadIntents(input.dir)),
+    pack: resolveIntent(loadIntents(input.dir), input.intent),
     humanQuestions: Boolean(input.humanQuestions),
     templateNames: promptTemplateNames(),
     ask: autoSwitches().ask,

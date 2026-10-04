@@ -51,6 +51,7 @@ import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { loadIntents } from "@opencode-ai/auto-core/intent/load"
+import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle, type IntentBundle } from "@opencode-ai/auto-core/bundle"
 import { shellProfile } from "@opencode-ai/auto-core/shell"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -126,6 +127,15 @@ const VALUE_FLAGS = new Set([
   // swallow the task id), plan's alone.
   "export",
   "adopt",
+  // --intent (plans/0079 §2/§3): the active intent pack's name — on init also
+  // an intent-bundle source (a registered bundle name or a directory path
+  // holding bundle.json, materialized into the target); elsewhere the plain
+  // config-key revision.
+  "intent",
+  // --repair (plans/0079 §4): run's bounded repair budget — how many
+  // automatic repair rounds a FAIL verdict or a held verdict gate may drive
+  // before blocking for the human; run's alone.
+  "repair",
 ])
 // Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
 // one value, so the values are collected in their own table instead of the
@@ -336,7 +346,7 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
-const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate"]
+const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
 // agents and spends tokens); status stays flagless.
 const MODELS_FLAGS = new Set(["probe"])
@@ -1152,6 +1162,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
     idleMs: config.idleTime * 60_000,
     maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
     mode,
+    intent: config.intent,
     phases: config.phases,
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
@@ -1349,6 +1360,16 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   const explicit: Partial<ProjectConfig> = {}
   if (!isolateNone && isolateRaw.length) explicit.isolate = isolateRaw
   if (agent === "claude") explicit.agent = agent
+  // --intent (plans/0079 §2): the active intent pack's name, frozen like
+  // every project attribute. The pack-existence check sits in the command
+  // block — on init the name may belong to a bundle whose pack materializes
+  // before the config write.
+  const intentName = flags.get("intent")
+  if (intentName !== undefined && !intentName.trim()) {
+    console.error("--intent takes an intent pack name (a lowercase letter followed by letters/digits/hyphens); defaults to the built-in default pack")
+    process.exit(1)
+  }
+  if (intentName !== undefined) explicit.intent = intentName
   if (flags.has("subtask")) explicit.subtask = subtask
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
   if (flags.has("idle-time")) explicit.idleTime = idleTime
@@ -1488,6 +1509,27 @@ if (command === "init" || command === "amend") {
     )
     process.exit(1)
   }
+  // --intent as a bundle source (plans/0079 §3), init only: the value may
+  // name a registered intent bundle or a directory holding bundle.json. The
+  // parse validates everything (phase types through the custom-type parser,
+  // the pack, the mode, the comma-form phases, the stamps) and writes
+  // nothing — materialization joins the write phase below, before the config
+  // save. A value that resolves to no bundle is a plain pack name (validated
+  // after the merge); amend takes plain names only — a bundle is an
+  // installation, and installing belongs to init.
+  let bundle: IntentBundle | undefined
+  const intentFlag = flags.get("intent")
+  if (intentFlag !== undefined && intentFlag.trim() && command === "init") {
+    const files = await resolveIntentBundle(intentFlag)
+    if (files !== undefined) {
+      try {
+        bundle = parseIntentBundle(files)
+      } catch (error) {
+        console.error(`--intent ${intentFlag}: ${error instanceof Error ? error.message : String(error)}`)
+        process.exit(1)
+      }
+    }
+  }
   // No command reaching this block takes -p (init's is a scoped retired flag,
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
@@ -1565,6 +1607,34 @@ if (command === "init" || command === "amend") {
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
+  // The bundle's stamps (plans/0079 §3) fill only what the person did not
+  // give explicitly — a flag always wins over the manifest. The bundle's
+  // phases value goes through the prefix guard below like any other, and its
+  // mode stamp re-checks against the loaded mode table (a bundle's own mode
+  // file is only on disk after materialization, so its name checks here
+  // against the manifest's word; the file itself was parsed with the bundle).
+  if (bundle) {
+    if (explicit.phases === undefined) config.phases = bundle.phases
+    if (!flags.has("mode") && bundle.mode !== undefined) config.mode = bundle.mode
+    if (!flags.has("subtask") && bundle.stamps.subtask !== undefined) config.subtask = bundle.stamps.subtask
+    if (!flags.has("parallel") && bundle.stamps.parallel !== undefined) config.parallel = bundle.stamps.parallel
+    if (!flags.has("wrapup") && !flags.has("no-wrapup") && bundle.stamps.wrapup !== undefined) config.wrapup = bundle.stamps.wrapup
+    config.intent = bundle.name
+    if (bundle.mode !== undefined && !modes[bundle.mode] && !bundle.files.mode) {
+      console.error(`--intent ${intentFlag}: the bundle's manifest mode "${bundle.mode}" is not a registered mode (currently supported: ${Object.keys(modes).join(", ")})`)
+      process.exit(1)
+    }
+  }
+  // --intent's pack-existence check (plans/0079 §2), judged on the merged
+  // value: the name must be a pack the loader resolves in this directory
+  // (built-in plus .opencode/auto/intents/). A parsed bundle satisfies itself
+  // — its pack materializes before the config write below — so the check
+  // skips it.
+  if (config.intent !== undefined && config.intent !== bundle?.name && !loadIntents(directory)[config.intent]) {
+    const packs = loadIntents(directory)
+    console.error(`--intent must be a loaded intent pack (currently available: ${Object.keys(packs).sort().join(", ")}); defaults to the built-in default pack`)
+    process.exit(1)
+  }
   // --parallel none / --scan-exempt none / --isolate none / --agent opencode
   // drop their keys (an amend would otherwise keep the old value).
   if (parallel === "none") delete config.parallel
@@ -1694,6 +1764,17 @@ if (command === "init" || command === "amend") {
       console.log("cancelled; nothing was changed")
       process.exit(0)
     }
+  }
+  // The bundle's files join the write phase here (plans/0079 §3): every
+  // check — the parse, the stamps, the prefix guard, the gates — has passed,
+  // so the materialization lands with the config that names it. Re-running
+  // init --intent re-materializes the same bytes (no drift copy exists).
+  if (bundle) {
+    const written = await materializeIntentBundle(directory, bundle).catch((error: unknown) => {
+      console.error(`--intent ${intentFlag}: materializing the bundle into ${directory} failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    })
+    console.log(`✓ intent bundle "${bundle.name}" materialized (${written.join(", ")})`)
   }
   try {
     await saveProjectConfig(directory, config)

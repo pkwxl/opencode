@@ -168,6 +168,11 @@ export type Opts = {
   // -m/--mode scenario mode (default migrate): passed through to the execution
   // and init prompt renders.
   mode?: ModeSpec
+  // The active intent pack's name (plans/0079 §2): config `intent` rides the
+  // session options so the render facts select the pack the preflight
+  // validated — absent = the built-in default pack. Name only; the pack
+  // itself loads per render call from the target directory's overlay.
+  intent?: string
   // --new-session: skips session reuse in interruption recovery (a new session
   // opens even when the interrupted session is still alive); exact phase
   // re-entry is unaffected — only the old session context is abandoned, the
@@ -290,6 +295,7 @@ export type SessionCtx = {
     testByDriver?: boolean
     handoverTest?: boolean
     mode?: ModeSpec
+    intent?: string
     newSession?: boolean
     wrapup?: boolean
     scanExempt?: string[]
@@ -364,6 +370,7 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       testByDriver: ctx.opts.testByDriver,
       handoverTest: ctx.opts.handoverTest,
       mode: ctx.opts.mode,
+      intent: ctx.opts.intent,
       newSession: ctx.opts.newSession,
       wrapup: ctx.opts.wrapup,
       scanExempt: ctx.opts.scanExempt,
@@ -405,6 +412,7 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
     router: ctx.router,
     git: ctx.git,
     mode: ctx.opts.mode,
+    intent: ctx.opts.intent,
   }
   return bypass
 }

@@ -56,7 +56,7 @@ export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(
 // is plan's stop condition — the same rule sessionOpts applies to every
 // bypass site, so a planning prompt renders the question-rule's human-answer
 // branch exactly when its session would wait for the human.
-const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute" })
+const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute", intent: ctx.opts.intent })
 
 // A phase type's duty paragraph for the planning/append prompts (E2): the
 // type's own `## plan duties` (custom types), else the type's shared partial

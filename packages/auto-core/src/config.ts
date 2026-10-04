@@ -11,18 +11,27 @@
 import { existsSync, statSync } from "node:fs"
 import { chmod } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { loadIntents } from "./intent/load"
+import { DEFAULT_INTENT, PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
 import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { phaseTypeRoleProblems, type AgentChoice } from "./switches"
-import { PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
 
 export { PARALLEL_LEVELS, type ParallelLevel }
 
 export type ProjectConfig = {
   // Must be a name registered in loadModes(dir).
   mode: string
+  // The active intent pack (plans/0079 §2, unblocking 0031 D2): a pack name
+  // loadIntents(dir) resolves — the built-in default, or one of the target
+  // directory's .opencode/auto/intents/<name>.md files (a materialized intent
+  // bundle's pack among them). Absent = the default pack, and the key is not
+  // written for default-only projects; set with init/amend --intent (init
+  // --intent <bundle> materializes the bundle and stamps its own name).
+  // Composition stays degenerate (0031 F8): the key selects, never merges.
+  intent?: string
   // The coding agent the project runs on (M6.1): opencode (absent, the
   // default — no key is written) or claude. Until M6.1 this key named the agent
   // contract; that name is fixed to `auto` now (opts.ts CONTRACT_AGENT), and a
@@ -260,7 +269,8 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
-    `mode ${config.mode} · agent ${config.agent ?? "opencode"} · subtask ${config.subtask}` +
+    `mode ${config.mode}${config.intent !== undefined && config.intent !== DEFAULT_INTENT ? ` · intent ${config.intent}` : ""}` +
+    ` · agent ${config.agent ?? "opencode"} · subtask ${config.subtask}` +
     ` · watchdog ${watchdog}` +
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
@@ -288,6 +298,17 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
   if (!modes[mode]) {
     throw new Error(`${CONFIG_FILE} mode value "${mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")})`)
   }
+  // The intent key validates the way mode does (plans/0079 §2): the value
+  // must name a pack the loader resolves; a missing pack is a strict failure
+  // fix reports as a manual finding (fix never resets a key — the person
+  // restores the pack file or amends the key).
+  const intent = record.intent === undefined ? undefined : stringOf("intent", record.intent)
+  if (intent !== undefined) {
+    const packs = loadIntents(dir)
+    if (!packs[intent]) {
+      throw new Error(`${CONFIG_FILE} intent value "${intent}" is not a loaded intent pack (available: ${Object.keys(packs).sort().join(", ")})`)
+    }
+  }
   const contextLimit = pick("contextLimit")
   if (typeof contextLimit !== "number" || !Number.isInteger(contextLimit) || contextLimit < 1) {
     throw new Error(`${CONFIG_FILE} contextLimit must be a positive integer (thousands of tokens)`)
@@ -311,6 +332,7 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
   }
   return {
     mode,
+    intent,
     agent: agentOf(record.agent),
     contextLimit,
     subtask: subtaskOf(pick("subtask")),

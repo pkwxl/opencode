@@ -34,6 +34,7 @@ const ctx: SessionCtx = {
     testByDriver: true,
     handoverTest: true,
     mode: { name: "greenfield", init: "init section", exec: "exec section" },
+    intent: "cleanroom",
     newSession: true,
     wrapup: false,
     scanExempt: ["dist/"],
@@ -67,6 +68,7 @@ const taskSet = (c: SessionCtx): Opts => ({
   testByDriver: c.opts.testByDriver,
   handoverTest: c.opts.handoverTest,
   mode: c.opts.mode,
+  intent: c.opts.intent,
   newSession: c.opts.newSession,
   wrapup: c.opts.wrapup,
   scanExempt: c.opts.scanExempt,
@@ -98,6 +100,7 @@ const bypassSet = (c: SessionCtx): Opts => ({
   router: c.router,
   git: c.git,
   mode: c.opts.mode,
+  intent: c.opts.intent,
 })
 
 describe("sessionOpts (the seven-site field-set pin)", () => {

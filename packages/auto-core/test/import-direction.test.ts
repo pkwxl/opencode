@@ -120,6 +120,12 @@ const CLASSIFIED: Record<string, Domain> = {
   "agents-block": "driver",
   artifact: "driver",
   attempt: "driver",
+  // Intent bundles (plans/0079 §3): the parse/materialize/register surface of
+  // the named policy bundle — init-time installation machinery that validates
+  // policy files (through the intent/phases/mode parsers) and writes them,
+  // the same seat config.ts holds; driver, not the intent domain, because it
+  // reads the config/opts shapes it stamps.
+  bundle: "driver",
   capability: "driver",
   chain: "driver",
   // The named SessionChain transitions (plans/0061 §4.8): the one home for
@@ -577,6 +583,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   opts: "runtime",
   config: "runtime",
   "config-fix": "runtime",
+  // The intent-bundle surface (plans/0079 §3): init-time installation
+  // machinery beside config/config-fix — parse/materialize/register over the
+  // policy files, reaching only the provider parsers and opts' mode words.
+  bundle: "runtime",
   "agent-choice": "runtime",
   "agent-env": "runtime",
   "agent-pool": "runtime",
