@@ -13,8 +13,8 @@ Verification: run the checks that target this stream's own changes (its tests, t
 The DRIVER's commit is this stream's record: write no docs/T-002/S03/index.md for code changes — only a stream whose output is itself a document (analysis, design) writes that document, into docs/T-002/S03/index.md. Do not change docs/T-002/subtasks.md, and do not create, rename or delete any S<nn>/todo.md or done.md: the DRIVER marks the stream done once this session ends.
 
 Document terminator discipline: every Markdown document you create (or rewrite in full) during this task must end, once finished, with a line
-containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). This is the mechanical criterion for
-"a document is finished" and the DRIVER validates artifacts against it — a missing terminator on the last line is treated as unfinished and
-sent back for correction; documents that already existed beforehand need no retrofit.
+containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). The DRIVER validates finished artifacts
+against exactly this — a missing terminator counts as unfinished and is sent back for correction; documents that already existed beforehand
+need no retrofit.
 
 Before ending, check for yourself whether this subtask is genuinely complete. When this stream is done, end the session.

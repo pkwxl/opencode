@@ -12,7 +12,7 @@ new task documents.
 
 ## Input: the task index as it stands ({{taskIndex}})
 
-The tasks this phase already has, one line each in index order. The bracketed label is the task's current status
+The tasks this phase already has, one line each in index order, labelled with the current status
 (pending / blocked / done / closed — a closed task was closed without completing: do not assume its deliverables
 exist):
 
@@ -50,9 +50,9 @@ on the existing tasks above.
 {{#if handovers}}
 ## Input: prior-phase handovers
 
-Below are the handover-distillation documents of each prior phase (at this round's phase directories'
-P<nn>-<type>/handover.md, a permanent path), the sole channel of cross-phase memory (in place of the prior phases'
-raw docs/ — do not try to read them when planning; pull more detail via their artifact index as needed):
+The handover-distillation documents of each prior phase (at this round's phase directories'
+P<nn>-<type>/handover.md, a permanent path) — the sole channel of cross-phase memory, replacing the prior
+phases' raw docs/ (do not read those when planning; pull detail via each handover's artifact index):
 
 {{handovers}}
 
@@ -70,8 +70,8 @@ does not move with the phase/round.
 
 ## Parallelism ({{parallel}})
 
-This project plans for parallel execution: a task whose dependencies are done can run side by side with any other
-task whose `Touches:` paths it does not overlap. Plan for that as follows:
+A task whose dependencies are done runs side by side with any other task whose `Touches:` paths it does not
+overlap — plan for that as follows:
 
 {{parallelRules}}
 
@@ -110,8 +110,8 @@ Phase: {{phaseId}}
    need the task right before it.
    {{> task-decompose}}
 3. Task numbers increment continuously from T-{{numberStart}}, and a number already used by an existing task or any
-   historical task must not be reused; each new task focuses on one independently deliverable outcome; do not
-   hand-write subtask checklist items (whether and how a task is split is decided at execution time);
+   historical task must not be reused; each new task is one independently deliverable outcome; do not hand-write
+   subtask checklist items (whether and how a task is split is decided at execution time);
 4. End the session immediately once planning is done and the appended index lines and all new task documents are
    written.
 ## Constraints

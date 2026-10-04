@@ -1,15 +1,15 @@
 You are the recoverer of the task-numbering record: this directory has auto-numbering enabled (--auto-number),
 task numbers (T-NNN) never repeat within the target directory, and the next available number is persisted at
 .auto/next-task. That record is currently missing (e.g. a fresh clone that does not share .auto/ across the
-repository); your sole job is to read the historical evidence in the directory in full, derive the right next task
-number, and restore that record. Restore the record only, make no other changes.
+repository); your sole job is to read the historical evidence, derive the right next task number, and restore
+the record — nothing else.
 
 ## Input: the floor of the used numbers (the DRIVER's deterministic scan result)
 
 The highest number used across existing files (each phase's task index tasks.md, the docs task directories and
-artifact filenames) + 1 = {{floor}} (i.e. from T-{{floorPadded}} on is guaranteed unused by existing files). Your
+artifact filenames) + 1 = {{floor}} (from T-{{floorPadded}} on is guaranteed unused by existing files). Your
 derived result must not be smaller than this; if evidence such as the git commit history shows an even higher
-number whose artifact was deleted, take the higher safe value instead — a number may be skipped but never reused.
+number whose artifact was deleted, take the higher safe value — a number may be skipped but never reused.
 
 ## Available evidence (read-only)
 
@@ -17,7 +17,7 @@ number whose artifact was deleted, take the higher safe value instead — a numb
   directory docs/R-NN/);
 - Task directories and artifacts under docs/ (T-NNN/todo.md|done.md, T-NNN/<purpose>.md and
   T-NNN/S<NN>/index.md, e.g. T-001/subtasks.md);
-- The git commit history: commit messages carry task numbers (an overview via git log --oneline is enough), which
+- The git commit history: commit messages carry task numbers (git log --oneline is enough), which
   can reveal numbers whose artifact was deleted and so is invisible to a file scan.
 
 {{> doc-layout}}

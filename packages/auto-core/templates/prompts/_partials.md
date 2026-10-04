@@ -7,7 +7,10 @@ the partial. Keep the section names unchanged when overriding this file, otherwi
 templates that reference them fail at render time.
 Optional content blocks (blocking remarks, mode notes and the like) are deliberately not
 partials — a conditional section swallows the whole line on its empty branch, so each
-template writes those inline.
+template writes those inline. The exception is a whole partial whose body is one line led by
+its `{{#if}}` tag (test-protocol): the empty branch then collapses to the call site's own
+line, which is only clean where the include sits at the template's end (the render trims) —
+anywhere else it leaves a blank line.
 When a conditional section carries two whole-branch replacement texts inside a partial
 (like the two `ask` branches of question-rule), the opening and closing tags must sit on the
 same line as the content (`…{{/if}}{{#if x}}…`): a tag alone on its line swallows that line
@@ -19,7 +22,7 @@ phase-type registry (`src/phases/registry.ts`, `dutiesRef`) picks the section, s
 adds a section here instead of a branch in phase-plan.
 
 ## head
-You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
+You are carrying out one task of an implementation plan: this session has to finish only the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions are not yours to carry out.
 
 {{#if doneList}}These tasks are already done, do not redo them:
 {{doneList}}{{/if}}{{^doneList}}No task in the plan is done yet.{{/if}}
@@ -30,13 +33,13 @@ You are carrying out one task of an implementation plan. This session only has t
    an `AUTO-RESOLVE` marker in this session. Plain engineering trade-offs that were always yours remain yours, no record required.
    Asking the same question again after it was answered blocks the task and stops the run.{{/if}}{{^humanQuestions}}{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
-   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
 {{#if decisionsUnattended}}{{decisionsUnattended}}{{/if}}{{^decisionsUnattended}}   A decision of your own must leave a record in the relevant document or code comment: a call that should have been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other call an `AUTO-DECISION: <decision> (<reason>)` line.{{/if}}
-   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.{{/if}}{{#if ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.{{/if}}{{#if ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
 {{#if decisionsAsk}}{{decisionsAsk}}{{/if}}{{^decisionsAsk}}   for anything else, ask with the question tool when the call should have been the user's, and decide it yourself when it was always yours.{{/if}}
-   When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on according
-   to the reply, and if the current stage is already finished, move straight on to the next one.
-   Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}{{/if}}
+   When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on by
+   the reply, and once the current stage is finished, move straight on to the next one.
+   Asking the same question again blocks the task and stops the run — do not rephrase and re-ask an answered question.{{/if}}{{/if}}
 ## ground-state
 Authoritative DRIVER ledger state (this is the only basis for the progress of this task and this subtask — never infer whether this task is done from other tasks' documents, handovers or git commit records):
 - Current task: {{taskId}} "{{taskTitle}}", status: {{taskStatusText}};{{#if qualifiedId}}
@@ -44,46 +47,46 @@ Authoritative DRIVER ledger state (this is the only basis for the progress of th
 - Subtask tick snapshot for this task: {{subtaskSnapshot}}; ticks are maintained by the DRIVER once each subtask session ends and do not change during a session;{{/if}}{{#if doneIds}}
 - The previously completed tasks {{doneIds}} are independent of this task, and their wrap-up/completion narratives say nothing about this task's progress; their documents may be consulted only as a format/precedent reference, never as evidence that "this task (or this subtask) is done".{{/if}}
 ## digest-rule
-Cross-task reference discipline (this file will serve as the background/navigation source for downstream subtask sessions; once a previous task's
-completion narrative flows in through a reference, a downstream session misreads it as a sign that this task is already done):
+Cross-task reference discipline (this file is the background/navigation source for downstream subtask sessions; a previous task's completion
+narrative flowing in through a reference is misread by a downstream session as a sign that this task is already done):
 - Point cross-task references only at phase-level single sources (rulings/contracts/ledger); never leave a pointer to a previous task's wrap-up narrative;
-- When you genuinely need to borrow a previous task-level wrap-up artifact (report/batch record/testhandoff and the like) as a format or precedent, the
+- Borrowing a previous task-level wrap-up artifact (report/batch record/testhandoff and the like) as a format or precedent is allowed, but the
   reference must carry the qualification "artifact of another, already completed task — format template only";
-- Excerpt the points you need instead of sending the reader back to a whole document: quote the content directly and leave no pointer that a
+- Excerpt the points you need instead of sending the reader back to a whole document: quote the content directly, leave no pointer a
   downstream session would have to read end to end.
 ## eof-rule
 Document terminator discipline: every Markdown document you create (or rewrite in full) during this task must end, once finished, with a line
-containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). This is the mechanical criterion for
-"a document is finished" and the DRIVER validates artifacts against it — a missing terminator on the last line is treated as unfinished and
-sent back for correction; documents that already existed beforehand need no retrofit.
+containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). The DRIVER validates finished artifacts
+against exactly this — a missing terminator counts as unfinished and is sent back for correction; documents that already existed beforehand
+need no retrofit.
 ## doc-layout
-Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
-shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
-subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
+Document placement rules: every document of a task (T-NNN) goes inside that task's own directory docs/T-NNN/ (digest context.md,
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md); subtask artifacts go to
+docs/T-NNN/S<two-digit index>/index.md, a subtask-level test handover to testhandoff.md beside it;
 do not create flat task files at the top level of docs/.
 
 
 ## task-depends
-Optional dependency fields, placed right after the `Phase:` line of a task document: `Depends: T-011, T-012` means the task starts only
-after the listed tasks are done — name tasks of this phase's index or already completed tasks of earlier phases, by id only; without the
-field a task depends on the task before it in the index (serial order), and `Depends: none` declares a task with no prerequisite.
-`Touches: src/dma/, include/dma.h` lists the repository-relative paths the task will change (no absolute paths, no `..`); without it the
-task may touch anything. Both field names are protocol strings the DRIVER parses — write them verbatim; an empty value, a task depending on
-itself and a dependency cycle are rejected.
+Optional dependency fields, right after the `Phase:` line of a task document: `Depends: T-011, T-012` — the task starts only after those tasks
+are done (this phase's index or completed earlier-phase tasks, by id only); without the field, the task before it in the index (serial order);
+`Depends: none` — no prerequisite. `Touches: src/dma/, include/dma.h` — the repository-relative paths the task will change (no absolute paths,
+no `..`); without it, anything. Both field names are protocol strings the DRIVER parses — write them verbatim; an empty value, a
+self-dependency and a cycle are rejected.
 ## task-decompose
-Optional execution-mode field, placed in the same field block beside `Phase:`: `Decompose: split` | `Decompose: whole` | `Decompose: pipeline`
-records how the task should run under the default adaptive execution, and the DRIVER executes it mechanically. Weigh, per task, its size, the
-dependency shape of its parts and the expected session count, and record your choice: `split` = one lead session works the task and may split
-the remaining work into parallel streams; `whole` = one single session carries the task to completion; `pipeline` = a decomposition session
-plans the task into subtasks first, then one session per subtask runs. The choice is a recorded decision and the field line is its artifact;
-omit the field when you have no opinion (execution then stays adaptive). The field name and its three values are protocol strings the DRIVER
-parses — write them verbatim and untranslated; any other value is rejected at load.
+Optional execution-mode field, in the same field block beside `Phase:`: `Decompose: split` | `Decompose: whole` | `Decompose: pipeline` — how
+the task should run under the default adaptive execution; the DRIVER executes it mechanically. Weigh the task's size, its parts' dependency
+shape and the expected session count: `split` = a lead session works the task and may split the remainder into parallel streams; `whole` = one
+session carries the task to completion; `pipeline` = a decomposition session plans subtasks first, then one session per subtask. The choice is a
+recorded decision; omit the field for no opinion (execution stays adaptive). The field name and its three values are protocol strings the
+DRIVER parses — verbatim, untranslated; any other value is rejected at load.
 ## subtask-depends
-Optional dependency fields, placed as the first lines of a subtask's todo.md (before `## Scope`): `Depends: S01, S03` means the subtask
-starts only after the listed subtasks of this task are done — item N of the checklist is S<two-digit N>; without the field a subtask depends
-on the item before it (serial order), and `Depends: none` declares a subtask with no prerequisite. `Touches: <repository-relative paths>`
-lists what it will change (no absolute paths, no `..`). Both field names are protocol strings the DRIVER parses — write them verbatim; an
-empty value, a subtask depending on itself and a dependency cycle are rejected.
+Optional dependency fields, the first lines of a subtask's todo.md (before `## Scope`): `Depends: S01, S03` — the subtask starts only after
+those subtasks of this task are done (item N of the checklist is S<two-digit N>); without the field, the item before it (serial order);
+`Depends: none` — no prerequisite. `Touches: <repository-relative paths>` — what it will change (no absolute paths, no `..`). Both field names
+are protocol strings the DRIVER parses — write them verbatim; an empty value, a self-dependency and a cycle are rejected.
+## test-protocol
+{{#if testByDriver}}Test execution protocol (--test-by-driver): after writing the script path into tmp/test.sh, end your turn to wait for the run. To test again,
+write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — the DRIVER reads that naming family to order handovers, and writing it yourself is misread as a handover that happened. Record test-result interpretations and corrections in this scope's established artifact documents, or leave them for the next handover document.{{/if}}{{/if}}
 ## plan-duties-a
 
 - Establish the source system's and source module's external behaviour, dependencies and boundaries, giving later

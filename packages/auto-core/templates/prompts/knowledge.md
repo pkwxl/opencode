@@ -12,12 +12,9 @@ Scenario mode notes ({{modeName}}):
 
 - The phase index docs/R-NN/phases.md (inside this round's directory): this round's phases in order, each with its own phase
   directory docs/R-NN/P<nn>-<type>/;
-- Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md: read these closely first (they are the phase's distilled
-  conclusions); each phase directory also holds that phase's task index tasks.md — when you need more
-  detail, fetch the original artifacts through the handover document's `## Artifact index` section (permanent paths,
-  docs/T-NNN/…);
-- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
-  entry).
+- Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md — read these closely first (the phase's distilled conclusions);
+  when you need more detail, fetch the original artifacts through the handover's `## Artifact index` section (permanent paths, docs/T-NNN/…);
+- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough).
 
 ## Artifact
 
@@ -65,9 +62,9 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 {{/if}}## Steps
 
-1. Read-only survey: read the phase index phases.md in this round's directory docs/R-NN/ and the handover.md in each phase
-   directory to grasp the whole migration; when you need detail, fetch the task index and the original artifacts through the
-   artifact index — do not skip a phase you have not read yet;
+1. Read-only survey: read the phase index phases.md in this round's docs/R-NN/ and each phase directory's handover.md to grasp
+   the whole migration; when you need detail, fetch the original artifacts through the artifact index — do not skip a phase you
+   have not read;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
 3. End the session as soon as a valid {{file}} is written.

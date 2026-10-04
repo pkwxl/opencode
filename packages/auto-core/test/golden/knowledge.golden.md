@@ -14,12 +14,9 @@ Migration/upgrade mode notes:
 
 - The phase index docs/R-NN/phases.md (inside this round's directory): this round's phases in order, each with its own phase
   directory docs/R-NN/P<nn>-<type>/;
-- Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md: read these closely first (they are the phase's distilled
-  conclusions); each phase directory also holds that phase's task index tasks.md — when you need more
-  detail, fetch the original artifacts through the handover document's `## Artifact index` section (permanent paths,
-  docs/T-NNN/…);
-- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
-  entry).
+- Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md — read these closely first (the phase's distilled conclusions);
+  when you need more detail, fetch the original artifacts through the handover's `## Artifact index` section (permanent paths, docs/T-NNN/…);
+- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough).
 
 ## Artifact
 
@@ -71,9 +68,9 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Steps
 
-1. Read-only survey: read the phase index phases.md in this round's directory docs/R-NN/ and the handover.md in each phase
-   directory to grasp the whole migration; when you need detail, fetch the task index and the original artifacts through the
-   artifact index — do not skip a phase you have not read yet;
+1. Read-only survey: read the phase index phases.md in this round's docs/R-NN/ and each phase directory's handover.md to grasp
+   the whole migration; when you need detail, fetch the original artifacts through the artifact index — do not skip a phase you
+   have not read;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
 3. End the session as soon as a valid docs/R-01/P04-knowledge/kb.md is written.
@@ -83,19 +80,19 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
-   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
    A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
    relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
    a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
    - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
-     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
-     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
-     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment), and
+     anything beyond or narrower than the task description's literal scope — you closed it on the user's behalf, so annotate it explicitly with an
+     `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
    - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
-     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
-   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
-   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
-   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
-   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+     naming, file organisation, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the task's literal scope — AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
+   Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
 3. Writing that document is a hard requirement: even with little information, write out the full section skeleton and explain
    why; producing no document makes this phase's knowledge extraction fail;

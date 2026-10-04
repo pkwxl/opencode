@@ -23,8 +23,8 @@ only, do not implement — do not modify any file other than the task index and 
 {{#if parallelRules}}
 ## Parallelism ({{parallel}})
 
-This project plans for parallel execution: a task whose dependencies are done can run side by side with any other
-task whose `Touches:` paths it does not overlap. Plan for that as follows:
+A task whose dependencies are done runs side by side with any other task whose `Touches:` paths it does not
+overlap — plan for that as follows:
 
 {{parallelRules}}
 
@@ -60,10 +60,9 @@ Phase: {{phaseId}}
    {{> task-depends}}
    {{> task-decompose}}
 3. Task numbers increment continuously from T-{{numberStart}}, and must not reuse a number already taken by an
-   existing task directory; each task focuses on one independently deliverable outcome, sized so a single session can
+   existing task directory; each task is one independently deliverable outcome, sized so a single session can
    finish it within a modest context budget; do not hand-write subtask checklist items (whether and how a task is
-   split is decided at execution time); where there is a dependency order, arrange tasks in executable order (a
-   task depending on an earlier one comes after it).
+   split is decided at execution time); order tasks so a task depending on an earlier one comes after it.
 4. End the session immediately once planning is done and the task index and all task documents are written.
 
 ## Constraints

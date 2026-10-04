@@ -244,7 +244,7 @@ describe("digest-rule partial and cross-task reference discipline (L2, plans/002
     // The characterization duty names the preceding task-level wrap-up artifact family (report/batch record/testhandoff)
     expect(text).toContain("report/batch record/testhandoff")
     // The background line spells out the misread consequence: a preceding completion narrative flowing in gets misread by downstream sessions as this task already done
-    expect(text).toContain("misreads it as a sign that this task is already done")
+    expect(text).toContain("misread by a downstream session as a sign that this task is already done")
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
@@ -286,7 +286,7 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
     const text = renderText("{{> eof-rule}}", {})
     expect(text).toContain("<!-- auto: eof -->")
     expect(text).toContain("as its last line of body text")
-    expect(text).toContain("documents that already existed beforehand need no retrofit")
+    expect(text).toContain("documents that already existed beforehand\nneed no retrofit")
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 

@@ -44,9 +44,9 @@ the phase duties below.
 {{#if handovers}}
 ## Input: prior-phase handovers
 
-Below are the handover-distillation documents of each prior phase (at this round's phase directories'
-P<nn>-<type>/handover.md, a permanent path), the sole channel of cross-phase memory (in place of the prior phases'
-raw docs/ — do not try to read them when planning; pull more detail via their artifact index as needed):
+The handover-distillation documents of each prior phase (at this round's phase directories'
+P<nn>-<type>/handover.md, a permanent path) — the sole channel of cross-phase memory, replacing the prior
+phases' raw docs/ (do not read those when planning; pull detail via each handover's artifact index):
 
 {{handovers}}
 
@@ -57,8 +57,8 @@ raw docs/ — do not try to read them when planning; pull more detail via their 
 This project has already run a full round of phased migration, and this is a continuation round: build on the
 existing migration results to bring them into fuller agreement with the source system — prioritise gaps and misses
 left over from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows
-(handover and knowledge documents are permanent paths; each prior phase's task index tasks.md lives inside its own
-phase directory under the prior round's directory docs/R-NN/; pull detail via the index as needed):
+(each prior phase's task index tasks.md lives inside its own phase directory under the prior round's docs/R-NN/,
+a permanent path; pull detail via the index as needed):
 
 {{prevRound}}
 
@@ -80,8 +80,8 @@ be dropped because of pipeline trimming.
 
 ## Parallelism ({{parallel}})
 
-This project plans for parallel execution: a task whose dependencies are done can run side by side with any other
-task whose `Touches:` paths it does not overlap. Plan for that as follows:
+A task whose dependencies are done runs side by side with any other task whose `Touches:` paths it does not
+overlap — plan for that as follows:
 
 {{parallelRules}}
 
@@ -117,8 +117,8 @@ Phase: {{phaseId}}
    {{> task-decompose}}
 3. {{#if numberStart}}Task numbers increment continuously from T-{{numberStart}} (auto-numbering: numbers never repeat
    within the target directory; earlier numbers are already taken by historical tasks and must not be reused){{/if}}{{^numberStart}}Task numbers increment continuously from T-001{{/if}};
-   each task focuses on one independently deliverable outcome; do not hand-write subtask
-   checklist items (whether and how a task is split is decided at execution time);
+   each task is one independently deliverable outcome; do not hand-write subtask checklist items
+   (whether and how a task is split is decided at execution time);
 4. End the session immediately once planning is done and the task index and all task documents are written.
 ## Constraints
 

@@ -1,8 +1,8 @@
 You are the knowledge distiller for a migration retrospective: this working directory already holds the artifacts of an earlier
 migration (possibly done by hand, by other tools, or by earlier rounds of this tool). Read through these existing migration
-results and distil the **finally verified** migration experience in them into one structured knowledge document, as input to the
-second migration about to start (the full admtvk flow) and to the inference of the migration parameters. Distil only — implement
-nothing and change no existing artifact.
+results and distil the **finally verified** migration experience in them into one structured knowledge document, as input to
+the second migration about to start (the full admtvk flow) and to the inference of the migration parameters. Distil only —
+implement nothing and change no existing artifact.
 
 {{#if modeExec}}
 Scenario mode notes ({{modeName}}):
@@ -19,7 +19,7 @@ Scenario mode notes ({{modeName}}):
 {{#if distilled}}
 ## Input: existing distilled artifacts (reference, do not restate)
 
-The following previously distilled knowledge/handover documents already exist. Their conclusions **must not be restated in this
+The previously distilled knowledge/handover documents below already exist. Their conclusions **must not be restated in this
 document** — the relevant sections carry only a one-line reference (`see <path>: <one sentence>`). This document's added value =
 a differential forecast for the migration target about to start: the mappings, pitfalls and reusable rules specific to the new
 target.
@@ -31,23 +31,21 @@ target.
 
 - The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
   phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
-  prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first; the task indexes
-  tasks.md inside the phase directories only list the tasks — when you need detail, fetch it through the handover document's `## Artifact index` section;
-- The migrated code itself (the current state on the target side): check the final state against the documents; where documents
-  and code disagree, the code wins, and note the discrepancy in the document;
+  prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first; when you need detail beyond them,
+  fetch it through the handover document's `## Artifact index` section;
+- The migrated code itself (the target side's current state): check the final state against the documents; where documents and
+  code disagree, the code wins, and note the discrepancy in the document;
 - The migration source (if it exists inside the working directory): work out its layout and module boundaries, and record
   relative-path clues that locate it;
-- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
-  entry).
+- A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough).
 
 ## Artifact
 
 Write the knowledge document to {{file}} (overwrite), organised by the following section skeleton (headings exactly as given, in
 this order; keep the heading of a section with little information and explain why — do not delete sections). {{file}} is an
 intermediate artifact path: once every section is written, put the line `DONE` on a line of its own at the very end of the document
-as the closing mark — this is a DRIVER-parsed protocol string: write it verbatim, do not translate it. The DRIVER accepts only a
-document carrying that mark, and only after confirming it does it promote the file to the official prior-knowledge document and
-commit it; never write that line before every section is complete.
+as the closing mark — a DRIVER-parsed protocol string: write it verbatim, do not translate it. Only after confirming that mark does the
+DRIVER promote the file to the official prior-knowledge document and commit it; never write that line before every section is complete.
 
 # Migration knowledge base: <one-sentence description of the project/module>
 

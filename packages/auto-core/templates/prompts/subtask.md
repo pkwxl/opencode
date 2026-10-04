@@ -26,13 +26,7 @@ The previous session was interrupted by the context limit. First read {{handoffF
 
 Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.{{#if last}} This is the last subtask: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.{{/if}}
 
-{{> doc-layout}}
-
-{{> eof-rule}}
-
-{{#if artifactConvention}}{{artifactConvention}}
-
-{{/if}}{{#if processRefs}}{{processRefs}}
+{{#if processRefs}}{{processRefs}}
 
 {{/if}}Constraints:
 1. Complete this one subtask strictly, and as soon as it is done, close out with the steps below and end the session, so as to keep the context of a single session small;
@@ -42,8 +36,13 @@ Verification: run the checks that target this subtask's own changes (its tests, 
 {{/if}}   b. you may add to the content of docs/ but not modify it (if a modification is unavoidable, {{^ask}}annotate it as AUTO-DECISION and {{/if}}record it in the relevant document).
 {{#if budget}}
 
-Context-budget protocol (this session manages its own context): the DRIVER watches this session's token usage and steers in one-line `[DRIVER] context: …` notices at milestones (about half the budget, then about 85%). Those notices are information, not interrupts — keep working. When the rest of this subtask would not fit the budget, hand over at a natural boundary — a coherent step finished, nothing half-edited: write into {{handoffFile}} (overwriting it) what a brand-new session continuing this subtask from that file alone needs, so it does not re-read what you already read: the progress so far, the key decisions, the verified facts and file paths, the dead ends, and the next steps; end the document with `Status: continue` (subtask incomplete) or `Status: done` (subtask fully done) as its last line — a protocol string the driver parses, write it verbatim and untranslated — then end the session. A "[DRIVER] This session's context has reached the wall" notice overrides everything above: write the file immediately and end the session.
+Context-budget protocol (this session manages its own context): the DRIVER watches this session's token usage and steers in one-line `[DRIVER] context: …` notices at milestones (about half the budget, then about 85%) — information, not interrupts; keep working. When the rest of this subtask would not fit the budget, hand over at a natural boundary — a coherent step finished, nothing half-edited: write into {{handoffFile}} (overwriting it) what a brand-new session continuing this subtask from that file alone needs — the progress so far, the key decisions, the verified facts and file paths, the dead ends, and the next steps — ending with `Status: continue` (subtask incomplete) or `Status: done` (subtask fully done) as its last line, a protocol string the driver parses, written verbatim and untranslated; then end the session. A "[DRIVER] This session's context has reached the wall" notice overrides everything above: write the file immediately and end the session.
 {{/if}}
-{{#if testByDriver}}
-Test execution protocol (--test-by-driver): after writing the script path into tmp/test.sh, end your turn to wait for the run. To test again,
-write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish and write out the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — that naming family is what the DRIVER observes to establish handover ordering, and writing it yourself is misread as a handover that happened. Record your interpretation of the test result and any corrections in the established artifact documents of this execution scope, or leave them to be folded into the handover document at the next handover.{{/if}}{{/if}}
+
+{{> eof-rule}}
+
+{{#if artifactConvention}}{{artifactConvention}}
+
+{{/if}}{{> doc-layout}}
+
+{{> test-protocol}}

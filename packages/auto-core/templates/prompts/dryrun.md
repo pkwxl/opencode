@@ -5,7 +5,7 @@ Task:
    and operations beyond what opencode.json already grants these tasks may need (paths outside the project directory, network access,
    special bash commands and the like); list them as candidates;
 2. Confirm the candidates one by one with read-only probes (harmless operations such as ls, test -r, reading a file) to establish
-   which accesses really are denied — a denied probe does not interrupt you: record it and move on to the next one;
+   which accesses really are denied — a denied probe does not interrupt you: record it and move on;
 3. Write the conclusion to .auto/dryrun.md (overwrite): the list of accesses confirmed as blocked, and the allow rules you recommend
    adding to the opencode.json permission block; if no access beyond the granted scope is needed, say so explicitly.
 

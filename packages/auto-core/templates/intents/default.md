@@ -9,13 +9,13 @@
      the files/modules/interfaces/behaviours/scenarios named in the task description are the natural splitting reference;
 {{#if fine}}   - Fine-grained mode: make one item per natural unit named in the task body (file, module, interface, behaviour, scenario) and
      prefer finer over coarser — the fork pipeline has removed the fixed cost of re-understanding between subtasks, so a fine item's marginal
-     cost is low; order the fine items explicitly into an executable sequence, placing an item that depends on an earlier one after it;
-{{/if}}   - Each item self-contained: executable from the item description alone plus this subtask's todo.md, the task-background digest
-     context.md, the shared-context index shared.md and docs/, and including the way to verify it — the checks that target the item's own
-     changes (its tests, the typecheck or build of what it touched), not the task's full suite;
+     cost is low; order the fine items into an executable sequence (an item that depends on an earlier one comes after it);
+{{/if}}   - Each item self-contained: executable from the item description alone plus the item's todo.md, the shared-context index and docs/,
+     and carrying the way to verify it — the checks that target the item's own changes (its tests, the typecheck or build of what it
+     touched), not the task's full suite;
    - Each item declares its artifacts: documents state the file path, code states the module/file range;
-   - Budget-oriented: each item's own work — what its session reads and writes beyond the context it starts with (the agent's harness, its
-     prompt and the inherited background) — should be on the order of {{contextBudget}} tokens;
+   - Budget-oriented: each item's own work — what its session reads and writes beyond the context it starts with (harness, prompt and
+     inherited background) — should be on the order of {{contextBudget}} tokens;
    - No close-out item: the task's final verification (the full suite, the build, the acceptance checks of the task description) is not an
      item of its own — the last item runs it once, after its own work;
 
@@ -133,25 +133,24 @@ target's own documentation.
    relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
    a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
    - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
-     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
-     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
-     user's to make and you closed it on their behalf, so annotate it explicitly with an {{resolveFormat}} line;
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment), and
+     anything beyond or narrower than the task description's literal scope — you closed it on the user's behalf, so annotate it explicitly with an
+     {{resolveFormat}} line;
    - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
-     naming, file organisation, injection method, how tests are written) — annotate it with an {{decisionFormat}} line.
-   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
-   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
-   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+     naming, file organisation, how tests are written) — annotate it with an {{decisionFormat}} line.
+   Example: "whether to close out the third duplicate implementation as well" changes the task's literal scope — AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
+   Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
 
 ### decisions-ask
 
    for anything else, proceed by "who should have owned this call":
    - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
-     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
-     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. For these, ask
-     directly with the question tool instead of deciding in the user's place; when unsure, ask — the cost of one question is far smaller than the
-     cost of one wrong decision made in the user's name;
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment), and
+     anything beyond or narrower than the task description's literal scope — for these, ask directly with the question tool
+     instead of deciding in the user's place; when unsure, ask — one question costs far less than one wrong decision made in the user's name;
    - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
-     naming, file organisation, injection method, how tests are written) — decide it yourself, no record required.
+     naming, file organisation, how tests are written) — decide it yourself, no record required.
 
 ### wrapup-audit
 
@@ -160,7 +159,7 @@ also list any other proxy decisions you identified on your own (points of diverg
 
 ### process-references
 
-Process documents are the DRIVER's record of this long-running work — .auto/ and the task, round and phase documents under docs/T-* and docs/R-*. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
+Process documents are the DRIVER's record of this long-running work — .auto/ and the task, round and phase documents under docs/T-* and docs/R-*. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, no task ids as pointers. A comment needing a decision or constraint that a process document records restates that content itself, so the code stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line carries its own question, decision and reason and never points at a process document.
 
 ### test-handover-finish
 

@@ -730,7 +730,7 @@ describe("renderWrapup", () => {
   test("solo mode keeps the summary-style report, without the indexed protocol", () => {
     const text = wrapOf(plan, task, { solo: true })
     expect(text).not.toContain("indexed")
-    expect(text).toContain("a summary of the output (what changed, key decisions and open items),\n   so that later sessions")
+    expect(text).toContain("a summary of the output (what changed, key decisions and open items), so that later sessions")
     expect(text).not.toContain("S<NN>")
   })
 
@@ -1142,7 +1142,7 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     const wrapup = wrapOf(plan, task, { resolves: [driverResolve] })
     expect(wrapup).toContain("an indexed report")
     expect(wrapup).toContain("Every item above must appear; also list any other proxy decisions you identified on your own")
-    expect(wrapOf(plan, task, { solo: true })).toContain("a summary of the output (what changed, key decisions and open items),\n   so that later sessions")
+    expect(wrapOf(plan, task, { solo: true })).toContain("a summary of the output (what changed, key decisions and open items), so that later sessions")
     expect(renderKnowledge(facts(), { file: "kb.md" })).toContain("## Quality constraints (hard requirements)\n\n1. Final state first")
     expect(renderPriorKnowledge(facts(), { file: "kb.md" })).toContain("deduplicate across documents")
     expect(renderStuckHint(facts(), stuck)).toContain("still going in circles. Write these three things out")
@@ -1184,7 +1184,7 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
       expect(wrapup).not.toContain("an indexed report")
       expect(wrapup).toContain("docs/T-002/report.md: so that later sessions")
       expect(wrapup).toContain("Every item above must appear.")
-      expect(wrapOf(plan, task, { solo: true })).toContain("report.md:\n   so that later sessions")
+      expect(wrapOf(plan, task, { solo: true })).toContain("report.md: so that later sessions")
       const knowledge = renderKnowledge(facts(), { file: "kb.md" })
       expect(knowledge).not.toContain("Quality constraints")
       expect(knowledge).toMatch(/`>\n\n## Steps/)
@@ -1235,7 +1235,7 @@ describe("intent externalization, P1 and test-handover discipline (M2.3)", () =>
   test("built-in pack: the P1 discipline reaches subtask and whole sessions; test-wrapup keeps its wording", () => {
     for (const text of [subOf(plan, task, "write the schema part of the migration script"), wholeOf(plan, task)]) {
       expect(text).toContain("Process documents are the DRIVER's record of this long-running work")
-      expect(text).toContain("each line must carry its own question, decision and reason and never point at a process document")
+      expect(text).toContain("each line carries its own question, decision and reason and never points at a process document")
     }
     const wrap = renderTestWrapup(facts(), { handoffFile: "docs/T-002/testhandoff.md" })
     expect(wrap).toContain("(code, documents, artifacts) — do not omit any of it because a handover is due")

@@ -19,7 +19,7 @@ The other streams belong to other sessions; do not do their work or change their
 {{siblings}}
 
 {{#if changed}}Since the split, the streams that ran before this one changed these files; re-read those this stream relies on, and nothing else you already read:
-{{changed}}{{/if}}{{^changed}}{{#if cold}}Nothing besides the lead's committed work changed before this stream starts; read what this stream needs fresh, starting from the task and the scope file above.{{/if}}{{^cold}}Do not re-read what you already read: the files this stream works with are as you left them.{{/if}}{{/if}}
+{{changed}}{{/if}}{{^changed}}{{#if cold}}Only the lead's committed work precedes this stream; read what this stream needs fresh, starting from the task and the scope file above.{{/if}}{{^cold}}Do not re-read what you already read: the files this stream works with are as you left them.{{/if}}{{/if}}
 
 Verification: run the checks that target this stream's own changes (its tests, the typecheck or build of what it touched), not the full suite.{{#if last}} This is the last stream: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.{{/if}}
 
@@ -28,7 +28,7 @@ The DRIVER's commit is this stream's record: write no {{outputFile}} for code ch
 {{> eof-rule}}
 
 {{#if budget}}
-{{#if cold}}The context-budget protocol goes on, measured on this session's whole context.{{/if}}{{^cold}}The context-budget protocol goes on, measured on this session's whole context — the prefix it inherited counts, so a notice may come early.{{/if}} When the rest of this stream would not fit, hand over at a natural boundary: write {{handoffFile}} (overwriting it) for this stream alone — its progress, the verified facts and file paths, the dead ends and the next steps — ending with the line `Status: continue` (stream incomplete) or `Status: done` (stream fully done), a protocol string the driver parses, written verbatim; then end the session, and a new session continues the stream from that file.
+{{#if cold}}The context-budget protocol goes on, measured on this session's whole context.{{/if}}{{^cold}}The context-budget protocol goes on, measured on this session's whole context — the prefix it inherited counts, so a notice may come early.{{/if}} When the rest of this stream would not fit, hand over at a natural boundary: write {{handoffFile}} (overwriting it) for this stream alone — its progress, verified facts and paths, dead ends and next steps — ending with the line `Status: continue` (stream incomplete) or `Status: done` (stream fully done), a protocol string the driver parses, written verbatim; then end the session, and a new session continues the stream from that file.
 
 {{/if}}
 {{#if selfCheck}}Before ending, {{selfCheck}}. {{/if}}When this stream is done, end the session.
