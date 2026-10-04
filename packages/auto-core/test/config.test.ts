@@ -432,6 +432,46 @@ describe("config key agent (M6.1: the coding agent)", () => {
   })
 })
 
+describe("config key intent (plans/0079 §2: the pack selection surface)", () => {
+  // Registers a project pack in the target directory, for the selection to name.
+  function registerPack(dir: string, name = "cleanroom") {
+    const packs = join(dir, ".opencode", "auto", "intents")
+    mkdirSync(packs, { recursive: true })
+    writeFileSync(join(packs, `${name}.md`), `# ${name}\n\n## quality\n\n### self-check-whole\n\nClean-room discipline.\n`)
+  }
+
+  test("absent loads as undefined; a project pack's name reads back; an unknown or mistyped value throws naming the available packs", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, "{}")
+      expect((await loadProjectConfig(dir)).intent).toBeUndefined()
+      registerPack(dir)
+      writeConfig(dir, JSON.stringify({ intent: "cleanroom" }))
+      expect((await loadProjectConfig(dir)).intent).toBe("cleanroom")
+      // The built-in default is selectable too (a no-op selection).
+      writeConfig(dir, JSON.stringify({ intent: "default" }))
+      expect((await loadProjectConfig(dir)).intent).toBe("default")
+      writeConfig(dir, JSON.stringify({ intent: "cleanrom" }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/intent value "cleanrom" is not a loaded intent pack \(available: cleanroom, default\)/)
+      writeConfig(dir, JSON.stringify({ intent: 2 }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/intent must be a non-empty string/)
+      // The key survives the round-trip write (a default-only config keeps no key).
+      writeConfig(dir, JSON.stringify({ intent: "cleanroom" }))
+      await saveProjectConfig(dir, await loadProjectConfig(dir))
+      expect(await Bun.file(join(dir, ".opencode", "auto", "config.json")).text()).toContain('"intent": "cleanroom"')
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS })
+      expect(await Bun.file(join(dir, ".opencode", "auto", "config.json")).text()).not.toContain("intent")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the summary line names the pack only when one is selected", async () => {
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS })).not.toContain("intent")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, intent: "cleanroom" })).toContain("mode migrate · intent cleanroom")
+  })
+})
+
 describe("config key parallel (MP.1, plans/0046 D8)", () => {
   test("absent and none load as undefined; low/medium/high read back; anything else throws", async () => {
     const dir = tempDir()

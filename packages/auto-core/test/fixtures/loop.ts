@@ -137,7 +137,8 @@ const APPEND_MARK = "## Input: the task index as it stands"
 // One accepted append: a single new line goes after the index's last line and
 // the new task's document is written — nothing else is touched (D24's
 // contract). The new number is the highest on disk + 1 (the append prompt's
-// fallback start without the numbering record).
+// fallback start without the numbering record). Exported for composed turn
+// scripts (the repair-loop suite rides it beside its own report turns).
 export const appendTurn = (dir: string): TurnScript => (ctx: TurnContext) => {
   if (!ctx.text.includes(APPEND_MARK)) return undefined
   const phaseDir = promptPhaseDir(ctx.text)
@@ -145,7 +146,7 @@ export const appendTurn = (dir: string): TurnScript => (ctx: TurnContext) => {
   return undefined
 }
 
-function appendOneTask(dir: string, phaseDir: string): string {
+export function appendOneTask(dir: string, phaseDir: string): string {
   const file = join(dir, phaseDir, "tasks.md")
   const task = padTask(nextTaskNumber(dir))
   const line = `- [ ] ${task} task ${task}`

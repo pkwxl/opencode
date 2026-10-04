@@ -63,6 +63,9 @@ export const REPO_LANE: readonly string[] = [
   "test/plan-input.test.ts",
   "test/plan-loop.test.ts",
   "test/plan.test.ts",
+  // The bounded repair run option (plans/0079 §4): drives the loop harness
+  // over real git repositories, close and append commits included.
+  "test/repair-loop.test.ts",
   "test/reset.test.ts",
   "test/resolve.test.ts",
   "test/run-status.test.ts",
@@ -92,6 +95,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/chain.test.ts",
   "test/chain-writes.test.ts",
   "test/classify.test.ts",
+  // The intent-bundle surface (plans/0079 §3): parse/materialize over temp
+  // directories, no repository, no spawn.
+  "test/bundle.test.ts",
   "test/config.test.ts",
   "test/confirm.test.ts",
   "test/constitution-ratchet.test.ts",
