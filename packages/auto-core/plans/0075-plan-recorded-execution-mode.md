@@ -4,7 +4,7 @@ Status: **proposal, 2026-10-03.** Follow-up feature per the person's ruling of 2
 (enters via `plan --append` behind its own design doc + ruling). Covers original
 requirement 4, scoped: execution-behavior parameters should get smarter — but by the
 planning session **recording** its decision in the task documents, not by the driver
-deciding ambiently.
+deciding ambiently. Ruled 2026-10-04: all three rulings accepted as recommended (§5).
 
 ## 1. Why scoped
 
@@ -64,7 +64,7 @@ because the driver still only reads grammars.
   that touches templates; the change is additive (a new duty paragraph), not a
   consolidation, so it does not collide with 0072's audit if that lands first.
 
-## 5. Rulings asked
+## 5. Rulings (decided 2026-10-04 — all as recommended)
 
 1. Field name and value set (`Decompose: split|whole|pipeline` proposed)?
 2. Absent-field fallback = today's `auto` logic (recommended)?

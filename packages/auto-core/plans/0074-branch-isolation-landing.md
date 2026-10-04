@@ -3,7 +3,8 @@
 Status: **proposal, 2026-10-03.** Follow-up feature per the person's ruling of 2026-10-03
 (enters via `plan --append` behind its own design doc + ruling). Covers original
 requirement 3: stop committing the driver's per-session commits into a real target
-repository's branch; land all of a round's work back as **one** commit.
+repository's branch; land all of a round's work back as **one** commit. Ruled
+2026-10-04: all four rulings accepted as recommended (§5).
 
 ## 1. Problem, and the rejected mechanism
 
@@ -74,7 +75,7 @@ the deliverable repository is the person's to curate).
 - The isolation branch left behind by an abandoned run is recoverable state, not
   corruption: `land --abandon` and plain git both address it; preflight reports it.
 
-## 5. Rulings asked
+## 5. Rulings (decided 2026-10-04 — all as recommended)
 
 1. Approve the branch-isolation mechanism (rejecting the `.git`-removal design)?
 2. Command name `land` (recommended over `commit` — avoids colliding with the "sessions

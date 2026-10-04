@@ -3,7 +3,8 @@
 Status: **proposal, 2026-10-03.** Follow-up feature per the person's ruling of 2026-10-03
 (enters via `plan --append` behind its own design doc + ruling). Covers original
 requirement 2: `init` in a directory without a `.git` repository should initialize Git
-and configure the required identity in one go.
+and configure the required identity in one go. Ruled 2026-10-04: all three rulings
+accepted as recommended (§5).
 
 ## 1. Problem
 
@@ -66,7 +67,7 @@ contract change to record in the README's environment notes.
 - Default-branch mismatch with the person's convention (master vs main) — resolved by
   honoring `init.defaultBranch` first, `-b main` only as the fallback.
 
-## 5. Rulings asked
+## 5. Rulings (decided 2026-10-04 — all as recommended)
 
 1. Approve auto-init as the default in non-git directories (no escape hatch)?
 2. Identity refusal when no global identity and no flags (recommended), or auto-write

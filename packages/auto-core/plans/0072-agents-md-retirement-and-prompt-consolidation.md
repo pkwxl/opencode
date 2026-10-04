@@ -1,11 +1,11 @@
-# 0072 — AGENTS.md retirement and prompt-carrier consolidation
+# 0072 — Prompt-carrier consolidation (AGENTS.md kept as the constitution layer)
 
-Status: **proposal, 2026-10-03.** Drafted after the R-02 program landed (T-114..T-129),
-per the person's ruling of 2026-10-03 (follow-ups enter via `plan --append`, each behind
-its own design doc + ruling). Covers original requirements 1 and 6: retire the tailored
-AGENTS.md the driver maintains in the target directory, folding its conventions into the
-agent contract and the prompt hierarchy — and make that hierarchy contradiction-free
-first. Nothing here is ruled yet.
+Status: **proposal, amended 2026-10-03.** The first draft proposed retiring the AGENTS.md
+block; re-weighed against the standalone prompt-session direction (plans/0076, settled in
+discussion the same day) the retirement is **dropped** — the block stays as the
+constitution layer. Still covers original requirements 1 and 6: every behavioral rule
+reaches every session exactly once, from one source, contradiction-free under every
+parameter decision. Ruled 2026-10-04: all three rulings accepted as recommended (§5).
 
 ## 1. Problem
 
@@ -18,67 +18,79 @@ conventions) currently travel in **three manually-synced carriers**:
    during run, gitignored;
 2. the agent contract — `templates/.opencode/agent/auto.md` (items 1, 2, 5 overlap the
    block nearly verbatim);
-3. the prompt partials — `_partials.md` `state-rule` (inlined by 15 templates) plus inline
+3. the prompt partials — `_partials.md` `state-rule` (inlined by 14 templates) plus inline
    copies (e.g. the test protocol inlined again in `whole.md`).
 
 No audit has ever checked the three carriers against each other for contradictions,
-drift, or staleness — they stay in sync by hand. 0054 already retired session-maintained
-AGENTS.md and the CURRENT.md mirror; the file now holds only the driver's block, whose
-sole remaining function is per-turn system-context injection — which the agent contract
-already provides (both are system context every provider turn; the claude adapter
-appends the `auto.md` body to its system prompt per process start, `src/opts.ts`
-CONTRACT_AGENT).
+drift, or staleness — they stay in sync by hand, and the drift is already real (REFS_SPEC
+points at a "stable-refs design document" that exists in no target directory, and the
+reference checker it referred to retired with 0061).
+
+The disease is the manual sync, not the carrier count. Each carrier reaches a different
+audience, and 0076's hand-driven sessions make the split load-bearing:
+
+| carrier | audience | hand-driven session (0076) |
+|---|---|---|
+| AGENTS.md block | every session in the directory | reached |
+| `auto.md` contract | driver-started sessions only | not reached |
+| rendered prompt | the session it is rendered into | reached |
+
+Retiring the block would leave the sessions the person drives inside other coding agents
+with no rule carrier at all. So: keep all three carriers, give each rule exactly one
+owning layer, and mechanize the sync.
 
 ## 2. Proposal — two units
 
 **U-A · prompt contradiction audit (read-only, first).** A review unit in 0069's own
 pattern: bounded read lists over `templates/prompts/*.md`, `_partials.md`,
 `templates/intents/default.md`, the `auto.md` contract, and `src/agents-block.ts`;
-deliverable a findings table — contradiction / duplication / stale, every finding cited.
-Constraints preserved: tier-1 driver-enforced markers and the `test/prompt-*.test.ts`
-goldens are inputs to read, not things to change. Now that the role registry exists
-(T-123), role-owned prompt assembly is descriptor-backed — the audit maps each finding to
-its owning carrier (contract / partial / role descriptor / intent pack), which is exactly
-the consolidation target list.
+deliverable a findings table — contradiction / duplication / stale, every finding cited —
+**with an audience tag per rule**: *every session* → block, *driver sessions* → contract,
+*this role* → partial / role descriptor. The tag decides the owning layer; the person
+approves the mapping as part of U-B's acceptance. Constraints preserved: tier-1
+driver-enforced markers and the `test/prompt-*.test.ts` goldens are inputs to read, not
+things to change.
 
-**U-B · consolidation and retirement.** One carrier per rule:
-- behavioral contract (pointer, test protocol, commit prohibition, summary rule,
-  reference/storage conventions — REFS_SPEC lives only in the block today and must move)
-  → the `auto.md` contract (already rendered conditionally on `testByDriver`);
-- per-role specifics → partials and role descriptors, per the audit's mapping.
-- Retire: `ensurePointer`/`removePointer` and their init/amend/fix/reset/`fix`-hint
-  call sites; `protect.ts`'s AGENTS.md write-lock (config protection stays); the
-  `AGENTS.md` entry of the init gitignore set; `agents-block` tests.
-- Preflight gains an idempotent janitor that removes a block an earlier release left
-  (the pattern is `removeRetiredCurrent`); it prints what it cleaned.
-- The two-tier marker discipline is untouched: tier-1 grammar stays minimal; tier-2
-  intent guidance stays marker-free.
+**U-B · layer-ownership consolidation.** One wording per rule, at its owning layer:
+- **constitution** — the AGENTS.md block, generated from the `agents-block.ts` constants:
+  pointer, state-file ownership, commit prohibition, summary rule, reference/storage
+  conventions (REFS_SPEC stays here — its audience is every session);
+- **operating manual** — the `auto.md` contract, slimmed to driver-operational protocol:
+  role naming, question escalation and proxy-answer semantics, problem handling; the
+  sentences restating constitution rules (the pointer of item 1, the state-file and
+  test sentences of item 2, the commit prohibition of item 5) are deleted — the AGENTS.md
+  note in item 2 stays, still accurate;
+- **work order** — partials and role descriptors keep role-specific text only;
+  `state-rule` slims to what no other layer states.
 
-## 3. The trade-off that needs the person
+Mechanization: the constants in `src/agents-block.ts` become the single source — beside
+the block they also render 0076's constitution preamble (one source, two renderings) —
+and a **drift ratchet test** (the `chain-writes` pattern) fails when any other carrier
+restates a constitution rule's wording.
 
-Retirement narrows scope: AGENTS.md is injected for **every** session in the directory —
-including the person's own interactive opencode sessions and other agent tools — while
-`auto.md` binds only the `auto` agent's sessions. After U-B, an interactive session that
-commits or edits state files no longer reads the prohibition. The mechanical backstop
-still holds (close-out's SHA-baseline check detects any non-`Auto-Stage` commit in range
-and blocks), and the person's own sessions are theirs to govern — but this is a real
-policy change, not just cleanup. Recommendation: accept the narrowing; the driver's
-mechanical fences, not prose in a gitignored file, are the protection that matters.
+Dropped from the first draft: the preflight janitor, the protect/gitignore/call-site
+removal, the agents-block test deletions — the block is permanent.
+
+## 3. The trade-off, resolved
+
+The first draft's §3 — the scope narrowing where, after retirement, the person's own
+interactive sessions would no longer read the prohibitions — is moot: AGENTS.md keeps its
+every-session reach and gains 0076's hand-driven audience. The mechanical backstops
+(SHA-baseline audit; 0076's adopt-step validation) fence the runs and the close-out; the
+constitution prose fences everything else, as it does today.
 
 ## 4. Risks
 
-- The claude-adapter translation path (contract → claude system prompt) must be re-pinned
-  by tests in the same unit (it reads the same `auto.md` source — no behavior change
-  expected, only more content).
-- Compaction safety is preserved by construction (agent body = per-turn system context);
-  the audit should still verify no rule depends on AGENTS.md being workspace-level.
-- Migration is one release long: the janitor is self-limiting debris cleanup (0069 D15
-  pattern); schedule its deletion when old releases age out.
+- The ratchet is wording-based: paraphrase drift (same rule, different words) is caught
+  by the audit cadence, not the ratchet. Name the trigger: any edit to a carrier (block,
+  contract, partial, descriptor) reruns the audit's contradiction case.
+- The claude adapter path shrinks, not grows (the contract loses items, gains none);
+  its translation tests re-pin in the same unit.
+- Compaction safety unchanged: block and contract are both per-turn system context.
 
-## 5. Rulings asked
+## 5. Rulings (decided 2026-10-04 — all as recommended)
 
-1. Accept the scope narrowing (§3)?
-2. U-A and U-B as separate units (audit first, consolidation second), or one?
-3. Does the round input for these units reference this doc only, or also pre-rule the
-   carrier mapping (recommend: let the audit produce it, then the person approves it as
-   part of U-B's acceptance)?
+1. Layer ownership decided by the audit's audience tag (recommended)?
+2. `agents-block.ts` constants as the single source (block + 0076 preamble + ratchet), or
+   ratchet-only without the shared rendering?
+3. U-A then U-B as separate units (recommended)?
