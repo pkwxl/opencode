@@ -77,6 +77,10 @@ export const REPO_LANE: readonly string[] = [
   "test/turn-trace.test.ts",
   "test/unit-commit.test.ts",
   "test/watch.test.ts",
+  // The standalone work-order routes (plans/0076, T-137): the adopt fixtures
+  // drive the unified commit and the test handover's script execution over
+  // real git repositories under temp dirs.
+  "test/work-order.test.ts",
 ]
 
 // Pure, in-memory files.

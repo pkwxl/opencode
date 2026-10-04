@@ -11,12 +11,14 @@
 // Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
 import { roundBriefPath, roundDirName } from "./docpaths"
+import type { ModeSpec } from "./mode"
 import {
   currentPhase,
   currentRound,
   establishRound,
   legacyLayoutProblem,
   phaseIndexPath,
+  phaseKey,
   phaseLabel,
   phaseTailDrift,
   readPhases,
@@ -33,7 +35,8 @@ import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-cl
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
 import { addTask } from "./task-add"
-import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan } from "./tasks"
+import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan, type Task } from "./tasks"
+import { adoptUnit, unitNotReady, workOrder } from "./work-order"
 
 type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
@@ -53,11 +56,43 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 //  11. --new-task <title> → add one task the person names, with no session,
 //      to the phase the route names now (task-add, the mechanical half of
 //      append planning) and stop for review.
+//  12. --export <T-NNN> → render the ready unit's standalone work order
+//      (constitution preamble + the whole-task session's prompt under the
+//      attended flag, src/work-order.ts) and stop, the order on stdout
+//      (plans/0076 ruling 1: nothing persisted to go stale).
+//  13. --adopt <T-NNN> → run the driver half for the externally-driven unit:
+//      validation → test handover → ticks/rename → the unified commit
+//      (src/work-order.ts adoptUnit), then stop for review. Any ready unit
+//      may be taken (ruling 4), and adopt re-checks readiness — the export
+//      may have aged.
 // Input is refused before any write on the round-setup rows (D5, rows 1–3);
 // rows 9–11 apply the progress-record guard (D26); --append without input
 // is a usage error everywhere; row 11 refuses while a step is open (its
-// snapshot and resume machinery must not be bypassed).
-export async function planPrelude(dir: string, opts: { phases: string; build?: string; scanExempt?: string[]; isolate?: string[]; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
+// snapshot and resume machinery must not be bypassed); rows 12–13 refuse the
+// planning input and an open step alike (the step machinery owns the phase's
+// index; a work order renders or closes one unit, a session never plans
+// from the input under these flags).
+export async function planPrelude(dir: string, opts: {
+  phases: string
+  build?: string
+  scanExempt?: string[]
+  isolate?: string[]
+  input?: PlanInput
+  append?: boolean
+  newTask?: string
+  autoNumber?: boolean
+  // Rows 12–13 (plans/0076, T-137): the standalone work-order routes. The
+  // render inputs are the config's own (mode, the test protocol's switches)
+  // plus the script watchdog adopt's test handover runs under; the export
+  // and the adopt are mutually exclusive (the shell checks; one route runs).
+  export?: string
+  adopt?: string
+  mode?: ModeSpec
+  testByDriver?: boolean
+  handoverTest?: boolean
+  idleMs?: number
+  maxMs?: number
+}): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
@@ -86,6 +121,20 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
       `--append requires a planning input: pass one with ${bin} plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
     ])
   }
+  // The work-order routes (rows 12–13, plans/0076): the shell checks the
+  // reference's shape and the mutual exclusions before the lock; this
+  // backstops other shells and direct callers, before any route logic —
+  // one route runs, and neither plans from an input nor adds a task.
+  if (opts.export !== undefined && opts.adopt !== undefined) {
+    return stop(1, [
+      `--export and --adopt are mutually exclusive: --export renders a ready unit's work order for a standalone session, --adopt closes one out — run them one at a time (${bin} plan ${dir} --export <task id>, then --adopt <task id> after the session)`,
+    ])
+  }
+  if ((opts.export !== undefined || opts.adopt !== undefined) && (opts.input || opts.append || opts.newTask !== undefined)) {
+    return stop(1, [
+      `--export / --adopt take only a task id: no planning input (a session never plans under them), no --append, no --new-task — pass the flag alone (${bin} plan ${dir} --export <task id> | --adopt <task id>)`,
+    ])
+  }
   const round = await currentRound(dir)
   // Row 1: no docs/R-NN/, or its phase index is missing (an interrupted
   // round start, plans/0049 G6).
@@ -98,6 +147,11 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     if (opts.newTask !== undefined) {
       return stop(1, [
         `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
+      ])
+    }
+    if (opts.export !== undefined || opts.adopt !== undefined) {
+      return stop(1, [
+        `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
       ])
     }
     const lines: string[] = []
@@ -124,6 +178,12 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
           `run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
+    if (opts.export !== undefined || opts.adopt !== undefined) {
+      return stop(1, [
+        `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
+          `run ${bin} plan ${dir} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
+      ])
+    }
     const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
     return establish(dir, round + 1, opts.phases, roundCloseLines(close), opts.isolate)
@@ -145,6 +205,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   if (drift) {
     if (opts.input) return stop(1, [driftInputLine(dir, drift)])
     if (opts.newTask !== undefined) return stop(1, [driftNewTaskLine(dir, drift)])
+    if (opts.export !== undefined || opts.adopt !== undefined) return stop(1, [driftOrderLine(dir, drift)])
     try {
       await syncPhaseIndex(dir, round, opts.phases)
     } catch (error) {
@@ -162,6 +223,14 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   if (opts.newTask !== undefined) {
     const open = await openStep(dir)
     if (open) return stop(1, [openStepNewTaskLine(dir, open)])
+  }
+  // Rows 12–13's open-step refusal: the same reasoning as --new-task's —
+  // the step's snapshot and resume machinery own the phase's index until it
+  // closes, and a work order rendered or adopted under them would bypass
+  // both (returning the loop here would silently ignore the flag).
+  if (opts.export !== undefined || opts.adopt !== undefined) {
+    const open = await openStep(dir)
+    if (open) return stop(1, [openStepOrderLine(dir, open)])
   }
   if (await openStep(dir)) return { type: "loop" }
   // Row 11 (--new-task): add one task the person names, with no session, to
@@ -183,6 +252,41 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     if (added.type === "failed") return stop(2, [`⏸ ${added.question}`])
     return stop(0, addedLines(dir, added))
+  }
+  // Rows 12–13 (plans/0076, T-137): the standalone work-order routes. Both
+  // take any ready unit of the phase the route names now (ruling 4 — not
+  // just the dependency graph's leaves; the readiness predicate re-derives
+  // over the plan loaded here, so adopt never trusts the export's snapshot),
+  // and both are read-from-write routes of the phase the route names now,
+  // like row 11's targeting. loadPlan's throw is the state-file grammar half
+  // of adopt's validation (unitProblems); the export reaches it too — a
+  // unit whose documents fail the grammar has no work order to render.
+  if (opts.export !== undefined || opts.adopt !== undefined) {
+    const ref = opts.export ?? opts.adopt!
+    let task: Task | undefined
+    let plan: Plan | undefined
+    try {
+      plan = await loadPlan(dir, route.phase)
+      task = plan.tasks.find((unit) => unit.id === ref)
+      if (task) {
+        const notReady = unitNotReady(plan, task)
+        if (notReady) return stop(1, [`${notReady}; take a ready unit (any unit whose prerequisites are done) — list them in ${taskIndexPath(route.phase)}`])
+      }
+    } catch (error) {
+      return stop(1, [`⏸ ${error instanceof Error ? error.message : String(error)}`])
+    }
+    if (!task || !plan) return stop(1, [`${ref} is not listed in ${taskIndexPath(route.phase)}; a work order is rendered for a task of the phase the route names now`])
+    if (opts.export !== undefined) {
+      const order = await workOrder(dir, plan, task, {
+        mode: opts.mode,
+        testByDriver: opts.testByDriver,
+        handoverTest: opts.handoverTest,
+        phase: phaseKey(route.phase),
+      })
+      return stop(0, [order])
+    }
+    const adopted = await adoptUnit(dir, plan, task, { scanExempt: opts.scanExempt, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    return adopted.ok ? stop(0, adopted.lines) : stop(adopted.code, adopted.lines)
   }
   if (!manual) {
     // Row 10 (plans/0053 D23): --append on the execute or handover route
@@ -322,6 +426,16 @@ function driftNewTaskLine(dir: string, drift: PhaseTailDrift): string {
   )
 }
 
+// Row 3's work-order refusal: same gate — the re-synced tail must be
+// reviewed and committed before a unit of its phases is rendered or adopted.
+function driftOrderLine(dir: string, drift: PhaseTailDrift): string {
+  const { bin } = shellProfile()
+  return (
+    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `run ${bin} plan ${dir} without --export / --adopt to re-sync it, commit the change, then take the work order again.`
+  )
+}
+
 // Row 11's open-step refusal: the step's snapshot and resume machinery own
 // the phase's index until closeStep; a hand-add under them would bypass both.
 function openStepNewTaskLine(dir: string, open: { step: string; unit: string }): string {
@@ -330,6 +444,18 @@ function openStepNewTaskLine(dir: string, open: { step: string; unit: string }):
   return (
     `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
     `finish it first (run: ${bin} plan ${dir}), then add the task with --new-task`
+  )
+}
+
+// Rows 12–13's open-step refusal (plans/0076): the same ownership as
+// --new-task's — the step owns the phase's index until it closes, and a work
+// order rendered or adopted under it would read or close a moving index.
+function openStepOrderLine(dir: string, open: { step: string; unit: string }): string {
+  const { bin } = shellProfile()
+  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+  return (
+    `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
+    `finish it first (run: ${bin} plan ${dir}), then export or adopt the unit`
   )
 }
 

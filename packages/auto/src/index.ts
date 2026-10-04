@@ -120,6 +120,12 @@ const VALUE_FLAGS = new Set([
   // by repository-relative path; a value flag like every config flag, but
   // repeatable — see REPEAT_FLAGS below.
   "isolate",
+  // --export/--adopt (plans/0076, T-137): the standalone work-order routes of
+  // plan — render a ready unit's work order to stdout (--export <T-NNN>) and
+  // close the externally-driven unit out (--adopt <T-NNN>); value flags (they
+  // swallow the task id), plan's alone.
+  "export",
+  "adopt",
 ])
 // Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
 // one value, so the values are collected in their own table instead of the
@@ -261,6 +267,20 @@ if (command !== "plan" && flags.has("force-close")) {
 // the flag with a pointer to plan, the same pattern as --append above.
 if (command !== "plan" && flags.has("new-task")) {
   console.error(`--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`)
+  process.exit(1)
+}
+
+// --export/--adopt are plan's alone too (plans/0076, T-137): the standalone
+// work-order routes — rendering a ready unit's prompt for a session outside
+// the driver, and closing that unit out — are plan prelude rows, so every
+// other command refuses the flags with a pointer to plan, the same pattern
+// as --new-task above.
+if (command !== "plan" && (flags.has("export") || flags.has("adopt"))) {
+  const flag = flags.has("export") ? "--export" : "--adopt"
+  console.error(
+    `${flag} is a plan option: ${command ?? "this command"} takes no ${flag}. ` +
+      `Render a ready unit's standalone work order with opencode-auto plan <dir> --export <task id>, and close the externally-driven unit out with opencode-auto plan <dir> --adopt <task id>`,
+  )
   process.exit(1)
 }
 // --keep/--abandon are land's alone (plans/0074 §2.3, U-L2): the mid-round
@@ -696,6 +716,46 @@ if (command === "plan") {
     console.error("--append requires a planning input: pass -p <text> | --file <path>; it appends the tasks planned from the input to the current phase")
     process.exit(1)
   }
+  // --export / --adopt <T-NNN> (plans/0076, T-137): the standalone work-order
+  // routes. The unit of a work order is a task; the two flags are mutually
+  // exclusive (one renders, one closes), and neither plans from an input,
+  // appends, hand-adds a task or closes a unit — the exclusions mirror
+  // --new-task's, checked here before the lock; planPrelude backstops other
+  // shells and direct callers.
+  const exportRef = flags.get("export")
+  const adoptRef = flags.get("adopt")
+  if (exportRef !== undefined || adoptRef !== undefined) {
+    for (const [flag, value] of [
+      ["export", exportRef],
+      ["adopt", adoptRef],
+    ] as const) {
+      if (value === undefined) continue
+      if (!/^T-\d+$/.test(value)) {
+        console.error(`--${flag} requires a task id (usage: opencode-auto plan <dir> --${flag} T-NNN); a work order is rendered for one task unit of the current phase`)
+        process.exit(1)
+      }
+    }
+    if (exportRef !== undefined && adoptRef !== undefined) {
+      console.error("--export and --adopt are mutually exclusive: --export renders a ready unit's work order for a standalone session, --adopt closes one out — run them one at a time")
+      process.exit(1)
+    }
+    if (input) {
+      console.error("--export / --adopt and -p | --file are mutually exclusive: a standalone work order is rendered for an existing task, no session plans from the input")
+      process.exit(1)
+    }
+    if (append) {
+      console.error("--export / --adopt and --append are mutually exclusive: appending plans tasks with a session; a work order neither plans nor appends")
+      process.exit(1)
+    }
+    if (newTask !== undefined) {
+      console.error("--export / --adopt and --new-task are mutually exclusive: --new-task adds a task with no session; --export / --adopt render or close one that exists")
+      process.exit(1)
+    }
+    if (forceClose !== undefined) {
+      console.error("--export / --adopt and --force-close are mutually exclusive: --force-close closes a unit and keeps planning in this process; a work order route does neither")
+      process.exit(1)
+    }
+  }
   const session = parseSessionFlags()
   // plan writes the round setup, which follows the config (phases): a
   // directory init never configured is refused rather than planned with the
@@ -735,7 +795,26 @@ if (command === "plan") {
       process.exit(closed.type === "refused" ? 1 : 2)
     }
   }
-  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, scanExempt: config.scanExempt, isolate: config.isolate, input, append, newTask, autoNumber: config.autoNumber })
+  const prelude = await planPrelude(directory, {
+    phases: config.phases,
+    build: config.build,
+    scanExempt: config.scanExempt,
+    isolate: config.isolate,
+    input,
+    append,
+    newTask,
+    autoNumber: config.autoNumber,
+    // The work-order routes (plans/0076): the render inputs from the config
+    // (the same fields runOptions threads into a run), plus the script
+    // watchdog adopt's test handover runs under.
+    export: exportRef,
+    adopt: adoptRef,
+    mode,
+    testByDriver: config.testByDriver,
+    handoverTest: config.handoverTest,
+    idleMs: config.idleTime * 60_000,
+    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
+  })
   if (prelude.type === "stop") {
     for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
     lock.release()

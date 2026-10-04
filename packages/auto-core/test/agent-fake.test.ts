@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentError, AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
+import { renderConstitutionPreamble } from "../src/agents-block"
 import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
@@ -45,6 +46,7 @@ import { defaultTier } from "../src/tier"
 import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
+import { workOrder } from "../src/work-order"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
 import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
@@ -2710,6 +2712,37 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toContain("You are the lead session of this task")
       expect(existsSync(join(dir, "docs/T-001/subtasks.md"))).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The standalone work order (plans/0076, T-137): the bytes a guest session
+  // receives are the bytes the driver's own lead session receives under the
+  // attended question flag — the export renders through the same machinery
+  // and the same flag values (no second prompt variant exists to drift), and
+  // the constitution preamble (the agents-block single source's second
+  // rendering) rides in front for an agent that reads no AGENTS.md and never
+  // sees the auto.md contract. The order is rendered from the pre-run
+  // snapshot: that is the export's own timing (export → the person's session
+  // → adopt), and it is exactly the snapshot executeWhole renders from.
+  test("the work order is the driver session's prompt under the attended flag (plans/0076)", async () => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "init")
+    const order = await workOrder(dir, plan, plan.tasks[0]!, {})
+    const agent = make()
+    try {
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, wrapup: false, subtask: "auto", humanQuestions: true, router: services().router })
+      expect(outcome).toEqual({ type: "completed" })
+      expect(agent.prompts).toHaveLength(1)
+      expect(order).toBe(`${renderConstitutionPreamble()}\n\n${agent.prompts[0]!.text}`)
+      // The attended branch (the person at the keyboard), never the
+      // unattended proxy-answer rule.
+      expect(order).toContain("a human is attending this planning run")
+      expect(order).not.toContain("do not call the question tool")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

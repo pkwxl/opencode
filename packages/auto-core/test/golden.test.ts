@@ -46,6 +46,7 @@ import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"
 import { phaseTypeOfLetter, planDutiesPartial, type PhaseLetter } from "../src/phases/registry"
+import { workOrder } from "../src/work-order"
 
 const UPDATE = process.env.UPDATE_GOLDEN === "1"
 const GOLDEN_DIR = join(import.meta.dir, "golden")
@@ -206,6 +207,20 @@ describe("golden render snapshots", () => {
     // lead arranges its streams for the width they will actually get.
     golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true, parallel: "medium" }))
     golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
+  })
+
+  // The standalone work order (plans/0076, T-137): the constitution preamble
+  // (the agents-block single source's second rendering, TEST_PRINCIPLE
+  // present under the switch) + the fresh whole-task session's prompt for a
+  // ready task (T-003, pending, no checklist — so the split clause is
+  // offered), under the attended question flag. The steer switch is on at
+  // the unset default, so the render carries the lead's own flags; the
+  // readiness composition itself is the prelude's (test/work-order.test.ts).
+  test("the standalone work order", async () => {
+    golden(
+      "work-order",
+      await workOrder("/repo", plan, plan.tasks[2]!, { testByDriver: true, handoverTest: true, mode: migrate }),
+    )
   })
 
   test("phase-loop family (planning/handover/knowledge)", () => {
