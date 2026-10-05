@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
 import { loadIntents, packSubsection } from "../src/intent/load"
+import { parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
 import { resolvePhases } from "../src/phases/registry"
@@ -202,6 +203,64 @@ describe("bundle sources", () => {
       expect(loadPhaseTypes(dir).find((entry) => entry.type === "audit")).toMatchObject({ gates: ["verdict"] })
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The intent family's faithful postures (0080 §6): the builtin admtv
+  // skeleton with no custom types — the pack re-voices all five phase duties,
+  // so the `### m` tier replaces the core "code migration" partial in every
+  // phase-plan/implement render, and the guarantees subsections ride along.
+  const FAITHFUL_ANCHORS = {
+    faithful: { m: "the reference implementation is the working input", mode: "Faithful parity rule", charter: "parity with the reference's observed" },
+    "faithful-lean": { m: "remove legacy debt deliberately", mode: "Lean boundary", charter: "debt-removal accounting" },
+  } as const
+
+  test("the built-in faithful and faithful-lean bundles ship: they list, resolve, parse, and materialize with the pack tier and guarantees intact", async () => {
+    expect(registeredIntentBundles()).toEqual(expect.arrayContaining(["cleanroom", "faithful", "faithful-lean"]))
+    for (const name of ["faithful", "faithful-lean"] as const) {
+      const files = await resolveIntentBundle(name)
+      expect(files).toBeDefined()
+      expect(Object.keys(files!).sort()).toEqual(["bundle.json", `intents/${name}.md`, `modes/${name}.md`])
+      const bundle = parseIntentBundle(files!)
+      // The builtin skeleton: the comma form of the five builtin ids, no
+      // custom phase types shipped, the ondemand subtask stamp, the mode
+      // named like the bundle.
+      expect(bundle).toMatchObject({ name, phases: "analysis,design,implement,test,acceptance", mode: name, stamps: { subtask: "ondemand" } })
+      expect(bundle.types).toEqual([])
+      expect(bundle.files.phases).toEqual({})
+      const dir = tempDir()
+      try {
+        const written = await materializeIntentBundle(dir, bundle)
+        expect(written.sort()).toEqual([`.opencode/auto/intents/${name}.md`, `.opencode/auto/modes/${name}.md`].sort())
+        // The pack resolves by the config's intent selection key.
+        expect(promptFacts({ dir, intent: name }).pack.name).toBe(name)
+        const pack = loadIntents(dir)[name]!
+        // The implement duties are the pack's own tier (the anchor), not the
+        // core partial's migration framing.
+        const m = packSubsection(pack, "phaseDuties", "m")
+        expect(m).toContain(FAITHFUL_ANCHORS[name].m)
+        expect(m).not.toContain("code migration")
+        for (const key of ["a", "d", "t", "v"]) expect(packSubsection(pack, "phaseDuties", key)).toBeDefined()
+        // The guarantees subsections survive: the precedence authority order,
+        // the parseable asserts (with the implement must-not), the charter.
+        expect(packSubsection(pack, "guarantees", "precedence")).toContain("outrank the planning input")
+        const asserts = parseGuaranteeAsserts(pack)!
+        expect(asserts).toBeDefined()
+        expect(asserts.some((assert) => assert.template === "phase-plan" && assert.phase === "m" && assert.kind === "must-not" && assert.literals.includes("code migration"))).toBe(true)
+        expect(packSubsection(pack, "guarantees", "verify-plan")).toContain(FAITHFUL_ANCHORS[name].charter)
+        // The acceptance and governance semantics ride with the pack.
+        expect(packSubsection(pack, "acceptance", "result-line")).toContain("Result: PASS")
+        expect(packSubsection(pack, "governance", "repair")).toContain("regression check")
+        // The mode lands as any hand-dropped file would: the exec anchor the
+        // whole/subtask asserts pin.
+        expect(loadModes(dir)[name]?.exec).toContain(FAITHFUL_ANCHORS[name].mode)
+        // A materialized project adds no phase types: the builtin registry
+        // already resolves the stamped sequence.
+        expect(loadPhaseTypes(dir).some((entry) => entry.origin === "project")).toBe(false)
+        expect(resolvePhases("analysis,design,implement,test,acceptance")).not.toBeNull()
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     }
   })
 })

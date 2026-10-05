@@ -30,6 +30,12 @@ import cleanroomSpecRead from "../templates/bundles/cleanroom/phases/spec-read.m
 import cleanroomAudit from "../templates/bundles/cleanroom/phases/audit.md" with { type: "file" }
 import cleanroomPack from "../templates/bundles/cleanroom/intents/cleanroom.md" with { type: "file" }
 import cleanroomMode from "../templates/bundles/cleanroom/modes/cleanroom.md" with { type: "file" }
+import faithfulManifest from "../templates/bundles/faithful/bundle.json" with { type: "file" }
+import faithfulPack from "../templates/bundles/faithful/intents/faithful.md" with { type: "file" }
+import faithfulMode from "../templates/bundles/faithful/modes/faithful.md" with { type: "file" }
+import faithfulLeanManifest from "../templates/bundles/faithful-lean/bundle.json" with { type: "file" }
+import faithfulLeanPack from "../templates/bundles/faithful-lean/intents/faithful-lean.md" with { type: "file" }
+import faithfulLeanMode from "../templates/bundles/faithful-lean/modes/faithful-lean.md" with { type: "file" }
 
 export const BUNDLE_MANIFEST = "bundle.json"
 
@@ -204,7 +210,12 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
 // validating instance) is the Clean-Room Redesign protocol: spec-read and
 // audit custom types around the builtin design/implement/test flow, the
 // cleanroom pack (the repair duties the bounded repair loop consumes as
-// content), and the cleanroom mode carrying the clean-room boundary.
+// content), and the cleanroom mode carrying the clean-room boundary. Beside
+// it the intent family's other two postures (0080 §6), both on the builtin
+// admtv skeleton — no custom types, the pack re-voices all five phase duties:
+// faithful (behavior and structure: the reference is the primary input,
+// parity is the bar) and faithful-lean (external behavior exactly, internals
+// free, legacy debt deliberately shed).
 let builtinTable: Record<string, IntentBundleFiles> | undefined
 function builtinBundles(): Record<string, IntentBundleFiles> {
   if (!builtinTable) {
@@ -215,6 +226,16 @@ function builtinBundles(): Record<string, IntentBundleFiles> {
         "phases/audit.md": readFileSync(cleanroomAudit, "utf8"),
         "intents/cleanroom.md": readFileSync(cleanroomPack, "utf8"),
         "modes/cleanroom.md": readFileSync(cleanroomMode, "utf8"),
+      },
+      faithful: {
+        "bundle.json": readFileSync(faithfulManifest, "utf8"),
+        "intents/faithful.md": readFileSync(faithfulPack, "utf8"),
+        "modes/faithful.md": readFileSync(faithfulMode, "utf8"),
+      },
+      "faithful-lean": {
+        "bundle.json": readFileSync(faithfulLeanManifest, "utf8"),
+        "intents/faithful-lean.md": readFileSync(faithfulLeanPack, "utf8"),
+        "modes/faithful-lean.md": readFileSync(faithfulLeanMode, "utf8"),
       },
     }
   }

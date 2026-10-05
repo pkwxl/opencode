@@ -1,0 +1,5 @@
+{
+  "name": "faithful",
+  "phases": "analysis,design,implement,test,acceptance",
+  "subtask": "ondemand"
+}
