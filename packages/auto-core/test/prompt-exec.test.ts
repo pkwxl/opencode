@@ -10,6 +10,7 @@ import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 import { renderAgentsBlock } from "../src/agents-block"
+import { PromptGuaranteeError } from "../src/intent/guarantees"
 import { usePromptLibrary } from "../src/template"
 import {
   decomposeTemplateName,
@@ -1254,5 +1255,81 @@ describe("intent externalization, P1 and test-handover discipline (M2.3)", () =>
       expect(wrap).toContain("Status: continue")
       expect(wrap).not.toMatch(/\{\{|\}\}/)
     })
+  })
+})
+
+// The render gate (plans/0080 §3): the active pack's `### asserts` lines are
+// evaluated against every composed prompt at the single render exit — a
+// violation throws PromptGuaranteeError (the run boundary, loop.ts, maps it
+// to a blocked exit 2), and a pack without the section renders
+// byte-identically (the zero-intent floor).
+describe("the render gate (plans/0080 §3, `## guarantees` / `### asserts`)", () => {
+  function withGuarantees(section: string | undefined, fn: () => void) {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), section === undefined ? "# default\n" : `# default\n\n## guarantees\n\n${section}\n`)
+      factsDir = dir
+      fn()
+    } finally {
+      factsDir = undefined
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("must passes through when the literal is present; a missing literal throws PromptGuaranteeError carrying the violation text", () => {
+    withGuarantees('### asserts\n\nwhole: must "Constraints:"', () => {
+      const text = wholeOf(plan, task)
+      expect(text).toContain("Constraints:")
+      // The gate holds on every render of the named template — and leaves
+      // renders of other templates alone (applicability is by template).
+      expect(subOf(plan, task, "write the schema part of the migration script")).toContain("Constraints:")
+    })
+    withGuarantees('### asserts\n\nwhole: must "NO SUCH LITERAL"', () => {
+      expect(() => wholeOf(plan, task)).toThrow(PromptGuaranteeError)
+      expect(() => wholeOf(plan, task)).toThrow(/intent pack "default" guarantees this prompt and it failed: whole must contain "NO SUCH LITERAL"/)
+    })
+  })
+
+  test("must-not with the literal present blocks naming where it was found", () => {
+    withGuarantees('### asserts\n\nwhole: must-not "Constraints:"', () => {
+      expect(() => wholeOf(plan, task)).toThrow(PromptGuaranteeError)
+      expect(() => wholeOf(plan, task)).toThrow(/whole must not contain "Constraints:" — found in the composed prompt/)
+    })
+  })
+
+  test("phase-qualified lines apply only to renders whose ctx carries that phase; unqualified lines apply to every render of the template", () => {
+    withGuarantees('### asserts\n\nwhole(v): must "NO SUCH LITERAL"', () => {
+      // The default whole render runs under phase m: the v-qualified line
+      // does not apply, the render passes.
+      expect(wholeOf(plan, task)).toContain("Constraints:")
+      // The same template rendered under the acceptance phase trips it.
+      expect(() => wholeOf(plan, task, { phase: key("v") })).toThrow(/whole \(v\) must contain "NO SUCH LITERAL"/)
+    })
+    withGuarantees('### asserts\n\nwhole: must "NO SUCH LITERAL"', () => {
+      expect(() => wholeOf(plan, task)).toThrow(PromptGuaranteeError)
+      expect(() => wholeOf(plan, task, { phase: key("v") })).toThrow(PromptGuaranteeError)
+    })
+  })
+
+  test("the zero-intent floor: a pack without the section — or with an empty asserts subsection — renders byte-identically (the gate adds no bytes while it holds)", () => {
+    // Two packs whose only difference is the guarantees section: while the
+    // asserts hold, the gate contributes nothing to the composed prompt.
+    withGuarantees('### asserts\n\nwhole: must "Constraints:"', () => {
+      const gated = wholeOf(plan, task)
+      expect(gated).toContain("Constraints:")
+      withGuarantees(undefined, () => {
+        expect(wholeOf(plan, task)).toBe(gated)
+      })
+    })
+    withGuarantees("### asserts\n\n# nothing declared, comments only\n", () => {
+      withGuarantees(undefined, () => {
+        expect(subOf(plan, task, "write the schema part of the migration script")).toBe(subOf(plan, task, "write the schema part of the migration script"))
+      })
+    })
+    // The built-in default pack itself declares no guarantees (the floor a
+    // project without an intent bundle runs on).
+    expect(wholeOf(plan, task)).not.toContain("Authority order")
   })
 })

@@ -395,7 +395,7 @@ type OneShot =
 // contract — then read until the turn ends, fails or the timeout aborts it.
 export async function oneShot(client: AgentClient, entry: ModelEntry, text: string, timeoutMs: number, title: string = CLASSIFY_TITLE): Promise<OneShot> {
   const usage: Usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
-  const created = await client.create({ title: CLASSIFY_TITLE })
+  const created = await client.create({ title })
   if (!created.ok) return { kind: "failed", error: { message: formatClientError(created.error) }, usage }
   const session = created.value.id
   const stop = new AbortController()

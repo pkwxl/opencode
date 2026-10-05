@@ -24,6 +24,7 @@ import { singleHost } from "../../src/agent-pool"
 import { runPhaseLoop } from "../../src/loop-phase"
 import type { RunAllOpts } from "../../src/loop-preflight"
 import type { LoopCtx } from "../../src/loop-task"
+import type { RoutingFacts } from "../../src/routing"
 import { services } from "../../src/services"
 import { readPhases, type PhaseUnit } from "../../src/phases"
 import { renderTaskIndex } from "../../src/tasks"
@@ -226,8 +227,11 @@ export type LoopFixture = {
   // Stage and commit everything (round setup, seeded tasks).
   commit: (subject: string) => Promise<void>
   // One pass of the phase loop, as run would drive it (planInput rides the
-  // ctx, not the opts; opts.stopBefore is plan's stop condition).
-  run: (opts?: Partial<RunAllOpts>) => Promise<LoopRunResult>
+  // ctx, not the opts; opts.stopBefore is plan's stop condition). routing is
+  // the LoopCtx field runAll fills from the loaded registry — the harness
+  // takes it the same way for the cases that need one (the plan verifier's
+  // classifier entry, plans/0080 §5).
+  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts }) => Promise<LoopRunResult>
 }
 
 const OPENCODE_AUTO = /^OPENCODE_AUTO_/
@@ -275,7 +279,7 @@ export async function loopFixture(
       await git(dir, "commit", "-qm", subject)
     },
     async run(opts = {}) {
-      const { planInput, append, ...rest } = opts
+      const { planInput, append, routing, ...rest } = opts
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
@@ -286,10 +290,12 @@ export async function loopFixture(
         ran: 0,
         repairs: 0,
         input: planInput,
-        // The run's router (loop.ts fills the field from the installed
-        // services; the fixture's runs hold no routing decision state, and
-        // the boundary hooks read it only through ctx).
+        // The run's registry routing facts (loop.ts fills the field from the
+        // loaded registry; the fixture's runs hold no routing decision state,
+        // and the boundary hooks read it only through ctx) — a case that
+        // needs one (the plan verifier) passes it per run.
         router: services().router,
+        ...(routing !== undefined ? { routing } : {}),
         // The run's control service (loop.ts fills the field the same way
         // from the installed services): the boundary hooks read the /exit
         // request through it.

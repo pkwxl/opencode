@@ -2,8 +2,12 @@
 // Split out of test/prompt.test.ts (plans/0024-module-split-plan.md S19, pure move).
 
 import { describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
-import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "../src/prompt-plan"
+import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "../src/prompt-plan"
 import { promptFacts } from "../src/prompt-facts"
 import { usePromptLibrary, renderText } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
@@ -506,5 +510,116 @@ describe("renderPriorKnowledge (prior knowledge extraction session)", () => {
     expect(text).toContain("DRIVER-parsed protocol string: write it verbatim, do not translate it")
     expect(text).toContain("never write that line before every section is complete")
     expect(text).toContain("promote the file to the official prior-knowledge document")
+  })
+})
+
+// The precedence block (plans/0080 §2/§3): the pack's `## guarantees` / `###
+// precedence` authority order, injected into the planning prompt — exactly
+// where the human planning input meets the intent charter — through the same
+// three-state pattern the other intent injections follow: the built-in
+// bundle's pack injects it, a project overlay replaces it, an absent
+// subsection drops the block cleanly (byte-identical floor).
+describe("the precedence block on renderPhasePlan (plans/0080 §3)", () => {
+  // The shipped cleanroom bundle's pack is the built-in that carries one.
+  const planOver = (facts = promptFacts()) =>
+    renderPhasePlan(facts, { phase: L("m"), planDuties: planDutyText(facts, L("m")), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md" })
+
+  test("the built-in bundle pack injects the block; a project overlay replaces it; an absent subsection drops it byte-identically", async () => {
+    // State 1 — the built-in injects: materialize the cleanroom bundle as a
+    // stamped project would hold it, and the planning prompt carries the
+    // charter's authority order.
+    const dir = mkdtempSync(join(tmpdir(), "auto-precedence-"))
+    const overlay = join(dir, ".opencode", "auto", "intents")
+    try {
+      mkdirSync(overlay, { recursive: true })
+      await materializeIntentBundle(dir, parseIntentBundle((await resolveIntentBundle("cleanroom"))!))
+      const builtin = planOver(promptFacts({ dir, intent: "cleanroom" }))
+      expect(builtin).toContain("## Authority order (intent guarantees)")
+      expect(builtin).toContain("they outrank the planning input, the project brief and any")
+      // The block sits between the mode preamble slot and the handovers slot:
+      // before any lower-order input the session reads.
+      expect(builtin.indexOf("## Authority order")).toBeLessThan(builtin.indexOf("## Phase duties"))
+
+      // State 2 — a project overlay replaces the built-in pack wholesale
+      // (F8): same pack text, the precedence subsection revoiced.
+      const packText = await Bun.file(join(overlay, "cleanroom.md")).text()
+      const revoiced = packText.replace(/### precedence\n\n[\s\S]*?(?=### asserts)/, "### precedence\n\nCUSTOM-PRECEDENCE: the project's own authority order.\n\n")
+      expect(revoiced).not.toBe(packText)
+      writeFileSync(join(overlay, "cleanroom.md"), revoiced)
+      const replaced = planOver(promptFacts({ dir, intent: "cleanroom" }))
+      expect(replaced).toContain("## Authority order (intent guarantees)")
+      expect(replaced).toContain("CUSTOM-PRECEDENCE: the project's own authority order.")
+      expect(replaced).not.toContain("they outrank the planning input")
+
+      // State 3 — absent drops cleanly: without the precedence subsection the
+      // whole block disappears, byte-identically to a pack with no
+      // guarantees section at all (the section's other subsections — asserts,
+      // verify-plan — inject nothing into any prompt).
+      const noPrecedence = packText.replace(/### precedence\n\n[\s\S]*?(?=### asserts)/, "")
+      const noGuarantees = packText.replace(/## guarantees\n\n[\s\S]*$/, "").trimEnd() + "\n"
+      writeFileSync(join(overlay, "cleanroom.md"), noPrecedence)
+      const dropped = planOver(promptFacts({ dir, intent: "cleanroom" }))
+      expect(dropped).not.toContain("Authority order")
+      writeFileSync(join(overlay, "cleanroom.md"), noGuarantees)
+      expect(planOver(promptFacts({ dir, intent: "cleanroom" }))).toBe(dropped)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    // The built-in default pack declares no guarantees: the ordinary
+    // project's planning prompt carries no block at all.
+    expect(planOver()).not.toContain("Authority order")
+  })
+})
+
+// The phase-plan duty paragraph's tiers (plans/0080 §4, planDutyText): the
+// custom type's own `## plan duties` first, then the active pack's `###
+// <dutiesRef>` under `## phase duties` (the tier that lets a bundle re-voice
+// the builtin duties without touching core partials), then the core shared
+// partial `plan-duties-<dutiesRef>`.
+describe("planDutyText tiers (plans/0080 §4)", () => {
+  function withPack(pack: string, fn: (facts: ReturnType<typeof promptFacts>) => void) {
+    const dir = mkdtempSync(join(tmpdir(), "auto-duty-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), pack)
+      fn(promptFacts({ dir }))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("the custom type's own plan duties win over the pack's same-keyed subsection", () => {
+    const custom = parsePhaseTypeFile("security-review", "# Security review\n\n## plan duties\n\nPlan one review task per trust boundary.\n")
+    // The pack declares a `### security-review` phase-duties subsection too
+    // (dutiesRef = the type id): the file's own duties outrank it.
+    withPack("# default\n\n## phase duties\n\n### security-review\n\nPACK-DUTIES should not win.\n", (facts) => {
+      expect(planDutyText(facts, custom)).toContain("Plan one review task per trust boundary.")
+      expect(planDutyText(facts, custom)).not.toContain("PACK-DUTIES")
+    })
+  })
+
+  test("the pack's `### <dutiesRef>` replaces the core partial for builtin types", () => {
+    withPack("# default\n\n## phase duties\n\n### m Implementation\n\nPACK-M-DUTIES implement to parity.\n", (facts) => {
+      const text = planDutyText(facts, L("m"))
+      expect(text).toContain("PACK-M-DUTIES implement to parity.")
+      // The core partial's migration framing is gone — replaced, not merged.
+      expect(text).not.toContain("code migration and rework")
+    })
+  })
+
+  test("absent both, the core shared partial renders (rendered through the active library, overlays apply)", () => {
+    withPack("# default\n", (facts) => {
+      expect(planDutyText(facts, L("m"))).toContain("code migration and rework")
+      expect(planDutyText(facts, L("a"))).toContain("behaviour baseline")
+    })
+    // The same resolution drives renderPhasePlan's planDuties slot (the
+    // loop-plan helper is this very function): the pack tier voices the
+    // implement duties inside the composed planning prompt.
+    withPack("# default\n\n## phase duties\n\n### m Implementation\n\nPACK-M-DUTIES implement to parity.\n", (facts) => {
+      const text = renderPhasePlan(facts, { phase: L("m"), planDuties: planDutyText(facts, L("m")), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md" })
+      expect(text).toContain("PACK-M-DUTIES implement to parity.")
+      expect(text).not.toContain("code migration and rework")
+    })
   })
 })

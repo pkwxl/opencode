@@ -47,10 +47,12 @@ import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { workOrder } from "../src/work-order"
-import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
+import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, type TurnScript, WINDOW } from "./fixtures/agent"
+import { artifactTurns, appendOneTask, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
+import { establishRound } from "../src/phases"
 
 // Fresh failback/down-mark state mid-test (the moved state lives in the
 // run's router and has no reset hook): reinstall the holder with a fresh
@@ -3204,6 +3206,229 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       }
     } finally {
       clampSwitches({ steer: true })
+    }
+  })
+})
+
+// The plan-step consistency verifier (plans/0080 §5), driven through the
+// loop harness on the native fake agent over a real git repository: before a
+// planning session runs, one bare verifier session (the registry's classifier
+// entry) judges the composed planning prompt against the active pack's
+// `### verify-plan` charter. `Consistent: no` blocks the step (exit 2) with
+// the verdict recorded in the round's docs/R-NN/prompt-audit.md; a consistent
+// reply proceeds to the planning session; an unparsable reply fails closed
+// after its retry; a pack without the charter never opens a verifier session;
+// and a repair round's append input carries the active pack's `### repair`
+// discipline (plans/0080 §6 — the section that had no consumer before).
+//
+// Writing these cases found and fixed two wiring gaps in the landed §5
+// mechanism (the exact category this coverage exists for): oneShot ignored
+// the title parameter its verifier caller passes (src/classify.ts — the
+// session was created titled "auto: classify error"), and the audit write
+// landed uncommitted between the input commit and the planning unit's entry
+// clean gate, blocking the very step it documents (src/loop-plan.ts — it now
+// commits on its own ahead of the session, the savePlanInput pattern).
+describe("the plan-step verifier (plans/0080 §5)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  const routing = (): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("free", { model: "free/model" })].map((item) => [item.name, item])),
+      tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
+      routes: new Map(),
+      unused: [],
+      classifier: { names: ["free"], layer: "operator" },
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+    runAgent: "opencode",
+    router: services().router,
+    clock: services().clock,
+  })
+
+  // The verifier prompt opens with this line (templates/prompts/plan-verify.md);
+  // the composed planning prompt it embeds carries the planning markers too, so
+  // this check comes first in every turn script below.
+  const VERIFY_MARK = "You read one prompt that a planning step"
+  const VERIFY_TITLE = "auto: plan consistency check"
+  const CHARTER = "This project runs a clean room: the reference implementation is never to be read, copied or translated."
+  const CONTRARY_INPUT = "Copy the reference implementation's modules over verbatim, reading its source directly."
+  const CHARTER_PACK = `# verify\n\n## guarantees\n\n### verify-plan\n\n${CHARTER}\n`
+
+  // A fixture over m mode with a pack overlay committed before the round: the
+  // planning step verifies against the pack's charter, the classifier entry
+  // (free) serves the verifier session.
+  async function verifierFixture(pack: string, turn: (dir: string) => TurnScript): Promise<LoopFixture> {
+    const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: turn(dir) }))
+    await mkdir(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
+    await writeFile(join(f.dir, ".opencode", "auto", "intents", "verify.md"), pack)
+    await establishRound(f.dir, { phases: "m" })
+    await f.commit("round setup")
+    return f
+  }
+
+  // The verifier's scripted reply rides a bare one-shot session; everything
+  // else takes the artifact turns (planning writes the index and task
+  // documents, wrap-up writes a report per task — FAIL for the ids in
+  // `failing`, PASS for everything else).
+  const verdictTurn = (verdict: string | undefined, failing: ReadonlySet<string> = new Set()) => (dir: string): TurnScript => (ctx) => {
+    if (verdict !== undefined && ctx.text.includes(VERIFY_MARK)) {
+      return [ev.text(ctx.session, `vrf_${ctx.n}`, verdict), ev.idle(ctx.session)]
+    }
+    if (ctx.text.includes("only performs the wrap-up")) {
+      const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
+      if (id) {
+        mkdirSync(join(dir, "docs", id), { recursive: true })
+        writeFileSync(
+          join(dir, "docs", id, "report.md"),
+          [
+            `# Report (${id})`,
+            "",
+            "The wrap-up session reviewed the work against the task's acceptance statements and",
+            "recorded the verification evidence: what was delivered, where it lives, and how it",
+            "was checked.",
+            "",
+            failing.has(id) ? "Result: FAIL the acceptance gap" : "Result: PASS",
+            "",
+            "<!-- auto: eof -->",
+            "",
+          ].join("\n"),
+        )
+      }
+      return undefined
+    }
+    return artifactTurns(dir)(ctx)
+  }
+
+  test("a contradictory planning input: `Consistent: no` blocks the step (exit 2), the audit records the verdict, and no planning session runs", async () => {
+    const f = await verifierFixture(
+      CHARTER_PACK,
+      verdictTurn('Consistent: no — the charter\'s "never to be read, copied or translated" contradicts the prompt\'s "Copy the reference implementation\'s modules over verbatim, reading its source directly" (in the planning input)'),
+    )
+    try {
+      const { code, lines } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing() })
+      expect(code).toBe(2)
+      expect(lines.some((line) => line.includes("plan verification found the implement-plan R-01.P01 prompt inconsistent with the intent charter"))).toBe(true)
+      expect(lines.some((line) => line.includes("The verdict is recorded in"))).toBe(true)
+      // The wall documentation: the round's prompt-audit.md carries the
+      // verdict with the evidence, written before any session ran.
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
+      expect(audit).toContain("# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round")
+      expect(audit).toMatch(/implement-plan R-01\.P01: INCONSISTENT — the charter's "never to be read, copied or translated" contradicts the prompt's "Copy the reference implementation's modules over verbatim/)
+      // The verifier was the only session: one bare prompt under the verifier
+      // title, both texts under review inside it, and no planning output.
+      expect(f.agent.argsOf("create")).toEqual([[{ title: VERIFY_TITLE }]])
+      expect(f.agent.prompts).toHaveLength(1)
+      expect(f.agent.prompts[0]!.bare).toBe(true)
+      expect("agent" in f.agent.prompts[0]!).toBe(false)
+      expect(f.agent.prompts[0]!.text).toContain(CHARTER)
+      expect(f.agent.prompts[0]!.text).toContain(CONTRARY_INPUT)
+      expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
+      expect(lines.some((line) => line.includes("starting the phase planning session"))).toBe(false)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a consistent reply proceeds: the verifier session runs first, the planning session writes the index, the run completes, the audit records the pass", async () => {
+    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
+    try {
+      const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
+      expect(code).toBe(0)
+      expect(lines.some((line) => line.includes("✓ plan verification: the implement-plan R-01.P01 prompt is consistent with the intent charter"))).toBe(true)
+      // Order: the verifier's bare session ahead of the planning session.
+      expect(f.agent.argsOf("create")).toContainEqual([{ title: VERIFY_TITLE }])
+      expect(f.agent.prompts[0]!.bare).toBe(true)
+      expect(f.agent.prompts[0]!.text).toContain(CHARTER)
+      expect(f.agent.prompts[1]!.text).toContain("You are the planner for this implementation plan")
+      expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
+      expect(lines).toContain("✓ all tasks complete")
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
+      expect(audit).toMatch(/implement-plan R-01\.P01: consistent/)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an unparsable reply twice fails closed: two verifier sessions, exit 2, the failure recorded in the audit", async () => {
+    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Hmm, I really cannot judge these two texts."))
+    try {
+      const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
+      expect(code).toBe(2)
+      expect(lines.some((line) => line.includes("plan verification could not judge the implement-plan R-01.P01 prompt"))).toBe(true)
+      expect(lines.some((line) => line.includes("fail-closed"))).toBe(true)
+      // One retry, then the block: exactly two verifier sessions, no planning.
+      expect(f.agent.argsOf("create")).toEqual([[{ title: VERIFY_TITLE }], [{ title: VERIFY_TITLE }]])
+      expect(f.agent.prompts).toHaveLength(2)
+      for (const prompt of f.agent.prompts) expect(prompt.bare).toBe(true)
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
+      expect(audit).toMatch(/implement-plan R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
+      expect(audit).toContain("(after one retry — fail-closed, plans/0080 §5)")
+      expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a pack without verify-plan never opens a verifier session: nothing logged, nothing recorded, the run proceeds", async () => {
+    // A guarantees section (precedence) without the charter: the charter's
+    // presence is the activation, nothing else.
+    const f = await verifierFixture("# verify\n\n## guarantees\n\n### precedence\n\nThe charter wins over the planning input.\n", verdictTurn(undefined))
+    try {
+      const { code, lines } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing() })
+      expect(code).toBe(0)
+      expect(f.agent.prompts.some((prompt) => prompt.text.includes(VERIFY_MARK))).toBe(false)
+      expect(f.agent.argsOf("create").some(([input]) => (input as { title: string }).title === VERIFY_TITLE)).toBe(false)
+      expect(existsSync(join(f.dir, "docs", "R-01", "prompt-audit.md"))).toBe(false)
+      expect(lines.some((line) => line.includes("plan verification"))).toBe(false)
+      expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  // The repair discipline's consumer (plans/0080 §6): a repair round's append
+  // input carries the active pack's `### repair` text — before 0080 the
+  // section existed with no consumer at all.
+  test("a repair round's append input carries the active pack's `### repair` discipline", async () => {
+    // The turn: the wrap-up of T-001 concludes FAIL, the append session
+    // appends one repair task, everything else takes the artifact turns.
+    const repairTurn = (dir: string): TurnScript => {
+      const base = verdictTurn(undefined, new Set(["T-001"]))(dir)
+      return (ctx) => {
+        if (ctx.text.includes("## Input: the task index as it stands")) {
+          const phaseDir = promptPhaseDir(ctx.text)
+          if (phaseDir) appendOneTask(dir, phaseDir)
+          return undefined
+        }
+        return base(ctx)
+      }
+    }
+    const f = await verifierFixture(
+      "# verify\n\n## governance\n\n### repair\n\nCUSTOM-REPAIR-BOUNDARY: a repair fixes the finding it is named for, adds a regression check, and re-runs the verification.\n",
+      repairTurn,
+    )
+    try {
+      const { code, lines } = await f.run({ planInput: { text: "migrate the widget" }, intent: "verify", repair: 1, routing: routing() })
+      expect(code).toBe(0)
+      expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
+      // The append session's prompt carries the repair discipline inside the
+      // planning input block (withIntentParagraph's framing clause).
+      const append = f.agent.prompts.find((prompt) => prompt.text.includes("## Input: the task index as it stands"))!
+      expect(append).toBeDefined()
+      expect(append.text).toContain("Repair discipline (the project's intent declares it):")
+      expect(append.text).toContain("CUSTOM-REPAIR-BOUNDARY: a repair fixes the finding it is named for, adds a regression check, and re-runs the verification.")
+      // The persisted input (the block's durable copy) carries it too.
+      const input = await Bun.file(join(f.dir, "docs", "R-01", "P01-implement", "plan-input.md")).text()
+      expect(input).toContain("Repair discipline (the project's intent declares it):")
+      expect(input).toContain("CUSTOM-REPAIR-BOUNDARY")
+      expect(existsSync(join(f.dir, "docs", "T-002", "done.md"))).toBe(true)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
     }
   })
 })

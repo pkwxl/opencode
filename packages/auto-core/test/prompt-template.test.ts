@@ -475,3 +475,46 @@ describe("classify-error template (plans/0055 §7.1)", () => {
     }
   })
 })
+
+// The plan-step consistency verifier's template (plans/0080 §5): a tier-1
+// protocol surface — the driver parses the reply's `Consistent:` line, and an
+// override that drops the charter or the prompt under review would make the
+// verdict a check of nothing.
+describe("plan-verify template (plans/0080 §5)", () => {
+  test("the built-in carries the markers; the file ends with the terminator and the render leaves none", async () => {
+    const raw = await Bun.file(join(import.meta.dir, "..", "templates", "prompts", "plan-verify.md")).text()
+    for (const marker of ["Consistent:", "{{charter}}", "{{prompt}}"]) expect(raw).toContain(marker)
+    expect(raw.trimEnd().endsWith("<!-- auto: eof -->")).toBe(true)
+    const text = renderTemplate("plan-verify", { charter: "THE CHARTER", prompt: "THE PROMPT", step: "phase-plan R-01.P02" })
+    expect(text).toContain("THE CHARTER")
+    expect(text).toContain("THE PROMPT")
+    expect(text).toContain("phase-plan R-01.P02")
+    expect(text).toContain("Consistent: yes")
+    expect(text).not.toContain("<!-- auto: eof -->")
+    expect(text).not.toMatch(/\{\{|\}\}/)
+  })
+
+  test("an override dropping Consistent: / {{charter}} / {{prompt}} fails usePromptLibrary naming the file and the missing markers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-verify-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      // Dropping the protocol line alone is refused first.
+      writeFileSync(join(overlay, "plan-verify.md"), "Judge the charter {{charter}} against {{prompt}}.\n\n<!-- auto: eof -->\n")
+      expect(() => usePromptLibrary(dir)).toThrow(/plan-verify\.md is missing required protocol content: Consistent:/)
+      // Dropping the prompt under review is just as fatal.
+      writeFileSync(join(overlay, "plan-verify.md"), "Charter:\n{{charter}}\nReply Consistent: yes|no.\n\n<!-- auto: eof -->\n")
+      expect(() => usePromptLibrary(dir)).toThrow(/plan-verify\.md is missing required protocol content: \{\{prompt\}\}/)
+      // Dropping the charter too — all three markers can go missing at once.
+      writeFileSync(join(overlay, "plan-verify.md"), "Is it consistent? Reply Consistent: yes or no.\n\n<!-- auto: eof -->\n")
+      expect(() => usePromptLibrary(dir)).toThrow(/plan-verify\.md is missing required protocol content: \{\{charter\}\}/)
+      // Keeping every marker loads the override.
+      writeFileSync(join(overlay, "plan-verify.md"), "Charter <<<{{charter}}>>> prompt <<<{{prompt}}>>> — last line: Consistent: yes/no\n\n<!-- auto: eof -->\n")
+      usePromptLibrary(dir)
+      expect(renderTemplate("plan-verify", { charter: "C", prompt: "P", step: "s" })).toBe("Charter <<<C>>> prompt <<<P>>> — last line: Consistent: yes/no")
+    } finally {
+      usePromptLibrary(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

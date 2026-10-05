@@ -82,6 +82,18 @@ async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prom
     join(ctx.directory, audit),
     `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${verifyAuditEntry(step, outcome)}\n`,
   )
+  // The audit write commits on its own ahead of the session it documents: the
+  // planning unit's entry clean gate demands a clean tree, so an uncommitted
+  // wall document would block the very step it records (Auto-DECISION: a
+  // dedicated prompt-audit commit, the savePlanInput pattern, instead of
+  // riding the session's unified commit — §5's "written before the session"
+  // stays true in git order, and the record survives a session that never
+  // runs; found by the §7 session-driving coverage, T-141).
+  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `plan verification (${step})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit ${step}` })
+  if (!settled.ok) {
+    log(`⏸ prompt-audit commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The record is kept in the worktree; commit manually and re-run`)
+    return 2
+  }
   if (outcome.kind === "skipped") {
     log(`ℹ plan verification skipped: ${outcome.reason}`)
     return 0

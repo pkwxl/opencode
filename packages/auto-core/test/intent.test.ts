@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadIntents, packSubsection, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
+import { guaranteesProblem, parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { DEFAULT_INTENT, INTENT_SECTIONS, PARALLEL_LEVELS } from "../src/intent/types"
 
 function packText(name: string, sections: Record<string, string>): string {
@@ -223,6 +224,71 @@ two lines.
     for (const letter of ["a", "d", "m", "t", "v", "k"]) {
       expect(dutiesForPhase(builtin, letter)).toContain("Splitting and artifact criteria for this phase ({{phaseName}})")
     }
+  })
+})
+
+// The guarantees assert grammar (plans/0080 §2, src/intent/guarantees.ts):
+// the machine-checked half of the `## guarantees` section, parsed out of its
+// `### asserts` subsection and validated at preflight through
+// guaranteesProblem.
+describe("guarantees parsing (parseGuaranteeAsserts / guaranteesProblem)", () => {
+  const packWithAsserts = (asserts: string) => parseIntentFile("x", `# x\n\n## guarantees\n\n### asserts\n\n${asserts}\n`)
+
+  test("valid lines parse: must / must-not, phase-qualified and bare, multiple literals", () => {
+    const pack = packWithAsserts([
+      'whole: must "Clean-room boundary"',
+      'phase-plan(audit): must "verdict.md", "Result: PASS"',
+      'phase-plan( m ): must-not "code migration"',
+      'subtask: must-not "reference implementation", "translated code"',
+    ].join("\n"))
+    const asserts = parseGuaranteeAsserts(pack)!
+    expect(asserts).toHaveLength(4)
+    expect(asserts[0]).toEqual({ template: "whole", kind: "must", literals: ["Clean-room boundary"] })
+    // A phase-qualified line keeps its qualifier; the parenthesized phase may
+    // carry surrounding spaces.
+    expect(asserts[1]).toEqual({ template: "phase-plan", phase: "audit", kind: "must", literals: ["verdict.md", "Result: PASS"] })
+    expect(asserts[2]).toEqual({ template: "phase-plan", phase: "m", kind: "must-not", literals: ["code migration"] })
+    expect(asserts[3]!.literals).toEqual(["reference implementation", "translated code"])
+    // A pack without the subsection at all is the zero-intent floor.
+    expect(parseGuaranteeAsserts(parseIntentFile("y", "# y\n\n## quality\nq\n"))).toBeUndefined()
+  })
+
+  test("malformed lines throw naming the pack and the offending line", () => {
+    const cases: Array<[string, RegExp]> = [
+      ['whole must "x"', /intent pack "x" has a malformed asserts line: whole must "x"/],
+      ["whole: shall \"x\"", /malformed asserts line/],
+      // A body with nothing after the keyword never matches the line grammar.
+      ["whole: must", /malformed asserts line: whole: must/],
+      ["whole: must code migration", /asserts literals must be double-quoted and comma-separated/],
+      ["whole: must 'x'", /must be double-quoted/],
+      ['whole: must "x", y', /must be double-quoted/],
+      ['whole: must ""', /must be double-quoted/],
+    ]
+    for (const [line, pattern] of cases) expect(() => parseGuaranteeAsserts(packWithAsserts(line))).toThrow(pattern)
+  })
+
+  test("comment and blank lines are skipped; a section of comments only is the floor", () => {
+    const pack = packWithAsserts(['# pinned by the assessment, keep verbatim', "", 'whole: must "boundary"', "   "].join("\n"))
+    const asserts = parseGuaranteeAsserts(pack)!
+    expect(asserts).toHaveLength(1)
+    expect(asserts[0]!.literals).toEqual(["boundary"])
+    expect(parseGuaranteeAsserts(packWithAsserts("# nothing declared\n\n"))).toBeUndefined()
+  })
+
+  test("guaranteesProblem round-trips the parse: undefined clean, the message naming the pack otherwise", () => {
+    const clean = packWithAsserts('whole: must "boundary"\nphase-plan(m): must-not "code migration"\n')
+    expect(guaranteesProblem(clean)).toBeUndefined()
+    const broken = packWithAsserts("whole: definitely maybe")
+    expect(guaranteesProblem(broken)).toMatch(/intent pack "x" has a malformed asserts line: whole: definitely maybe/)
+    expect(guaranteesProblem(parseIntentFile("y", "# y\n"))).toBeUndefined()
+    // Through the full file protocol the subsections address beside the
+    // asserts: precedence and verify-plan are prose, never validated.
+    const full = parseIntentFile(
+      "z",
+      ["# z", "", "## guarantees", "", "### precedence", "", "The charter wins.", "", "### asserts", "", 'whole: must "boundary"', "", "### verify-plan", "", "The charter paragraph.", ""].join("\n"),
+    )
+    expect(guaranteesProblem(full)).toBeUndefined()
+    expect(parseGuaranteeAsserts(full)).toEqual([{ template: "whole", kind: "must", literals: ["boundary"] }])
   })
 })
 
