@@ -8,7 +8,7 @@
 // appends on the same append step (D23). Direction: loop-phase → loop-plan
 // → loop-task; never imports loop-phase or loop.
 import { rm } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { projectBriefText } from "./brief"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
@@ -18,9 +18,9 @@ import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./
 import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
-import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
+import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
+import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
-import { planDutiesPartial } from "./phases/registry"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
 import { statsDigest } from "./stats"
@@ -40,7 +40,7 @@ import {
   taskStatePaths,
   type PlanPhase,
 } from "./tasks"
-import { renderText, templateRenders } from "./template"
+import { templateRenders } from "./template"
 import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
 
 // the phase index (routing already validated it; re-read here only for the
@@ -58,11 +58,47 @@ export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(
 // branch exactly when its session would wait for the human.
 const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute", intent: ctx.opts.intent })
 
-// A phase type's duty paragraph for the planning/append prompts (E2): the
-// type's own `## plan duties` (custom types), else the type's shared partial
-// (`plan-duties-<dutiesRef>`), rendered through the active library so
-// overlays apply — moved out of the render layer with the registry imports.
-const planDuties = (entry: PhaseUnit["entry"]): string => renderText(entry.planDuties ?? `{{> ${planDutiesPartial(entry)}}}`, {}).trimEnd()
+// A phase type's duty paragraph for the planning/append prompts (E2):
+// prompt-plan's planDutyText — the type's own `## plan duties` (custom
+// types), then — the pack tier, plans/0080 §4 — the active pack's `###
+// <dutiesRef>` under `## phase duties`, then the core shared partial,
+// rendered through the active library so overlays apply.
+const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string => planDutyText(planFacts(ctx), entry)
+
+// The plan-step consistency gate (plans/0080 §5): before a planning or append
+// session runs, its composed prompt is judged against the active pack's
+// verify-plan charter and the verdict recorded in the round's prompt-audit.md
+// (written here, ahead of the session, so the step's own commit carries it —
+// the wall documentation a clean-room defense wants). Returns 0 = proceed
+// (consistent, inactive, or a skip the mechanical layers still cover), 2 =
+// blocked for the human: an inconsistent prompt quotes the evidence, a
+// verifier that cannot answer fails closed after its retry.
+async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prompt: string): Promise<number> {
+  const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt })
+  if (outcome.kind === "inactive") return 0
+  const audit = join(dirname(phase.dir), "prompt-audit.md")
+  const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
+  await Bun.write(
+    join(ctx.directory, audit),
+    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${verifyAuditEntry(step, outcome)}\n`,
+  )
+  if (outcome.kind === "skipped") {
+    log(`ℹ plan verification skipped: ${outcome.reason}`)
+    return 0
+  }
+  if (outcome.kind === "consistent") {
+    log(`✓ plan verification: the ${step} prompt is consistent with the intent charter (${audit})`)
+    return 0
+  }
+  if (outcome.kind === "inconsistent") {
+    log(`⏸ plan verification found the ${step} prompt inconsistent with the intent charter: ${outcome.evidence}`)
+    log(`  The verdict is recorded in ${audit}. Rewrite the conflicting input, or amend the intent — the driver never rewrites your words`)
+    return 2
+  }
+  log(`⏸ plan verification could not judge the ${step} prompt: ${outcome.reason}`)
+  log(`  The failure is recorded in ${audit} — fail-closed, fix the verifier's model and re-run`)
+  return 2
+}
 
 // the phase planning session (§E): a one-off bypass reusing the
 // requireArtifact skeleton, artifacts = this phase's task index
@@ -158,6 +194,12 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         parallel: opts.parallel,
       })
     : await phasePlanPrompt(ctx, phase, { brief, input, taskIndex, phaseId, numberStart })
+  // The plan-step consistency gate (plans/0080 §5): the composed planning
+  // prompt meets the intent charter here — where the human planning input,
+  // the brief and the duties all sit in one text. Blocked (2) = the verdict
+  // or a fail-closed verifier stopped the step before any session ran.
+  const verified = await verifyPlanStep(ctx, phase, ctx.manual ? `implement-plan ${phaseId}` : `phase-plan ${phaseKey(phase).id}`, prompt)
+  if (verified !== 0) return verified
   let problems: string[] = []
   log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
   const planned = await requireArtifact(
@@ -278,7 +320,7 @@ async function phasePlanPrompt(
   const round = await roundBriefText(directory, state.round)
   return renderPhasePlan(planFacts(ctx), {
     phase: phase.entry,
-    planDuties: planDuties(phase.entry),
+    planDuties: planDuties(ctx, phase.entry),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
     brief: parts.brief,
@@ -593,6 +635,11 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
         parallel: opts.parallel,
       })
     : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks) })
+  // The consistency gate, the append side (plans/0080 §5): an append plans
+  // against a human input too — plan --append or a repair round's evidence —
+  // so its composed prompt is verified the same way before its session runs.
+  const verified = await verifyPlanStep(ctx, phase, `phase-append ${phaseKey(phase).id}`, prompt)
+  if (verified !== 0) return verified
   let problems: string[] = []
   log(`▶ starting the task-append session to append to ${taskIndex}`)
   const appended = await requireArtifact(
@@ -691,7 +738,7 @@ async function phaseAppendPrompt(
   const state = await phaseState(directory)
   return renderPhaseAppend(planFacts(ctx), {
     phase: phase.entry,
-    planDuties: planDuties(phase.entry),
+    planDuties: planDuties(ctx, phase.entry),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
     numberStart: parts.numberStart,

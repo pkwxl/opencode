@@ -4,7 +4,13 @@ The task (its document is docs/{{taskId}}/todo.md):
 
 {{taskBlock}}
 
-Your stream's scope file ({{todoFile}}) in full:
+{{#if cold}}{{#if modeExec}}Scenario mode notes ({{modeName}}):
+{{modeExec}}
+
+{{/if}}{{#if precedence}}Authority order for everything in this prompt:
+{{precedence}}
+
+{{/if}}{{/if}}Your stream's scope file ({{todoFile}}) in full:
 
 {{scope}}
 

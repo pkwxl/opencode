@@ -40,6 +40,13 @@ the phase duties below.
 
 {{modeInit}}
 
+{{/if}}{{#if precedence}}
+## Authority order (intent guarantees)
+
+Where any part of this prompt — the planning input, the round brief, the project brief, these phase duties — conflicts with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order text.
+
+{{precedence}}
+
 {{/if}}
 {{#if handovers}}
 ## Input: prior-phase handovers

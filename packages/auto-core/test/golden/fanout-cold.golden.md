@@ -6,6 +6,13 @@ The task (its document is docs/T-002/todo.md):
 
 Write the migration script.
 
+Scenario mode notes (migrate):
+Migration/upgrade mode notes:
+- The new implementation must stay behaviourally equivalent to the old one (inputs and outputs, edge cases and error paths must not drift);
+- Any compatibility layer, temporary branch or switch introduced during the migration must state its purpose and when it is to be removed;
+- Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
+  record how it was made and annotate it as AUTO-DECISION requires.
+
 Your stream's scope file (docs/T-002/S02/todo.md) in full:
 
 Depends: S01

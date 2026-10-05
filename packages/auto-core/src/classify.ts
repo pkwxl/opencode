@@ -387,12 +387,13 @@ type OneShot =
   | { kind: "failed"; error: ErrorInfo; usage: Usage }
   | { kind: "timeout"; usage: Usage }
 
-// The one-shot session: created titled `auto: classify error`, subscribed
+// The one-shot session: created titled `auto: classify error` (or the title a
+// fellow one-shot caller passes — the plan verifier, plans/0080 §5), subscribed
 // before the prompt, the prompt sent bare on the entry's model (its base
 // step and variant; an entry without `model` runs on the agent's default)
 // and on the adapter's default agent — no `agent` key, so not the `auto`
 // contract — then read until the turn ends, fails or the timeout aborts it.
-async function oneShot(client: AgentClient, entry: ModelEntry, text: string, timeoutMs: number): Promise<OneShot> {
+export async function oneShot(client: AgentClient, entry: ModelEntry, text: string, timeoutMs: number, title: string = CLASSIFY_TITLE): Promise<OneShot> {
   const usage: Usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
   const created = await client.create({ title: CLASSIFY_TITLE })
   if (!created.ok) return { kind: "failed", error: { message: formatClientError(created.error) }, usage }

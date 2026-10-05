@@ -9,6 +9,9 @@ Current task:
 {{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
+{{/if}}{{#if precedence}}Authority order for everything in this prompt:
+{{precedence}}
+
 {{/if}}{{#if subtaskList}}The subtask list of this task, by title (executed in order; the other items belong to other sessions, do not touch them):
 
 {{subtaskList}}

@@ -35,6 +35,11 @@ export const SWITCH_ENV = {
   // the landing protocol) with zero concurrency. The rollout/testing answer to
   // 0036 D13's "plan for parallelism, execute serially" trap.
   laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
+  // Plan-step consistency verification (plans/0080 §5): the AI verifier that
+  // judges each composed planning prompt against the active intent's charter.
+  // off is the emergency exit — the mechanical layers (the render gate, the
+  // precedence blocks) keep running; only the semantic check goes away.
+  planVerify: "OPENCODE_AUTO_PLAN_VERIFY",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -299,6 +304,13 @@ export type Switches = {
   // protocol, still strictly serially. The isolation rollout stage of the
   // lanes design: full machinery, zero concurrency, per-run only.
   laneIsolation: boolean
+  // Plan-step consistency verification (default on, plans/0080 §5): before a
+  // planning session runs, a verifier session judges the composed prompt
+  // against the active pack's `### verify-plan` charter (fail-closed: a
+  // verifier that cannot answer blocks the step). No charter declared ⇒ no
+  // verifier, whatever the switch says — the switch only removes the check,
+  // never adds one to a pack that declares none.
+  planVerify: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -325,6 +337,7 @@ const SWITCH_DEFAULTS: Switches = {
   hibernate: undefined,
   agent: undefined,
   laneIsolation: false,
+  planVerify: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -543,6 +556,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
+    planVerify: onOff(SWITCH_ENV.planVerify, env[SWITCH_ENV.planVerify], SWITCH_DEFAULTS.planVerify),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -582,6 +596,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
     switches.laneIsolation === SWITCH_DEFAULTS.laneIsolation ? undefined : `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
+    switches.planVerify === SWITCH_DEFAULTS.planVerify ? undefined : `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -607,6 +622,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
     `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
+    `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
   ].join(", ")
 }
 

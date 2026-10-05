@@ -35,6 +35,7 @@ const SECTION_HEADINGS: Record<string, IntentSection> = {
   governance: "governance",
   "artifact spec": "artifactSpec",
   parallelism: "parallelism",
+  guarantees: "guarantees",
 }
 
 // File-facing headings in canonical section order (for diagnostics).

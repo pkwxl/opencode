@@ -4,6 +4,7 @@ import { startRunEvents } from "./engine/events"
 import { hibernatePause } from "./hibernate"
 import { interactiveChannel, startInteractive, type Interactive } from "./interactive"
 import { acquireRunLock, lockLines } from "./lock"
+import { PromptGuaranteeError } from "./intent/guarantees"
 import { runLaneUnit, type LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
@@ -309,6 +310,16 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     if (error instanceof ExitRequested) {
       log(`⏸ ${error.message}, progress saved, re-run to resume fully`)
       return 3
+    }
+    // A prompt-guarantee violation (plans/0080 §3): the active intent's
+    // declared asserts failed on a composed prompt — the intent's content and
+    // the prompt sources disagree, which is a human problem (fix the pack, the
+    // planning input, or the prompt overlay), never a retry. Blocked, like
+    // every other stop that waits for a person.
+    if (error instanceof PromptGuaranteeError) {
+      log(`⏸ prompt guarantee violation: ${error.message} — fix the conflicting source (the intent pack, the planning input, or the prompt overlay) and re-run`)
+      emitStatus({ type: "failure", message: `prompt guarantee violation: ${error.message}` })
+      return 2
     }
     throw error
   } finally {

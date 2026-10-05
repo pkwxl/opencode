@@ -52,6 +52,8 @@ import {
   type LaneRuntime,
 } from "./lanes"
 import { recallProgress } from "./resume"
+import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
+import { promptFacts } from "./prompt-facts"
 import { emitStatus } from "./run-status"
 import { runTask } from "./runner"
 import type { AgentPool } from "./agent-pool"
@@ -348,7 +350,10 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
             `Repair round ${ctx.repairs}: the task ${task.id} was closed — its report docs/${task.id}/report.md concluded ` +
             `Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}. Read that report and the task's documents for what it ` +
             `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
-            `and have the last task re-verify so the phase's verdict is rewritten honestly.`,
+            `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
+            // The pack's repair discipline (plans/0080 §6): the boundary that
+            // keeps a repair from re-architecting.
+            withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: ctx.opts.intent }))),
         }
         ctx.append = true
         ctx.ran++

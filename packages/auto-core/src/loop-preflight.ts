@@ -52,6 +52,7 @@ import { promptFacts } from "./prompt-facts"
 import type { PromptFacts } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import { packSubsection } from "./intent/load"
+import { guaranteesProblem } from "./intent/guarantees"
 import type { ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { protect } from "./protect"
@@ -299,6 +300,16 @@ export async function preflight(
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
+  }
+  // The guarantees contract's grammar (plans/0080 §2): a pack that declares
+  // `### asserts` with malformed lines fails here as a usage error, ahead of
+  // any render — the same load-style strictness the pack file itself gets.
+  {
+    const problem = guaranteesProblem(renderFacts!.pack)
+    if (problem !== undefined) {
+      log(problem)
+      return { exit: 1 }
+    }
   }
   // The active pack's provenance (plans/0079 §2, the moment 0031 froze
   // IntentSource for): the config's intent key names the pack, the log says

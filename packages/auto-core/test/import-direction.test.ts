@@ -52,9 +52,11 @@ const DOMAIN_DIRS: ReadonlySet<string> = new Set(["intent", "phases", "document"
 // grows a published surface. Paths are src-relative keys without extension.
 const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // intent: types = the frozen schema (M1.1); load = the pack-acquisition
-  // surface (built-in registry + project overlay). Published together so the
-  // driver never reaches past them into the domain.
-  intent: ["intent/types", "intent/load"],
+  // surface (built-in registry + project overlay); guarantees = the pack's
+  // declared consistency contract — the assert-line parser and evaluator the
+  // render gate reads and the run boundary catches (plans/0080 §2). Published
+  // together so the driver never reaches past them into the domain.
+  intent: ["intent/types", "intent/load", "intent/guarantees"],
   // phases: registry = the type registry and phases-value resolution; custom =
   // the project type loader (M3.6, .opencode/auto/phases/<type>.md), which the
   // driver calls where it validates config and preflights a run.
@@ -150,6 +152,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   confirm: "driver",
+  // The plan-step consistency verifier (plans/0080 §5): the classifier's
+  // one-shot sibling that judges each composed planning prompt against the
+  // active pack's verify-plan charter — strict reply parser, fail-closed
+  // retry, the audit-entry line the planning step appends.
+  "prompt-verify": "driver",
   // The control modules' shared vocabulary (the Boundary and Interactive
   // types), a types-only leaf (LEAVES): step, interactive, exit and failback
   // all depend on it instead of on each other, which is what broke the
@@ -516,6 +523,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   usage: "policies",
   "quota-windows": "policies",
   classify: "policies",
+  "prompt-verify": "policies",
   stuck: "policies",
   "model-step": "policies",
   capability: "policies",

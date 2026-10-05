@@ -7,6 +7,9 @@ Current task:
 {{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
+{{/if}}{{#if precedence}}Authority order for everything in this prompt:
+{{precedence}}
+
 {{/if}}{{#if solo}}The implementation of this task was completed in earlier sessions; do not redo it. This session only performs the wrap-up:{{/if}}{{^solo}}All subtasks of this task were completed one by one in earlier sessions; do not redo them. This session only performs the wrap-up:{{/if}}
 
 1. Update the documents in docs/ affected by this task;

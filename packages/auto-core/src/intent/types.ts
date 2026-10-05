@@ -19,7 +19,7 @@
 // Section keys of an intent pack, in canonical document order. The parser
 // (load.ts) and future rendering iterate this list; the pack file protocol
 // uses the human-readable headings mapped in load.ts.
-export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism"] as const
+export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism", "guarantees"] as const
 
 export type IntentSection = (typeof INTENT_SECTIONS)[number]
 
@@ -40,6 +40,12 @@ export type IntentPack = {
   // How hard planning sessions work to make tasks independent, keyed by the
   // config's `parallel` level (MP.1).
   parallelism?: string
+  // Prompt guarantees (plans/0080 §2): the pack's declared consistency
+  // contract — `### precedence` (the block injected into prompts), `### asserts`
+  // (machine-checked lines the render gate evaluates), `### verify-plan` (the
+  // charter the plan-step verifier session judges against; its presence
+  // activates the verifier). Parsed structurally by intent/guarantees.ts.
+  guarantees?: string
 }
 
 // The `### <level>` keys of `## parallelism`, i.e. the values of the config's

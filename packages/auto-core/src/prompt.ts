@@ -14,6 +14,7 @@
 // document-path view (docpaths' taskDocPaths). No module state remains here.
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, packSubsection } from "./intent/load"
+import { guaranteeViolation, parseGuaranteeAsserts, PromptGuaranteeError } from "./intent/guarantees"
 import type { IntentPack, IntentSection, ParallelLevel } from "./intent/types"
 import { renderTemplate, renderText, type Ctx } from "./template"
 
@@ -50,12 +51,14 @@ export type PromptFacts = {
 
 // A phase type as the render layer sees it (the phases registry's
 // PhaseTypeEntry satisfies it structurally): the preset letter or type id
-// (the {{phase}} var), the display name, and the decompose-side fields.
+// (the {{phase}} var), the display name, and the decompose-side fields plus
+// a custom type's own plan duties (the planDutyText tier, plans/0080 §4).
 export type PhaseEntry = {
   type: string
   name: string
   letter?: string
   dutiesRef: string
+  planDuties?: string
   decomposeTemplate: string
   decomposeDuties?: string
 }
@@ -203,8 +206,23 @@ export function parallelismVars(facts: PromptFacts, level: ParallelLevel | undef
   return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
+// The single render exit, now also the guarantees gate (plans/0080 §3): when
+// the active pack declares `### asserts`, every composed prompt is checked
+// against them before it leaves the render layer — a violation throws
+// PromptGuaranteeError, which the run boundary (loop.ts) maps to a blocked
+// exit. The gate sees this function's output only; driver-authored feedback
+// appended at call sites and non-template sends (steer placeholder fills,
+// probes) are outside its claim by design. A pack without the subsection
+// renders byte-identically (the zero-intent floor).
 export function renderPrompt(facts: PromptFacts, name: string, ctx: Ctx): string {
-  return renderTemplate(name, promptCtx(facts, ctx))
+  const output = renderTemplate(name, promptCtx(facts, ctx))
+  const asserts = parseGuaranteeAsserts(facts.pack)
+  if (asserts !== undefined) {
+    const phase = typeof ctx.phase === "string" ? ctx.phase : undefined
+    const violation = guaranteeViolation(facts.pack, asserts, name, phase, output)
+    if (violation !== undefined) throw new PromptGuaranteeError(violation)
+  }
+  return output
 }
 
 // Run info of a driver-executed script, relayed to the session: out is the
@@ -872,6 +890,12 @@ function baseCtx(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskD
   const notes = closedPrerequisiteNotes(plan, task)
   return {
     ...modeCtx(opts.mode),
+    // The intent's declared authority order (plans/0080 §2, `## guarantees` /
+    // `### precedence`): injected into every execution-surface prompt so a
+    // contradictory input block cannot silently outrank the intent charter —
+    // the composition states which side wins. Absent section ⇒ undefined and
+    // the template's block disappears (zero-intent floor).
+    precedence: intentText(facts, "guarantees", "precedence", {}),
     taskId: task.id,
     taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}${notes ? `\n\n${notes}` : ""}`,
     doneList: doneList(plan),

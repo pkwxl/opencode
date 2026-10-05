@@ -10,8 +10,42 @@
 // paragraph arrive as data (the caller renders the registry's duty text),
 // and every render takes the PromptFacts value the caller built.
 import type { ModeSpec } from "./mode"
+import { dutiesForPhase } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
 import { intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
+import { renderText } from "./template"
+
+// The phase-plan duty paragraph's resolution (plans/0080 §4): the custom
+// type's own `## plan duties` first, then — the new tier — the active pack's
+// `### <dutiesRef>` subsection under `## phase duties`, then the core shared
+// partial `plan-duties-<dutiesRef>` (the partial name is the registry's
+// planDutiesPartial rule, `plan-duties-` + dutiesRef; built inline so this
+// layer keeps taking the structural entry instead of importing the phases
+// domain). Only builtin types ever reach the pack tier — a custom type file
+// always carries its own plan duties — so this is what lets a bundle re-voice
+// the builtin design/implement/test duties without touching core partials.
+export function planDutyText(facts: PromptFacts, entry: PhaseEntry): string {
+  const own = entry.planDuties ?? dutiesForPhase(facts.pack, entry.dutiesRef)
+  return renderText(own ?? `{{> plan-duties-${entry.dutiesRef}}}`, {}).trimEnd()
+}
+
+// The repair round's discipline (plans/0080 §6): the active pack's `##
+// governance` / `### repair` text, appended to the repair append's input —
+// the boundary that keeps a repair from re-architecting (fix the named
+// finding, minimal change, regression check, re-run the verification).
+// Absent section ⇒ undefined and the input stays as the core composes it
+// (the zero-intent floor; before 0080 the section existed with no consumer
+// at all).
+export function repairDutiesText(facts: PromptFacts): string | undefined {
+  return intentText(facts, "governance", "repair", {})
+}
+
+// Join an optional intent paragraph onto a driver-composed input text: a
+// leading blank line and a framing clause when present, nothing at all when
+// absent (the zero-intent floor keeps the input byte-identical).
+export function withIntentParagraph(text: string | undefined): string {
+  return text === undefined ? "" : `\n\nRepair discipline (the project's intent declares it):\n${text}`
+}
 
 // Phase planning session (design doc plans/0006-phases-design.md §E): a
 // one-shot bypass session whose artifacts = this phase's task index
@@ -68,6 +102,12 @@ export function renderPhasePlan(facts: PromptFacts, input: {
     phaseName: type.name,
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
+    // The intent's declared authority order (`## guarantees` / `###
+    // precedence`, plans/0080 §2): the planning prompt is exactly where the
+    // human planning input meets the intent charter, so the block stating
+    // which side wins belongs here first. Absent section ⇒ the template's
+    // block disappears (zero-intent floor).
+    precedence: intentText(facts, "guarantees", "precedence", {}),
     brief: input.brief?.trim() || undefined,
     round: input.round?.trim() || undefined,
     // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
@@ -190,6 +230,10 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     phaseName: type?.name,
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
+    // The precedence block, same subsection as renderPhasePlan: an append
+    // plans against a human input too (plan --append, or a repair round's
+    // evidence), so the authority order rides along.
+    precedence: intentText(facts, "guarantees", "precedence", {}),
     numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
     input: input.input.trim(),
     inputPath: input.inputPath,

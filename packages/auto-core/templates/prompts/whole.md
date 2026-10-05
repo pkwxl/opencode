@@ -7,6 +7,9 @@ Current task (its document is docs/{{taskId}}/todo.md):
 {{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
+{{/if}}{{#if precedence}}Authority order for everything in this prompt:
+{{precedence}}
+
 {{/if}}{{#if adaptive}}You are the lead session of this task: you are responsible for the whole task and work it yourself; handing part of it to further sessions is an option only under the split rule below.{{/if}}{{^adaptive}}You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks.{{/if}}{{#if continuation}} The previous session ended with a context-budget handover. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.{{/if}}
 
 {{#if processRefs}}{{processRefs}}

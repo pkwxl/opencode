@@ -18,6 +18,7 @@ import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseK
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
+import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
 import { promptFacts } from "./prompt-facts"
 import { emitStatus } from "./run-status"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
@@ -167,7 +168,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         text:
           `Repair round ${ctx.repairs}: the phase ${phaseTitle(phase)} is held by its verdict gate — ${gated.join("; ")}. ` +
           `The verdict document docs/${phaseVerdictDoc(phase)} records why. Read it, then append repair tasks that fix what it found and ` +
-          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.`,
+          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.` +
+          // The pack's repair discipline (plans/0080 §6): the boundary that
+          // keeps a repair from re-architecting.
+          withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
       }
       const code = await appendPlan(ctx, phase)
       ctx.input = undefined

@@ -15,7 +15,7 @@ function packText(name: string, sections: Record<string, string>): string {
 }
 
 describe("intent file protocol (parseIntentFile)", () => {
-  test("a full pack captures all six sections in canonical order", () => {
+  test("a full pack captures all seven sections in canonical order", () => {
     const pack = parseIntentFile(
       "x",
       packText("x", {
@@ -25,6 +25,7 @@ describe("intent file protocol (parseIntentFile)", () => {
         governance: "decision discipline.",
         "artifact spec": "artifact conventions.",
         parallelism: "planning width.",
+        guarantees: "the consistency contract.",
       }),
     )
     expect(pack.name).toBe("x")
@@ -34,6 +35,7 @@ describe("intent file protocol (parseIntentFile)", () => {
     expect(pack.governance).toBe("decision discipline.")
     expect(pack.artifactSpec).toBe("artifact conventions.")
     expect(pack.parallelism).toBe("planning width.")
+    expect(pack.guarantees).toBe("the consistency contract.")
     expect(Object.keys(pack)).toEqual(["name", ...INTENT_SECTIONS])
   })
 

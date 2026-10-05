@@ -47,6 +47,7 @@ import tplImplementPlan from "../templates/prompts/implement-plan.md" with { typ
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
+import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
 import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
@@ -94,6 +95,7 @@ const embedded: Record<string, string> = {
   "implement-plan": tplImplementPlan,
   knowledge: tplKnowledge,
   "number-recovery": tplNumberRecovery,
+  "plan-verify": tplPlanVerify,
   "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
@@ -135,6 +137,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   fanout: ["{{subtask}}", "Status: continue", "Status: done"],
   "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "number-recovery": [".auto/next-task"],
+  // The plan-step consistency verifier (plans/0080 §5): the driver parses the
+  // reply's `Consistent:` line verbatim, and an override must still show the
+  // charter and the prompt under review — a verdict without both is a check
+  // of nothing.
+  "plan-verify": ["Consistent:", "{{charter}}", "{{prompt}}"],
   // The append planner (plans/0053 D27): the phase-plan task-document skeleton
   // plus the slots an override must keep rendering — the index path, the
   // existing-task list and the planning input.
