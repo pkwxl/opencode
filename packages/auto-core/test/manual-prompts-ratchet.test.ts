@@ -1,11 +1,14 @@
 // The manual-driver prompt ratchet (plans/0078): prompts/ is the manual-driver
 // suite — run.md (the master control), run-task / run-verify / run-fix (the
 // whole-task children), run-as-subtasks / resume-subtasks (the subtask
-// pipeline) and plan-append — the runbooks a coding-agent session uses to run
-// as the driver itself, treating its child sessions as workers. run.md and
-// the run-verify close-out are driver-role (they own the driver-exclusive
-// writes and the commit grammar); run-task / run-fix / the Stage 1–3 child
-// prompts are workers (no commits, no state writes).
+// pipeline), plan-append, and charter (plans/0081 D13: the discussion runbook
+// for a greenfield baseline, the person-facing sibling of the driver-role
+// runbooks) — the runbooks a coding-agent session uses to run as the driver
+// itself, treating its child sessions as workers. run.md and the run-verify
+// close-out are driver-role (they own the driver-exclusive writes and the
+// commit grammar); run-task / run-fix / the Stage 1–3 child prompts are
+// workers (no commits, no state writes); charter is neither driver nor worker
+// — it lands everything through the init/plan flags and drives nothing.
 //
 // The suite is prompt copy like templates/prompts/, but a separate carrier:
 // no renderer assembles it, so nothing structural stops it from drifting
@@ -26,7 +29,7 @@ const SRC = resolve(import.meta.dir, "..", "src")
 
 // The suite's pinned file set: a file added to prompts/ joins the ratchet
 // consciously (this test fails until it is either listed or removed).
-const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md"]
+const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md"]
 
 const text = (name: string) => readFileSync(join(PROMPTS, name), "utf8")
 const src = (name: string) => readFileSync(join(SRC, name), "utf8")
@@ -114,6 +117,32 @@ describe("manual-driver prompt ratchet", () => {
     for (const name of ["run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
       expect(text(name), name).toContain("`docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/`")
     }
+  })
+
+  // charter.md's cross-references (plans/0081 D13): the command shapes the
+  // chartering session lands the baseline through must be the driver's own —
+  // the brief seed (D11), the scaffold flow (D12) and the planning input —
+  // so the prompt cannot drift from the CLI that exists.
+  test("charter lands the baseline through the driver's own flags (plans/0081 D13)", () => {
+    const charter = text("charter.md")
+    expect(charter).toContain("init <dir> --brief")
+    expect(charter).toContain("plan <dir> --scaffold")
+    expect(charter).toContain("plan <dir> --file <path>")
+    // The brief's four constants (D11.4) and the scaffold's shape are named,
+    // not paraphrased away.
+    for (const literal of ["goal", "source/reference", "target", "the constraints every round must respect"]) {
+      expect(charter, literal).toContain(literal)
+    }
+    expect(charter).toContain("in scope")
+    expect(charter).toContain("out of scope")
+    // The stated difference from re-work names the survey (D14.4's
+    // cross-link) and the negotiate-vs-distill distinction.
+    expect(charter).toContain("survey")
+    expect(charter).toContain("negotiated")
+    expect(charter).toContain("distilled")
+    // Nothing is driven: the chartering session runs no run/plan of its own
+    // beyond naming the commands the person runs.
+    expect(charter).not.toContain("opencode-auto run <dir>")
   })
 
   test("plan-append carries the Decompose field (plans/0075)", () => {

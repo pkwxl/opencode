@@ -42,7 +42,7 @@
 // intent (`## governance` / `### process-references`), the mechanical side is
 // the prohibition scan at unit close-out (process-refs.ts), and the whole-tree
 // scan at round close belongs to M4.
-import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, ROUND_BRIEF_NAME } from "../docpaths"
+import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, REPORT_FOR_USER_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"
 
 export type RolePolicy = {
@@ -79,6 +79,10 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // no terminator, like the round brief (plans/0053 D10).
   planningInput: { eofScan: false, process: true },
   artifact: { eofScan: true, process: true },
+  // The round user report (plans/0081 D6a): session-written, person-read. The
+  // round-close gate itself checks non-empty + the eof terminator (D4), so the
+  // per-unit eof scan skips it like its round-level siblings.
+  userReport: { eofScan: false, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -88,13 +92,16 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
 // driverState too (units.json runtime state, progress.json, …) but is
 // rewritten continuously by the driver, so it is guarded by the prompt
 // contract alone. The retired task mirror CURRENT.md (plans/0054 D3) is no
-// longer a role of its own.
-const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json"]
+// longer a role of its own. The project brief .opencode/auto/brief.md joined
+// with plans/0081 D6c/D11: the driver alone writes it (the init/amend seed,
+// the survey gate's install of the approved section, D15.2) — a person edits
+// it through those commands, never by hand mid-run.
+const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json", ".opencode/auto/brief.md"]
 
 // Read-only during a run (protect.ts, which adds the contract surface
 // AGENTS.md). Every entry must classify as driverState — asserted by
 // test/document-roles.test.ts.
-export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json"] as const
+export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json", ".opencode/auto/brief.md"] as const
 
 // The session handoff family by file name, wherever it sits: the task-level
 // handoff.md, the per-stream handoff.md of docs/T-NNN/S<nn>/ (plans/0068 S5
@@ -120,6 +127,9 @@ const PHASE_ACCEPTANCE = new RegExp(`^docs/${PHASE_DIR}/${PHASE_ACCEPTANCE_NAME.
 // The round brief: docs/R-NN/round.md (plans/0049 G2).
 const ROUND_BRIEF = new RegExp(`^docs/R-\\d+/${ROUND_BRIEF_NAME.replace(".", "\\.")}$`)
 
+// The round user report: docs/R-NN/report-for-user.md (plans/0081 D6a).
+const USER_REPORT = new RegExp(`^docs/R-\\d+/${REPORT_FOR_USER_NAME.replace(".", "\\.")}$`)
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -142,6 +152,7 @@ export function roleOf(rel: string): DocumentRole {
   if (PHASE_ACCEPTANCE.test(path)) return "phaseAcceptance"
   if (ROUND_BRIEF.test(path)) return "roundBrief"
   if (PLANNING_INPUT.test(path)) return "planningInput"
+  if (USER_REPORT.test(path)) return "userReport"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

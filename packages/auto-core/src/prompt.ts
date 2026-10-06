@@ -666,8 +666,8 @@ export function renderPhaseHandover(facts: PromptFacts, input: {
 // to the target directory); mode.exec is injected as scenario background
 // (reusing ModeSpec's existing fields, adding no registration surface).
 // The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
-export function renderKnowledge(facts: PromptFacts, input: { file: string; mode?: ModeSpec }): string {
-  const ctx = { file: input.file, ...modeCtx(input.mode) }
+export function renderKnowledge(facts: PromptFacts, input: { file: string; mode?: ModeSpec; report?: string }): string {
+  const ctx = { file: input.file, ...modeCtx(input.mode), ...(input.report !== undefined ? { report: input.report } : {}) }
   return renderPrompt(facts, "knowledge", { ...ctx, qualityRules: intentText(facts, "quality", "knowledge", ctx) })
 }
 

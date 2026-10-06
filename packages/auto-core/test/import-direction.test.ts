@@ -369,8 +369,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // verdict policy as data; src/tier.ts's role table and the driving call
   // sites' usage-policy reads resolve through it.
   "roles/registry": "driver",
-  // The round-close gate (M4.2, plans/0049 G8): whole-tree P1 scan, build, close listing.
+  // The round-close gate (M4.2, plans/0049 G8; the round-report check plans/0081 D4): whole-tree P1 scan, build, close listing, the round user report's existence/shape.
   "round-close": "driver",
+  // The round user report's driver-side vocabulary (plans/0081): the wrap-up
+  // task's mandated title and the D3 charter the self-heal's append input
+  // composes — pure text over docpaths, consumed by loop-phase.
+  "round-report": "driver",
   // The run-status event table (the headless direction's P2a, plans/0067
   // and its review): the frozen, additive-only vocabulary the P2 emitter
   // will publish — types and declaration tables only, importing nothing;
@@ -577,6 +581,9 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   conclusion: "pipeline",
   status: "pipeline",
   "round-close": "pipeline",
+  // The round user report's vocabulary (plans/0081 D4): the self-heal's
+  // append input and title guard, consumed by loop-phase's handover path.
+  "round-report": "pipeline",
   // The standalone work order and its adopt step (plans/0076, T-137): the
   // guest-model halves behind plan's rows 12–13 — the export's render
   // composition (constitution preamble + the whole-task prompt under the

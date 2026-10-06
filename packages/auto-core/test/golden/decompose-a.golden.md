@@ -46,6 +46,9 @@ This session completes the task-background understanding and the subtask decompo
      module X", "the list of differences for a certain API", "does a given risk exist");
    - Each item produces one standalone analysis document, written to its own file under docs/;
    - This phase produces analysis and conclusions only; modifying any implementation code is forbidden;
+   - The closing task also proposes the project brief — the goal in the target's own terms, where the reference/source lives, where
+     the deliverable goes, the constraints that bind every round — as one standalone document under this phase directory, so the
+     person can install it with `amend --brief-file <that document>`;
 5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each item opens with a
    short title and a colon (the other subtask sessions see only the titles of the items that are not theirs); the description must be
    self-contained (the executing session can finish the item from it alone, plus the item's todo.md, the shared-context
@@ -82,6 +85,7 @@ Constraints:
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. Writing out every file is a hard requirement: even if the task looks done or trivial, you must write context.md,
    shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
    and stops the run;

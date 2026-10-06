@@ -302,7 +302,8 @@ describe("questions and permissions", () => {
     })
     expect(result.blocked).toBeUndefined()
     expect(result.resolves).toEqual([])
-    expect(agent.argsOf("replyQuestion")).toEqual([["q1", [["use postgres"]]]])
+    // D10: the relayed answer names its question.
+    expect(agent.argsOf("replyQuestion")).toEqual([["q1", [["[re: which db?]\nuse postgres"]]]])
   })
 
   test("plan's sessions (humanQuestions): a closed input blocks; the same question again blocks", async () => {
@@ -322,7 +323,7 @@ describe("questions and permissions", () => {
       stream([ev.question("s", "q1", "which db?"), ev.question("s", "q2", "which db?"), ev.idle("s")]),
       { humanQuestions: true, interactive: line("use postgres") },
     )
-    expect(attended.argsOf("replyQuestion")).toEqual([["q1", [["use postgres"]]]])
+    expect(attended.argsOf("replyQuestion")).toEqual([["q1", [["[re: which db?]\nuse postgres"]]]])
     expect(again.blocked?.question).toContain("asked again about the same question after the human's answer")
     expect(attended.argsOf("rejectQuestion")).toEqual([["q2"]])
   })
@@ -2744,10 +2745,10 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(outcome).toEqual({ type: "completed" })
       expect(agent.prompts).toHaveLength(1)
       expect(order).toBe(`${renderConstitutionPreamble()}\n\n${agent.prompts[0]!.text}`)
-      // The attended branch (the person at the keyboard), never the
+      // The planning branch (plans/0081 D16: default and record), never the
       // unattended proxy-answer rule.
-      expect(order).toContain("a human is attending this planning run")
-      expect(order).not.toContain("do not call the question tool")
+      expect(order).toContain("take the recommended option as a provisional default")
+      expect(order).toContain("needs-attention section")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

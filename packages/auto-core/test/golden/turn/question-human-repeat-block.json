@@ -6,7 +6,7 @@
         "q1",
         [
           [
-            "use postgres"
+            "[re: which db?]\nuse postgres"
           ]
         ]
       ]

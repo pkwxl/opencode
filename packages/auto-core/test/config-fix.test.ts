@@ -4,19 +4,20 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
-import { appendToSection, projectBriefText, renderProjectBrief } from "../src/brief"
+import { appendToSection, briefProposal, projectBriefText } from "../src/brief"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveConfigRecord } from "../src/config"
 import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract, type FixPlan } from "../src/config-fix"
 
 const CONFIG = ".opencode/auto/config.json"
 const BRIEF = ".opencode/auto/brief.md"
 
-// What a plain init leaves behind (outside git, so no .gitignore).
+// What a plain init leaves behind (outside git, so no .gitignore). The stub
+// retired (plans/0081 D11): a plain init writes no brief — the seed is
+// --brief's, the fixture writes one only where a test needs it.
 async function seedInit(dir: string, record: object = CONFIG_DEFAULTS) {
   await saveConfigRecord(dir, record)
   await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
   await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-  await Bun.write(join(dir, BRIEF), renderProjectBrief())
   await ensurePointer(dir)
 }
 
@@ -24,29 +25,43 @@ const readConfig = async (dir: string) => JSON.parse(await Bun.file(join(dir, CO
 const fixable = (plan: FixPlan) => plan.findings.filter((finding) => finding.class === "fixable")
 const manual = (plan: FixPlan) => plan.findings.filter((finding) => finding.class === "manual")
 
-describe("project brief (plans/0052 D9)", () => {
-  test("an untouched stub injects nothing; a filled one injects its text without the hints", async () => {
+describe("project brief (plans/0052 D9; the stub retired by plans/0081 D11)", () => {
+  test("a missing or comment-only brief injects nothing; a seed or a generated brief injects its text", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-brief-"))
     try {
       expect(await projectBriefText(dir)).toBeUndefined()
-      await Bun.write(join(dir, BRIEF), renderProjectBrief())
+      await Bun.write(join(dir, BRIEF), "<!-- only a comment -->\n")
       expect(await projectBriefText(dir)).toBeUndefined()
-      await Bun.write(join(dir, BRIEF), appendToSection(renderProjectBrief(), "## Source", "legacy/pkg"))
-      const text = (await projectBriefText(dir))!
-      expect(text).toContain("## Source\n\nlegacy/pkg")
-      expect(text).not.toContain("<!--")
-      // A brief written by init -p has no headings at all.
+      // A seed (--brief's text, verbatim) has no headings at all.
       await Bun.write(join(dir, BRIEF), "migrate legacy to bun\n")
       expect(await projectBriefText(dir)).toBe("migrate legacy to bun")
+      // A generated brief (the installed ## Project brief proposal).
+      await Bun.write(join(dir, BRIEF), "## Goal\n\nA clean-room reimplementation.\n")
+      const text = (await projectBriefText(dir))!
+      expect(text).toContain("## Goal")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("the stub's hints keep deliverables out of docs/ and .opencode/", () => {
-    const stub = renderProjectBrief()
-    for (const heading of ["## Goal", "## Source", "## Target", "## Constraints"]) expect(stub).toContain(`\n${heading}\n`)
-    expect(stub).toContain("Keep deliverables out of docs/ and\n     .opencode/")
+  test("briefProposal: the survey's ## Project brief section body, or undefined (plans/0081 D15.1)", () => {
+    expect(briefProposal("# Survey\n\nFork: scope?\n")).toBeUndefined()
+    expect(briefProposal("# Survey\n\n## Project brief\n\n\n")).toBeUndefined()
+    const survey = [
+      "# Survey",
+      "",
+      "Fork: scope — core only?",
+      "",
+      "## Project brief",
+      "",
+      "The goal, the reference location and wall kind, the target,",
+      "the constraints that bind every round.",
+      "",
+      "## Environment",
+      "",
+      "e2fsprogs missing.",
+    ].join("\n")
+    expect(briefProposal(survey)).toBe("The goal, the reference location and wall kind, the target,\nthe constraints that bind every round.")
   })
 
   test("appendToSection: end of the section, before the next heading; heading added when absent", () => {
@@ -92,7 +107,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       destDir: "app",
       futureKey: "kept",
     })
-    await Bun.write(join(dir, BRIEF), `${renderProjectBrief()}\nMigrate the parser first.\n`)
+    await Bun.write(join(dir, BRIEF), "Migrate the parser first.\n")
     const plan = await planFix(dir)
     expect(manual(plan)).toEqual([])
     expect(plan.skipped).toBeUndefined()
@@ -107,23 +122,23 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     await applyFix(plan)
     expect(await readConfig(dir)).toEqual({ mode: "migrate", contextLimit: 32, idleTime: 15, idleMax: 60, futureKey: "kept" })
     const brief = await Bun.file(join(dir, BRIEF)).text()
-    expect(brief).toContain("## Source\n\n<!--")
-    expect(brief).toContain("- Source-system directory (relative to the working directory): `legacy`\n- Source-module path (relative to the source-system directory): `pkg`\n\n## Target")
-    expect(brief).toContain("- Migration-target directory (relative to the working directory): `app` — migrated code is written here\n\n## Constraints")
-    expect(brief).toContain("Migrate the parser first.")
+    // The moved keys append their sections to the plain brief (the empty
+    // baseline adds each heading at the end, plans/0081 D11: no stub).
+    expect(brief).toContain("Migrate the parser first.\n\n## Source\n\n- Source-system directory (relative to the working directory): `legacy`\n- Source-module path (relative to the source-system directory): `pkg`\n\n## Target")
+    expect(brief).toContain("- Migration-target directory (relative to the working directory): `app` — migrated code is written here")
     expect(await loadProjectConfig(dir)).toMatchObject({ contextLimit: 32, idleTime: 15, idleMax: 60 })
     // Idempotent: a second pass finds nothing.
     expect((await planFix(dir)).findings).toEqual([])
   })
 
-  test("moving source into a missing brief starts from the stub", async () => {
+  test("moving source into a missing brief starts from empty (plans/0081 D11: no stub, no missing-brief finding)", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, source: { dir: "legacy", path: "pkg" } })
-    await rm(join(dir, BRIEF))
+    await rm(join(dir, BRIEF), { force: true })
     const plan = await planFix(dir)
     expect(plan.findings.map((finding) => finding.path)).toEqual([CONFIG])
     await applyFix(plan)
     const brief = await Bun.file(join(dir, BRIEF)).text()
-    expect(brief.startsWith(renderProjectBrief().split("## Source")[0]!)).toBe(true)
+    expect(brief.startsWith("## Source\n")).toBe(true)
     expect(brief).toContain("`legacy`")
     expect(await readConfig(dir)).not.toHaveProperty("source")
   })
@@ -162,10 +177,10 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(plan.skipped).toBe(".opencode/auto/config.json does not parse")
   })
 
-  test("artifact rules: missing or stale artifacts are rewritten; opencode.json and brief.md only when missing", async () => {
+  test("artifact rules: missing or stale artifacts are rewritten; the brief is never written (plans/0081 D11)", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, testByDriver: true })
     await rm(join(dir, "opencode.json"))
-    await rm(join(dir, BRIEF))
+    await rm(join(dir, BRIEF), { force: true })
     const agents = await Bun.file(join(dir, "AGENTS.md")).text()
     await writeFile(join(dir, "AGENTS.md"), `${agents}\n<!-- opencode-auto:old:start -->\nstale\n<!-- opencode-auto:old:end -->\n`)
     const plan = await planFix(dir)
@@ -173,12 +188,12 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       ".opencode/agent/auto.md: differs from the template rendered for testByDriver = true",
       "AGENTS.md: the opencode-auto block differs from the current config render; 1 legacy/stray opencode-auto marker block(s)",
       "opencode.json: missing",
-      ".opencode/auto/brief.md: missing",
     ])
     await applyFix(plan)
     expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(await renderAgentContract(true))
     expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("opencode-auto:old")
-    expect(await Bun.file(join(dir, BRIEF)).text()).toBe(renderProjectBrief())
+    // A missing brief is no finding and no write: seed it with init/amend --brief.
+    expect(await Bun.file(join(dir, BRIEF)).exists()).toBe(false)
     expect((await planFix(dir)).findings).toEqual([])
     // A person's opencode.json is never compared, only written when missing.
     await writeFile(join(dir, "opencode.json"), '{"model":"mine"}\n')

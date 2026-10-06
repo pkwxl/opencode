@@ -4,6 +4,7 @@
 // Only constructs text, never prints; the loop body owns log(). Pure leaf, no
 // dependency on loop.ts.
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S13, pure move).
+import { reportForUserPath } from "./docpaths"
 import { formatDuration, formatTokens, formatUsageLine } from "./log"
 import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
@@ -292,6 +293,9 @@ export async function roundCompleteLines(
     `■ round ${round} complete: total ${formatDuration(totals.wallMs)} (AI ${formatDuration(totals.aiMs)}${wait}), ` +
       `${phasesPart}${totals.tasks} tasks / ${totals.sessions} sessions`,
     formatUsageLine(totals.usage),
+    // The round's account to the person (plans/0081 D4): the terminal itself
+    // names where to read it.
+    `  round report for the person: ${reportForUserPath(round)}`,
   ]
   // The lanes roll-up follows the tokens line (plans/0068 D13, S4): it
   // qualifies the numbers above it — where the lane usage sits and what the

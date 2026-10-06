@@ -81,6 +81,7 @@ Phase: R-01.P01
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. The task index must have at least one task: even if you conclude there is nothing to do, write one explanatory
    task and state the reason in its task document; producing no valid task causes a blocked shutdown.
 

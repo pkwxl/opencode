@@ -1,6 +1,6 @@
 // Round-close gate (M4.2, plans/0049 G8; root plan D12 ③, 0036 D12, open
 // question 15-⑦ ruled "middle form"): whether a round whose phases are all
-// done may be closed, i.e. whether the next round may start. Three
+// done may be closed, i.e. whether the next round may start. Four
 // checks, all read-only:
 //   1. the whole-tree P1 prohibition scan — the unit close-out scan
 //      (document/process-refs.ts) widened from "lines the unit added" to every
@@ -11,14 +11,24 @@
 //      decisions were restated into the target's own documentation and which
 //      were accepted as lost. The gate checks presence, not content — no
 //      mechanical criterion tells which rationale had to survive.
+//   4. the round user report (plans/0081 D4): docs/R-NN/report-for-user.md
+//      must exist, be non-empty and end with the eof terminator. The check
+//      self-heals before it ever blocks — the final task-bearing phase's
+//      handover appends exactly one report task when the phase completes
+//      without the report (loop-phase.ts, 0079 §4's append pattern, bounded
+//      once) — so a problem here means the self-heal was refused or the
+//      report task itself failed; the message names the file and the phase
+//      that should have planned its task.
 // Two anchors: the complete route reports it on every run (loop-phase.ts), and
 // the next round's start blocks on it: plan's prelude (plan.ts, exit 2,
 // plans/0053 D4). No state is written, so routing stays a pure function of
 // the files.
 import { join } from "node:path"
-import { roundBriefPath } from "./docpaths"
+import { reportForUserPath, roundBriefPath } from "./docpaths"
+import { endsWithEof } from "./doccheck"
 import { processReferenceScan } from "./document/process-refs"
 import { repoRoots, unitAddedLines } from "./git"
+import { readPhases } from "./phases"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
 
 // The build's wall-clock cap: generous for a real target build, but a hung
@@ -63,6 +73,24 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
     problems.push(
       `close listing: ${brief} \`${ROUND_CLOSE_HEADING}\` is empty — list the decisions restated into the target's own documentation and those accepted as lost`,
     )
+  }
+  // 4. The round user report (plans/0081 D4): a durable, human-facing account
+  // of the round. Existence + non-empty + the eof terminator — the driver
+  // reads no content. The message names the round's last task-bearing phase
+  // (the one whose planner should have carried the wrap-up duty), lenient
+  // about an unreadable index.
+  const report = reportForUserPath(round)
+  const reportText = await Bun.file(join(dir, report)).text().catch(() => undefined)
+  if (reportText === undefined || !reportText.trim()) {
+    const state = await readPhases(dir, round).catch(() => undefined)
+    const planner = state?.phases.filter((unit) => unit.entry.hasTasks).at(-1)
+    problems.push(
+      `round report: ${report} is ${reportText === undefined ? "missing" : "empty"} — the person's account of the round` +
+        `${planner ? ` (${planner.id}-${planner.type} should have planned its wrap-up task)` : ""}; ` +
+        `a re-run of run/plan appends one report task automatically, or write it by hand ending with the terminator line`,
+    )
+  } else if (!endsWithEof(reportText)) {
+    problems.push(`round report: ${report} does not end with the terminator line \`<!-- auto: eof -->\` — finish the document and re-run`)
   }
   return { problems, warnings }
 }

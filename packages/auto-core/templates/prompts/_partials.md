@@ -28,9 +28,10 @@ You are carrying out one task of an implementation plan: this session has to fin
 {{doneList}}{{/if}}{{^doneList}}No task in the plan is done yet.{{/if}}
 ## question-rule
 {{#if humanQuestions}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
-   for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), ask with the question tool —
-   a human is attending this planning run and the DRIVER waits for the answer with no timeout; there is no automatic proxy answer, so never decide in the user's place and never leave
-   an `AUTO-RESOLVE` marker in this session. Plain engineering trade-offs that were always yours remain yours, no record required.
+   for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), do not call the question tool —
+   take the recommended option as a provisional default, record the question in the affected task documents (the context, the options with their consequences, the default taken and how
+   to override it), and continue; the round report's needs-attention section lists every such question for the person's considered answer, so a decision is never closed in real time.
+   Plain engineering trade-offs that were always yours remain yours, no record required.
    Asking the same question again after it was answered blocks the task and stops the run.{{/if}}{{^humanQuestions}}{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
@@ -40,6 +41,7 @@ You are carrying out one task of an implementation plan: this session has to fin
    When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on by
    the reply, and once the current stage is finished, move straight on to the next one.
    Asking the same question again blocks the task and stops the run — do not rephrase and re-ask an answered question.{{/if}}{{/if}}
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 ## ground-state
 Authoritative DRIVER ledger state (this is the only basis for the progress of this task and this subtask — never infer whether this task is done from other tasks' documents, handovers or git commit records):
 - Current task: {{taskId}} "{{taskTitle}}", status: {{taskStatusText}};{{#if qualifiedId}}
@@ -66,6 +68,24 @@ docs/T-NNN/S<two-digit index>/index.md, a subtask-level test handover to testhan
 do not create flat task files at the top level of docs/.
 
 
+## report-duty
+This is the round's final phase — the round ends with this phase's work. End the task list with one wrap-up task, titled
+exactly "Round user report", whose deliverable is the round report {{reportFile}} (a round-level artifact: it does not live
+under docs/T-NNN/, and this one task may name and write it there — the placement exception to the doc-layout rule), placed
+after the verdict/consolidation closing task; a FAIL verdict is one of the report's findings, not a reason to skip the report task. The report is written for the
+person who started the run — plain prose, path links, no driver-protocol obligations beyond the closing terminator line
+`<!-- auto: eof -->`. Its charter, which the wrap-up task's document must restate in full (self-contained, as every task
+document must be):
+1. What this round set out to do, in the person's own terms (the project brief, the round brief, the planning input);
+2. What happened, phase by phase: what each phase delivered, its verdict, and headline counts (tasks done / failed /
+   blocked / closed by hand);
+3. **Needs your attention** — the section the whole report exists for: every provisionally-defaulted planning question
+   with its options, implications and override path; open questions and the safe defaults currently in force; the round's
+   AUTO-RESOLVE proxy decisions with enough context to confirm or overturn each; FAIL verdicts and what they mean;
+   environment gaps; recorded deviations and assumption notes; mid-round decisions that belong in the project brief (the next survey folds them in);
+4. Where to look deeper: an artifact index (spec-notes, verdicts, notable task reports), one line each — the report
+   links, it never copies at length.
+
 ## task-depends
 Optional dependency fields, right after the `Phase:` line of a task document: `Depends: T-011, T-012` — the task starts only after those tasks
 are done (this phase's index or completed earlier-phase tasks, by id only); without the field, the task before it in the index (serial order);
@@ -89,24 +109,24 @@ are protocol strings the DRIVER parses — write them verbatim; an empty value, 
 write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — the DRIVER reads that naming family to order handovers, and writing it yourself is misread as a handover that happened. Record test-result interpretations and corrections in this scope's established artifact documents, or leave them for the next handover document.{{/if}}{{/if}}
 ## plan-duties-a
 
-- Establish the source system's and source module's external behaviour, dependencies and boundaries, giving later
-  phases a behaviour baseline; artifacts are anchored per task, written into docs/T-NNN/ (analysis conclusions,
-  dependency lists, etc.).
-- This is the first phase: put the survey plan of the source system as the first batch of tasks.
+- Establish the existing implementation's external behaviour, dependencies and boundaries, where the brief names
+  one, giving later phases a behaviour baseline; artifacts are anchored per task, written into docs/T-NNN/
+  (analysis conclusions, dependency lists, etc.).
+- This is the first phase: put the survey plan of the existing implementation as the first batch of tasks.
 
 ## plan-duties-d
 
-- Complete the module design on the target-system side (interfaces, data structures, adaptation points); design
-  artifacts are anchored per task, written into docs/T-NNN/.
+- Complete the module design of the work this project delivers (interfaces, data structures, integration points);
+  design artifacts are anchored per task, written into docs/T-NNN/.
 
 ## plan-duties-m
 
-- Complete the code migration and rework; artifacts are the source-code changes plus the task reports under
+- Complete the implementation work; artifacts are the source-code changes plus the task reports under
   docs/T-NNN/.
 
 ## plan-duties-t
 
-- Complete the migration/backfill of the test suite, giving the baseline behaviour regression coverage; artifacts
+- Bring the test suite to cover the delivered work, giving the behaviour regression coverage; artifacts
   are the test code plus the task artifacts under docs/T-NNN/.
 
 ## plan-duties-v
@@ -119,6 +139,6 @@ write the same script path into tmp/test.sh once more to re-run it (you may modi
 
 ## plan-duties-k
 
-- Complete the migration-knowledge distillation: the knowledge document is produced by the DRIVER's side-channel
+- Complete the knowledge distillation: the knowledge document is produced by the DRIVER's side-channel
   extraction session at docs/R-NN/P<nn>-knowledge/kb.md (this phase directory's standard artifact for the type, a
   permanent path; this phase does not go through a planning session, no tasks are laid out for it).

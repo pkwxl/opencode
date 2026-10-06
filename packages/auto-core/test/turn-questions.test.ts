@@ -46,7 +46,9 @@ describe("the questions concern (question: the plan-session human policy)", () =
     await expect(drive(ev.question(SESSION, "q1", "which db?"))).resolves.toBe("consumed")
     expect(fx.humanAsks).toEqual([{ timeoutMin: undefined, hint: "no timeout and no automatic answer under plan" }])
     expect(fx.lines).toEqual([`❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\nwhich db?`, "→ human answer: use postgres"])
-    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [["use postgres"]] }])
+    // The reply names the question it answers (plans/0081 D10): a free-text
+    // answer that mismatches an options question is visible in the session.
+    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [["[re: which db?]\nuse postgres"]] }])
     expect(own.autoAnswered).toEqual(["which db?"])
     expect(own.resolves).toEqual([])
   })
@@ -54,7 +56,7 @@ describe("the questions concern (question: the plan-session human policy)", () =
   test("every question of one request gets the human's answer (one answer slot per question)", async () => {
     const { drive, fx } = setup({ opts: { humanQuestions: true }, human: "use postgres" })
     await expect(drive(ev.question(SESSION, "q1", "which db?", "which cache?"))).resolves.toBe("consumed")
-    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [["use postgres"], ["use postgres"]] }])
+    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [["[re: which db? which cache?]\nuse postgres"], ["[re: which db? which cache?]\nuse postgres"]] }])
   })
 
   test("the closed input channel (no human answer): reject, abort and the blocked settle naming the closed input", async () => {
@@ -102,7 +104,7 @@ describe("the questions concern (question: --wait-answer and the fallback auto-a
     await expect(drive(ev.question(SESSION, "q1", Q1))).resolves.toBe("consumed")
     expect(fx.humanAsks).toEqual([{ timeoutMin: 5, hint: "auto-answered on timeout" }])
     expect(fx.lines).toEqual([`❓ received a non-permission question:\n${Q1}`, "→ human answer: backfill the old rows"])
-    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [["backfill the old rows"]] }])
+    expect(fx.questionReplies).toEqual([{ request: "q1", answers: [[`[re: ${Q1}]\nbackfill the old rows`]] }])
     expect(own.resolves).toEqual([])
   })
 

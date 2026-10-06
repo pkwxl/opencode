@@ -98,6 +98,16 @@ const gateTurns = () => (dir: string): TurnScript => {
       }
       return undefined
     }
+    // The round-report self-heal's append (plans/0081 D4): the appended task
+    // is the round's report task, and its session writes the report.
+    if (ctx.text.includes("## Input: the task index as it stands") && ctx.text.includes("Round report self-heal")) {
+      const phaseDir = promptPhaseDir(ctx.text)
+      if (phaseDir) {
+        appendOneTask(dir, phaseDir)
+        writeFileSync(join(dir, phaseDir.split("/").slice(0, 2).join("/"), "report-for-user.md"), "# Round report\n\nThe round's account for the person.\n\n<!-- auto: eof -->\n")
+      }
+      return undefined
+    }
     if (ctx.text.includes("## Input: the task index as it stands")) {
       const phaseDir = promptPhaseDir(ctx.text)
       if (phaseDir) appendOneTask(dir, phaseDir)

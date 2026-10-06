@@ -18,13 +18,16 @@
 //      byte-for-byte comparison: opencode.json is deleted only while its
 //      content equals the template, kept once modified; AGENTS.md only has
 //      the opencode-auto marker block stripped.
-//   5. The project brief holds human intent: it is removed only while it equals
-//      the stub init wrote, a filled brief is kept (plans/0052 D9, DF6).
+//   5. The project brief is never removed (plans/0081 D11): the stub model
+//      and its remove-while-stub rule retired — a brief is either the
+//      person's seed (init/amend --brief) or the analysis phase's generated,
+//      approved brief, and reset cannot tell them from a file worth keeping
+//      by comparison. Delete it by hand if you mean to.
 import { rm, rmdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { removePointer } from "./agents-block"
-import { BRIEF_FILE, renderProjectBrief } from "./brief"
+import { BRIEF_FILE } from "./brief"
 import { removeGitignoreEntries } from "./gitignore"
 
 export type ResetAction = "remove" | "strip" | "rmdir" | "keep"
@@ -63,13 +66,8 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
   const entries: ResetEntry[] = []
 
   if (await fileExists(join(dir, CONFIG_JSON))) entries.push({ path: CONFIG_JSON, action: "remove" })
-  const brief = await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)
-  if (brief !== undefined) {
-    entries.push(
-      brief === renderProjectBrief()
-        ? { path: BRIEF_FILE, action: "remove" }
-        : { path: BRIEF_FILE, action: "keep", reason: "filled in, not the init stub, kept" },
-    )
+  if (await fileExists(join(dir, BRIEF_FILE))) {
+    entries.push({ path: BRIEF_FILE, action: "keep", reason: "the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to" })
   }
   if (await fileExists(join(dir, LEGACY_CONFIG))) entries.push({ path: LEGACY_CONFIG, action: "remove" })
 

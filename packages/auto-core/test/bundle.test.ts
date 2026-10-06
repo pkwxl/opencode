@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
-import { loadIntents, packSubsection } from "../src/intent/load"
+import { loadIntents, packSubsection, planningInputScaffold } from "../src/intent/load"
 import { parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
@@ -184,7 +184,12 @@ describe("bundle sources", () => {
     const files = await resolveIntentBundle("cleanroom")
     expect(files).toBeDefined()
     const bundle = parseIntentBundle(files!)
-    expect(bundle).toMatchObject({ name: "cleanroom", phases: "spec-read,design,implement,test,audit", mode: "cleanroom", stamps: { subtask: "off" } })
+    expect(bundle).toMatchObject({ name: "cleanroom", phases: "survey,spec-read,design,implement,test,audit", mode: "cleanroom", stamps: { subtask: "off" } })
+    // The leading survey phase (plans/0081 D14): the human clarification gate
+    // over the phase directory's survey.md, survey.md its standard artifact.
+    const survey = bundle.types.find((entry) => entry.type === "survey")
+    expect(survey).toMatchObject({ gates: ["human"] })
+    expect(survey!.phaseArtifacts.map((spec) => spec.path)).toEqual(["survey.md"])
     // The load-bearing pack subsections survive wholesale pack replacement:
     // the result line (the verdict the driver parses), the process-reference
     // rule (the P1 scan's explanation), and the repair duties the bounded
@@ -201,6 +206,31 @@ describe("bundle sources", () => {
       expect(packSubsection(pack, "phaseDuties", "audit")).toBeDefined()
       expect(loadModes(dir).cleanroom?.exec).toContain("never access")
       expect(loadPhaseTypes(dir).find((entry) => entry.type === "audit")).toMatchObject({ gates: ["verdict"] })
+      // The generalized wall (plans/0081 D8): both wall kinds named in the
+      // mode, the verify-plan charter judging prompts against the declared
+      // kind. The scaling clause (D9) floors the spec-read concerns in both
+      // carriers (the pack's section and the phase file's duties).
+      // Line-wrap-independent: the init names both wall kinds and the
+      // platform boundary clause (D8).
+      const modeInit = loadModes(dir).cleanroom!.init.replaceAll("\n", " ")
+      expect(modeInit).toContain("layout separation (the reference lives outside the worktrees the clean rooms use)")
+      expect(modeInit).toContain("rule separation (a shared tree, with the reference's paths quarantined")
+      expect(modeInit).toContain("names the platform boundary — the parts of the shared tree the clean rooms may still read")
+      const modeExec = loadModes(dir).cleanroom!.exec.replaceAll("\n", " ")
+      expect(modeExec).toContain("Layout separation")
+      expect(modeExec).toContain("Rule separation")
+      expect(modeExec).toContain("platform boundary")
+      expect(packSubsection(pack, "guarantees", "verify-plan")).toContain("wall kind")
+      expect(packSubsection(pack, "guarantees", "verify-plan")).toContain("quarantined")
+      for (const carrier of [packSubsection(pack, "phaseDuties", "spec-read")!, loadPhaseTypes(dir).find((entry) => entry.type === "spec-read")!.planDuties!]) {
+        const flat = carrier.replaceAll("\n", " ").replace(/  +/g, " ")
+        expect(flat).toContain("a floor, not a ceiling")
+        expect(flat).toContain("every feature area of the reference is assigned to exactly one task")
+        expect(flat).toContain("coverage/accounting task")
+      }
+      // The pack ships its own planning-input scaffold (D12.1): the fallback
+      // never needs the default pack's.
+      expect(planningInputScaffold(loadIntents(dir), "cleanroom")).toContain("The reference and its wall")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -220,19 +250,19 @@ describe("bundle sources", () => {
     for (const name of ["faithful", "faithful-lean"] as const) {
       const files = await resolveIntentBundle(name)
       expect(files).toBeDefined()
-      expect(Object.keys(files!).sort()).toEqual(["bundle.json", `intents/${name}.md`, `modes/${name}.md`])
+      expect(Object.keys(files!).sort()).toEqual(["bundle.json", `intents/${name}.md`, `modes/${name}.md`, "phases/survey.md"])
       const bundle = parseIntentBundle(files!)
       // The builtin skeleton: the comma form of the five builtin ids, no
       // custom phase types shipped, the off subtask stamp (flipped from
       // ondemand 2026-10-05, matching the run default), the mode named like
       // the bundle.
-      expect(bundle).toMatchObject({ name, phases: "analysis,design,implement,test,acceptance", mode: name, stamps: { subtask: "off" } })
-      expect(bundle.types).toEqual([])
-      expect(bundle.files.phases).toEqual({})
+      expect(bundle).toMatchObject({ name, phases: "survey,analysis,design,implement,test,acceptance", mode: name, stamps: { subtask: "off" } })
+      expect(bundle.types.map((entry) => entry.type)).toEqual(["survey"])
+      expect(bundle.files.phases).toEqual({ survey: expect.stringContaining("Fork:") })
       const dir = tempDir()
       try {
         const written = await materializeIntentBundle(dir, bundle)
-        expect(written.sort()).toEqual([`.opencode/auto/intents/${name}.md`, `.opencode/auto/modes/${name}.md`].sort())
+        expect(written.sort()).toEqual([`.opencode/auto/intents/${name}.md`, `.opencode/auto/modes/${name}.md`, ".opencode/auto/phases/survey.md"].sort())
         // The pack resolves by the config's intent selection key.
         expect(promptFacts({ dir, intent: name }).pack.name).toBe(name)
         const pack = loadIntents(dir)[name]!
@@ -255,10 +285,10 @@ describe("bundle sources", () => {
         // The mode lands as any hand-dropped file would: the exec anchor the
         // whole/subtask asserts pin.
         expect(loadModes(dir)[name]?.exec).toContain(FAITHFUL_ANCHORS[name].mode)
-        // A materialized project adds no phase types: the builtin registry
-        // already resolves the stamped sequence.
-        expect(loadPhaseTypes(dir).some((entry) => entry.origin === "project")).toBe(false)
-        expect(resolvePhases("analysis,design,implement,test,acceptance")).not.toBeNull()
+        // A materialized project adds exactly the survey type (plans/0081
+        // D14); the builtin registry resolves the rest of the sequence.
+        expect(loadPhaseTypes(dir).filter((entry) => entry.origin === "project").map((entry) => entry.type)).toEqual(["survey"])
+        expect(resolvePhases("survey,analysis,design,implement,test,acceptance", loadPhaseTypes(dir))).not.toBeNull()
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }

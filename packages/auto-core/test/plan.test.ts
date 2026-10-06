@@ -59,7 +59,9 @@ async function listTasks(dir: string, phase: PhaseUnit, tasks: Array<[string, bo
   }
 }
 
-// A round whose phases are all done, each with one done task.
+// A round whose phases are all done, each with one done task — and the round
+// report the close gate requires (plans/0081 D4; a run would self-heal one
+// through an appended report task, the fixture writes it directly).
 async function completeRound(dir: string, phases: string) {
   await establishRound(dir, { phases })
   let n = 1
@@ -67,6 +69,8 @@ async function completeRound(dir: string, phases: string) {
     if (phase.entry.hasTasks) await listTasks(dir, phase, [[`T-00${n++}`, true]])
     await completePhase(dir, phase)
   }
+  const round = await currentRound(dir)
+  writeFileSync(join(dir, "docs", `R-${String(round).padStart(2, "0")}`, "report-for-user.md"), "# Round report\n\nAll done.\n\n<!-- auto: eof -->\n")
 }
 
 const FILLED_CLOSE = "# Round R-01\n\n## Close\n\n- Restated: the retry policy, in src/net/README.md.\n- Accepted as lost: none.\n"
@@ -80,6 +84,7 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
         type: "stop",
         code: 0,
         lines: [
+          "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
           "✓ round R-01 established: P01-analysis, P02-implement",
           "next (round-start gate): review the round setup, fill in docs/R-01/round.md (goal, acceptance and release criteria), and commit it; " +
             `then run: opencode-auto plan ${dir} to plan R-01.P01 analysis (or run to plan and execute)`,
@@ -98,6 +103,7 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
         type: "stop",
         code: 0,
         lines: [
+          "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
           "✓ round R-01 established: single phase P01-implement",
           "next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, " +
             `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
@@ -134,7 +140,11 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
       writeFileSync(join(dir, "docs/R-01/round.md"), FILLED_CLOSE)
       const result = await planPrelude(dir, { phases: "am", build: "true" })
       expect(result.type === "stop" && result.code).toBe(0)
-      expect(result.type === "stop" && result.lines.slice(0, 2)).toEqual(["✓ round close checks passed", "✓ round R-02 established: P01-analysis, P02-implement"])
+      expect(result.type === "stop" && result.lines.slice(0, 3)).toEqual([
+        "✓ round close checks passed",
+        "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
+        "✓ round R-02 established: P01-analysis, P02-implement",
+      ])
       expect(await currentRound(dir)).toBe(2)
       expect(await exists(dir, "docs/R-02/phases.md")).toBe(true)
     }),

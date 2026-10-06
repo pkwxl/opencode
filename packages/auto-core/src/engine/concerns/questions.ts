@@ -40,6 +40,15 @@ const raise = (request: string, question: string, session: string): void =>
 const settle = (request: string, session: string, by: QuestionSettlement, answer?: string): void =>
   emitStatus({ type: "question-answered", by, request, session, ...(answer !== undefined ? { answer } : {}) })
 
+// The relayed human answer names the question it answers (plans/0081 D10):
+// the reply the session reads carries the question beside the answer, so a
+// free-text answer that mismatches an options question is visible instead of
+// being silently applied to the wrong fork. Driver auto-answers need no name —
+// the driver composed them against the question itself.
+function answerNamingQuestion(question: string, answer: string): string {
+  return `[re: ${compactText(question)}]\n${answer}`
+}
+
 export const questionsConcern: Concern<"questions"> = {
   name: "questions",
   initial: (): TurnState["questions"] => ({ autoAnswered: [], resolves: [] }),
@@ -68,7 +77,7 @@ export const questionsConcern: Concern<"questions"> = {
           if (human) {
             fx.log(`→ human answer: ${human}`)
             settle(event.request, ctx.sessionID, "human", human)
-            await fx.replyQuestion(event.request, event.questions.map(() => [human]))
+            await fx.replyQuestion(event.request, event.questions.map(() => [answerNamingQuestion(text, human)]))
             return "consumed"
           }
         }
@@ -98,7 +107,7 @@ export const questionsConcern: Concern<"questions"> = {
         // The run's switches, frozen in the context when the turn started.
         const ask = ctx.switches.ask
         const fallback = autoAnswer(ask)
-        const reply = human ?? fallback
+        const reply = human === undefined ? fallback : answerNamingQuestion(text, human)
         // The settlement: a human reply, a wait that expired into the
         // fallback, or the driver answering outright (no wait configured).
         settle(event.request, ctx.sessionID, human ? "human" : waitAnswer > 0 ? "timeout" : "driver", human ?? undefined)

@@ -6,20 +6,37 @@
 import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
+import { briefProposal, BRIEF_FILE } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
+import { reportForUserPath } from "./docpaths"
+import { allowWrite, reprotect } from "./protect"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
-import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, phaseVerdictDoc, routePhase, type PhaseUnit } from "./phases"
+import {
+  CLARIFIED_MARK,
+  completePhase,
+  phaseAcceptanceDoc,
+  phaseGateProblems,
+  phaseGates,
+  phaseHandoverDoc,
+  phaseKey,
+  phaseSurveyDoc,
+  phaseVerdictDoc,
+  routePhase,
+  type PhaseUnit,
+} from "./phases"
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
+
 import { renderPhaseHandover } from "./prompt"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
 import { promptFacts } from "./prompt-facts"
+import { REPORT_TASK_TITLE, reportAppendInput } from "./round-report"
 import { emitStatus } from "./run-status"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
@@ -151,7 +168,18 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // them through the handover-complete skip above, no longer relying on
   // session recovery.
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
-  const gated = await completePhase(directory, phase, gates)
+  // The round-report self-heal (plans/0081 D4) runs before the completion
+  // rename, only with every gate passing: a report task appended under a
+  // held gate would run before the phase may complete anyway. completePhase
+  // re-checks the gates it renames through; nothing moves between the two
+  // reads (the driver alone writes here).
+  const preGate = await phaseGateProblems(directory, phase, gates)
+  if (!preGate.length) {
+    const healed = await ensureRoundReport(ctx, phase, state)
+    if (healed === 0) return 0
+    if (healed === 2) return 2
+  }
+  const gated = preGate.length ? preGate : await completePhase(directory, phase, gates)
   if (gated.length) {
     // The repair round (plans/0079 §4): a held verdict gate with budget left
     // appends repair tasks over the gate evidence instead of stopping — the
@@ -181,6 +209,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     logGateStop(directory, phase, gated, acceptance)
     return 2
   }
+  // The survey release's other half (plans/0081 D15.2): the person's
+  // `Clarified: yes` approved the proposed `## Project brief` section with
+  // the forks — the driver installs it now, its own commit through protect.
+  if (gates.includes("human")) await installApprovedBrief(ctx, phase)
   // The phase's unit transition (P2b, src/run-status.ts): completePhase's
   // rename (todo.md → done.md inside the phase directory) is the fact; this
   // is the push of the same fact, keyed by the qualified phase id the stats
@@ -223,10 +255,19 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
 // distillation after the fix tasks.
 function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
   const { bin } = shellProfile()
+  const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
   const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
-  log(`⏸ phase ${phaseTitle(phase)} ${waiting ? "awaits acceptance" : "is held by its gate"}:`)
+  log(`⏸ phase ${phaseTitle(phase)} ${awaiting ? "awaits your clarification" : waiting ? "awaits acceptance" : "is held by its gate"}:`)
   for (const problem of problems) log(`  ${problem}`)
   const handover = phaseHandoverDoc(phase)
+  if (awaiting) {
+    // The human gate (plans/0081 D14.3): a designed awaiting-person pause, the
+    // acceptance gate's control point — done.md waits, and the person's
+    // release simultaneously approves the proposed project brief (D15.2).
+    const survey = phaseSurveyDoc(phase)
+    log(`  to release: review ${survey}, resolve the recorded forks (append your answers beside them, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
+    log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
+  }
   if (acceptance) {
     log(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
   }
@@ -235,6 +276,84 @@ function logGateStop(directory: string, phase: PhaseUnit, problems: string[], ac
       `(the stale handover is removed and distilled again after them)`,
   )
   log(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
+}
+
+// The brief install on survey release (plans/0081 D15.2): the person's
+// `Clarified: yes` approves the forks and the proposed `## Project brief`
+// section in one act — on release the driver installs that section verbatim
+// into .opencode/auto/brief.md, one mechanical copy, a driver-exclusive
+// write through protect (D6c), its own commit. Idempotent: an installed
+// equal brief writes nothing. A survey released without a proposal installs
+// nothing (the seed, an earlier install or the default path's `a`-phase
+// proposal remain the brief's sources).
+async function installApprovedBrief(ctx: LoopCtx, phase: PhaseUnit): Promise<void> {
+  const survey = phaseSurveyDoc(phase)
+  const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
+  const proposal = briefProposal(text)
+  if (proposal === undefined) return
+  const target = join(ctx.directory, BRIEF_FILE)
+  if ((await Bun.file(target).text().catch(() => "")) === `${proposal}\n`) return
+  await allowWrite(target)
+  await Bun.write(target, `${proposal}\n`)
+  await reprotect(target)
+  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
+    stage: "brief-install",
+    subject: `PLAN brief install the approved project brief (${phaseTitle(phase)})`,
+  })
+  if (!settled.ok) {
+    log(
+      `⚠ the approved project brief was written to ${BRIEF_FILE} but its commit failed: ` +
+        `${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Commit manually and re-run`,
+    )
+    return
+  }
+  log(`✓ approved project brief installed: ${survey} \`${briefProposalHeading()}\` section → ${BRIEF_FILE}`)
+}
+
+// The heading the install names in its log line (briefProposal's own).
+function briefProposalHeading(): string {
+  return "## Project brief"
+}
+
+// The round-report self-heal (plans/0081 D4, §7 A2): when the round's final
+// task-bearing phase is about to complete and docs/R-NN/report-for-user.md
+// does not exist or is empty, the driver appends exactly one report task
+// through the existing append machinery (0079 §4's held-verdict append
+// pattern) — which also carries legacy rounds whose final phase was planned
+// before the duty landed and a planner that skipped it. Bounded once: a task
+// with the mandated title already in the index (this round's earlier heal,
+// or the planner's own wrap-up task) never appends again — a report task
+// that ran without producing the report is the round-close gate's to block.
+// Returns 0 = a report task was appended (the loop re-derives the execute
+// route), 1 = nothing to do (not the final phase, the report stands, or the
+// bound holds), 2 = the append failed.
+async function ensureRoundReport(ctx: LoopCtx, phase: PhaseUnit, state: Awaited<ReturnType<typeof phaseState>>): Promise<number> {
+  const last = state.phases.at(-1)
+  if (last === undefined || last.id !== phase.id || !phase.entry.hasTasks) return 1
+  const report = reportForUserPath(state.round)
+  const existing = await Bun.file(join(ctx.directory, report)).text().catch(() => undefined)
+  if (existing !== undefined && existing.trim()) return 1
+  const plan = await loadPlan(ctx.directory, phase).catch(() => undefined)
+  if (plan?.tasks.some((task) => task.title === REPORT_TASK_TITLE)) return 1
+  // The durable once-per-round bound: a previous self-heal's append left its
+  // input in the phase's plan-input.md (an append overwrites the file, so a
+  // later append that replaced it simply re-arms the heal — but two heals in
+  // a row cannot happen). A planner that will not comply stops here and the
+  // round-close gate blocks for the human instead of looping.
+  const priorHeal = (await Bun.file(join(ctx.directory, planInputPath(phase))).text().catch(() => "")).includes("Round report self-heal")
+  if (priorHeal) {
+    log(`⏸ the round report ${report} is still missing after one report-task append; the phase completes and the round-close gate will block — write the report by hand (ending with the terminator line) or re-plan`)
+    return 1
+  }
+  log(`↻ the round's final phase is completing without ${report}; appending one report task (the person's account of the round, plans/0081 D4)`)
+  ctx.input = { text: reportAppendInput(state.round) }
+  const code = await appendPlan(ctx, phase)
+  ctx.input = undefined
+  if (code !== 0) {
+    log(`⏸ the report-task append did not complete (exit ${code}); handle what it reported and re-run — the phase stays open until the report exists`)
+    return 2
+  }
+  return 0
 }
 
 // the phase loop (D.1; the no-phase mode runs this loop too, plans/0047 L2):
@@ -448,8 +567,17 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // src/phases/custom.ts), so the session choice needs no generalization.
       if (!route.phase.entry.hasTasks) {
         banner("k knowledge distillation: migration knowledge capture")
-        const extracted = await extractKnowledge(serverHandle, directory, sessionOpts(ctx, { site: "knowledge" }), route.phase)
-        if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)
+        // The round report (plans/0081 D6b): when this knowledge phase is the
+        // round's last, the one session writes two artifacts — kb.md
+        // machine-facing, docs/R-NN/report-for-user.md human-facing — and
+        // both are hard requirements (D5: the user report is unconditional).
+        const knowState = await phaseState(directory)
+        const knowLast = knowState.phases.at(-1)
+        const report = knowLast && knowLast.id === route.phase.id ? reportForUserPath(knowState.round) : undefined
+        const extracted = await extractKnowledge(serverHandle, directory, sessionOpts(ctx, { site: "knowledge" }), route.phase, {
+          ...(report !== undefined ? { report } : {}),
+        })
+        if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}${report !== undefined ? ` and the round report ${report}` : ""}`)
         else if (extracted.type === "skipped") log(`↻ migration knowledge document already produced (${extracted.file}); skipping extraction, going straight to handover`)
         else if (extracted.type === "dirty") {
           // dirty (plans/0021-commit-boundary-design.md ④ generalization): an
@@ -461,6 +589,13 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
           for (const file of extracted.files) log(`  ${file}`)
           return 2
         } else {
+          if (report !== undefined) {
+            // The report is a completion requirement of a k-final round
+            // (plans/0081 D5): unlike kb.md alone, a round without its report
+            // does not close, so the failure blocks instead of warning.
+            log(`⏸ migration knowledge capture incomplete and the round report ${report} was not produced; the round cannot close without it. Block details:\n${extracted.question}`)
+            return 2
+          }
           log(
             `⚠ migration knowledge capture incomplete (knowledge_extraction_error); exit code unaffected, the k phase hands over as usual; ` +
               `fix the issue, then retry separately per the manual rollback procedure (rename the knowledge phase's done.md back to todo.md and delete its kb.md). Block details:\n${extracted.question}`,

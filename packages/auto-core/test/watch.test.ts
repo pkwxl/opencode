@@ -696,7 +696,8 @@ describe("proxy-answer ledger wiring (AUTO-RESOLVE, T-005)", () => {
       { pct: 100, used: 0, at: 0 },
     )
     expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
-    expect(calls.replies[0]).toBe("go with plan A")
+    // The relayed answer names the question it answers (plans/0081 D10).
+    expect(calls.replies[0]).toEndWith("\ngo with plan A")
   })
 
   test("dryrun preflight session: the auto-answer reply goes out, but nothing is booked (the preflight only probes permissions)", async () => {

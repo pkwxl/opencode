@@ -7,12 +7,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadProjectConfig } from "../src/config"
 import { acceptanceMark, p1Scope, roleOf } from "../src/document/roles"
-import { completePhase, establishRound, phaseGates, readPhases } from "../src/phases"
+import { clarifiedMark, completePhase, establishRound, phaseGateProblems, phaseGates, readPhases, surveyForks } from "../src/phases"
 import { renderPhaseHandover } from "../src/prompt"
 import { renderPhasePlan } from "../src/prompt-plan"
 import { closeSection, renderRoundBrief, roundBriefText } from "../src/round-brief"
 import { roundCloseLines, roundCloseProblems } from "../src/round-close"
 import { phaseType, planDutiesPartial } from "../src/phases/registry"
+import { parsePhaseTypeFile } from "../src/phases/custom"
 import { promptFacts } from "../src/prompt-facts"
 import { renderText } from "../src/template"
 
@@ -145,6 +146,13 @@ describe("phase gates in completePhase (plans/0049 G7)", () => {
 })
 
 describe("round-close gate (plans/0049 G8)", () => {
+  // The round user report's passing shape (plans/0081 D4): non-empty and
+  // eof-terminated at docs/R-NN/report-for-user.md.
+  const writeReport = (dir: string, round: number, text = `# Round report\n\nWhat happened.\n\n<!-- auto: eof -->\n`) => {
+    mkdirSync(join(dir, "docs", `R-${String(round).padStart(2, "0")}`), { recursive: true })
+    writeFileSync(join(dir, "docs", `R-${String(round).padStart(2, "0")}`, "report-for-user.md"), text)
+  }
+
   test(
     "empty close listing and a process reference in the deliverable are problems; .gitignore's .auto/ is not",
     withDir(async (dir) => {
@@ -153,6 +161,7 @@ describe("round-close gate (plans/0049 G8)", () => {
       mkdirSync(join(dir, "src"), { recursive: true })
       writeFileSync(join(dir, "src/lib.rs"), "// see docs/T-004/report.md for the reason\nfn main() {}\n")
       writeFileSync(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      writeReport(dir, 1)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const close = await roundCloseProblems(dir, 1)
@@ -170,6 +179,7 @@ describe("round-close gate (plans/0049 G8)", () => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
       writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      writeReport(dir, 1)
       writeFileSync(join(dir, "main.c"), "int main(void) { return 0; }\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
@@ -188,6 +198,7 @@ describe("round-close gate (plans/0049 G8)", () => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
       writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      writeReport(dir, 1)
       mkdirSync(join(dir, "test/fixtures"), { recursive: true })
       writeFileSync(join(dir, "test/fixtures/sample.md"), "a sample task record: docs/T-004/report.md\n")
       await git(dir, "add", "-A")
@@ -205,11 +216,100 @@ describe("round-close gate (plans/0049 G8)", () => {
       await gitRepo(dir)
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
       writeFileSync(join(dir, "notes.txt"), "state lives in .auto/progress.json\n")
+      writeReport(dir, 1)
       const close = await roundCloseProblems(dir, 1, { build: "true" })
       expect(close.problems.map((problem) => problem.split(":")[0])).toEqual(["process reference", "close listing"])
       expect(close.problems[1]).toBe("close listing: docs/R-01/round.md is missing")
     }),
   )
+
+  // The fourth check (plans/0081 D4): the round report must exist, be
+  // non-empty and end with the eof terminator; the missing message names the
+  // file and the last task-bearing phase that should have planned the task.
+  test(
+    "the round user report: missing, empty or unterminated is a blocking problem naming the path and the phase (plans/0081 D4)",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      await establishRound(dir, { phases: "am" })
+      writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round")
+      const missing = await roundCloseProblems(dir, 1)
+      expect(missing.problems).toEqual([
+        "round report: docs/R-01/report-for-user.md is missing — the person's account of the round (P02-implement should have planned its wrap-up task); a re-run of run/plan appends one report task automatically, or write it by hand ending with the terminator line",
+      ])
+      writeReport(dir, 1, "   \n")
+      const empty = await roundCloseProblems(dir, 1)
+      expect(empty.problems[0]).toContain("docs/R-01/report-for-user.md is empty")
+      writeReport(dir, 1, "# Round report\n\nNeeds your attention: nothing yet.\n")
+      const unterminated = await roundCloseProblems(dir, 1)
+      expect(unterminated.problems[0]).toContain("does not end with the terminator line")
+      writeReport(dir, 1)
+      expect((await roundCloseProblems(dir, 1)).problems).toEqual([])
+    }),
+  )
+})
+
+describe("the human clarification gate (plans/0081 D14.3)", () => {
+  // A survey-type phase entry parsed like a bundle's phases/survey.md.
+  const survey = parsePhaseTypeFile(
+    "survey",
+    "# Survey\n\nGate: human\nPhase-artifacts: survey.md\n\n## plan duties\n\nInventory-level reading.\n",
+  )
+
+  test("Gate: human parses (the third PHASE_GATES kind) with survey.md its standard artifact", () => {
+    expect(survey.gates).toEqual(["human"])
+    expect(survey.phaseArtifacts.map((spec) => spec.path)).toEqual(["survey.md"])
+  })
+
+  test("surveyForks / clarifiedMark: list-marker forks count; the whole-line release mark", () => {
+    const text = ["# Survey", "", "Fork: the journal — reimplement or stub it?", "- Fork: parity depth — core only or full?", "    * Fork: platform boundary — where does it sit?", "", "Forks: none (the other posture).", "Clarified: no"].join("\n")
+    expect(surveyForks(text)).toBe(3)
+    expect(surveyForks("Forks: none\n")).toBe(0)
+    expect(clarifiedMark(text)).toBe(false)
+    expect(clarifiedMark("reviewed.\n\nClarified: yes\n")).toBe(true)
+    expect(clarifiedMark("Clarified: yes, mostly")).toBe(false)
+  })
+
+  test("a missing survey.md is a gate problem, never a silent pass (§7 A6)", async () => {
+    await withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const phase = (await readPhases(dir))!.phases[0]!
+      expect(await phaseGateProblems(dir, phase, ["human"])).toEqual([
+        "clarification: docs/R-01/P01-implement/survey.md is missing — the survey must exist before the phase can complete",
+      ])
+    })
+  })
+
+  test("zero Fork: lines completes the phase like an ungated one", async () => {
+    await withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const phase = (await readPhases(dir))!.phases[0]!
+      // Zero forks (the `Forks: none` posture): pass through, no gate wait.
+      await Bun.write(join(dir, phase.dir, "survey.md"), "# Survey\n\nThe map.\n\nForks: none\n")
+      expect(await phaseGateProblems(dir, phase, ["human"])).toEqual([])
+      expect(await completePhase(dir, phase, ["human"])).toEqual([])
+      expect(await Bun.file(join(dir, phase.dir, "done.md")).exists()).toBe(true)
+    })
+  })
+
+  test("at least one Fork: line holds the phase open until the person's Clarified: yes", async () => {
+    await withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const phase = (await readPhases(dir))!.phases[0]!
+      const doc = join(dir, phase.dir, "survey.md")
+      await Bun.write(doc, "# Survey\n\nFork: scope — core only?\nFork: depth — full parity?\n")
+      const held = await completePhase(dir, phase, ["human"])
+      expect(held).toEqual([
+        "clarification: docs/R-01/P01-implement/survey.md records 2 open Fork: line(s) — awaiting the person (add `Clarified: yes` to release the phase)",
+      ])
+      expect(await Bun.file(join(dir, phase.dir, "done.md")).exists()).toBe(false)
+      // The release line completes the phase in one act (D15.2's approval).
+      await Bun.write(doc, "# Survey\n\nFork: scope — core only?\n\nClarified: yes\n")
+      expect(await completePhase(dir, phase, ["human"])).toEqual([])
+      expect(await Bun.file(join(dir, phase.dir, "done.md")).exists()).toBe(true)
+    })
+  })
 })
 
 describe("config keys acceptanceGate / build (plans/0049 G9)", () => {

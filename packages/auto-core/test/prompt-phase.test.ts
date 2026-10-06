@@ -62,11 +62,14 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
 
   test("brief missing → the not-provided paragraph; per-phase duties inject conditionally (task anchoring; k is the permanent-path knowledge document)", () => {
     const missing = phasePlan({ phase: L("d") })
-    expect(missing).toContain("Not provided (brief.md missing or empty)")
+    // The fallback names the seed channels (plans/0081 D11.3), never an ask.
+    expect(missing).toContain("Not provided (no project brief yet")
+    expect(missing).toContain("init --brief <one line>")
+    expect(missing).not.toContain("ask a human")
     expect(missing).toContain("module design")
     expect(missing).not.toContain("behaviour baseline")
-    expect(phasePlan({ phase: L("m") })).toContain("code migration and rework")
-    expect(phasePlan({ phase: L("t") })).toContain("regression coverage")
+    expect(phasePlan({ phase: L("m") })).toContain("Complete the implementation work")
+    expect(phasePlan({ phase: L("t") })).toContain("cover the delivered work")
     expect(phasePlan({ phase: L("v") })).toContain("overall acceptance")
     expect(phasePlan({ phase: L("k") })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
   })
@@ -79,7 +82,7 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     expect(text.indexOf("## Input: round brief")).toBeLessThan(text.indexOf("## Input: planning input"))
     expect(text.indexOf("## Input: planning input")).toBeLessThan(text.indexOf("## Phase duties"))
     for (const input of [undefined, " \n"]) {
-      expect(phasePlan({ phase: L("m"), input, inputPath })).not.toContain("planning input")
+      expect(phasePlan({ phase: L("m"), input, inputPath })).not.toContain("## Input: planning input")
     }
   })
 
@@ -102,13 +105,14 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
       phase: L("a"),
       prevRound: "### Previous round (round 1) phase directory index (docs/R-01/)\n\n- docs/R-01/P01-implement/",
     })
-    expect(text).toContain("prior-round migration conclusions (continuation round)")
+    expect(text).toContain("prior-round conclusions (continuation round)")
+    expect(text).toContain("full phased round of work")
     expect(text).toContain("fuller agreement")
     expect(text).toContain("do not redo finished work")
     expect(text).toContain("permanent path")
     expect(text).toContain("- docs/R-01/P01-implement/")
     // Not a continuation round (no prevRound): the conclusions block disappears entirely
-    expect(phasePlan({ phase: L("a") })).not.toContain("prior-round migration conclusions")
+    expect(phasePlan({ phase: L("a") })).not.toContain("prior-round conclusions")
   })
 
   test("m phase injects the pipeline-trimming note via trimmedPhases (--phases trimming → the survey-design work merges into the first batch of tasks, the safety-net floor is not skipped); the default and the other phases lack it", () => {
@@ -126,7 +130,7 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     const bare = phasePlan({ phase: L("m") })
     expect(bare).not.toContain("migration-source")
     expect(bare).not.toContain("migration-target")
-    expect(bare).toContain("Not provided (brief.md missing or empty). Proceed by the phase duties")
+    expect(bare).toContain("Not provided (no project brief yet")
   })
 
   test("no verify field or acceptance-execution-right wording (verify retired, m phase)", () => {
@@ -165,6 +169,37 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     expect(text).not.toContain("code migration and rework")
     expect(text).not.toMatch(/\{\{|\}\}/)
     expect(renderPhaseHandover(facts, { phase: custom, handover: "docs/R-01/P02-security-review/handover.md" })).toContain("Security review")
+  })
+})
+
+describe("renderPhasePlan finalPhase (the round report duty, plans/0081 D2/D3)", () => {
+  const charter = [
+    "This is the round's final phase",
+    '"Round user report"',
+    "docs/R-01/report-for-user.md",
+    "Needs your attention",
+    "provisionally-defaulted planning question",
+    "environment gaps",
+    "an artifact index",
+    "never copies at length",
+  ]
+  test("present: the report-duty partial renders beside the phase duties, carrying the D3 charter in full", () => {
+    const text = phasePlan({ phase: L("v"), finalPhase: true, reportFile: "docs/R-01/report-for-user.md" })
+    for (const marker of charter) expect(text, marker).toContain(marker)
+    // Beside the duties, after them (the placement exception stated).
+    expect(text.indexOf("overall acceptance")).toBeLessThan(text.indexOf("This is the round's final phase"))
+    expect(text).toContain("does not live\nunder docs/T-NNN/")
+  })
+  test("absent: a non-final phase renders nothing of the duty", () => {
+    const text = phasePlan({ phase: L("v") })
+    for (const marker of ['"Round user report"', "This is the round's final phase", "Needs your attention"]) {
+      expect(text, marker).not.toContain(marker)
+    }
+  })
+  test("the m-mode implement plan carries the duty (the implicit round's single phase is final)", () => {
+    const text = implementPlan({ content: "the input", round: 1 })
+    for (const marker of charter) expect(text, marker).toContain(marker)
+    expect(implementPlan({ content: "the input" })).not.toContain("Round user report")
   })
 })
 
@@ -266,7 +301,7 @@ describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D2
     expect(text).toContain("Fill in the lexical fallback first.")
     expect(text).toContain("scenario-mode preamble (migrate)")
     expect(text).toContain("prior-phase handovers")
-    expect(text).toContain("code migration and rework")
+    expect(text).toContain("Complete the implementation work")
     // Task-unit format protocol (tier-1 markers) and the append wording
     for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P02", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
       expect(text).toContain(marker)
@@ -449,8 +484,9 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
     expect(text).toContain("docs/R-NN/P<nn>-<type>/handover.md")
     expect(text).toContain("docs/R-NN/P<nn>-<type>/")
     expect(text).toContain("git log")
-    // Section skeleton (this repository's take on spec §13; Design Deviations instead sources AUTO-DECISION)
-    for (const section of ["## Migration summary", "## API and type mapping", "## Implementation patterns", "## Pitfalls and edge cases", "## Reusable rules", "## Design deviations and key decisions", "## Verification evidence", "## References"]) {
+    // Section skeleton (this repository's take on spec §13; Design Deviations instead sources AUTO-DECISION) —
+    // work-type-neutral since plans/0081 D7.
+    for (const section of ["## Work summary", "## API and type mapping", "## Implementation patterns", "## Pitfalls and edge cases", "## Reusable rules", "## Design deviations and key decisions", "## Verification evidence", "## References"]) {
       expect(text).toContain(section)
     }
     expect(text).toContain("AUTO-DECISION")
@@ -460,7 +496,8 @@ describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --ext
     expect(text).toContain("Do not copy session dialogue")
     expect(text).toContain("verifiable anchor")
     expect(text).toContain('labelled "rejected"')
-    expect(text).toContain("the only file you may write this time is " + FILE)
+    expect(text).toContain(`the only file(s) you may write this time are ${FILE}; do not`)
+    expect(text).not.toContain("[re:")
     // 0072 U-B/T-131: the state-rule restatement (state files / commits)
     // retired from the prompt; the AGENTS.md block owns both wordings
     expect(text).not.toContain("maintained by the DRIVER")
@@ -610,7 +647,8 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
 
   test("absent both, the core shared partial renders (rendered through the active library, overlays apply)", () => {
     withPack("# default\n", (facts) => {
-      expect(planDutyText(facts, L("m"))).toContain("code migration and rework")
+      // Work-type-neutral core wording since plans/0081 D7.
+      expect(planDutyText(facts, L("m"))).toContain("Complete the implementation work")
       expect(planDutyText(facts, L("a"))).toContain("behaviour baseline")
     })
     // The same resolution drives renderPhasePlan's planDuties slot (the
@@ -619,7 +657,7 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
     withPack("# default\n\n## phase duties\n\n### m Implementation\n\nPACK-M-DUTIES implement to parity.\n", (facts) => {
       const text = renderPhasePlan(facts, { phase: L("m"), planDuties: planDutyText(facts, L("m")), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md" })
       expect(text).toContain("PACK-M-DUTIES implement to parity.")
-      expect(text).not.toContain("code migration and rework")
+      expect(text).not.toContain("Complete the implementation work")
     })
   })
 })

@@ -1085,20 +1085,20 @@ describe("stats digest counters", () => {
     now += 5 * 60_000
     await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }))
     const plain = await roundCompleteLines(dir)
-    expect(plain).toHaveLength(2)
+    expect(plain).toHaveLength(3)
     expect(plain?.[0]).toBe("■ round 1 complete: total 5m 0s (AI 5m 0s), 1 tasks / 1 sessions")
-    // Counters booked: one line after the tokens line, only the non-zero
-    // parts, singular/plural like the model counters.
+    // Counters booked: one line after the round-report pointer line, only the
+    // non-zero parts, singular/plural like the model counters.
     await statsDigest(dir, { priorKnowledge: 12_000, prevRound: 41_000, capped: true })
     await statsKnowledgePhase(dir)
     const lines = await roundCompleteLines(dir)
-    expect(lines?.[2]).toBe("  digests: prior knowledge 1 session / 12.0k tokens, previous round 1 session / 41.0k tokens, 1 capped, 1 knowledge phase")
-    expect(lines).toHaveLength(3)
+    expect(lines?.[3]).toBe("  digests: prior knowledge 1 session / 12.0k tokens, previous round 1 session / 41.0k tokens, 1 capped, 1 knowledge phase")
+    expect(lines).toHaveLength(4)
     // Only one kind booked: the absent one omits its part.
     await loadStats(join(dir, "empty"))
     await statsDigest(join(dir, "empty"), { prevRound: 41_000 })
     const one = await roundCompleteLines(join(dir, "empty"))
-    expect(one?.[2]).toBe("  digests: previous round 1 session / 41.0k tokens")
+    expect(one?.[3]).toBe("  digests: previous round 1 session / 41.0k tokens")
   })
 })
 

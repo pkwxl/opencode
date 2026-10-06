@@ -174,6 +174,20 @@ export function roundBriefPath(round: number): string {
   return join(roundDir(round), ROUND_BRIEF_NAME)
 }
 
+// The round user report (plans/0081 D1): docs/R-NN/report-for-user.md, one per
+// round, written by a task (the final phase's planned wrap-up task) or — when
+// the round ends in a knowledge phase — by that side-channel session as its
+// second artifact (D6b). The round-close gate requires it to exist, be
+// non-empty and end with the eof terminator (D4); the complete route's
+// conclusion names its path. The name is self-describing, greppable, and
+// collides with neither the task-level wrap-up report (docs/T-NNN/report.md)
+// nor the knowledge kb.md.
+export const REPORT_FOR_USER_NAME = "report-for-user.md"
+
+export function reportForUserPath(round: number): string {
+  return join(roundDir(round), REPORT_FOR_USER_NAME)
+}
+
 // File name of a phase's planning input (planningInput role, plans/0053 D9–D10):
 // one per phase directory docs/R-NN/P<nn>-<type>/, the latest `plan -p` /
 // `--file` text verbatim, written and committed by the driver before the

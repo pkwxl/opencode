@@ -313,6 +313,32 @@ async function phaseSync(dir: string, round: number, phases: string, types: read
   return { units, existing, keep }
 }
 
+// The survey document of a human-gated phase (plans/0081 D14): the phase
+// directory's survey.md — written by the survey pipeline's closing task,
+// clarified by the person. The `Fork:` lines and the `Clarified: yes` line
+// are driver protocol strings (whole-line, case-sensitive, like the other
+// gate marks); a missing survey is a gate problem, never a silent pass (§7
+// A6).
+export const SURVEY_NAME = "survey.md"
+export const phaseSurveyDoc = (unit: PhaseUnit): string => join(unit.dir, SURVEY_NAME)
+
+// The person's release line in a survey (D14.3): its presence simultaneously
+// releases the phase and approves the proposed project brief (D15.2).
+export const CLARIFIED_MARK = "Clarified: yes"
+
+// The `Fork:` lines a survey records (D14.2): each a scope fork stated with
+// its options, consequences and a recommended default. A list marker before
+// the word is accepted ("- Fork: …").
+export function surveyForks(text: string): number {
+  return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line)).length
+}
+
+// Whether the person released the survey (D14.3): at least one whole-line
+// `Clarified: yes`.
+export function clarifiedMark(text: string): boolean {
+  return text.split("\n").some((line) => line.trim() === CLARIFIED_MARK)
+}
+
 // The gates a phase must pass before it is marked done (plans/0049 G7): its
 // type's own, plus acceptance when config `acceptanceGate` lists the type.
 export function phaseGates(unit: PhaseUnit, acceptanceGate: readonly string[] = []): PhaseGate[] {
@@ -325,7 +351,13 @@ export function phaseGates(unit: PhaseUnit, acceptanceGate: readonly string[] = 
 // - verdict: verdict.md `Result: FAIL` blocks; no file or no result line
 //   passes, like a task report without one (the run does not stop);
 // - acceptance: acceptance.md must end its `Accepted:` lines with the
-//   human's `Accepted: yes`.
+//   human's `Accepted: yes`;
+// - human (plans/0081 D14.3): the phase directory's survey.md must exist
+//   (a missing survey is a gate problem, never a silent pass), and when it
+//   records at least one `Fork:` line the phase holds open — the acceptance
+//   gate's control point, an awaiting-person pause, not a failure — until
+//   the person's `Clarified: yes` line; a survey with zero `Fork:` lines
+//   completes the phase like an ungated one.
 export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: readonly PhaseGate[]): Promise<string[]> {
   const problems: string[] = []
   if (gates.includes("verdict")) {
@@ -338,6 +370,20 @@ export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: rea
     const text = await Bun.file(join(dir, doc)).text().catch(() => undefined)
     if (text === undefined) problems.push(`acceptance: ${doc} is missing`)
     else if (!acceptanceMark(text).accepted) problems.push(`acceptance: ${doc} has no \`${ACCEPTED_MARK}\` line`)
+  }
+  if (gates.includes("human")) {
+    const doc = phaseSurveyDoc(unit)
+    const text = await Bun.file(join(dir, doc)).text().catch(() => undefined)
+    if (text === undefined) {
+      problems.push(`clarification: ${doc} is missing — the survey must exist before the phase can complete`)
+    } else {
+      const forks = surveyForks(text)
+      if (forks > 0 && !clarifiedMark(text)) {
+        problems.push(
+          `clarification: ${doc} records ${forks} open Fork: line(s) — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase)`,
+        )
+      }
+    }
   }
   return problems
 }

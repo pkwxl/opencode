@@ -36,6 +36,7 @@ const SECTION_HEADINGS: Record<string, IntentSection> = {
   "artifact spec": "artifactSpec",
   parallelism: "parallelism",
   guarantees: "guarantees",
+  "planning-input": "planningInput",
 }
 
 // File-facing headings in canonical section order (for diagnostics).
@@ -113,6 +114,16 @@ export function packSubsection(pack: IntentPack, section: IntentSection, key: st
 // phase letter; the M3 phase registry's dutiesRef will point at these.
 export function dutiesForPhase(pack: IntentPack, key: string): string | undefined {
   return packSubsection(pack, "phaseDuties", key)
+}
+
+// The planning-input scaffold (plans/0081 D12): the active pack's
+// `## planning-input` section, falling back to the default pack's — the only
+// per-section fallback in the loader (a scenario pack without its own scaffold
+// still teaches the neutral shape; intentText's consumers read the active pack
+// alone, and the fallback is a scaffold-specific decision, not a loader-wide
+// rule). Whole-section, not subsectioned. undefined when neither pack has one.
+export function planningInputScaffold(packs: Record<string, IntentPack>, active: string): string | undefined {
+  return packs[active]?.planningInput ?? packs[DEFAULT_INTENT]?.planningInput
 }
 
 // Parse a pack file; throws on a missing/mismatched title or an unknown

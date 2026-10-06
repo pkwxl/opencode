@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
+import { BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
 import {
@@ -50,7 +50,7 @@ import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/au
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
-import { loadIntents } from "@opencode-ai/auto-core/intent/load"
+import { loadIntents, planningInputScaffold } from "@opencode-ai/auto-core/intent/load"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle, type IntentBundle } from "@opencode-ai/auto-core/bundle"
 import { shellProfile } from "@opencode-ai/auto-core/shell"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -136,6 +136,11 @@ const VALUE_FLAGS = new Set([
   // automatic repair rounds a FAIL verdict or a held verdict gate may drive
   // before blocking for the human; run's alone.
   "repair",
+  // --brief/--brief-file (plans/0081 D11): the project brief's seed (init) or
+  // revision (amend) — the text verbatim, or the file holding it; init/amend's
+  // alone (refused elsewhere like the config flags).
+  "brief",
+  "brief-file",
 ])
 // Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
 // one value, so the values are collected in their own table instead of the
@@ -144,7 +149,7 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -272,6 +277,15 @@ if (command !== "plan" && flags.has("force-close")) {
   )
   process.exit(1)
 }
+// --scaffold is plan's alone too (plans/0081 D12): printing the active pack's
+// planning-input scaffold is a plan route; every other command refuses the
+// flag with a pointer to plan, the same pattern as --append above.
+if (command !== "plan" && flags.has("scaffold")) {
+  console.error(
+    `--scaffold is a plan option: ${command ?? "this command"} takes no --scaffold. Print the planning-input template with opencode-auto plan <dir> --scaffold`,
+  )
+  process.exit(1)
+}
 // --new-task is plan's alone too (auto-core plans/0058): adding a task the
 // person names, with no session, is a plan route; every other command refuses
 // the flag with a pointer to plan, the same pattern as --append above.
@@ -318,10 +332,10 @@ const COMPLETION_RETIRED =
   "is retired: the driver no longer runs task-level acceptance, quality review or a final review. " +
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
-  "is retired: the migration source and target are intent, not configuration — state them in .opencode/auto/brief.md, which planning sessions read"
+  "is retired: the migration source and target are intent, not configuration — state them in the project brief (opencode-auto init <dir> --brief <text> | --brief-file <path>, likewise amend) or in the planning input, which planning sessions read"
 const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)"
 const INIT_PROMPT_RETIRED =
-  "is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p"
+  "is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p"
 const AMEND_FLAG_RETIRED =
   "is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"
 const COMMIT_FLAG_RETIRED =
@@ -725,6 +739,12 @@ if (command === "plan") {
       process.exit(1)
     }
   }
+  // --scaffold (plans/0081 D12.2) takes no other option: it only prints the
+  // planning-input template and exits.
+  if (flagOn("scaffold") && (input || newTask !== undefined || forceClose !== undefined || flags.has("append") || flags.has("export") || flags.has("adopt"))) {
+    console.error("--scaffold takes no other option: it prints the planning-input template to stdout and exits — complete it into a file and pass it with -p <text> | --file <path>")
+    process.exit(1)
+  }
   // --append (auto-core plans/0053 D23) rides a planning input: it appends
   // the tasks planned from the input to the current phase. In m mode the
   // input implies the append on a non-empty index, so the flag is redundant
@@ -789,6 +809,21 @@ if (command === "plan") {
         (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
     )
     process.exit(1)
+  }
+  // --scaffold (plans/0081 D12.2): print the active pack's planning-input
+  // scaffold to stdout and exit 0 — nothing written into the target, the
+  // verbatim-input contract untouched (no stub file a git clean or a planning
+  // step could mistake for input). The person completes it into a file and
+  // runs plan --file <path>. Read-only, so it runs before the lock.
+  if (flagOn("scaffold")) {
+    const { config: scaffoldConfig } = await loadRunConfig(directory)
+    const scaffold = planningInputScaffold(loadIntents(directory), scaffoldConfig.intent ?? "default")
+    if (scaffold === undefined) {
+      console.error("no planning-input scaffold: neither the active intent pack nor the default pack carries a ## planning-input section")
+      process.exit(1)
+    }
+    console.log(scaffold)
+    process.exit(0)
   }
   const { config, mode } = await loadRunConfig(directory)
   const lock = acquireRunLock(directory, "plan")
@@ -1002,6 +1037,17 @@ function refuseFrozenFlags(command: "run" | "plan") {
   }
   // --amend is retired everywhere (RETIRED_FLAGS above: once init stopped
   // taking the flag, no command accepts it).
+  // --brief/--brief-file are init/amend's alone (plans/0081 D11): the project
+  // brief's seed/revision channel; run and plan never write it, so they
+  // refuse the pair rather than silently ignoring it.
+  for (const key of ["brief", "brief-file"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is an init/amend option (the project brief: opencode-auto init <dir> --${key} <text or path>, likewise amend); ${command} does not accept it`,
+      )
+      process.exit(1)
+    }
+  }
   // --name/--email are init's alone (plans/0073 §2.2): the commit identity
   // pair init writes as repository-local git config when no global/GIT_*
   // identity resolves; run and plan never write git config, so they refuse
@@ -1099,6 +1145,42 @@ async function parsePlanInput(): Promise<PlanInput | undefined> {
     process.exit(1)
   }
   return { text: content, source: path }
+}
+
+// init/amend's --brief/--brief-file (plans/0081 D11): the project brief's
+// seed (init) or revision (amend) — the text verbatim, or the file holding
+// it; one of the two and non-empty; undefined when neither is given.
+async function parseBriefSeed(): Promise<string | undefined> {
+  const text = flags.get("brief")
+  const file = flags.get("brief-file")
+  if (text !== undefined && file !== undefined) {
+    console.error("--brief and --brief-file are mutually exclusive: give the brief one way")
+    process.exit(1)
+  }
+  if (text !== undefined) {
+    if (!text.trim()) {
+      console.error("--brief requires non-empty text (the brief, written verbatim)")
+      process.exit(1)
+    }
+    return text
+  }
+  if (file === undefined) return undefined
+  if (!file) {
+    console.error("--brief-file requires a path: the file holding the brief, written verbatim")
+    process.exit(1)
+  }
+  const path = resolve(file)
+  const info = await stat(path).catch(() => undefined)
+  if (!info?.isFile()) {
+    console.error(`--brief-file ${file}: ${info ? "not a regular file" : "no such file"}; it names the file holding the brief`)
+    process.exit(1)
+  }
+  const content = await Bun.file(path).text()
+  if (!content.trim()) {
+    console.error(`--brief-file ${file} is empty: the brief must not be empty`)
+    process.exit(1)
+  }
+  return content
 }
 
 // Every run (and every plan that enters the loop) starts a fresh log file
@@ -1460,12 +1542,12 @@ if (command === "init" || command === "amend") {
   }
   const amendCommand = command === "amend"
   if (amendCommand) {
-    const allowed = new Set([...CONFIG_FLAGS, "verify-idle", "verify-max", "commit-subtask"])
+    const allowed = new Set([...CONFIG_FLAGS, "verify-idle", "verify-max", "commit-subtask", "brief", "brief-file"])
     for (const key of flags.keys()) {
       if (allowed.has(key)) continue
       console.error(
         key === "prompt"
-          ? `-p/--prompt is not an amend option: the brief is not config — edit ${BRIEF_FILE} directly`
+          ? `-p/--prompt is not an amend option: the planning input is plan's (-p/--file of opencode-auto plan); the brief is revised with --brief <text> | --brief-file <path>`
           : key === "force"
             ? "-f/--force is not an amend option: amend discards no key, so there is no overwrite confirmation or worktree check to skip"
             : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
@@ -1480,9 +1562,9 @@ if (command === "init" || command === "amend") {
       )
       process.exit(1)
     }
-    if (!CONFIG_FLAGS.some((key) => flags.has(key))) {
+    if (!CONFIG_FLAGS.some((key) => flags.has(key)) && flags.get("brief") === undefined && flags.get("brief-file") === undefined) {
       console.error(
-        `name at least one key to change (for example: opencode-auto amend ${directory} --phases amt); ` +
+        `name at least one key to change (for example: opencode-auto amend ${directory} --phases amt), or revise the brief with --brief <text> | --brief-file <path>; ` +
           `to refresh the agent contract and the AGENTS.md block without changing a key, run opencode-auto fix ${directory}`,
       )
       process.exit(1)
@@ -1559,6 +1641,7 @@ if (command === "init" || command === "amend") {
   // No command reaching this block takes -p (init's is a scoped retired flag,
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
+  const briefSeed = await parseBriefSeed()
   const { explicit, agent, parallel, scanExempt, isolate } = parseConfigFlags(directory)
   // The one watershed between full overwrite and per-key revision: the default
   // takes the builtin defaults table as its baseline (keys not given fall back
@@ -1835,15 +1918,19 @@ if (command === "init" || command === "amend") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
   }
-  // The project brief stub (plans/0052 D9): written only when the file is
-  // missing; a person's brief is never touched (init's own -p is retired, and
-  // the `continue` subcommand that rewrote the brief per round is gone too).
-  if (!amendCommand) {
-    if (await Bun.file(join(directory, BRIEF_FILE)).exists()) console.log(`already exists, skipped: ${BRIEF_FILE}`)
-    else {
-      await Bun.write(join(directory, BRIEF_FILE), renderProjectBrief())
-      console.log(`created: ${BRIEF_FILE} (project brief stub: fill in the goal, the migration source and target, and constraints; every planning session reads it)`)
-    }
+  // The project brief seed (plans/0081 D11, superseding 0052 D9's stub):
+  // written verbatim only when --brief/--brief-file is given — omitted writes
+  // no file, and a bare re-init never touches an existing brief (a generated,
+  // approved brief survives re-init, §7 A5). init seeds; amend revises (the
+  // person's rare manual override and the default path's install channel).
+  if (briefSeed !== undefined) {
+    const existed = await Bun.file(join(directory, BRIEF_FILE)).exists()
+    await Bun.write(join(directory, BRIEF_FILE), `${briefSeed.trimEnd()}\n`)
+    console.log(
+      existed
+        ? `replaced: ${BRIEF_FILE} (the brief, verbatim)`
+        : `created: ${BRIEF_FILE} (the brief seed, verbatim — the survey/analysis phase proposes the full brief later; every planning session reads it)`,
+    )
   }
   // Idempotently sync the opencode-auto block of AGENTS.md: render it from the
   // current config and compare with the file's existing standard block —
@@ -2059,21 +2146,21 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
-  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto land [dir] [--keep] [--abandon] [--merge]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
-       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — plan establishes them), so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
-       fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
+       fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — seed it with init/amend --brief); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
@@ -2082,8 +2169,8 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
          run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), close holds it around its writes, and land around its branch moves; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
-       -p/--prompt is the planning input of plan (-p <text> | --file <path>); on every other command it is refused — init no longer writes the project brief: edit .opencode/auto/brief.md directly (init writes a stub there when the file is missing: ## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning; every planning session reads it). State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
-       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
+       -p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. The project brief .opencode/auto/brief.md is seeded with init --brief <text> | --brief-file <path> (written verbatim; omitted writes no file) and revised with amend's --brief/--brief-file or installed from the survey phase's approved proposal — never hand-edited mid-run; every planning session reads it. State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
+       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); the project brief .opencode/auto/brief.md is kept (a seed or the analysis phase's generated brief — delete it by hand if you mean to); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
        --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md). Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); once the current round is complete any value applies to the next round plan establishes
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)

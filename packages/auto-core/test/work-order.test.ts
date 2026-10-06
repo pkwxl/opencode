@@ -111,8 +111,9 @@ describe("planPrelude: --export (row 12, plans/0076)", () => {
       // the unattended proxy-answer instruction.
       expect(order).toContain("# T-002: task T-002")
       expect(order).toContain("Context-budget protocol")
-      expect(order).toContain("a human is attending this planning run and the DRIVER waits for the answer with no timeout")
-      expect(order).not.toContain("do not call the question tool")
+      // The planning question rule (plans/0081 D16): default and record.
+      expect(order).toContain("take the recommended option as a provisional default")
+      expect(order).not.toContain("answered automatically")
       // A template's own trailing terminator line is file metadata (loading
       // strips it), so the order ends with the prompt's last body text.
       expect(order.trimEnd().endsWith("and you finish the task yourself.")).toBe(true)

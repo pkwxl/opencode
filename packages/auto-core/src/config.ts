@@ -218,7 +218,7 @@ export function retiredValue(key: string, value: unknown): boolean {
 function migrationParameter(key: string) {
   return {
     retired: (value: unknown) => value !== undefined,
-    why: "the migration source and target are intent — state them in .opencode/auto/brief.md",
+    why: "the migration source and target are intent — state them in the project brief (init/amend --brief) or in the planning input",
     message: (value: unknown) =>
       `${key} is retired (the migration source and target are intent, not configuration): ` +
       `copy its value ${JSON.stringify(value)} into .opencode/auto/brief.md, then remove the key`,

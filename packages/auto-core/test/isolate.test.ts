@@ -223,6 +223,7 @@ describe("planPrelude: isolation at round establishment (plans/0074 §2.2, U-L1)
         type: "stop",
         code: 2,
         lines: [
+          "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
           "⏸ round R-01 cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; handle it manually (commit/clean) and re-run:",
           "  pkg:",
           "    pkg/wip.txt",

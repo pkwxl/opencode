@@ -7,7 +7,7 @@
 //   # Security review                 title = display name
 //
 //   Tasks: yes                        optional; only yes (task-less types stay builtin)
-//   Gate: none                        optional; none | verdict | acceptance | verdict, acceptance
+//   Gate: none                        optional; none | a comma list of verdict / acceptance / human
 //   Reasoning: deep                   optional; deep | simple, the execute tier (absent = deep)
 //   Phase-artifacts: threat-model.md  optional; standard artifacts in the phase dir
 //   Task-artifacts: review.md         optional; standard artifacts in each task dir

@@ -1,5 +1,5 @@
 {
   "name": "cleanroom",
-  "phases": "spec-read,design,implement,test,audit",
+  "phases": "survey,spec-read,design,implement,test,audit",
   "subtask": "off"
 }

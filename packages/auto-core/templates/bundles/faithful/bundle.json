@@ -1,5 +1,5 @@
 {
   "name": "faithful",
-  "phases": "analysis,design,implement,test,acceptance",
+  "phases": "survey,analysis,design,implement,test,acceptance",
   "subtask": "off"
 }

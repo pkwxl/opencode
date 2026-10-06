@@ -10,8 +10,9 @@ this phase into a set of executable tasks, and write this phase's task index and
 {{^brief}}
 ## Input: project intent
 
-Not provided (brief.md missing or empty). Proceed by the phase duties; if the project intent is indispensable for
-planning, ask a human to write .opencode/auto/brief.md and rerun.
+Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The survey phase of a re-work
+round will propose one — seed it optionally with `init --brief <one line>` (what the project is, where the
+reference lives, where the deliverable goes), or name the reference in this round's planning input.
 
 {{/if}}
 {{#if round}}
@@ -59,11 +60,11 @@ phases' raw docs/ (do not read those when planning; pull detail via each handove
 
 {{/if}}
 {{#if prevRound}}
-## Input: prior-round migration conclusions (continuation round)
+## Input: prior-round conclusions (continuation round)
 
-This project has already run a full round of phased migration, and this is a continuation round: build on the
-existing migration results to bring them into fuller agreement with the source system — prioritise gaps and misses
-left over from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows
+This project has already run a full phased round of work, and this is a continuation round: build on the existing
+results to bring them into fuller agreement with what the project is for — prioritise gaps and misses left over
+from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows
 (each prior phase's task index tasks.md lives inside its own phase directory under the prior round's docs/R-NN/,
 a permanent path; pull detail via the index as needed):
 
@@ -77,6 +78,9 @@ Document placement is anchored to tasks: each task's document artifacts go into 
 does not move with the phase/round.
 
 {{planDuties}}
+{{#if finalPhase}}
+{{> report-duty}}
+{{/if}}
 {{#if trimmedPhases}}
 Pipeline-trimming note: this round's pipeline was trimmed via --phases with no separate analysis/design phase — fold
 the necessary survey and design points into this phase's first batch of tasks. The baseline-safety-net items (the

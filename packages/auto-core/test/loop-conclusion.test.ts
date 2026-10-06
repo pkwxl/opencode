@@ -199,11 +199,12 @@ describe("roundCompleteLines round-complete lines", () => {
     expect(phased).toEqual([
       "■ round 1 complete: total 52m 0s (AI 30m 0s), 6 phases / 1 tasks / 1 sessions",
       "tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
+      "  round report for the person: docs/R-01/report-for-user.md",
     ])
     // Non-phased path (the m-phase summary, no phase part)
     const plain = await roundCompleteLines(dir)
     expect(plain?.[0]).toBe("■ round 1 complete: total 52m 0s (AI 30m 0s), 1 tasks / 1 sessions")
-    expect(plain).toHaveLength(2)
+    expect(plain).toHaveLength(3)
   })
 
   test("cumulative over prior rounds: once a round rolls into history, two prior-rounds lines are appended", async () => {
@@ -233,6 +234,7 @@ describe("roundCompleteLines round-complete lines", () => {
     expect(lines).toEqual([
       "■ round 2 complete: total 20m 0s (AI 20m 0s), 5 phases / 1 tasks / 1 sessions",
       "tokens in 500 / out 100 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.05",
+      "  round report for the person: docs/R-02/report-for-user.md",
       "  cumulative (1 rounds): total 40m 0s (AI 40m 0s), 1 tasks / 2 sessions",
       "  cumulative tokens in 2000 / out 400 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.2",
     ])
@@ -289,6 +291,7 @@ describe("roundCompleteLines per-model lines", () => {
     expect(lines).toEqual([
       "■ round 1 complete: total 42m 0s (AI 40m 0s), 1 tasks / 2 sessions",
       "tokens in 3000 / out 700 / cache-read 18.0k / cache-write 0, hit 85.7%, cost $0.2",
+      "  round report for the person: docs/R-01/report-for-user.md",
       "  model classify: 1 sessions, tokens in 300 / out 20 / cache-read 0 / cache-write 0, hit 0.0%",
       "  model glm: 1 sessions, tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12, 1 FAIL verdict, 1 stuck hint, 2 shape re-prompts",
       "  model opus: 1 sessions, tokens in 1000 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08",
@@ -303,9 +306,9 @@ describe("roundCompleteLines per-model lines", () => {
     now += 5 * 60_000
     await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }), "glm", "simple")
     const lines = await roundCompleteLines(dir)
-    expect(lines?.[2]).toBe("  model glm: 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
-    expect(lines?.[3]).toBe("  tiers: simple 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
-    expect(lines).toHaveLength(4)
+    expect(lines?.[3]).toBe("  model glm: 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
+    expect(lines?.[4]).toBe("  tiers: simple 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
+    expect(lines).toHaveLength(5)
   })
 
   test("time lost to quota windows: one line, names sorted, the figure unclamped where the wait segment clamps (plans/0057 §11 item 7)", async () => {
@@ -323,8 +326,8 @@ describe("roundCompleteLines per-model lines", () => {
     await statsQuotaWait(dir, "glm", 90_000)
     const lines = await roundCompleteLines(dir)
     expect(lines?.[0]).toContain("human wait 30m 0s")
-    expect(lines?.[2]).toBe("  time lost to quota windows: fake/model-1 3h 5m; glm 1m 30s")
-    expect(lines).toHaveLength(3)
+    expect(lines?.[3]).toBe("  time lost to quota windows: fake/model-1 3h 5m; glm 1m 30s")
+    expect(lines).toHaveLength(4)
   })
 
   test("no model data: the block stays at its two lines", async () => {
@@ -337,6 +340,7 @@ describe("roundCompleteLines per-model lines", () => {
     expect(lines).toEqual([
       "■ round 1 complete: total 30m 0s (AI 30m 0s), 1 tasks / 1 sessions",
       "tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
+      "  round report for the person: docs/R-01/report-for-user.md",
     ])
   })
 })
@@ -519,6 +523,7 @@ describe("roundCompleteLines lanes roll-up (plans/0068 D13, S4)", () => {
       // the time lines mean parent-wall.
       "■ round 1 complete: total 5m 0s (AI 5m 0s), 2 tasks / 3 sessions",
       "tokens in 1700 / out 400 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08",
+      "  round report for the person: docs/R-01/report-for-user.md",
       "  lanes: 1 landed / 2 sessions / 900 tokens (booked into the totals above); lane wall 3m 0s summed — lanes overlap, the time lines mean parent-wall",
       "  model glm: 1 sessions, tokens in 1000 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.05",
       "  model opus: 2 sessions, tokens in 700 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.03",
@@ -530,8 +535,8 @@ describe("roundCompleteLines lanes roll-up (plans/0068 D13, S4)", () => {
     await statsTask(dir, "T-001")
     await statsLaneUsage(dir, "T-001", { tokens: 1200, wallMs: 90_000, sessions: 1 })
     const lines = await roundCompleteLines(dir)
-    expect(lines?.[2]).toBe("  lanes: 1 landed / 1 session / 1200 tokens; lane wall 1m 30s summed — lanes overlap, the time lines mean parent-wall")
-    expect(lines).toHaveLength(3)
+    expect(lines?.[3]).toBe("  lanes: 1 landed / 1 session / 1200 tokens; lane wall 1m 30s summed — lanes overlap, the time lines mean parent-wall")
+    expect(lines).toHaveLength(4)
   })
 
   test("no lanes: the block keeps its exact prior shape", async () => {
@@ -540,7 +545,7 @@ describe("roundCompleteLines lanes roll-up (plans/0068 D13, S4)", () => {
     now += 30_000
     await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }))
     const lines = await roundCompleteLines(dir)
-    expect(lines).toHaveLength(2)
+    expect(lines).toHaveLength(3)
     expect(lines?.[1]).not.toContain("lanes:")
   })
 })

@@ -48,7 +48,7 @@ describe("renderer", () => {
     // its zero-intent fallback carries the marker formats.
     expect(renderText("{{> question-rule}}", {})).toContain("do not call the question tool")
     expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
-    expect(renderText("{{> question-rule}}", { humanQuestions: true })).toContain("no automatic proxy answer")
+    expect(renderText("{{> question-rule}}", { humanQuestions: true })).toContain("take the recommended option as a provisional default")
   })
 
   test("when a partial stands alone on its line the line's leading indent applies to every line; an inline reference applies only from the second line on (stacking on the partial body's own indent)", () => {

@@ -1,8 +1,9 @@
 # 0081 — The round user report and work-type-neutral prompts
 
-Status: **proposal.** The findings below are settled from the R-01 records in
+Status: **implemented** (2026-10-06). The findings were settled from the R-01 records in
 `/home/wxl/workspace/cleanroom` (the first cleanroom-bundle run: ext4 → ext4x, in-tree
-replication); the design awaits the person's approval before implementation tasks are laid out.
+replication); the document is the design record — later changes are not tracked here
+(the plans/ retirement rule), the surfaces it names carry the living truth.
 
 The problem, in one paragraph: everything the pipeline writes is addressed to the process — later
 sessions, driver gates, the next migration — so the person who started a run gets no durable

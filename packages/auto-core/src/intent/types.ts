@@ -19,7 +19,7 @@
 // Section keys of an intent pack, in canonical document order. The parser
 // (load.ts) and future rendering iterate this list; the pack file protocol
 // uses the human-readable headings mapped in load.ts.
-export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism", "guarantees"] as const
+export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism", "guarantees", "planningInput"] as const
 
 export type IntentSection = (typeof INTENT_SECTIONS)[number]
 
@@ -46,6 +46,11 @@ export type IntentPack = {
   // charter the plan-step verifier session judges against; its presence
   // activates the verifier). Parsed structurally by intent/guarantees.ts.
   guarantees?: string
+  // The planning-input scaffold (plans/0081 D12): the template text the
+  // person completes into a planning input. Read by the shell's
+  // `plan --scaffold` alone — it never lands in plan-input.md or in a session
+  // prompt. Not subsectioned: the whole section body is the scaffold.
+  planningInput?: string
 }
 
 // The `### <level>` keys of `## parallelism`, i.e. the values of the config's

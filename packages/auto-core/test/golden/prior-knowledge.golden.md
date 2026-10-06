@@ -1,8 +1,7 @@
-You are the knowledge distiller for a migration retrospective: this working directory already holds the artifacts of an earlier
-migration (possibly done by hand, by other tools, or by earlier rounds of this tool). Read through these existing migration
-results and distil the **finally verified** migration experience in them into one structured knowledge document, as input to
-the second migration about to start (the full admtvk flow) and to the inference of the migration parameters. Distil only —
-implement nothing and change no existing artifact.
+You are the knowledge distiller for a retrospective of earlier work: this working directory already holds the artifacts of
+earlier work (possibly done by hand, by other tools, or by earlier rounds of this tool). Read through those existing results
+and distil the **finally verified** experience in them into one structured knowledge document, as input to the round of work
+about to start and to the inference of its parameters. Distil only — implement nothing and change no existing artifact.
 
 Scenario mode notes (migrate):
 
@@ -27,14 +26,14 @@ target.
 
 ## Inputs (read-only)
 
-- The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
-  phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
+- The whole docs/ tree: the document artifacts of the earlier work; inside earlier rounds' directories docs/R-NN/, the
+  phase handover documents (P<nn>-<type>/handover.md), the work knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
   prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first; when you need detail beyond them,
   fetch it through the handover document's `## Artifact index` section;
-- The migrated code itself (the target side's current state): check the final state against the documents; where documents and
+- The current code itself (the target side's current state): check the final state against the documents; where documents and
   code disagree, the code wins, and note the discrepancy in the document;
-- The migration source (if it exists inside the working directory): work out its layout and module boundaries, and record
-  relative-path clues that locate it;
+- The source of the earlier work, where one exists (a reference or legacy implementation inside the working directory): work
+  out its layout and module boundaries, and record relative-path clues that locate it;
 - A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough).
 
 ## Artifact
@@ -45,12 +44,12 @@ intermediate artifact path: once every section is written, put the line `DONE` o
 as the closing mark — a DRIVER-parsed protocol string: write it verbatim, do not translate it. Only after confirming that mark does the
 DRIVER promote the file to the official prior-knowledge document and commit it; never write that line before every section is complete.
 
-# Migration knowledge base: <one-sentence description of the project/module>
+# Work knowledge base: <one-sentence description of the project/module>
 
-## Migration summary
+## Work summary
 
-<what the earlier migration did, why it was migrated, the final state — summed up in one paragraph; give the relative paths of
-the migration source and target inside the working directory (if established)>
+<what the earlier work did, why, the final state — summed up in one paragraph; give the relative paths of the earlier work's
+source and target inside the working directory (if established)>
 
 ## API and type mapping
 
@@ -58,7 +57,7 @@ the migration source and target inside the working directory (if established)>
 
 ## Implementation patterns
 
-<the implementation recipes used repeatedly during the migration, the structure and organisation of the adaptation layer>
+<the implementation recipes used repeatedly during the earlier work, the structure and organisation of what was built>
 
 ## Pitfalls and edge cases
 
@@ -66,7 +65,7 @@ the migration source and target inside the working directory (if established)>
 
 ## Reusable rules
 
-<rules or checklists the second migration can reuse directly, each item standing on its own>
+<rules or checklists the next round or project can reuse directly, each item standing on its own>
 
 ## Design deviations and key decisions
 
@@ -92,8 +91,8 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Steps
 
-1. Read-only survey: read the handover/knowledge documents in docs/ and in each round's phase directories to grasp the whole existing
-   migration; when you need detail, fetch the archived artifacts through the artifact index — do not skip a part you have not read
+1. Read-only survey: read the handover/knowledge documents in docs/ and in each round's phase directories to grasp the whole body of
+   earlier work; when you need detail, fetch the archived artifacts through the artifact index — do not skip a part you have not read
    yet;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
@@ -118,6 +117,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. Writing that document is a hard requirement: even if the existing migration results are sparse, write out the full section
    skeleton and explain why; producing no document, or a document missing the closing `DONE` mark at the end, makes the
    prior-knowledge extraction fail;

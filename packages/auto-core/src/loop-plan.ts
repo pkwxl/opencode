@@ -15,7 +15,8 @@ import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./k
 import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
-import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
+import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
+import { reportForUserPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
@@ -204,6 +205,9 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         // init shortcut's rule, plans/0053 D12).
         numberStart: numberStart ?? Math.max(0, ...[...taken].map((id) => taskNumber(id) ?? 0)) + 1,
         parallel: opts.parallel,
+        // The no-phase implicit round's single phase is the round's final one
+        // (plans/0081 D2): its planner carries the report duty like any other.
+        round: await currentRound(directory),
       })
     : await phasePlanPrompt(ctx, phase, { brief, input, taskIndex, phaseId, numberStart })
   // The plan-step consistency gate (plans/0080 §5): the composed planning
@@ -330,6 +334,14 @@ async function phasePlanPrompt(
   // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
   // plans against the round's goal and criteria; an untouched stub injects nothing.
   const round = await roundBriefText(directory, state.round)
+  // The round report duty (plans/0081 D2): this phase is final when it is the
+  // round's last and lays out tasks — its planner ends the index with the
+  // wrap-up task whose deliverable is docs/R-NN/report-for-user.md. A round
+  // ending in a trailing task-less phase (knowledge) renders nothing here:
+  // that side-channel session writes the report as its second artifact
+  // (D6b, knowledge.ts).
+  const last = state.phases.at(-1)
+  const finalPhase = last !== undefined && last.id === phase.id && phase.entry.hasTasks
   return renderPhasePlan(planFacts(ctx), {
     phase: phase.entry,
     planDuties: planDuties(ctx, phase.entry),
@@ -342,6 +354,7 @@ async function phasePlanPrompt(
     handovers,
     prevRound,
     mode: opts.mode,
+    ...(finalPhase ? { finalPhase: true, reportFile: reportForUserPath(state.round) } : {}),
     // No analysis/design phase delivered in this round's index → the implement
     // phase's planning gets the pipeline-trimming note. A closed analysis/design
     // phase (plans/0053 D16: done for scheduling, not delivered) counts as absent.

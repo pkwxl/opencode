@@ -42,7 +42,7 @@ This session completes the task-background understanding and the subtask decompo
    - No close-out item: the task's final verification (the full suite, the build, the acceptance checks of the task description) is not an
      item of its own — the last item runs it once, after its own work;
 4. Splitting and artifact criteria for this phase (Design):
-   - Split by design concern: data model, API contract, module boundaries, error handling, migration strategy and the like each become an item;
+   - Split by design concern: data model, API contract, module boundaries, error handling and the like each become an item;
    - Each item produces one design document, including the alternatives considered and why one was chosen;
    - A cross-concern consistency check (whether the design documents contradict each other) must be a standalone closing subtask;
 5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each item opens with a
@@ -81,6 +81,7 @@ Constraints:
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. Writing out every file is a hard requirement: even if the task looks done or trivial, you must write context.md,
    shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
    and stops the run;

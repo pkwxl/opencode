@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
-import { renderProjectBrief } from "../src/brief"
 import { ensureGitignore, ensureInitGitignore, removeGitignoreEntries } from "../src/gitignore"
 import { MODELS_FILE } from "../src/models"
 import { applyReset, planReset, type ResetEntry } from "../src/reset"
@@ -15,7 +14,9 @@ async function seedInit(dir: string) {
   await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await writeFile(join(dir, ".opencode", "auto", "config.json"), '{"mode":"migrate"}\n')
-  await writeFile(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
+  // The brief seed (plans/0081 D11): a plain init writes none, the fixture
+  // seeds one like --brief would.
+  await writeFile(join(dir, ".opencode", "auto", "brief.md"), "migrate legacy to bun\n")
   await writeFile(join(dir, ".opencode", "agent", "auto.md"), "# auto agent\n")
   await writeFile(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
   await ensurePointer(dir)
@@ -40,27 +41,34 @@ describe("reset: config-layer cleanup", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("removes every config-layer artifact; once reclaimed, the directory matches the uninitialized state", async () => {
+  test("removes every config-layer artifact except the brief; once reclaimed, only the brief's tree remains", async () => {
     await seedInit(dir)
     await reset(dir)
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
-    expect(await exists(join(dir, ".opencode", "auto", "brief.md"))).toBe(false)
+    // The brief is kept (plans/0081 D11: a seed or a generated brief; delete
+    // it by hand if you mean to).
+    expect(await exists(join(dir, ".opencode", "auto", "brief.md"))).toBe(true)
     expect(await exists(join(dir, ".opencode", "agent", "auto.md"))).toBe(false)
     expect(await exists(join(dir, "opencode.json"))).toBe(false)
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false)
-    expect(await readdir(dir)).toEqual([])
+    expect(await readdir(dir)).toEqual([".opencode"])
   })
 
   test("an uninitialized directory: the list is empty, no error", async () => {
     expect(await planReset(dir)).toEqual([])
   })
 
-  test("idempotent: two resets in a row give the same result", async () => {
+  test("idempotent: two resets in a row give the same result (the kept brief survives both)", async () => {
     await seedInit(dir)
     await reset(dir)
-    expect(await planReset(dir)).toEqual([])
+    // The kept brief keeps .opencode/auto/ non-empty: the residual plan holds
+    // only keep and rmdir-if-empty entries, and the second reset removes
+    // nothing more.
+    const residual = await planReset(dir)
+    expect(residual.map((entry) => entry.action)).toEqual(["keep", "rmdir", "rmdir"])
     await reset(dir)
-    expect(await readdir(dir)).toEqual([])
+    expect(await readdir(dir)).toEqual([".opencode"])
+    expect(await exists(join(dir, ".opencode", "auto", "brief.md"))).toBe(true)
   })
 
   test("the old .auto/config.json belongs to the config layer and goes with it; the rest of .auto/ stays untouched", async () => {
@@ -86,11 +94,12 @@ describe("reset: boundary safety", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  // plans/0052 D9 (DF6): the brief is human intent; only the untouched stub is init's.
-  test("a filled brief.md is kept; the untouched stub is removed", async () => {
-    await writeFile(join(dir, ".opencode", "auto", "brief.md"), `${renderProjectBrief()}\nMigrate legacy/pkg to app/.\n`)
+  // plans/0081 D11: the stub and its remove-while-stub rule retired — every
+  // brief (a seed or the analysis phase's generated brief) is kept.
+  test("the brief is always kept (a seed or a generated brief alike)", async () => {
+    await writeFile(join(dir, ".opencode", "auto", "brief.md"), "Migrate legacy/pkg to app/.\n")
     const entries = await reset(dir)
-    expect(entries.find((entry) => entry.path === ".opencode/auto/brief.md")).toMatchObject({ action: "keep", reason: "filled in, not the init stub, kept" })
+    expect(entries.find((entry) => entry.path === ".opencode/auto/brief.md")).toMatchObject({ action: "keep", reason: "the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to" })
     expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).text()).toContain("Migrate legacy/pkg to app/.")
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
   })

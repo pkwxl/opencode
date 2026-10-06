@@ -144,18 +144,20 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
 
   // plan's sessions (the composition root sets humanQuestions when
   // RunAllOpts.stopBefore === "execute", carried by the facts since E2 — no
-  // module state left to reset): questions wait for the human answer, no
-  // proxy-answer basis, no annotation demand; the same single numbered-2
-  // invariant holds.
-  test("humanQuestions setting (plan's sessions): waits for the human, no proxy answers; the structural invariant holds equally", () => {
+  // module state left to reset): planning questions are taken as recorded
+  // provisional defaults and listed in the round report (plans/0081 D16),
+  // never asked or decided in real time; permission problems stay askable;
+  // the same single numbered-2 invariant holds.
+  test("humanQuestions setting (plan's sessions): default and record, never ask; the structural invariant holds equally", () => {
     const attended = promptFacts({ humanQuestions: true })
     for (const ask of [false, true]) {
       const text = fragment(ask, attended)
-      expect(text).toContain("waits for the answer with no timeout")
-      expect(text).toContain("never decide in the user's place")
+      expect(text).toContain("take the recommended option as a provisional default")
+      expect(text).toContain("needs-attention section")
       expect(text).toContain("question tool")
-      expect(text).not.toContain("do not call the question tool")
+      expect(text).toContain("do not call the question tool")
       expect(text).not.toContain("answered automatically")
+      expect(text).not.toContain("waits for the answer")
       expect(text.startsWith("2. ")).toBe(true)
       expect(text.endsWith("\n")).toBe(false)
       expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)

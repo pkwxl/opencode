@@ -23,7 +23,7 @@
 // lists the same findings without writing.
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
-import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING, renderProjectBrief } from "./brief"
+import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING } from "./brief"
 import {
   CONFIG_DEFAULTS,
   CONFIG_FILE,
@@ -128,7 +128,9 @@ async function planKeys(dir: string): Promise<KeyPlan> {
     ["destDir", BRIEF_TARGET_HEADING, targetLines],
   ] as const) {
     if (!(key in record)) continue
-    brief ??= (await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)) ?? renderProjectBrief()
+    // The stub model retired (plans/0081 D11): a missing brief starts empty —
+    // appendToSection adds the heading — and is no finding of its own.
+    brief ??= (await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)) ?? ""
     brief = appendToSection(brief, heading, lines(record[key]))
     drop(key, `${key} is retired (the migration source and target are intent, not configuration)`, `move its value into ${BRIEF_FILE} under ${heading}, then drop the key`)
   }
@@ -216,9 +218,8 @@ export async function planFix(dir: string): Promise<FixPlan> {
   if (!(await Bun.file(join(dir, "opencode.json")).exists())) {
     fixable("opencode.json", "missing", "write the template", async () => Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text()))
   }
-  if (keys.brief === undefined && !(await Bun.file(join(dir, BRIEF_FILE)).exists())) {
-    fixable(BRIEF_FILE, "missing", "write the stub", () => Bun.write(join(dir, BRIEF_FILE), renderProjectBrief()))
-  }
+  // A missing brief is no longer a finding (plans/0081 D11): omitted seed
+  // writes no file, and the analysis phase proposes the brief in its round.
   return { uninitialized: false, findings, writes }
 }
 

@@ -12,6 +12,7 @@
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
+import { reportForUserPath } from "./docpaths"
 import { intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
 import { renderText } from "./template"
 
@@ -95,6 +96,15 @@ export function renderPhasePlan(facts: PromptFacts, input: {
   numberStart?: number
   // config.parallel (MP.1): absent = none, nothing injected.
   parallel?: ParallelLevel
+  // The round report duty (plans/0081 D2): finalPhase is true when this
+  // phase is the round's last task-bearing one — the template then renders
+  // the report-duty partial beside the phase duties (end the task list with
+  // one wrap-up task whose deliverable is the round report), and reportFile
+  // names the round's report path. A round ending in a trailing task-less
+  // phase (knowledge) passes neither: that side-channel session writes the
+  // report as its second artifact (D6b).
+  finalPhase?: boolean
+  reportFile?: string
 }): string {
   const type = input.phase
   return renderPrompt(facts, "phase-plan", {
@@ -121,6 +131,8 @@ export function renderPhasePlan(facts: PromptFacts, input: {
     trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     planDuties: input.planDuties,
+    finalPhase: input.finalPhase || undefined,
+    reportFile: input.finalPhase ? input.reportFile : undefined,
     ...parallelismVars(facts, input.parallel),
   })
 }
@@ -153,6 +165,10 @@ export function renderImplementPlan(facts: PromptFacts, input: {
   taskIndex: string
   numberStart?: number
   parallel?: ParallelLevel
+  // The round's number (plans/0081 D2): the no-phase implicit round's single
+  // phase is final, so its planner carries the report duty like any other —
+  // the round's report path is derived from it. Absent = no report duty.
+  round?: number
 }): string {
   return renderPrompt(facts, "implement-plan", {
     phaseId: input.phaseId,
@@ -162,6 +178,8 @@ export function renderImplementPlan(facts: PromptFacts, input: {
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
+    finalPhase: input.round !== undefined || undefined,
+    reportFile: input.round !== undefined ? reportForUserPath(input.round) : undefined,
     ...parallelismVars(facts, input.parallel),
   })
 }

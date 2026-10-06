@@ -36,10 +36,12 @@ Process documents are the DRIVER's record of this long-running work — .auto/ a
 Constraints:
 1. once the whole task is complete, check for yourself whether it is genuinely complete;
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
-   for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), ask with the question tool —
-   a human is attending this planning run and the DRIVER waits for the answer with no timeout; there is no automatic proxy answer, so never decide in the user's place and never leave
-   an `AUTO-RESOLVE` marker in this session. Plain engineering trade-offs that were always yours remain yours, no record required.
+   for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), do not call the question tool —
+   take the recommended option as a provisional default, record the question in the affected task documents (the context, the options with their consequences, the default taken and how
+   to override it), and continue; the round report's needs-attention section lists every such question for the person's considered answer, so a decision is never closed in real time.
+   Plain engineering trade-offs that were always yours remain yours, no record required.
    Asking the same question again after it was answered blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. You may add to the content of docs/ but not modify it (if a modification is unavoidable, annotate it as AUTO-DECISION and record it in the relevant document).
 Context-budget protocol (this session manages its own context): the DRIVER watches this session's token usage and steers in one-line `[DRIVER] context: …` notices at milestones (about half the budget, then about 85%) — information, not interrupts; keep working. When the remaining work would not fit the budget (a notice says so, or your own judgment does), hand over at a natural boundary — a coherent step finished, nothing half-edited: write into docs/T-003/handoff.md (overwriting it) what a brand-new session continuing this task from that file alone plus the task-background digest context.md and docs/ needs — the progress so far, the key decisions, the verified facts and file paths, the dead ends, and the next steps — ending with `Status: continue` (task incomplete) or `Status: done` (task fully done) as its last line, a protocol string the driver parses, written verbatim and untranslated; then end the session. A session that finishes the task comfortably inside the budget needs no handover; a "[DRIVER] This session's context has reached the wall" notice overrides everything above: write the file immediately and end the session.
 

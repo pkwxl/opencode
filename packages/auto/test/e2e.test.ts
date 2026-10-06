@@ -6,7 +6,6 @@ import { dirname, join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
 import { subtaskDoc, taskDoc } from "@opencode-ai/auto-core/docpaths"
 import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
-import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { createServices, installServices, services } from "@opencode-ai/auto-core/services"
@@ -99,9 +98,12 @@ async function completeLetters(dir: string, letters: string[]) {
 
 // Fill in the round brief's `## Close` restatement listing, which the
 // round-close gate requires before the next round opens (plans/0049 G8;
-// plan's prelude enforces it).
+// plan's prelude enforces it), and the round user report (plans/0081 D4 — a
+// run self-heals one through an appended report task; the fixture writes it
+// directly).
 async function fillClose(dir: string, round = "R-01") {
   await Bun.write(join(dir, `docs/${round}/round.md`), `# Round ${round}\n\n## Close\n\n- Restated: none needed.\n- Accepted as lost: none.\n`)
+  await Bun.write(join(dir, `docs/${round}/report-for-user.md`), `# Round report\n\nThe round's account for the person.\n\n<!-- auto: eof -->\n`)
 }
 
 // Phased flow P3 end to end (phases=mv, the m phase already done): the v
@@ -819,7 +821,7 @@ describe("CLI parsing: run-side options and the config", () => {
           const run = await runCli([command, dir, ...extra])
           expect(run.code).toBe(1)
           expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
-          expect(run.err).toContain("state them in .opencode/auto/brief.md")
+          expect(run.err).toContain("state them in the project brief (opencode-auto init <dir> --brief <text> | --brief-file <path>, likewise amend) or in the planning input")
         }
       }
       // The refusal happens before any write
@@ -906,8 +908,9 @@ describe("CLI: init freezes the project config", () => {
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
       expect(init.out).not.toContain("list tasks in")
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // the brief stub is still init's (written when missing)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
+      // the brief is the optional --brief seed (plans/0081 D11): a plain
+      // init writes none
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
         contextLimit: 64,
@@ -1079,7 +1082,7 @@ describe("CLI: init freezes the project config", () => {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("full overwrite drops the retired key commit = false")
-      expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in .opencode/auto/brief.md')
+      expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in the project brief (init/amend --brief) or in the planning input')
       expect(init.out).toContain('full overwrite drops the retired key destDir = "app"')
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
       await commitFixture(dir)
@@ -1805,25 +1808,34 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const overwrite = await runCli(["init", dir, "-f", "--context-limit", "32"])
       expect(overwrite.code).toBe(1)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe(renderProjectBrief())
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("init -p is retired (plans/0053 D31): the message points at brief.md and plan -p; a human-written brief is not touched", async () => {
+  test("init -p is retired (plans/0053 D31; the brief seed is --brief, plans/0081 D11): the notice points at the seed flags; a seeded brief is never touched by a bare re-init", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
-      expect((await runCli(["init", dir])).code).toBe(0)
-      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
-      // After a person rewrites the brief, an init with -p always exits on the
-      // retired notice and the file survives untouched
-      await Bun.write(brief, "Migrate legacy to bun\n")
+      // The seed: written verbatim, nothing written when omitted.
+      expect((await runCli(["init", dir, "--brief", "Migrate legacy to bun."])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
       const refused = await runCli(["init", dir, "-p", "the revised intent"])
       expect(refused.code).toBe(1)
-      expect(refused.err).toBe("--prompt is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p\n")
-      expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun\n")
+      expect(refused.err).toBe(
+        "--prompt is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p\n",
+      )
+      // A bare re-init never touches the seeded brief (§7 A5); the overwrite
+      // gate is git-bound, so commit between inits.
+      await commitFixture(dir)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
+      // An explicit --brief replaces it — the person's word wins.
+      expect((await runCli(["init", dir, "--brief", "Second intent."])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("Second intent.\n")
+      // The seed and the planning input are exclusive to their commands.
+      expect((await runCli(["run", dir, "--brief", "x"])).code).toBe(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2058,7 +2070,9 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
     try {
       const prompt = await runCli(["init", dir, "-p", "intent"])
       expect(prompt.code).toBe(1)
-      expect(prompt.err).toBe("--prompt is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p\n")
+      expect(prompt.err).toBe(
+        "--prompt is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p\n",
+      )
       const flag = await runCli(["init", dir, "--amend"])
       expect(flag.code).toBe(1)
       expect(flag.err).toBe("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>\n")
@@ -2077,13 +2091,13 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       expect(init.code).toBe(0)
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
       // The config layer only: nothing lands under docs/ (no round directory,
-      // no round.md stub — round artifacts are all plan's), the brief stub is
-      // written
+      // no round.md stub — round artifacts are all plan's), and no brief is
+      // written without --brief (plans/0081 D11)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       expect(await stat(join(dir, "docs/R-01")).catch(() => undefined)).toBeUndefined()
       expect(await Bun.file(join(dir, "docs/R-01/round.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
       // An overwrite init (no round established): the same closing line, still
       // no round established
       await commitFixture(dir)
@@ -2404,7 +2418,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect(none.err).toContain("name at least one key to change")
       expect(none.err).toContain(`opencode-auto fix ${dir}`)
       const refused: [string[], string][] = [
-        [["-p", "intent"], "-p/--prompt is not an amend option: the brief is not config — edit .opencode/auto/brief.md directly"],
+        [["-p", "intent"], "-p/--prompt is not an amend option: the planning input is plan's (-p/--file of opencode-auto plan); the brief is revised with --brief <text> | --brief-file <path>"],
         [["--implement-prompt", "plan the work"], "--implement-prompt is retired: plan tasks with opencode-auto plan <dir>"],
         [["-f", "--phases", "am"], "-f/--force is not an amend option"],
         // The --amend flag is retired everywhere (init no longer takes it, so
@@ -2433,7 +2447,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
       // layer and no longer re-syncs the phase tail
       expect((await runCli(["plan", dir])).code).toBe(0)
       await rm(join(dir, "opencode.json"))
-      await rm(join(dir, ".opencode/auto/brief.md"))
+      await rm(join(dir, ".opencode/auto/brief.md"), { force: true })
       const amended = await runCli(["amend", dir, "--test-by-driver", "--phases", "amt", "--parallel", "none", "--agent", "opencode"])
       expect(amended.code).toBe(0)
       expect(amended.out).toContain("✓ amended (--agent --test-by-driver --phases --parallel); the other keys are unchanged")
@@ -3882,32 +3896,66 @@ describe("CLI: run under --subtask auto over the claude adapter (auto-core plans
   }, 60_000)
 })
 
-describe("CLI: the project brief stub (plans/0052 D9)", () => {
-  test("init writes the stub only when brief.md is missing; -p is retired; reset removes only the untouched stub", async () => {
+describe("CLI: the project brief seed (plans/0081 D11, superseding 0052 D9's stub)", () => {
+  test("--brief seeds verbatim; omitted writes nothing; a bare re-init never touches it; reset keeps it; -p stays retired", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
       const first = await runCli(["init", dir])
-      expect(first.out).toContain("created: .opencode/auto/brief.md (project brief stub")
-      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
-      await Bun.write(brief, `${renderProjectBrief()}\nMigrate legacy/pkg to app/.\n`)
+      expect(first.code).toBe(0)
+      expect(await Bun.file(brief).exists()).toBe(false)
       await commitFixture(dir)
-      expect((await runCli(["init", dir])).out).toContain("already exists, skipped: .opencode/auto/brief.md")
+      const seeded = await runCli(["init", dir, "--brief", "Migrate legacy/pkg to app/."])
+      expect(seeded.out).toContain("created: .opencode/auto/brief.md (the brief seed, verbatim")
+      expect(await Bun.file(brief).text()).toBe("Migrate legacy/pkg to app/.\n")
+      await commitFixture(dir)
+      expect((await runCli(["init", dir])).out).not.toContain(".opencode/auto/brief.md")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
       const reset = await runCli(["reset", dir])
-      expect(reset.out).toContain("keep: .opencode/auto/brief.md (filled in, not the init stub, kept)")
+      expect(reset.out).toContain("keep: .opencode/auto/brief.md (the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to)")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
-      // init's -p is retired (plans/0053 D31): the stub is there, a person
-      // edits it directly; with -p it is always refused
-      await rm(brief)
+      // init's -p is retired (plans/0053 D31; the seed is --brief): with -p it
+      // is always refused
       const refused = await runCli(["init", dir, "-p", "intent"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("--prompt is retired")
-      // reset's deletions commit before the re-init (the overwrite gate is
-      // git-bound since init bootstraps the repository)
       await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
+      expect(await Bun.file(brief).text()).toBe("Migrate legacy/pkg to app/.\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("amend --brief revises the brief beside the config keys (plans/0081 D11.2)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--brief", "first"])).code).toBe(0)
+      const amended = await runCli(["amend", dir, "--brief", "revised intent"])
+      expect(amended.code).toBe(0)
+      expect(amended.out).toContain("replaced: .opencode/auto/brief.md (the brief, verbatim)")
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("revised intent\n")
+      // amend still refuses -p with the brief pointer (A8).
+      const refused = await runCli(["amend", dir, "-p", "x"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("the brief is revised with --brief <text> | --brief-file <path>")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("plan --scaffold prints the active pack's planning-input template and exits 0 (plans/0081 D12.2)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const scaffold = await runCli(["plan", dir, "--scaffold"])
+      expect(scaffold.code).toBe(0)
+      expect(scaffold.out).toContain("What this step is for (one sentence, the person's own terms):")
+      expect(scaffold.out).toContain("What would convince you it is done:")
+      expect(await Bun.file(join(dir, "docs")).exists()).toBe(false)
+      // The scaffold takes no other option.
+      expect((await runCli(["plan", dir, "--scaffold", "-p", "text"])).code).toBe(1)
+      expect((await runCli(["run", dir, "--scaffold"])).code).toBe(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

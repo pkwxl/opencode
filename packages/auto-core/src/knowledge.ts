@@ -1,6 +1,6 @@
 import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
+import { priorKnowledgeDoc, reportForUserPath, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
 import { gitOf } from "./git-ops"
@@ -33,10 +33,14 @@ export function knowledgeFile(phase: PhaseUnit): string {
 
 // Idempotence check: a non-empty knowledge document for this phase means
 // already extracted. Once the phase is done the extraction hook does not fire
-// anyway (routePhase routes incomplete phases only).
-export async function existingKnowledge(dir: string, phase: PhaseUnit): Promise<string | undefined> {
+// anyway (routePhase routes incomplete phases only). With the round report in
+// play (plans/0081 D6b — the round ends in this knowledge phase), the report
+// counts as extracted only when it is non-empty too.
+export async function existingKnowledge(dir: string, phase: PhaseUnit, report?: string): Promise<string | undefined> {
   const file = knowledgeFile(phase)
-  return (await Bun.file(join(dir, file)).text().catch(() => "")).trim() ? file : undefined
+  if (!(await Bun.file(join(dir, file)).text().catch(() => "")).trim()) return undefined
+  if (report !== undefined && !(await Bun.file(join(dir, report)).text().catch(() => "")).trim()) return undefined
+  return file
 }
 
 // Knowledge extraction orchestration (mirrors the requireArtifact skeleton of
@@ -56,14 +60,19 @@ export async function existingKnowledge(dir: string, phase: PhaseUnit): Promise<
 // unclean worktree pollutes the start baseline of every later unit, it must
 // stop first). A commit failure (requireArtifact's blocked) is likewise thrown
 // up under the dirty convention, and the caller halts.
+// report (plans/0081 D6b): the round report path, passed when this knowledge
+// phase is the round's last — the one session then writes two artifacts
+// (kb.md machine-facing, the report human-facing), both hard requirements.
 export async function extractKnowledge(
   client: ClientSource,
   dir: string,
   opts: Opts,
   phase: PhaseUnit,
+  extra: { report?: string } = {},
 ): Promise<
   { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }
 > {
+  const report = extra.report
   const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
   // The run's git service (git-ops.ts gitOf, the seam's one resolution
@@ -71,11 +80,11 @@ export async function extractKnowledge(
   // fallback; a test wanting committing off installs the no-commit double
   // on the carrier).
   const git = gitOf(opts)
-  const existing = await existingKnowledge(dir, phase)
+  const existing = await existingKnowledge(dir, phase, report)
   if (existing) {
     // ③ Backfill commit: the document is on disk but still on the uncommitted
     // changes list → commit, then complete.
-    const pending = await git.commitPending(dir, opts, task, commit, [existing])
+    const pending = await git.commitPending(dir, opts, task, commit, report !== undefined ? [existing, report] : [existing])
     if (pending !== "clean") {
       log(pending.ok ? `✓ knowledge document was produced but not committed; committed now: ${existing}` : `⚠ knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
       if (!pending.ok) return { type: "dirty", files: [existing] }
@@ -93,21 +102,28 @@ export async function extractKnowledge(
   const produced = await requireArtifact(
     client,
     task,
-    renderKnowledge(promptFacts(opts), { file, mode: opts.mode }),
+    renderKnowledge(promptFacts(opts), { file, mode: opts.mode, ...(report !== undefined ? { report } : {}) }),
     opts,
     {
       kind: "knowledge extraction",
       role: "knowledge",
       // Independent hidden task unit: entry clean gate + SHA baseline + close-out check (plans/0021-commit-boundary-design.md).
       unitStart: true,
-      artifact: `a non-empty knowledge document ${file}`,
-      detail: "missing or empty",
-      requirement: `write the knowledge document to ${file} (fill in the full section skeleton given in the prompt; when information is scarce, still write the skeleton and say why).`,
+      artifact: `a non-empty knowledge document ${file}${report !== undefined ? ` and the round report ${report}` : ""}`,
+      detail: report !== undefined ? "either document missing or empty" : "missing or empty",
+      requirement:
+        `write the knowledge document to ${file} (fill in the full section skeleton given in the prompt; when information is scarce, still write the skeleton and say why).` +
+        (report !== undefined ? ` Also write the round report to ${report} along the charter the prompt states (the person's account of the round; a round without its report does not close).` : ""),
       commit,
-      reset: () => rm(join(dir, file), { force: true }),
+      reset: async () => {
+        await rm(join(dir, file), { force: true })
+        if (report !== undefined) await rm(join(dir, report), { force: true })
+      },
       collect: async () => {
         const text = await Bun.file(join(dir, file)).text().catch(() => "")
-        return text.trim() ? true : undefined
+        if (!text.trim()) return undefined
+        if (report !== undefined && !(await Bun.file(join(dir, report)).text().catch(() => "")).trim()) return undefined
+        return true
       },
     },
   )

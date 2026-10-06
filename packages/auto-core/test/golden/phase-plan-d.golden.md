@@ -26,8 +26,8 @@ Document placement is anchored to tasks: each task's document artifacts go into 
 (subtask artifacts included, at docs/T-NNN/S<two-digit index>/index.md); once a path is created it is permanent and
 does not move with the phase/round.
 
-- Complete the module design on the target-system side (interfaces, data structures, adaptation points); design
-  artifacts are anchored per task, written into docs/T-NNN/.
+- Complete the module design of the work this project delivers (interfaces, data structures, integration points);
+  design artifacts are anchored per task, written into docs/T-NNN/.
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content;
@@ -90,6 +90,7 @@ Phase: R-01.P02
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. The task index must have at least one task: even if you conclude this phase has nothing to do, write one
    explanatory task and state the reason in its task document; producing no valid task causes a blocked shutdown.
 

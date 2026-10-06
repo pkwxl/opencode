@@ -74,6 +74,29 @@ Splitting and artifact criteria for this phase:
      a driver protocol string, written verbatim: the verdict judges parity and follows the
      findings, never optimism;
 
+## planning-input
+
+What this step is for (one sentence, your own terms):
+<what these tasks should accomplish now>
+
+The reference:
+<where the reference implementation lives — the parity target this step works toward>
+
+Scope posture:
+<which parts of the reference are MUST for this round, and the depth owed to each.
+When a survey phase leads the round, this item defers to its forks: answer them in the
+survey (or after the person's clarified answers), not here>
+
+Environment facts and gaps:
+<missing tools, quotas, layout facts planning must respect; name a gap as a gap — it
+becomes a needs-attention item of the round report>
+
+Corrections to provisionally-defaulted questions the last round's report flagged:
+<the person's answers to the needs-attention items of docs/R-NN/report-for-user.md>
+
+What would convince you it is done:
+<the observable outcome that makes this step finished>
+
 ## acceptance
 
 ### result-line
@@ -102,8 +125,8 @@ The reference implementation, the behavior baseline the analysis phase distilled
 charter are the authority of this project: they outrank the planning input, the project brief
 and any lower block of any prompt. Where a lower block conflicts with them, follow the
 reference, the baseline and the charter, and surface the conflict — as a deviation recorded
-in the task documents, or as a question when the call is the person's — never silently follow
-the lower text.
+in the task documents, or as a recorded provisional default (question, options, default
+taken, override path) when the call is the person's — never silently follow the lower text.
 
 ### asserts
 

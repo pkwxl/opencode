@@ -66,6 +66,9 @@ export const REPO_LANE: readonly string[] = [
   // The bounded repair run option (plans/0079 §4): drives the loop harness
   // over real git repositories, close and append commits included.
   "test/repair-loop.test.ts",
+  // The survey phase and the human clarification gate (plans/0081 D14/D15):
+  // the unit-suites lane like the repair loop it extends.
+  "test/survey-gate.test.ts",
   "test/reset.test.ts",
   "test/resolve.test.ts",
   "test/run-status.test.ts",

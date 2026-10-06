@@ -226,7 +226,7 @@ describe("the io/Interactive seam: askHuman's wait routes to the injected implem
       expect(io.asked).toEqual([{ promptText: "enter your answer within 5 minutes (Enter to confirm, auto-answered on timeout): ", minutes: 5 }])
       expect(lines).toContain("→ human answer: sqlite, the embedded one")
       // The answer was delivered to the session as the question's reply.
-      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_widget", [["sqlite, the embedded one"]]])
+      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_widget", [[`[re: Which storage should the widget use?]\nsqlite, the embedded one`]]])
       expect(existsSync(join(dir, "docs", "T-001", "done.md"))).toBe(true)
       expect(io.attached.length).toBeGreaterThanOrEqual(1)
       expect(io.closes()).toBe(1)
@@ -270,7 +270,7 @@ describe("the io/Interactive seam: askHuman's wait routes to the injected implem
       // semantics).
       expect(io.asked).toEqual([{ promptText: "enter your answer (Enter to confirm, no timeout and no automatic answer under plan): ", minutes: undefined }])
       expect(lines).toContain("→ human answer: src/widget.ts only")
-      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_plan", [["src/widget.ts only"]]])
+      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_plan", [[`[re: Which modules should the first task own?]\nsrc/widget.ts only`]]])
       // The planning step itself completed and the run stopped at plan's own
       // boundary (m mode's summary line), exactly as without the seam.
       expect(lines).toContain("✓ phase planning complete: docs/R-01/P01-implement/tasks.md lists 1 task(s)")
@@ -335,7 +335,7 @@ describe("the io/Interactive seam: an io factory builds the terminal sideband ov
       // The answer written to the injected input line settled the question
       // as the human's answer, and the run completed around it.
       expect(lines).toContain("→ human answer: over the injected io")
-      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_widget", [["over the injected io"]]])
+      expect(agent.argsOf("replyQuestion")).toContainEqual(["req_widget", [[`[re: Which storage should the widget use?]\nover the injected io`]]])
       expect(existsSync(join(dir, "docs", "T-001", "done.md"))).toBe(true)
     } finally {
       printed.mockRestore()

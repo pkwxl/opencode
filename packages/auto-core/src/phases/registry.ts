@@ -22,8 +22,12 @@ export type PhaseLetter = (typeof PHASE_LETTERS)[number]
 // before the phase is marked done (phases.ts completePhase):
 // - verdict: the phase directory's verdict.md result line; `Result: FAIL` blocks;
 // - acceptance: the phase directory's acceptance.md must carry the human's
-//   `Accepted: yes`. Builtin types get it from config `acceptanceGate`.
-export const PHASE_GATES = ["verdict", "acceptance"] as const
+//   `Accepted: yes`. Builtin types get it from config `acceptanceGate`;
+// - human (plans/0081 D14.3): the phase directory's survey.md — zero `Fork:`
+//   lines (or the person's `Clarified: yes`) completes the phase, at least
+//   one open fork holds it open for the person. Shipped on the re-work
+//   bundles' survey type; builtin types carry none.
+export const PHASE_GATES = ["verdict", "acceptance", "human"] as const
 export type PhaseGate = (typeof PHASE_GATES)[number]
 
 // Reasoning tiers (plans/0055 §3, §5): how much reasoning a session's work

@@ -46,7 +46,7 @@ Document placement is anchored to tasks: each task's document artifacts go into 
 (subtask artifacts included, at docs/T-NNN/S<two-digit index>/index.md); once a path is created it is permanent and
 does not move with the phase/round.
 
-- Complete the code migration and rework; artifacts are the source-code changes plus the task reports under
+- Complete the implementation work; artifacts are the source-code changes plus the task reports under
   docs/T-NNN/.
 ## Tasks
 
@@ -116,6 +116,7 @@ Phase: R-01.P02
    "whether the new field is called matched or paired" changes no user-visible behaviour — AUTO-DECISION.
    Annotate each decision under one kind only; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+   A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. The append must add at least one new task: even if you conclude the input is already covered by the existing
    tasks, write one explanatory task and state the reason in its task document; producing no valid new task causes a
    blocked shutdown.

@@ -61,15 +61,18 @@ Do not issue the same call again before you have written these out.
      module X", "the list of differences for a certain API", "does a given risk exist");
    - Each item produces one standalone analysis document, written to its own file under docs/;
    - This phase produces analysis and conclusions only; modifying any implementation code is forbidden;
+   - The closing task also proposes the project brief — the goal in the target's own terms, where the reference/source lives, where
+     the deliverable goes, the constraints that bind every round — as one standalone document under this phase directory, so the
+     person can install it with `amend --brief-file <that document>`;
 
 ### d design
 
 4. Splitting and artifact criteria for this phase ({{phaseName}}):
-   - Split by design concern: data model, API contract, module boundaries, error handling, migration strategy and the like each become an item;
+   - Split by design concern: data model, API contract, module boundaries, error handling and the like each become an item;
    - Each item produces one design document, including the alternatives considered and why one was chosen;
    - A cross-concern consistency check (whether the design documents contradict each other) must be a standalone closing subtask;
 
-### m migration implementation
+### m implementation
 
 4. Splitting and artifact criteria for this phase ({{phaseName}}):
    - Vertical thin slices first: one callable path end to end per item; do not split by horizontal layer (all the schema first, then all the
@@ -100,6 +103,29 @@ Do not issue the same call again before you have written these out.
 4. Splitting and artifact criteria for this phase ({{phaseName}}):
    - Split by knowledge artifact: pitfall lists, reusable patterns, README/handover documents and the like each become an item;
    - Each item produces one standalone document that later tasks can reference directly;
+
+## planning-input
+
+What this step is for (one sentence, the person's own terms):
+<what these tasks should accomplish now>
+
+In scope:
+<the parts of the work this step must deliver>
+
+Out of scope:
+<what explicitly stays out of this step, even if adjacent>
+
+Constraints and environment facts (missing tools, quotas, layout):
+<hard facts planning must respect; name an environment gap as a gap>
+
+Priorities and the trade-offs that are the person's call:
+<which way to lean when scope, cost or risk pull apart>
+
+Corrections to provisionally-defaulted questions the last round's report flagged:
+<the person's answers to the needs-attention items of docs/R-NN/report-for-user.md>
+
+What would convince you it is done:
+<the observable outcome that makes this step finished>
 
 ## acceptance
 

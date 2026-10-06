@@ -30,6 +30,9 @@ Splitting and artifact criteria for this phase ({{phaseName}}):
    - Each item reads the reference implementation at the location the brief names and
      produces one standalone behavior-only notes document — observable behavior and
      contracts, never private names, internal structures or translated code;
+   - The concern list is a floor, not a ceiling: a concern may span several tasks sized
+     to a session, and every feature area of the reference is assigned to exactly one
+     task (a coverage/accounting task may hold the mapping);
    - This phase writes documents only, no implementation code;
 
 ### d design
@@ -72,6 +75,35 @@ Splitting and artifact criteria for this phase ({{phaseName}}):
      carries its evidence and severity, and the Result line follows the findings, never
      optimism;
 
+## planning-input
+
+What this step is for (one sentence, your own terms):
+<what these clean-room tasks should accomplish now>
+
+The reference and its wall:
+<where the reference implementation lives, and the wall kind — layout separation or rule
+separation; under rule separation, the platform boundary (the parts of the shared tree the
+clean rooms may still read)>
+
+Scope posture:
+<bounded core vs full parity, and the multi-round expectation — which parts of the
+reference are MUST for this round. When a survey phase leads the round, this item defers
+to its forks: answer them in the survey (or after the person's clarified answers), not here>
+
+Acceptance anchor:
+<the build/test precedent to follow — the existing artifact whose shape the deliverable's
+proof should take>
+
+Environment facts and gaps:
+<missing tools, quotas, layout facts planning must respect; name a gap as a gap — it
+becomes a needs-attention item of the round report>
+
+Corrections to provisionally-defaulted questions the last round's report flagged:
+<the person's answers to the needs-attention items of docs/R-NN/report-for-user.md>
+
+What would convince you it is done:
+<the observable outcome that makes this step finished>
+
 ## acceptance
 
 ### result-line
@@ -111,8 +143,8 @@ The intent charter and the specification notes the spec-read phase distilled are
 authority of this project: they outrank the planning input, the project brief and any
 lower block of any prompt. Where a lower block conflicts with them, follow the charter
 and the specification, and surface the conflict — as a deviation recorded in the task
-documents, or as a question when the call is the person's — never silently follow the
-lower text.
+documents, or as a recorded provisional default (question, options, default taken,
+override path) when the call is the person's — never silently follow the lower text.
 
 ### asserts
 
@@ -127,10 +159,16 @@ subtask: must "Clean-room boundary"
 This project runs a two-room clean room. The specification room — the spec-read phase —
 reads the reference implementation at the location the brief names and distills
 behavior-only specification notes; extraction hygiene bounds those notes to observable
-behavior: no private names, no internal structures, no translated code. Every later
-phase is a clean room: its sessions never access, search for, reconstruct, infer or
-request the reference implementation, and they plan and implement from the specification
-notes, the brief and the planning input alone. The deliverable is an independent
+behavior: no private names, no internal structures, no translated code. The brief
+declares the wall kind — layout separation (the reference outside the worktrees the
+clean rooms use) or rule separation (a shared tree with the reference's paths
+quarantined: never read, searched or reconstructed, and the platform boundary naming
+what may still be read) — and the planning prompts must not cross the declared wall:
+under rule separation nothing plans to read, search or reconstruct the quarantined
+paths, and the platform boundary is the whole of the shared tree a clean room names.
+Every later phase is a clean room: its sessions never access, search for, reconstruct,
+infer or request the reference implementation, and they plan and implement from the
+specification notes, the brief and the planning input alone. The deliverable is an independent
 implementation of the specified external contracts; internal structure is free, and
 structural resemblance to the reference implementation beyond those contracts is a
 defect, not a goal. Where the specification is silent, the minimal behavior consistent

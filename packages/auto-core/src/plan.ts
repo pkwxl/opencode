@@ -10,7 +10,9 @@
 //
 // Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
+import { projectBriefText } from "./brief"
 import { roundBriefPath, roundDirName } from "./docpaths"
+import { log } from "./log"
 import type { ModeSpec } from "./mode"
 import {
   currentPhase,
@@ -29,7 +31,7 @@ import {
   type PhaseTailDrift,
   type PhaseUnit,
 } from "./phases"
-import type { PlanInput } from "./plan-input"
+import { readPlanInput, type PlanInput } from "./plan-input"
 import { isolateRound } from "./git"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
@@ -160,6 +162,7 @@ export async function planPrelude(dir: string, opts: {
       if (previous.type === "stop") return previous
       lines.push(...previous.lines)
     }
+    lines.push(...(await planningNotices(dir, undefined, opts.input)))
     return establish(dir, round, opts.phases, lines, opts.isolate)
   }
   const route = await routePhase(dir, { loadPlan, bin })
@@ -215,6 +218,10 @@ export async function planPrelude(dir: string, opts: {
   }
   // Row 4.
   if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
+  // The advisory notices (plans/0081 D11.3/D12.3): the plan route is where a
+  // planning session is imminent — m mode's row 8 included (route.type is
+  // "plan" there too).
+  if (route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input)) log(line)
   // Row 5: the interrupted step is finished first (plans/0018 precedence);
   // the loop decides whether the record still matches the route. A hand-add
   // must not run under an open step: its snapshot and resume machinery
@@ -333,6 +340,25 @@ export async function planPrelude(dir: string, opts: {
 }
 
 const stop = (code: number, lines: string[]): PlanStop => ({ type: "stop", code, lines })
+
+// The person-facing advisory notices of a planning step (plans/0081 D11.3 /
+// D12.3): one line when no project brief exists (the survey phase will
+// propose one; the seed is optional), one when a planning step starts with no
+// input (the scaffold is one command away). Neither blocks anything, and
+// neither is a question — planning proceeds by the duties and the
+// default-and-record rule (D16).
+async function planningNotices(dir: string, phase: PhaseUnit | undefined, input: PlanInput | undefined): Promise<string[]> {
+  const lines: string[] = []
+  if ((await projectBriefText(dir)) === undefined) {
+    lines.push(
+      "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
+    )
+  }
+  if (!input && phase !== undefined && !(await readPlanInput(dir, phase))?.trim()) {
+    lines.push("ℹ no planning input given; plan --scaffold prints a template to complete (opencode-auto plan <dir> --scaffold)")
+  }
+  return lines
+}
 
 // The progress-record guard of rows 9–10 (plans/0053 D26): an append step
 // writes its own resume record, and .auto/progress.json holds one record (F2)

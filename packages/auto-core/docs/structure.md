@@ -67,7 +67,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Shape check | Non-trivial + `<!-- auto: eof -->` last-line criterion (pure) | `src/doccheck.ts` (0026) |
 | Read-only guard | chmod driver-owned files and AGENTS.md during `run` | `src/protect.ts` |
 | Round brief | `docs/R-NN/round.md` stub and readers | `src/round-brief.ts` (0049) |
-| Project brief | `.opencode/auto/brief.md` stub and planning-input reader | `src/brief.ts` (0052 D9) |
+| Project brief | `.opencode/auto/brief.md`: the person's optional seed (`init/amend --brief`), the planning-input reader, the survey's `## Project brief` proposal extraction | `src/brief.ts` (0052 D9, superseded by 0081 D11/D15) |
 
 ### agent — talking to a coding agent
 
@@ -174,7 +174,8 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | Wrap-up | Wrap-up session, `Result: PASS\|FAIL` parsing | `src/wrapup.ts` (0044) |
 | Knowledge | Knowledge phase and prior-knowledge extraction | `src/knowledge.ts` |
 | Status tree | Read-only round → phase → task → subtask view | `src/status.ts` |
-| Round close | Whole-tree P1 scan, build check, close listing before `plan` opens the next round | `src/round-close.ts` (0049) |
+| Round close | Whole-tree P1 scan, build check, close listing, the round user report's existence/shape before `plan` opens the next round | `src/round-close.ts` (0049; the report check 0081 D4) |
+| Round user report | `docs/R-NN/report-for-user.md`: the wrap-up task's mandated title and the D3 charter the self-heal's append input composes | `src/round-report.ts` (0081) |
 
 ### runtime — the process plane
 
@@ -187,7 +188,7 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | Project config | Constitutional options fixed by init in `.opencode/auto/config.json` | `src/config.ts` (0004) |
 | Config fix | The rule table behind `fix`: fixable/manual findings over the raw config and the config-layer artifacts, planned then applied; `renderAgentContract` | `src/config-fix.ts` (0052 D10–D11) |
 | AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md | `src/agents-block.ts` (0054) |
-| reset command | Remove init's configuration artifacts (the project brief only while it is the untouched stub) | `src/reset.ts` |
+| reset command | Remove init's configuration artifacts (the project brief is always kept — a seed or the analysis phase's generated brief) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |
 | .gitignore | Driver work-directory entries | `src/gitignore.ts` |
 | Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines | `src/lock.ts` (0053 D1–D3) |

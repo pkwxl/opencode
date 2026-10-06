@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadIntents, packSubsection, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
+import { loadIntents, packSubsection, parseIntentFile, resolveIntent, dutiesForPhase, planningInputScaffold } from "../src/intent/load"
 import { guaranteesProblem, parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { DEFAULT_INTENT, INTENT_SECTIONS, PARALLEL_LEVELS } from "../src/intent/types"
 
@@ -16,7 +16,7 @@ function packText(name: string, sections: Record<string, string>): string {
 }
 
 describe("intent file protocol (parseIntentFile)", () => {
-  test("a full pack captures all seven sections in canonical order", () => {
+  test("a full pack captures all eight sections in canonical order", () => {
     const pack = parseIntentFile(
       "x",
       packText("x", {
@@ -27,6 +27,7 @@ describe("intent file protocol (parseIntentFile)", () => {
         "artifact spec": "artifact conventions.",
         parallelism: "planning width.",
         guarantees: "the consistency contract.",
+        "planning-input": "the scaffold.",
       }),
     )
     expect(pack.name).toBe("x")
@@ -37,7 +38,23 @@ describe("intent file protocol (parseIntentFile)", () => {
     expect(pack.artifactSpec).toBe("artifact conventions.")
     expect(pack.parallelism).toBe("planning width.")
     expect(pack.guarantees).toBe("the consistency contract.")
+    expect(pack.planningInput).toBe("the scaffold.")
     expect(Object.keys(pack)).toEqual(["name", ...INTENT_SECTIONS])
+  })
+
+  // The scaffold reader's per-section fallback (plans/0081 D12): the active
+  // pack's section wins, the default pack's serves when the active pack has
+  // none, and neither having one is undefined.
+  test("planningInputScaffold: the active pack wins, the default pack serves the fallback", () => {
+    const packs = {
+      default: parseIntentFile("default", packText("default", { "planning-input": "the neutral scaffold." })),
+      scenario: parseIntentFile("scenario", packText("scenario", { "planning-input": "the scenario scaffold." })),
+      bare: parseIntentFile("bare", packText("bare", { quality: "only quality." })),
+    }
+    expect(planningInputScaffold(packs, "scenario")).toBe("the scenario scaffold.")
+    expect(planningInputScaffold(packs, "bare")).toBe("the neutral scaffold.")
+    expect(planningInputScaffold(packs, "missing")).toBe("the neutral scaffold.")
+    expect(planningInputScaffold({ default: packs.bare! }, "bare")).toBeUndefined()
   })
 
   test("partial packs leave absent sections undefined", () => {

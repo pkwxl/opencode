@@ -26,14 +26,17 @@ import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { parsePhaseTypeFile } from "./phases/custom"
 import { BUILTIN_PHASE_TYPES, PRESET_FORM, phasesProblem, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import cleanroomManifest from "../templates/bundles/cleanroom/bundle.json" with { type: "file" }
+import cleanroomSurvey from "../templates/bundles/cleanroom/phases/survey.md" with { type: "file" }
 import cleanroomSpecRead from "../templates/bundles/cleanroom/phases/spec-read.md" with { type: "file" }
 import cleanroomAudit from "../templates/bundles/cleanroom/phases/audit.md" with { type: "file" }
 import cleanroomPack from "../templates/bundles/cleanroom/intents/cleanroom.md" with { type: "file" }
 import cleanroomMode from "../templates/bundles/cleanroom/modes/cleanroom.md" with { type: "file" }
 import faithfulManifest from "../templates/bundles/faithful/bundle.json" with { type: "file" }
+import faithfulSurvey from "../templates/bundles/faithful/phases/survey.md" with { type: "file" }
 import faithfulPack from "../templates/bundles/faithful/intents/faithful.md" with { type: "file" }
 import faithfulMode from "../templates/bundles/faithful/modes/faithful.md" with { type: "file" }
 import faithfulLeanManifest from "../templates/bundles/faithful-lean/bundle.json" with { type: "file" }
+import faithfulLeanSurvey from "../templates/bundles/faithful-lean/phases/survey.md" with { type: "file" }
 import faithfulLeanPack from "../templates/bundles/faithful-lean/intents/faithful-lean.md" with { type: "file" }
 import faithfulLeanMode from "../templates/bundles/faithful-lean/modes/faithful-lean.md" with { type: "file" }
 
@@ -207,8 +210,10 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
 // under templates/bundles/ + one table entry; the files embed at compile time
 // via `with { type: "file" }` — the only way the compiled binary sees them —
 // and read lazily on first resolve). The shipped cleanroom bundle (0079 §1.1's
-// validating instance) is the Clean-Room Redesign protocol: spec-read and
-// audit custom types around the builtin design/implement/test flow, the
+// validating instance) is the Clean-Room Redesign protocol: survey (the
+// sizing-and-forks front phase with the human clarification gate, plans/0081
+// D14), spec-read and audit custom types around the builtin
+// design/implement/test flow, the
 // cleanroom pack (the repair duties the bounded repair loop consumes as
 // content), and the cleanroom mode carrying the clean-room boundary. Beside
 // it the intent family's other two postures (0080 §6), both on the builtin
@@ -222,6 +227,7 @@ function builtinBundles(): Record<string, IntentBundleFiles> {
     builtinTable = {
       cleanroom: {
         "bundle.json": readFileSync(cleanroomManifest, "utf8"),
+        "phases/survey.md": readFileSync(cleanroomSurvey, "utf8"),
         "phases/spec-read.md": readFileSync(cleanroomSpecRead, "utf8"),
         "phases/audit.md": readFileSync(cleanroomAudit, "utf8"),
         "intents/cleanroom.md": readFileSync(cleanroomPack, "utf8"),
@@ -229,11 +235,13 @@ function builtinBundles(): Record<string, IntentBundleFiles> {
       },
       faithful: {
         "bundle.json": readFileSync(faithfulManifest, "utf8"),
+        "phases/survey.md": readFileSync(faithfulSurvey, "utf8"),
         "intents/faithful.md": readFileSync(faithfulPack, "utf8"),
         "modes/faithful.md": readFileSync(faithfulMode, "utf8"),
       },
       "faithful-lean": {
         "bundle.json": readFileSync(faithfulLeanManifest, "utf8"),
+        "phases/survey.md": readFileSync(faithfulLeanSurvey, "utf8"),
         "intents/faithful-lean.md": readFileSync(faithfulLeanPack, "utf8"),
         "modes/faithful-lean.md": readFileSync(faithfulLeanMode, "utf8"),
       },

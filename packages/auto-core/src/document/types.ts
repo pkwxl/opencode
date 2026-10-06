@@ -35,10 +35,15 @@
 // - artifact:        AI-produced process documents consumed by later stages
 //                    (task, round and phase documents under docs/);
 //                    shape-checked (non-trivial + eof terminator).
+// - userReport:      the round user report docs/R-NN/report-for-user.md
+//                    (plans/0081 D6a): written by a task or the knowledge
+//                    side-channel session, read by the person; a process
+//                    role, eof-scan exempt like its round-level siblings
+//                    (the round-close gate itself checks the terminator).
 // - freeform:        everything else — the deliverable itself and the
 //                    project's own documents; the standardization boundary
 //                    places no schema on it beyond the P1 prohibition.
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "freeform"
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "userReport" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `Artifacts:` line, M1.4). The driver derives its mechanical checks from this

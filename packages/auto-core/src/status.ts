@@ -11,7 +11,7 @@
 // one read-model section the lanes design adds, present exactly while a
 // parent run holds lanes (a killed parent's leftovers show here too, which
 // is the recovery story's first line).
-import { currentPhase, currentRound, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
 import { shellProfile } from "./shell"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
 
@@ -55,7 +55,11 @@ export async function renderStatus(dir: string): Promise<string[]> {
   for (const phase of state.phases) {
     // Closed before done, as in formatPhases: the two views agree.
     const mark = state.closed.has(phase.id) ? "⊘" : state.done.has(phase.id) ? "✓" : phase === current ? "▶" : " "
-    lines.push(`  [${mark}] ${phaseLabel(phase)}`)
+    // The awaiting-clarification note (plans/0081 D14.3): a human-gated phase
+    // whose tasks are all done but whose survey still records open forks —
+    // the round is waiting on the person, and status says so.
+    const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
+    lines.push(`  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, then add `Clarified: yes`)" : ""}`)
     let tasks: Task[]
     try {
       tasks = (await loadPlan(dir, phase)).tasks
