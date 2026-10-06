@@ -99,11 +99,12 @@ describe("the bundle self-ratchet (plans/0080 §7)", () => {
           expect(text).toContain(packSubsection(b.pack, "guarantees", "precedence")!)
         })
 
-        // The execution surfaces under the bundle's mode and ondemand stamp:
-        // whole (the run's unit session), subtask (a project that decomposes
-        // after all) and wrap-up. The renders went through the render gate.
+        // The execution surfaces under the bundle's mode and off stamp: whole
+        // (the run's unit session — no context-budget protocol under off),
+        // subtask (a project that decomposes after all) and wrap-up. The
+        // renders went through the render gate.
         for (const [template, text] of [
-          ["whole", renderWhole(b.facts, views.plan, views.task, docs, { mode: b.mode, ondemand: true, budget: true })],
+          ["whole", renderWhole(b.facts, views.plan, views.task, docs, { mode: b.mode })],
           ["subtask", renderSubtask(b.facts, views.plan, views.task, docs, "write the schema part of the migration script", { mode: b.mode })],
           ["wrapup", renderWrapup(b.facts, views.plan, views.task, docs, { solo: true, mode: b.mode })],
         ] as const) {
@@ -153,7 +154,7 @@ describe("the bundle self-ratchet (plans/0080 §7)", () => {
         expect(verdictPlan).toContain("Result: PASS")
         // The mode's boundary text reaches the whole-task and subtask
         // surfaces (the `whole`/`subtask` asserts pin the same literals).
-        const whole = renderWhole(b.facts, views.plan, views.task, docs, { mode: b.mode, ondemand: true })
+        const whole = renderWhole(b.facts, views.plan, views.task, docs, { mode: b.mode })
         const sub = renderSubtask(b.facts, views.plan, views.task, docs, "write the schema part of the migration script", { mode: b.mode })
         expect(whole).toContain(modeAnchor(name))
         expect(sub).toContain(modeAnchor(name))

@@ -184,7 +184,7 @@ describe("bundle sources", () => {
     const files = await resolveIntentBundle("cleanroom")
     expect(files).toBeDefined()
     const bundle = parseIntentBundle(files!)
-    expect(bundle).toMatchObject({ name: "cleanroom", phases: "spec-read,design,implement,test,audit", mode: "cleanroom", stamps: { subtask: "ondemand" } })
+    expect(bundle).toMatchObject({ name: "cleanroom", phases: "spec-read,design,implement,test,audit", mode: "cleanroom", stamps: { subtask: "off" } })
     // The load-bearing pack subsections survive wholesale pack replacement:
     // the result line (the verdict the driver parses), the process-reference
     // rule (the P1 scan's explanation), and the repair duties the bounded
@@ -223,9 +223,10 @@ describe("bundle sources", () => {
       expect(Object.keys(files!).sort()).toEqual(["bundle.json", `intents/${name}.md`, `modes/${name}.md`])
       const bundle = parseIntentBundle(files!)
       // The builtin skeleton: the comma form of the five builtin ids, no
-      // custom phase types shipped, the ondemand subtask stamp, the mode
-      // named like the bundle.
-      expect(bundle).toMatchObject({ name, phases: "analysis,design,implement,test,acceptance", mode: name, stamps: { subtask: "ondemand" } })
+      // custom phase types shipped, the off subtask stamp (flipped from
+      // ondemand 2026-10-05, matching the run default), the mode named like
+      // the bundle.
+      expect(bundle).toMatchObject({ name, phases: "analysis,design,implement,test,acceptance", mode: name, stamps: { subtask: "off" } })
       expect(bundle.types).toEqual([])
       expect(bundle.files.phases).toEqual({})
       const dir = tempDir()
