@@ -40,6 +40,13 @@ export const SWITCH_ENV = {
   // off is the emergency exit — the mechanical layers (the render gate, the
   // precedence blocks) keep running; only the semantic check goes away.
   planVerify: "OPENCODE_AUTO_PLAN_VERIFY",
+  // Consented remediation (plans/0082 §5 D8): the blockage dossier's
+  // diagnosis session, the blockage document and the prelude executor — the
+  // machinery that turns a residual blockage into one consented `Choice:`
+  // line. off is the emergency exit returning today's exact static behavior;
+  // the dossier's corrected block line (D2) survives the switch, being
+  // mechanical truth.
+  remediate: "OPENCODE_AUTO_REMEDIATE",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -127,6 +134,9 @@ export const MODEL_ROLES = [
   "prior-knowledge",
   "implement-scan",
   "number-recovery",
+  // The blockage diagnosis session (plans/0082 §4 D4): the read-only
+  // side-channel that proposes a remediation plan over the dossier.
+  "diagnose",
   "bypass",
 ] as const
 export type ModelRole = (typeof MODEL_ROLES)[number]
@@ -311,6 +321,11 @@ export type Switches = {
   // verifier, whatever the switch says — the switch only removes the check,
   // never adds one to a pack that declares none.
   planVerify: boolean
+  // Consented remediation (default on, plans/0082 §5 D8): the blockage
+  // dossier's diagnosis session, the `docs/R-NN/blockage-<seq>.md` document
+  // and the prelude row that executes `Choice:` marks. off returns today's
+  // exact static behavior — only removes, never adds.
+  remediate: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -338,6 +353,7 @@ const SWITCH_DEFAULTS: Switches = {
   agent: undefined,
   laneIsolation: false,
   planVerify: true,
+  remediate: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -557,6 +573,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
     planVerify: onOff(SWITCH_ENV.planVerify, env[SWITCH_ENV.planVerify], SWITCH_DEFAULTS.planVerify),
+    remediate: onOff(SWITCH_ENV.remediate, env[SWITCH_ENV.remediate], SWITCH_DEFAULTS.remediate),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -597,6 +614,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
     switches.laneIsolation === SWITCH_DEFAULTS.laneIsolation ? undefined : `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
     switches.planVerify === SWITCH_DEFAULTS.planVerify ? undefined : `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
+    switches.remediate === SWITCH_DEFAULTS.remediate ? undefined : `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -623,6 +641,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
     `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
     `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
+    `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
   ].join(", ")
 }
 

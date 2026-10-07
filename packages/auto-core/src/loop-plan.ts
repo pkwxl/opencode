@@ -10,17 +10,19 @@
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
-import { projectBriefText } from "./brief"
+import { openBlockage, type BlockageSite } from "./blockage-diagnose"
+import type { BlockMapEntry } from "./blockage"
+import { BRIEF_FILE, projectBriefText } from "./brief"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
-import { reportForUserPath } from "./docpaths"
+import { reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
-import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
+import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
@@ -73,8 +75,14 @@ const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string => planDuty
 // the wall documentation a clean-room defense wants). Returns 0 = proceed
 // (consistent, inactive, or a skip the mechanical layers still cover), 2 =
 // blocked for the human: an inconsistent prompt quotes the evidence, a
-// verifier that cannot answer fails closed after its retry.
-async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prompt: string): Promise<number> {
+// verifier that cannot answer fails closed after its retry. The two block
+// branches (INCONSISTENT, FAILED) are covered block sites (plans/0082 §7
+// D10 v1): the dossier assembles and the honest block line names located
+// files (D2), then — the remediation switch on — the diagnosis session
+// writes the blockage document the person answers with one `Choice:` line.
+// "remediate" = the interactive fast path executed an approved option inline
+// (D9): the caller re-composes and re-verifies from scratch (D7).
+async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prompt: string, blocks: readonly BlockMapEntry[]): Promise<number | "remediate"> {
   const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt })
   if (outcome.kind === "inactive") return 0
   const audit = join(dirname(phase.dir), "prompt-audit.md")
@@ -103,14 +111,65 @@ async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prom
     log(`✓ plan verification: the ${step} prompt is consistent with the intent charter (${audit})`)
     return 0
   }
-  if (outcome.kind === "inconsistent") {
-    log(`⏸ plan verification found the ${step} prompt inconsistent with the intent charter: ${outcome.evidence}`)
-    log(`  The verdict is recorded in ${audit}. Rewrite the conflicting input, or amend the intent — the driver never rewrites your words`)
-    return 2
+  // The covered block branches (plans/0082 §7 D10 v1): dossier + honest
+  // block line + (switch on) the diagnosis and its document.
+  const evidence = outcome.kind === "inconsistent" ? outcome.evidence : outcome.reason
+  const site: BlockageSite = {
+    directory: ctx.directory,
+    gate: "plan-verify",
+    step,
+    verdict: outcome.kind === "inconsistent" ? `INCONSISTENT — ${outcome.evidence}` : `FAILED — ${outcome.reason}`,
+    evidence,
+    blockMap: blocks,
+    auditTail: auditTail(previous),
+    intro:
+      outcome.kind === "inconsistent"
+        ? `⏸ plan verification found the ${step} prompt inconsistent with the intent charter: ${outcome.evidence}`
+        : `⏸ plan verification could not judge the ${step} prompt: ${outcome.reason}`,
+    next: outcome.kind === "inconsistent"
+      ? "  rewrite the located file, or amend the intent — the driver never rewrites your words"
+      : "  fix the verifier's model and re-run — fail-closed, plans/0080 §5",
   }
-  log(`⏸ plan verification could not judge the ${step} prompt: ${outcome.reason}`)
-  log(`  The failure is recorded in ${audit} — fail-closed, fix the verifier's model and re-run`)
+  const result = await openBlockage(site, { server: ctx.server, opts: sessionOpts(ctx, { site: "diagnosis" }), ...(ctx.repl ? { repl: ctx.repl } : {}) })
+  for (const line of result.lines) log(line)
+  if (result.status === "remediated") return "remediate"
+  // The static tail the block always carried, kept after the honest lines.
+  if (outcome.kind === "inconsistent") log(`  The verdict is recorded in ${audit}. ${result.file ? `Answer ${result.file} with one \`Choice:\` line, or r` : "R"}ewrite the conflicting input, or amend the intent — the driver never rewrites your words`)
+  else log(`  The failure is recorded in ${audit} — fail-closed, fix the verifier's model and re-run`)
   return 2
+}
+
+// The audit's last verdict lines (the dossier's state snapshot reads them).
+function auditTail(auditText: string): string[] {
+  return auditText.trimEnd().split("\n").slice(-5).map((line) => line.trim()).filter(Boolean)
+}
+
+// The planning input's admission warn (plans/0082 §10 D14b): the same
+// charter-check call over the person's text at admission — warn-and-record,
+// never refuse. Their words are theirs; the composition-time gate still
+// judges the composed whole.
+async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step: string): Promise<void> {
+  const check = await checkTextAgainstCharter({
+    server: ctx.server,
+    routing: ctx.routing,
+    dir: ctx.directory,
+    intent: ctx.opts.intent,
+    label: `the planning input admitted to ${planInputPath(phase)}`,
+    text,
+  })
+  if (check.kind !== "flagged") return
+  log(`⚠ the planning input conflicts with the intent charter (${planInputPath(phase)}): the charter-consistent reading in force is "${check.reading}" — the run proceeds, and the composition-time gate still judges the composed whole`)
+  const audit = join(dirname(phase.dir), "prompt-audit.md")
+  const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
+  const stamp = new Date().toISOString()
+  await Bun.write(
+    join(ctx.directory, audit),
+    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}- ${stamp} admission ${step}: WARN — the planning input conflicts with the charter; in force: ${check.reading}\n`,
+  )
+  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `plan admission warn (${step})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit admission warn ${step}` })
+  if (!settled.ok) {
+    log(`⚠ the admission-warn record could not be committed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}; commit ${audit} manually`)
+  }
 }
 
 // the phase planning session (§E): a one-off bypass reusing the
@@ -162,6 +221,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // wins, and no reused session plans against a text it never saw.
   let restart: string | undefined
   if (ctx.input) {
+    const text = ctx.input.text
     const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
     if (saved.type === "dirty") {
       log(`⏸ worktree not clean before saving the planning input; handle it manually (commit/clean) and re-run:`)
@@ -176,6 +236,9 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     if (saved.type === "saved") {
       log(`✓ planning input saved to ${planInputPath(phase)}`)
       restart = "the planning input changed"
+      // The admission warn (plans/0082 §10 D14b): the same charter check over
+      // the person's text, warn-and-record, never refuse.
+      await admissionWarn(ctx, phase, text, ctx.manual ? `implement-plan ${qualifiedPhase(phase)}` : `phase-plan ${phaseKey(phase).id}`)
     }
   }
   const input = (await readPlanInput(directory, phase))?.trim() || undefined
@@ -194,27 +257,53 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // count — an interrupted resume/feedback retry rewrites the same batch of
   // numbers).
   const taken = await takenTaskIds(directory, phase)
-  const prompt = ctx.manual
-    ? renderImplementPlan(planFacts(ctx), {
-        file: planInputPath(phase),
-        content: input!,
-        brief,
-        phaseId,
-        taskIndex,
-        // Without the numbering record: after the highest taken id (the former
-        // init shortcut's rule, plans/0053 D12).
-        numberStart: numberStart ?? Math.max(0, ...[...taken].map((id) => taskNumber(id) ?? 0)) + 1,
-        parallel: opts.parallel,
-        // The no-phase implicit round's single phase is the round's final one
-        // (plans/0081 D2): its planner carries the report duty like any other.
-        round: await currentRound(directory),
-      })
-    : await phasePlanPrompt(ctx, phase, { brief, input, taskIndex, phaseId, numberStart })
-  // The plan-step consistency gate (plans/0080 §5): the composed planning
-  // prompt meets the intent charter here — where the human planning input,
-  // the brief and the duties all sit in one text. Blocked (2) = the verdict
-  // or a fail-closed verifier stopped the step before any session ran.
-  const verified = await verifyPlanStep(ctx, phase, ctx.manual ? `implement-plan ${phaseId}` : `phase-plan ${phaseKey(phase).id}`, prompt)
+  // The compose-and-verify loop (plans/0082 §5 D7 / §6 D9): the composed
+  // planning prompt meets the intent charter here — where the human planning
+  // input, the brief and the duties all sit in one text. Blocked (2) = the
+  // verdict or a fail-closed verifier stopped the step before any session
+  // ran; "remediate" = the interactive fast path executed an approved option
+  // inline, and the step re-composes and re-verifies from scratch (bounded
+  // at two inline remediations — the diagnosis gate's own suspension holds
+  // the third).
+  const compose = async (): Promise<{ prompt: string; blocks: BlockMapEntry[] }> => {
+    if (ctx.manual) {
+      return {
+        prompt: renderImplementPlan(planFacts(ctx), {
+          file: planInputPath(phase),
+          content: input!,
+          brief,
+          phaseId,
+          taskIndex,
+          // Without the numbering record: after the highest taken id (the former
+          // init shortcut's rule, plans/0053 D12).
+          numberStart: numberStart ?? Math.max(0, ...[...taken].map((id) => taskNumber(id) ?? 0)) + 1,
+          parallel: opts.parallel,
+          // The no-phase implicit round's single phase is the round's final one
+          // (plans/0081 D2): its planner carries the report duty like any other.
+          round: await currentRound(directory),
+        }),
+        blocks: [
+          { block: "template", source: "the implement-plan template" },
+          { block: "planning input", source: input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
+          { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
+          { block: "task index", source: taskIndex },
+        ],
+      }
+    }
+    return phasePlanPrompt(ctx, phase, { brief, input, taskIndex, phaseId, numberStart })
+  }
+  let prompt = ""
+  let verified: number | "remediate" = 0
+  for (let pass = 0; ; pass++) {
+    const composed = await compose()
+    prompt = composed.prompt
+    verified = await verifyPlanStep(ctx, phase, ctx.manual ? `implement-plan ${phaseId}` : `phase-plan ${phaseKey(phase).id}`, prompt, composed.blocks)
+    if (verified !== "remediate") break
+    if (pass >= 1) {
+      log("⏸ the step re-blocked after two inline remediations; stopping — the diagnosis gate suspends further attempts")
+      return 2
+    }
+  }
   if (verified !== 0) return verified
   let problems: string[] = []
   log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
@@ -285,7 +374,7 @@ async function phasePlanPrompt(
   ctx: LoopCtx,
   phase: PhaseUnit,
   parts: { brief?: string; input?: string; taskIndex: string; phaseId: string; numberStart?: number },
-): Promise<string> {
+): Promise<{ prompt: string; blocks: BlockMapEntry[] }> {
   const { directory, opts } = ctx
   const state = await phaseState(directory)
   // Earlier phases' handovers (injection discipline): only the distilled
@@ -342,7 +431,7 @@ async function phasePlanPrompt(
   // (D6b, knowledge.ts).
   const last = state.phases.at(-1)
   const finalPhase = last !== undefined && last.id === phase.id && phase.entry.hasTasks
-  return renderPhasePlan(planFacts(ctx), {
+  const prompt = renderPhasePlan(planFacts(ctx), {
     phase: phase.entry,
     planDuties: planDuties(ctx, phase.entry),
     phaseId: parts.phaseId,
@@ -362,6 +451,23 @@ async function phasePlanPrompt(
     numberStart: parts.numberStart,
     parallel: opts.parallel,
   })
+  // The block map (plans/0082 \u00a72 D1): each block of this composed prompt
+  // and its source path, from the composition state itself \u2014 never a guess
+  // read back out of the rendered text.
+  const blocks: BlockMapEntry[] = [
+    { block: "template", source: "the phase-plan template" },
+    { block: "phase duties", source: "the active pack's phase-duties section" },
+    { block: "brief", source: parts.brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
+    { block: "round brief", source: roundBriefPath(state.round) },
+    { block: "planning input", source: parts.input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
+    ...state.phases
+      .slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
+      .filter((unit) => state.done.has(unit.id))
+      .map((unit) => ({ block: "handover", source: phaseHandoverDoc(unit) })),
+    ...(prevRound !== undefined ? [{ block: "previous round digest", source: "the prior-knowledge and previous-round documents" }] : []),
+    { block: "mode notes", source: "the active mode file" },
+  ]
+  return { prompt, blocks }
 }
 
 // Phase planning plus the plan-review pause (plans/0049 G5): at
@@ -403,6 +509,16 @@ async function earlierHandovers(directory: string, phase: PhaseUnit, state: Phas
         }),
     )
   ).join("\n\n")
+}
+
+// The earlier phases' handover sources as block-map entries (the append
+// side's composition state; the same selection earlierHandovers injects).
+async function earlierHandoverSources(directory: string, phase: PhaseUnit): Promise<BlockMapEntry[]> {
+  const state = await phaseState(directory)
+  return state.phases
+    .slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
+    .filter((unit) => state.done.has(unit.id))
+    .map((unit) => ({ block: "handover", source: phaseHandoverDoc(unit) }))
 }
 
 // What an appending session builds on, read from disk at step entry (plans/0053
@@ -602,6 +718,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // saw. An append overwrites the phase's file — the latest input wins.
   let restart: string | undefined
   if (ctx.input) {
+    const text = ctx.input.text
     const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
     if (saved.type === "dirty") {
       log(`⏸ worktree not clean before saving the planning input; handle it manually (commit/clean) and re-run:`)
@@ -616,6 +733,9 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     if (saved.type === "saved") {
       log(`✓ planning input saved to ${planInputPath(phase)}`)
       restart = "the planning input changed"
+      // The admission warn (plans/0082 §10 D14b): the same charter check over
+      // the person's text, warn-and-record, never refuse.
+      await admissionWarn(ctx, phase, text, `phase-append ${phaseKey(phase).id}`)
     }
   }
   const input = (await readPlanInput(directory, phase))?.trim() || undefined
@@ -648,22 +768,45 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // The project brief, comments stripped: an untouched stub injects nothing.
   const brief = await projectBriefText(directory)
   const phaseId = qualifiedPhase(phase)
-  const prompt = ctx.manual
-    ? renderPhaseAppend(planFacts(ctx), {
-        phaseId,
-        taskIndex,
-        numberStart: promptStart,
-        input: input!,
-        inputPath: planInputPath(phase),
-        existingTasks: existingTaskList(plan.tasks),
-        brief,
-        parallel: opts.parallel,
-      })
-    : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks) })
-  // The consistency gate, the append side (plans/0080 §5): an append plans
-  // against a human input too — plan --append or a repair round's evidence —
-  // so its composed prompt is verified the same way before its session runs.
-  const verified = await verifyPlanStep(ctx, phase, `phase-append ${phaseKey(phase).id}`, prompt)
+  // The compose-and-verify loop (the append side of plans/0082 §5 D7 / §6
+  // D9): an append plans against a human input too — plan --append or a
+  // repair round's evidence — so its composed prompt is verified the same
+  // way before its session runs; "remediate" re-composes and re-verifies.
+  const compose = async (): Promise<{ prompt: string; blocks: BlockMapEntry[] }> => {
+    const prompt = ctx.manual
+      ? renderPhaseAppend(planFacts(ctx), {
+          phaseId,
+          taskIndex,
+          numberStart: promptStart,
+          input: input!,
+          inputPath: planInputPath(phase),
+          existingTasks: existingTaskList(plan.tasks),
+          brief,
+          parallel: opts.parallel,
+        })
+      : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks) })
+    const blocks: BlockMapEntry[] = [
+      { block: "template", source: "the phase-append template" },
+      { block: "phase duties", source: "the active pack's phase-duties section" },
+      { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
+      { block: "planning input", source: planInputPath(phase) },
+      { block: "task index", source: taskIndex },
+      ...(await earlierHandoverSources(directory, phase)),
+    ]
+    return { prompt, blocks }
+  }
+  let prompt = ""
+  let verified: number | "remediate" = 0
+  for (let pass = 0; ; pass++) {
+    const composed = await compose()
+    prompt = composed.prompt
+    verified = await verifyPlanStep(ctx, phase, `phase-append ${phaseKey(phase).id}`, prompt, composed.blocks)
+    if (verified !== "remediate") break
+    if (pass >= 1) {
+      log("⏸ the step re-blocked after two inline remediations; stopping — the diagnosis gate suspends further attempts")
+      return 2
+    }
+  }
   if (verified !== 0) return verified
   let problems: string[] = []
   log(`▶ starting the task-append session to append to ${taskIndex}`)

@@ -27,6 +27,10 @@
 // decomposition declared for itself; no schema, no required headings. New
 // protocol surface must be justified against this boundary: prefer a marker
 // in an index or handoff file over a schema on free content.
+// The blockage document (plans/0082 §5 D6) extends the boundary's index/state
+// family: its `Choice:` and `Executed:` lines are driver-parsed marks on a
+// round-level document the person answers in place — the same standing the
+// acceptance sign-off and the clarified mark hold.
 //
 // Process documents are not design dependencies (P1, root plan D12). Every
 // role except freeform is a process role: the tool's record of long-running
@@ -83,6 +87,11 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // round-close gate itself checks non-empty + the eof terminator (D4), so the
   // per-unit eof scan skips it like its round-level siblings.
   userReport: { eofScan: false, process: true },
+  // The blockage document (plans/0082 §5 D6): driver-assembled, person-read,
+  // driver-executed. Its `Choice:` / `Executed:` mark lines are the protocol
+  // and it never carries the eof terminator — the blockage machinery owns
+  // the whole format.
+  blockage: { eofScan: false, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -130,6 +139,11 @@ const ROUND_BRIEF = new RegExp(`^docs/R-\\d+/${ROUND_BRIEF_NAME.replace(".", "\\
 // The round user report: docs/R-NN/report-for-user.md (plans/0081 D6a).
 const USER_REPORT = new RegExp(`^docs/R-\\d+/${REPORT_FOR_USER_NAME.replace(".", "\\.")}$`)
 
+// The blockage document: docs/R-NN/blockage-<seq>.md (plans/0082 §5 D6) —
+// the remediation plan a gate's blockage assembled, one per blockage,
+// sequentially numbered within the round.
+const BLOCKAGE_DOC = /^docs\/R-\d+\/blockage-\d+\.md$/
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -153,6 +167,7 @@ export function roleOf(rel: string): DocumentRole {
   if (ROUND_BRIEF.test(path)) return "roundBrief"
   if (PLANNING_INPUT.test(path)) return "planningInput"
   if (USER_REPORT.test(path)) return "userReport"
+  if (BLOCKAGE_DOC.test(path)) return "blockage"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }
@@ -259,6 +274,34 @@ export const PRIOR_KB_DONE = "DONE"
 // contains the substring but is not a compliant heading).
 export function validHandover(text: string): boolean {
   return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))
+}
+
+// The handover collect lint (plans/0082 §10 D13's mechanical backstop): an
+// AUTO-RESOLVE marker under "Constraints and pitfalls" is status laundering
+// — a provisional default is an open decision (it belongs in "Key decisions"
+// as — OPEN), never a constraint. Returns the finding naming the line, or
+// undefined when the section is clean (or absent — validHandover's own
+// concern). The AUTO-RESOLVE grammar is resolve.ts's parseResolveLine; the
+// roles module restates only the marker test (it cannot import the driver
+// plane), pinned against resolve.ts by test/blockage.test.ts.
+const RESOLVE_MARKER = /AUTO-RESOLVE[ \t`*]*[:：][ \t]*/
+export function constraintPitfallResolves(text: string): string | undefined {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.trim() === "## Constraints and pitfalls")
+  if (start < 0) return undefined
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s+\S/.test(lines[i]!)) {
+      end = i
+      break
+    }
+  }
+  for (let i = start + 1; i < end; i++) {
+    if (RESOLVE_MARKER.test(lines[i]!)) {
+      return `line ${i + 1} carries an AUTO-RESOLVE marker under "Constraints and pitfalls" — a provisional default is an open decision (record it in "Key decisions" as — OPEN), never a constraint`
+    }
+  }
+  return undefined
 }
 
 // —— result line ——

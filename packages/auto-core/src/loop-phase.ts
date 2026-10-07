@@ -8,7 +8,7 @@ import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { briefProposal, BRIEF_FILE } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
-import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
+import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { reportForUserPath } from "./docpaths"
 import { allowWrite, reprotect } from "./protect"
 import { hibernatePause } from "./hibernate"
@@ -33,7 +33,10 @@ import {
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 
+import { openBlockage } from "./blockage-diagnose"
+import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { renderPhaseHandover } from "./prompt"
+import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
 import { promptFacts } from "./prompt-facts"
 import { REPORT_TASK_TITLE, reportAppendInput } from "./round-report"
@@ -101,7 +104,59 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // still reuse the original session to continue writing.
   const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
   const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
+  // The handover collect's two mechanical gates (plans/0082 §10 D13/D14a):
+  // the OPEN-status lint (an AUTO-RESOLVE marker under "Constraints and
+  // pitfalls" is status laundering — the item is an open decision, never a
+  // constraint) and the write-time charter check (one verifier call over the
+  // charter and the handover, the prompt-destined text; INCONSISTENT or
+  // FAILED re-dists once with the verdict, then fails closed — where the
+  // blockage machinery owns the person's decision).
+  let collectIssue: string | undefined
+  const lintHandover = constraintPitfallResolves
+  const writeTimeGate = async (text: string): Promise<string | undefined> => {
+    const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: promptFacts(sessionOpts(ctx, { site: "handover" })), step: `handover ${phaseKey(phase).id}`, prompt: text })
+    if (outcome.kind === "inactive" || outcome.kind === "skipped" || outcome.kind === "consistent") return undefined
+    // Record the verdict beside the plan-step verdicts it precedes (the
+    // audit's charter covers every composition judgment of the round).
+    // The round's audit sits beside the phase directory (loop-plan's
+    // convention): dirname(phase.dir) is the round root docs/R-NN.
+    const audit = join(dirname(phase.dir), "prompt-audit.md")
+    const previous = await Bun.file(join(directory, audit)).text().catch(() => "")
+    await Bun.write(
+      join(directory, audit),
+      `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${verifyAuditEntry(`handover ${phaseKey(phase).id}`, outcome)}\n`,
+    )
+    const settled = await ctx.git.commitTree(directory, { id: "PLAN", title: `handover verification (${phaseTitle(phase)})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit handover ${phaseKey(phase).id}` })
+    if (!settled.ok) log(`⚠ the handover charter-check record could not be committed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}; commit ${audit} manually`)
+    return outcome.kind === "inconsistent"
+      ? `the charter check found the handover inconsistent with the intent charter: ${outcome.evidence}`
+      : `the charter check could not judge the handover: ${outcome.reason}`
+  }
   if (validHandover(await Bun.file(handoverFile).text().catch(() => "")) && !(await draftProblem(false))) {
+    const skipText = await Bun.file(handoverFile).text().catch(() => "")
+    const skipLint = validHandover(skipText) && !(await draftProblem(false)) ? lintHandover(skipText) : undefined
+    collectIssue = skipLint ?? (await writeTimeGate(skipText)) ?? undefined
+    if (collectIssue !== undefined) {
+      // A complete-looking handover that fails the write-time check (D14a):
+      // the phase stays on its handover route and the blockage machinery
+      // owns the person's decision instead of a raw stop.
+      const result = await openBlockage(
+        {
+          directory,
+          gate: "handover-verify",
+          step: `handover ${phaseKey(phase).id}`,
+          verdict: `INCONSISTENT — ${collectIssue}`,
+          evidence: collectIssue,
+          blockMap: [{ block: "handover", source: handover }],
+          auditTail: [],
+          intro: `⏸ the handover verification found ${handover} inconsistent with the intent charter: ${collectIssue}`,
+          next: "  rewrite the located file, or amend the intent — the driver never rewrites your words",
+        },
+        { server: serverHandle, opts: sessionOpts(ctx, { site: "diagnosis" }), ...(ctx.repl ? { repl: ctx.repl } : {}) },
+      )
+      for (const line of result.lines) log(line)
+      return 2
+    }
     const pending = await ctx.git.commitPending(directory, opts, distillTask, distillCommit, acceptance ? [handover, acceptance] : [handover])
     if (pending !== "clean") {
       if (!pending.ok) {
@@ -137,7 +192,8 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
             `write the handover document to ${handover} with four sections whose headings are exactly ` +
             `${HANDOVER_SECTIONS.map((section) => `\`${section}\``).join(" / ")} (driver protocol strings, write them verbatim).` +
             (acceptance ? ` Also write the acceptance draft ${acceptance} for the human reviewer, without any \`Accepted:\` line.` : "") +
-            (draftIssue ? ` Problem last time: ${draftIssue}.` : "")
+            (draftIssue ? ` Problem last time: ${draftIssue}.` : "") +
+            (collectIssue ? ` Problem last time: ${collectIssue}.` : "")
           )
         },
         commit: distillCommit,
@@ -147,7 +203,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         collect: async () => {
           const text = await Bun.file(handoverFile).text().catch(() => "")
           draftIssue = await draftProblem(true)
-          return (validHandover(text) && !draftIssue) || undefined
+          const lint = validHandover(text) && !draftIssue ? lintHandover(text) : undefined
+          const writeTime = lint === undefined && validHandover(text) && !draftIssue ? await writeTimeGate(text) : undefined
+          collectIssue = lint ?? writeTime
+          return (validHandover(text) && !draftIssue && collectIssue === undefined) || undefined
         },
       },
     )
@@ -155,6 +214,25 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       if (distilled.type === "dirty") {
         log(`⏸ worktree not clean before starting the handover distillation session; handle it manually (commit/clean) and re-run:`)
         for (const file of distilled.files) log(`  ${file}`)
+      } else if (collectIssue !== undefined) {
+        // Fail-closed after one re-distill (D14a): Part I's remediation owns
+        // the decision instead of a raw blockage.
+        log(`⏸ handover distillation failed closed on the charter check after one re-distill`)
+        const result = await openBlockage(
+          {
+            directory,
+            gate: "handover-verify",
+            step: `handover ${phaseKey(phase).id}`,
+            verdict: `INCONSISTENT — ${collectIssue}`,
+            evidence: collectIssue,
+            blockMap: [{ block: "handover", source: handover }],
+            auditTail: [],
+            intro: `⏸ the handover verification found ${handover} inconsistent with the intent charter after one re-distill: ${collectIssue}`,
+            next: "  rewrite the located file, or amend the intent — the driver never rewrites your words",
+          },
+          { server: serverHandle, opts: sessionOpts(ctx, { site: "diagnosis" }), ...(ctx.repl ? { repl: ctx.repl } : {}) },
+        )
+        for (const line of result.lines) log(line)
       } else {
         log(`⏸ handover distillation session blocked (implicit block, investigate and re-run):\n${distilled.question}`)
       }
@@ -237,6 +315,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     )
     return 2
   }
+  // the phase boundary's OPEN questions (plans/0082 §10 D12): one line per
+  // charter-clamped default of this phase — the person's decision inbox
+  // beside the proxy-answer summary.
+  for (const item of await clampedItemsOf(directory, "phase", phaseKey(phase).id)) log(clampLine(item, item.clamp ?? ""))
   // the phase proxy-answer summary (plans/0020-auto-resolve-design.md §H-③,
   // H6): pinned above the ■ phase-close line.
   for (const line of await phaseResolveLines(directory, phase)) log(line)

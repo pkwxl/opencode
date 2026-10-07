@@ -609,14 +609,14 @@ describe("formatModels", () => {
       [
         "  analysis (a) · builtin · execute tier deep",
         "    decompose, whole, subtask, phase-plan, implement-scan: deep → opus ✗ · opus-b ✗ · k3 ✓",
-        "    wrapup, knowledge, prior-knowledge, number-recovery, bypass: simple → glm ✗ · k2 ✓ | opus ✗ · opus-b ✗ · k3 ✓",
+        "    wrapup, knowledge, prior-knowledge, number-recovery, diagnose, bypass: simple → glm ✗ · k2 ✓ | opus ✗ · opus-b ✗ · k3 ✓",
         "    phase-handover: route phase-handover [operator] → k2 ✓",
       ].join("\n"),
     )
     expect(text).toContain(
       [
         "  acceptance (v) · builtin · execute tier deep",
-        "    decompose, whole, subtask, wrapup, phase-plan, knowledge, prior-knowledge, implement-scan, number-recovery, bypass: deep · route acceptance [operator] → opus ✗ · opus-b ✗ · k3 ✓",
+        "    decompose, whole, subtask, wrapup, phase-plan, knowledge, prior-knowledge, implement-scan, number-recovery, diagnose, bypass: deep · route acceptance [operator] → opus ✗ · opus-b ✗ · k3 ✓",
         "    phase-handover: route phase-handover [operator] → k2 ✓",
       ].join("\n"),
     )
@@ -640,7 +640,7 @@ describe("formatModels", () => {
     expect(text).toContain(
       "    wrapup: override OPENCODE_AUTO_MODEL → zhipuai/glm-4.6 ✗ (filtered out by the agent filter claude (OPENCODE_AUTO_AGENT); a raw provider/model on the default agent opencode, without window, ring or steps)",
     )
-    expect(text).toContain("    knowledge, prior-knowledge, number-recovery, bypass: simple → (none) | opus ✗")
+    expect(text).toContain("    knowledge, prior-knowledge, number-recovery, diagnose, bypass: simple → (none) | opus ✗")
     expect(text).toContain("ℹ unused models (no tier, route list or classifier names them): opus-b, k3, glm")
     expect(lines.at(-1)).toBe("5 problem(s): run and plan refuse to start until they are fixed (exit 1)")
     expect(lines.at(-2)).toStartWith("⚠ model registry, operator layer")

@@ -21,6 +21,7 @@ const ROLE_TABLE: Record<string, Tier | "execute"> = {
   knowledge: "simple",
   "prior-knowledge": "simple",
   "number-recovery": "simple",
+  diagnose: "simple",
   bypass: "simple",
 }
 
@@ -63,7 +64,7 @@ describe("defaultTier", () => {
   })
 
   test("report, distillation, extraction and one-off sessions are simple in every phase type", () => {
-    const roles: ModelRole[] = ["wrapup", "phase-handover", "knowledge", "prior-knowledge", "number-recovery", "bypass"]
+    const roles: ModelRole[] = ["wrapup", "phase-handover", "knowledge", "prior-knowledge", "number-recovery", "diagnose", "bypass"]
     for (const role of roles) {
       for (const entry of [undefined, ...BUILTIN_PHASE_TYPES, custom(), custom("deep")]) expect(defaultTier(entry, role)).toBe("simple")
     }

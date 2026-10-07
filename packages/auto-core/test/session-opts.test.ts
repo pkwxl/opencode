@@ -103,7 +103,7 @@ const bypassSet = (c: SessionCtx): Opts => ({
   intent: c.opts.intent,
 })
 
-describe("sessionOpts (the seven-site field-set pin)", () => {
+describe("sessionOpts (the eight-site field-set pin)", () => {
   test("task site: the full execution set, leadSplit absent while the fleet can fork", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
   })
@@ -132,6 +132,10 @@ describe("sessionOpts (the seven-site field-set pin)", () => {
     const built = sessionOpts(ctx, { site: "handover" })
     expect("mode" in built).toBe(true)
     expect(built).toStrictEqual(bypassSet(ctx))
+  })
+
+  test("diagnosis site (the blockage diagnosis session, 0082 §4 D4)", () => {
+    expect(sessionOpts(ctx, { site: "diagnosis" })).toStrictEqual(bypassSet(ctx))
   })
 
   test("knowledge site (the k-phase extraction session)", () => {

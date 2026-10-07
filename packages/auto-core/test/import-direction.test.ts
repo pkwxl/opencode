@@ -419,6 +419,24 @@ const CLASSIFIED: Record<string, Domain> = {
   // guest-model halves behind plan's prelude rows 12–13 (the export's render
   // composition and the adopt's validation/test-handover/commit body).
   "work-order": "driver",
+  // The blockage dossier and honest block line (plans/0082 §2 D1/D2), the
+  // strict remediation-plan parser and the blockage document's shape (§4
+  // D5 / §5 D6): the pure half every covered block site builds on.
+  blockage: "driver",
+  // The remediation executor (plans/0082 §5 D7): the prelude row's
+  // mechanical body over the Choice marks — plan.ts imports this module
+  // only, so it starts no session and imports no session-driving layer,
+  // exactly the constraint plan itself lives under.
+  "blockage-execute": "driver",
+  // The blockage diagnosis session and document (plans/0082 §4-§6
+  // D3-D8): the requireArtifact dispatch, the strict parse, the committed
+  // blockage document and the interactive fast path.
+  "blockage-diagnose": "driver",
+  // Charter-clamped provisional defaults (plans/0082 §10 D12): the clamp
+  // orchestration over the resolve ledger, the check caller injected by the
+  // run start (the log.ts setter family — keeps the kernel below the
+  // classifier's policies layer).
+  "charter-clamp": "driver",
   // Adding one task by hand (--new-task): the mechanical, no-session half
   // of append planning (plans/0058); called from plan's prelude.
   "task-add": "driver",
@@ -590,6 +608,12 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // attended flag) and the adopt's validation / test-handover / commit body.
   // Pipeline beside plan, its only caller.
   "work-order": "pipeline",
+  // The 0082 blockage family and the charter clamp (pipeline beside the
+  // loops that call them and the plan prelude that executes the marks).
+  blockage: "pipeline",
+  "blockage-execute": "pipeline",
+  "blockage-diagnose": "pipeline",
+  "charter-clamp": "pipeline",
   // runtime — the process plane: switches, logging, services, options,
   // config, the agent start, the shell profile and the run lock.
   switches: "runtime",

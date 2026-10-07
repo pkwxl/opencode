@@ -25,12 +25,15 @@ created it is not moved or renamed), with the four mandatory sections, headings 
 ## Key decisions
 
 <the important decisions made in this phase and their reasons, rejected alternatives; decisions annotated
-AUTO-DECISION in the body take priority>
+AUTO-DECISION in the body take priority; decisions annotated AUTO-RESOLVE are open, never settled — record
+each as `<decision> — OPEN (AUTO-RESOLVE <path>: the default in force, the question, how to override)` so
+the next phase defers to the person's ruling instead of consuming the default as granted>
 
 ## Constraints and pitfalls
 
 <environment constraints, dependency traps, easy mistakes and workarounds discovered during execution; only write
-pitfalls the next phase would step in>
+pitfalls the next phase would step in; settled policy and environment facts only — anything awaiting the person's
+ruling is an open decision, not a constraint, and belongs in "Key decisions" as OPEN>
 
 ## Required reading for the next phase
 

@@ -330,6 +330,7 @@ export type SessionSite =
   | { site: "phase-append" }
   | { site: "handover" }
   | { site: "knowledge" }
+  | { site: "diagnosis" }
 
 // Build one session's options from the loop context. Every site carries
 // idleMs and mode (key always set, value possibly undefined): the session's

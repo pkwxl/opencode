@@ -3320,14 +3320,23 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toContain("# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round")
       expect(audit).toMatch(/implement-plan R-01\.P01: INCONSISTENT — the charter's "never to be read, copied or translated" contradicts the prompt's "Copy the reference implementation's modules over verbatim/)
-      // The verifier was the only session: one bare prompt under the verifier
-      // title, both texts under review inside it, and no planning output.
-      expect(f.agent.argsOf("create")).toEqual([[{ title: VERIFY_TITLE }]])
-      expect(f.agent.prompts).toHaveLength(1)
+      // The session protocol since 0082: the admission charter check (D14b,
+      // one bare call), the verifier (one bare prompt under the verifier
+      // title, both texts under review inside it), then the blockage
+      // diagnosis twice (D4/D5 — the fake writes no plan, so the diagnosis
+      // fails closed) — and no planning output anywhere.
+      expect(f.agent.argsOf("create")).toEqual([
+        [{ title: "auto: charter check" }],
+        [{ title: VERIFY_TITLE }],
+        [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
+        [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
+      ])
+      expect(f.agent.prompts).toHaveLength(4)
       expect(f.agent.prompts[0]!.bare).toBe(true)
       expect("agent" in f.agent.prompts[0]!).toBe(false)
-      expect(f.agent.prompts[0]!.text).toContain(CHARTER)
-      expect(f.agent.prompts[0]!.text).toContain(CONTRARY_INPUT)
+      expect(f.agent.prompts[1]!.bare).toBe(true)
+      expect(f.agent.prompts[1]!.text).toContain(CHARTER)
+      expect(f.agent.prompts[1]!.text).toContain(CONTRARY_INPUT)
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
       expect(lines.some((line) => line.includes("starting the phase planning session"))).toBe(false)
     } finally {
@@ -3362,10 +3371,18 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(code).toBe(2)
       expect(lines.some((line) => line.includes("plan verification could not judge the implement-plan R-01.P01 prompt"))).toBe(true)
       expect(lines.some((line) => line.includes("fail-closed"))).toBe(true)
-      // One retry, then the block: exactly two verifier sessions, no planning.
-      expect(f.agent.argsOf("create")).toEqual([[{ title: VERIFY_TITLE }], [{ title: VERIFY_TITLE }]])
-      expect(f.agent.prompts).toHaveLength(2)
-      for (const prompt of f.agent.prompts) expect(prompt.bare).toBe(true)
+      // One retry, then the block: two verifier sessions (the admission
+      // charter check ahead of them, the blockage diagnosis twice after —
+      // the fake writes no plan, the diagnosis fails closed), no planning.
+      expect(f.agent.argsOf("create")).toEqual([
+        [{ title: "auto: charter check" }],
+        [{ title: VERIFY_TITLE }],
+        [{ title: VERIFY_TITLE }],
+        [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
+        [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
+      ])
+      expect(f.agent.prompts).toHaveLength(5)
+      for (const prompt of f.agent.prompts.slice(0, 3)) expect(prompt.bare).toBe(true)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/implement-plan R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
       expect(audit).toContain("(after one retry — fail-closed, plans/0080 §5)")

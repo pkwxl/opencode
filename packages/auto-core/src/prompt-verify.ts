@@ -25,10 +25,12 @@
 import { classifierEntry, oneShot } from "./classify"
 import { packSubsection } from "./intent/load"
 import type { PromptFacts } from "./prompt"
+import { promptFacts } from "./prompt-facts"
 import { renderPrompt } from "./prompt"
 import type { RoutingFacts } from "./routing"
 import { SWITCH_ENV, autoSwitches } from "./switches"
 import type { AgentPool } from "./agent-pool"
+import type { ClientSource } from "./opts"
 
 // The verifier's wall clock: the composed planning prompt can be large, so
 // this is the classifier's 30 s raised, not shared.
@@ -124,4 +126,89 @@ export function verifyAuditEntry(step: string, outcome: Exclude<PlanVerifyOutcom
           ? `FAILED — ${outcome.reason}`
           : `skipped — ${outcome.reason}`
   return `- ${stamp} ${step}: ${verdict}`
+}
+
+// —— the record-time charter check (plans/0082 §10 D12, closing RC2) ——//
+
+// The check's wall clock and session title (the verifier's shape, cheap).
+const CHECK_TIMEOUT_MS = 60_000
+const CHECK_TITLE = "auto: charter check"
+
+// The strict reply parser (the parseVerifyReply discipline: the last line
+// that parses wins). `Clamp: none` — consistent, nothing to do; `Clamp:
+// <reading>` — flagged, clamp to the reading. Unparsable ⇒ undefined.
+export function parseDefaultCheckReply(text: string): { clamp: false } | { clamp: true; reading: string } | undefined {
+  for (const raw of text.split("\n").reverse()) {
+    const line = raw.trim().replace(/^`+|`+$/g, "")
+    const match = /^Clamp:\s*(.*)$/i.exec(line)
+    if (!match) continue
+    const body = match[1]!.trim()
+    if (/^none$/i.test(body)) return { clamp: false }
+    if (body) return { clamp: true, reading: body }
+    return undefined
+  }
+  return undefined
+}
+
+// The check's outcome for one text against the active charter.
+export type CharterCheck =
+  // No charter declared (the zero-intent floor), no routing, or no usable
+  // classifier entry: the check does not run — like the plan verifier's
+  // inactive/skipped arms.
+  | { kind: "skipped"; reason: string }
+  | { kind: "consistent" }
+  | { kind: "flagged"; reading: string }
+
+// The strictest reading — the fail-closed fallback when the check cannot
+// judge (a guarantee that can be slept through is not a guarantee; the
+// charter's own default is strict).
+export const OPEN_FALLBACK_READING = "no default in force — the question is OPEN until the person rules"
+
+// One charter check over one text (the 0080 verifier's call reused: a bare
+// one-shot on the registry's classifier entry, tools denied, strict parse).
+// server takes the ClientSource the run holds (the pool or one client);
+// routing undefined = no registry, the check does not run.
+export async function checkTextAgainstCharter(input: {
+  server?: ClientSource
+  routing?: RoutingFacts
+  dir?: string
+  intent?: string
+  label: string
+  text: string
+}): Promise<CharterCheck> {
+  const facts = promptFacts({ dir: input.dir, intent: input.intent })
+  const charter = packSubsection(facts.pack, "guarantees", "verify-plan")
+  if (charter === undefined) return { kind: "skipped", reason: "the active pack declares no verify-plan charter" }
+  if (input.routing === undefined || input.server === undefined) return { kind: "skipped", reason: "no model registry routing — no classifier entry to run the check on" }
+  const now = input.routing.clock.now()
+  const pick = classifierEntry(input.routing.router, input.routing.registry, input.routing.agentFilter, now)
+  if (pick === undefined) return { kind: "skipped", reason: "no usable classifier entry — the check cannot run" }
+  // ClientSource resolved inline (the agent-pool clientOf shape): a plain
+  // client is taken as is, a server control resolves the entry's agent \u2014
+  // reaching session-api here would re-open the policies \u2192 engine edge
+  // the sub-domain allowlist retired.
+  const source = input.server
+  const client = "client" in source ? await source.client(pick.entry.agent) : source
+  const prompt = renderPrompt(facts, "default-check", { charter, label: input.label, text: input.text })
+  let lastReason = "the check session produced no answer"
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const outcome = await oneShot(client, pick.entry, prompt, CHECK_TIMEOUT_MS, CHECK_TITLE)
+    if (outcome.kind === "timeout") {
+      lastReason = `the check gave no answer within ${Math.round(CHECK_TIMEOUT_MS / 1000)} s`
+      continue
+    }
+    if (outcome.kind === "failed") {
+      lastReason = `the check failed: ${outcome.error.message ?? "session error"}`
+      continue
+    }
+    const verdict = parseDefaultCheckReply(outcome.text)
+    if (verdict === undefined) {
+      lastReason = `the check replied without a parsable Clamp line; its last words: ${outcome.text.trim().split("\n").slice(-3).join(" ⏎ ").slice(0, 400)}`
+      continue
+    }
+    if (!verdict.clamp) return { kind: "consistent" }
+    return { kind: "flagged", reading: verdict.reading }
+  }
+  // Fail-closed: flagged with the strictest reading, the reason logged.
+  return { kind: "flagged", reading: OPEN_FALLBACK_READING, ...(lastReason ? { reason: lastReason } : {}) }
 }

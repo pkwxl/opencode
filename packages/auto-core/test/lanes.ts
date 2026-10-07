@@ -27,6 +27,11 @@ export const REPO_LANE: readonly string[] = [
   "test/append-loop.test.ts",
   "test/artifact.test.ts",
   "test/auto-doc-shape.test.ts",
+  // The 0082 consented-remediation family: the executor and the diagnosis
+  // suites drive real git repositories (remediation commits, the loop
+  // harness's freshRepo fixtures); the pure halves stay in the unit lane.
+  "test/blockage-diagnosis.test.ts",
+  "test/blockage-executor.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
   "test/config-fix.test.ts",
@@ -101,6 +106,11 @@ export const UNIT_LANE: readonly string[] = [
   // The intent-bundle surface (plans/0079 §3): parse/materialize over temp
   // directories, no repository, no spawn.
   "test/bundle.test.ts",
+  // The 0082 pure halves: the span locator, the plan parser, the marks and
+  // the caps over plain temp directories; the clamp suite over the ledger
+  // (temp files, no repository, no spawn).
+  "test/blockage.test.ts",
+  "test/charter-clamp.test.ts",
   "test/config.test.ts",
   "test/confirm.test.ts",
   "test/constitution-ratchet.test.ts",

@@ -5,6 +5,9 @@ import { hibernatePause } from "./hibernate"
 import { interactiveChannel, startInteractive, type Interactive } from "./interactive"
 import { acquireRunLock, lockLines } from "./lock"
 import { PromptGuaranteeError } from "./intent/guarantees"
+import { openRenderGateBlockage } from "./blockage-diagnose"
+import { setClampCaller } from "./charter-clamp"
+import { checkTextAgainstCharter } from "./prompt-verify"
 import { runLaneUnit, type LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
@@ -222,6 +225,13 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // flushes; without a classifier list nothing reports into it, so a
     // registry without one registers harmlessly.
     run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
+    // The record-time charter check's caller (plans/0082 §10 D12): wired
+    // once the routing facts and the pool exist, so every post-session scan
+    // of the run can check and clamp recorded AUTO-RESOLVE defaults; the
+    // finally clears it beside the sink (a test process re-wiring per run).
+    setClampCaller((input) =>
+      checkTextAgainstCharter({ server: serverHandle, routing, dir: input.dir, intent: input.intent, label: input.label, text: input.text }),
+    )
     // The interactive channel (the io/Interactive seam, P3a): the boolean
     // keeps today's terminal sideband exactly (io undefined = process
     // stdin/stdout, the same banner after the same call); an io factory
@@ -317,8 +327,20 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // planning input, or the prompt overlay), never a retry. Blocked, like
     // every other stop that waits for a person.
     if (error instanceof PromptGuaranteeError) {
-      log(`⏸ prompt guarantee violation: ${error.message} — fix the conflicting source (the intent pack, the planning input, or the prompt overlay) and re-run`)
+      // A covered block site (plans/0082 §7 D10 v1): the dossier's shape for
+      // the render gate is the violated assert, the offending literals and
+      // the located sources — the honest block line names files, then the
+      // blockage machinery (switch on) turns the person's next decision into
+      // one Choice line. The error's own text carries the assert and the
+      // literals (guarantees.ts names them); the locator searches them over
+      // the round's documents.
       emitStatus({ type: "failure", message: `prompt guarantee violation: ${error.message}` })
+      if (server === undefined) {
+        log(`⏸ prompt guarantee violation: ${error.message} — fix the conflicting source (the intent pack, the planning input, or the prompt overlay) and re-run`)
+        return 2
+      }
+      const result = await openRenderGateBlockage({ directory, violation: error.message, server, opts: { dir: directory, intent: opts.intent }, ...(repl ? { repl } : {}) })
+      for (const line of result.lines) log(line)
       return 2
     }
     throw error
@@ -330,6 +352,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // Drop the classifier's usage sink before the stats handle flushes, so a
     // late answer cannot book into a re-loaded handle after the run's end.
     run.router.setClassifyUsageSink(undefined)
+    setClampCaller(undefined)
     // Graceful stats close-out (STATS_PLAN §1): fold the open segment, then
     // persist the closed segment and unload the handle; the next loadStats
     // reads with no depreciation left. Write failures are silent inside and

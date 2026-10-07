@@ -43,6 +43,9 @@ export type ResolveItem = {
   file?: string // agent 源:标记所在 `路径:行号`
   malformed?: boolean // agent 源:标记缺箭头/理由段
   matched?: boolean // driver 源:已找到配对的 agent 标记
+  clamped?: boolean // agent 源:已被章程检查钳制(0082 D12)
+  clamp?: string // 钳制后的默认(强中的读法)，宽授权转为 OPEN 问题的选项
+  checked?: boolean // agent 源:章程检查已跑过(0082 D12)——后续扫描不重跑
 }
 
 // decisions: 逐任务的 AUTO-DECISION 计数(不落行级明细——台账的存在理由是驱动高亮,
@@ -177,6 +180,9 @@ function parseDoc(raw: string): ResolveDoc {
         file: typeof item.file === "string" ? item.file : undefined,
         malformed: item.malformed === true ? true : undefined,
         matched: item.matched === true ? true : undefined,
+        clamped: item.clamped === true ? true : undefined,
+        clamp: typeof item.clamp === "string" ? item.clamp : undefined,
+        checked: item.checked === true ? true : undefined,
       })
     }
     return { v: 1, items, decisions: parseDecisions(parsed.decisions) }
@@ -395,6 +401,33 @@ export async function resolvesOf(
   return doc.items.filter((item) =>
     scope === "task" ? item.task === want : scope === "phase" ? item.phase === want : String(item.round) === want,
   )
+}
+
+// ===== 章程钳制(0082 §10 D12 的台账侧) =====
+
+// 尚未钳制的 agent 源条目(带标记所在文件):钳制检查的输入。driver 源与
+// 无文件条目不参与——钳制改写的是标记行本身,只有 agent 源标记行存在。
+export async function pendingClampItems(dir: string | undefined): Promise<ResolveItem[]> {
+  if (!dir) return []
+  await writing.get(dir)?.catch(() => {})
+  const doc = await readDoc(dir)
+  return doc.items.filter((item) => item.source === "agent" && item.file !== undefined && !item.checked)
+}
+
+// 落账钳制结果:同键条目就地补 clamped/clamp(driver 项 matched 的同款
+// 就地更新手法);无同键条目(台账被清)则跳过——钳制的持久轨迹首先是
+// 被改写的标记行本身,台账只是驱动高亮与去重的依据。
+export async function recordClamp(dir: string | undefined, item: ResolveItem, clamp?: string): Promise<void> {
+  if (!dir) return
+  await update(dir, (doc) => {
+    const existing = doc.items.find((entry) => key(entry) === key(item))
+    if (!existing) return
+    existing.checked = true
+    if (clamp) {
+      existing.clamped = true
+      existing.clamp = clamp
+    }
+  })
 }
 
 // ===== 高亮报文(§H)=====

@@ -13,6 +13,15 @@
 // a rendered prompt, and name the violation. The throwing/catching halves
 // live at the render exit (prompt.ts) and the run boundary (loop.ts).
 //
+// Authoring rule (plans/0082 D11): every term the verifier will enforce is
+// defined by the charter itself — walls, permissions and carve-outs are
+// charter text (`### verify-plan`), never constraints carried in lower
+// documents; a lower document (playbook, handover, planning input) may narrow
+// a charter wall, never widen it, and a widening anyone wants becomes an open
+// question for the person, not a granted exception. Pack authors state the
+// boundary where the authority lives so no downstream session has to
+// reconcile two walls for itself.
+//
 // The assert line grammar (one assertion per line, blanks allowed between):
 //   <template>[ (<phase>) ] : must "literal"[, "literal"]...
 //   <template>[ (<phase>) ] : must-not "literal"[, "literal"]...

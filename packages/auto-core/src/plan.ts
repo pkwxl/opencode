@@ -36,6 +36,7 @@ import { isolateRound } from "./git"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
+import { executeBlockageChoices, executionLines } from "./blockage-execute"
 import { addTask } from "./task-add"
 import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan, type Task } from "./tasks"
 import { adoptUnit, unitNotReady, workOrder } from "./work-order"
@@ -190,6 +191,20 @@ export async function planPrelude(dir: string, opts: {
     const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
     return establish(dir, round + 1, opts.phases, roundCloseLines(close), opts.isolate)
+  }
+  // The remediation executor row (plans/0082 §5 D7): after round
+  // establishment and immediately before the drift re-sync row — D5's
+  // rows 1–3 keep their no-write order, and this row's edits are its first
+  // write. It finds the round's unexecuted `Choice:` marks and executes
+  // them mechanically (one Auto-Stage: remediation commit per edit,
+  // old-span literal match, the planning-input channel through its own
+  // commit); the blocked step then re-composes and re-verifies from scratch
+  // as the loop below runs it. A refusal or a re-block stops with the
+  // partial state named.
+  {
+    const executed = await executeBlockageChoices(dir, round)
+    if (executed.type === "reblocked") return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${bin} plan ${dir}`])
+    for (const line of executionLines(executed)) log(line)
   }
   // Row 3 (plans/0053 D34): the phase index drifted from the phases value —
   // config `phases` changed after the round was established. plan owns the

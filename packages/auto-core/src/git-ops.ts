@@ -39,7 +39,8 @@ import {
   type GitOps,
   type UnitBaseline,
 } from "./git"
-import { vlog } from "./log"
+import { clampRecordedResolves } from "./charter-clamp"
+import { log, vlog } from "./log"
 import { currentRound } from "./phases"
 import type { PhaseKey } from "./phases/registry"
 import { collectAgentResolves } from "./resolve"
@@ -106,6 +107,12 @@ async function collectSessionMarks(
   if (!found) return
   if (found.resolves) vlog(`⚑ ${task.id} ${stage}: collected ${found.resolves} AUTO-RESOLVE marker(s)`)
   if (found.decisions) vlog(`ℹ ${task.id} ${stage}: recorded ${found.decisions} AUTO-DECISION entries`)
+  // The record-time charter check (plans/0082 §10 D12): every freshly
+  // collected default gets one cheap one-shot check against the charter,
+  // here at the scan that collected it — the flagged ones are clamped and
+  // surface one line each. Auditing discipline: never affects flow or exit
+  // code (the clamp swallows its own errors).
+  for (const line of await clampRecordedResolves(dir)) log(line)
 }
 
 // The production instance: delegation to the free commit functions, and

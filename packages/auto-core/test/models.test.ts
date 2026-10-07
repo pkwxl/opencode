@@ -275,7 +275,7 @@ describe("parsing", () => {
     const routes = { decompose: "deep", implement: "deep", m: ["k2"], "security-review": "deep", bypass: ["k2", "k3"] }
     await writeOperator({ ...EXAMPLE, routes })
     expect((await problems())[0]).toBe(
-      `${OPERATOR()}: routes.security-review: is not a role word (decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, number-recovery, bypass), a phase type id (analysis, design, implement, test, acceptance, knowledge) or a preset letter (a, d, m, t, v, k)`,
+      `${OPERATOR()}: routes.security-review: is not a role word (decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, number-recovery, diagnose, bypass), a phase type id (analysis, design, implement, test, acceptance, knowledge) or a preset letter (a, d, m, t, v, k)`,
     )
     const registry = await loaded({ phaseTypes: [...TYPES, "security-review"] })
     expect([...registry.routes.keys()]).toEqual(Object.keys(routes))

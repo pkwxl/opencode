@@ -261,9 +261,12 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     // One work kind, three one-shot variants: the k-phase extraction, the
     // second-migration prior-knowledge extraction, and the numbering-record
     // recovery (all "read evidence, distill a document" sessions through
-    // requireArtifact).
-    routing: ["knowledge", "prior-knowledge", "number-recovery"],
-    templates: ["knowledge", "prior-knowledge", "number-recovery"],
+    // requireArtifact). Since plans/0082 §4 D4 the blockage diagnosis
+    // session rides the same simple side-channel tier: a read-only
+    // one-artifact session over the requireArtifact skeleton, its strict
+    // parse the backstop.
+    routing: ["knowledge", "prior-knowledge", "number-recovery", "diagnose"],
+    templates: ["knowledge", "prior-knowledge", "number-recovery", "diagnose"],
     tier: "simple",
     usage: { handover: false, testHandover: false, forkGuard: false, splitGuard: false },
     collect: "document-marker",

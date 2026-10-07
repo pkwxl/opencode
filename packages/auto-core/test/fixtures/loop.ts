@@ -16,7 +16,7 @@
 // default deterministically and its printed lines are assertable.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { spyOn } from "bun:test"
 import type { AgentHost, AgentMessage } from "../../src/agent/types"
 import { EOF_MARK } from "../../src/doccheck"
@@ -25,6 +25,7 @@ import { runPhaseLoop } from "../../src/loop-phase"
 import type { RunAllOpts } from "../../src/loop-preflight"
 import type { LoopCtx } from "../../src/loop-task"
 import type { RoutingFacts } from "../../src/routing"
+import type { Interactive } from "../../src/interactive"
 import { services } from "../../src/services"
 import { readPhases, type PhaseUnit } from "../../src/phases"
 import { renderTaskIndex } from "../../src/tasks"
@@ -83,6 +84,13 @@ function nextTaskNumber(dir: string): number {
 }
 
 export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => {
+  // The blockage diagnosis session (plans/0082 §4) never writes through
+  // this script's planning branches: its prompt names the phase's task index
+  // in the dossier's block map, which the tasks.md regex below would mistake
+  // for a planning prompt. Returning undefined gives it the default turn (no
+  // artifact) — exactly the fail-closed case; the diagnosis suites script a
+  // real plan through diagnosisTurn.
+  if (ctx.text.includes("You are the blockage diagnosis session")) return undefined
   // The handover prompt opens with "You are the handover distiller"; the
   // planning prompts (phase-plan and implement-plan alike) carry the phase's
   // task index path. A plan prompt also injects earlier phases' handover
@@ -124,6 +132,31 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
     mkdirSync(join(dir, "docs", task), { recursive: true })
     writeFileSync(join(dir, phaseDir, "tasks.md"), renderTaskIndex(phaseDirId(phaseDir), [{ id: task, title: `task ${task}` }]))
     writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
+  }
+  return undefined
+}
+
+// —— Diagnosis turns (plans/0082 §4, the agent-fake cases) ——
+
+// The diagnosis prompt's opening marker (templates/prompts/diagnose.md).
+const DIAGNOSIS_MARK = "You are the blockage diagnosis session"
+
+// One diagnosis turn: the session writes the remediation plan it was given
+// to the file the prompt names ("write the remediation plan to <path>").
+// The plan text is the strict format verbatim (Analysis / Options or
+// Escalation); undefined plan means "reply without writing" (the fail-closed
+// case — the default turn).
+export const diagnosisTurn = (dir: string, plan?: (file: string) => string | undefined): TurnScript => (ctx: TurnContext) => {
+  if (!ctx.text.includes(DIAGNOSIS_MARK)) return undefined
+  const file = /write the remediation plan to (\S+\.md)/i.exec(ctx.text)?.[1]
+  if (plan !== undefined && file !== undefined) {
+    // undefined from the callback means "reply without writing" — the
+    // fail-closed case (the default turn, no artifact).
+    const text = plan(file)
+    if (text !== undefined) {
+      mkdirSync(join(dir, dirname(file)), { recursive: true })
+      writeFileSync(join(dir, file), text)
+    }
   }
   return undefined
 }
@@ -231,7 +264,7 @@ export type LoopFixture = {
   // the LoopCtx field runAll fills from the loaded registry — the harness
   // takes it the same way for the cases that need one (the plan verifier's
   // classifier entry, plans/0080 §5).
-  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts }) => Promise<LoopRunResult>
+  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts; repl?: Interactive }) => Promise<LoopRunResult>
 }
 
 const OPENCODE_AUTO = /^OPENCODE_AUTO_/
@@ -279,7 +312,7 @@ export async function loopFixture(
       await git(dir, "commit", "-qm", subject)
     },
     async run(opts = {}) {
-      const { planInput, append, routing, ...rest } = opts
+      const { planInput, append, routing, repl, ...rest } = opts
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
@@ -290,6 +323,9 @@ export async function loopFixture(
         ran: 0,
         repairs: 0,
         input: planInput,
+        // The interactive sideband (0082 §6 D9's fast path): a case that
+        // needs one passes it per run; absent = the detached protocol.
+        ...(repl !== undefined ? { repl } : {}),
         // The run's registry routing facts (loop.ts fills the field from the
         // loaded registry; the fixture's runs hold no routing decision state,
         // and the boundary hooks read it only through ctx) — a case that

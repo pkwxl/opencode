@@ -168,7 +168,12 @@ under rule separation nothing plans to read, search or reconstruct the quarantin
 paths, and the platform boundary is the whole of the shared tree a clean room names.
 Every later phase is a clean room: its sessions never access, search for, reconstruct,
 infer or request the reference implementation, and they plan and implement from the
-specification notes, the brief and the planning input alone. The deliverable is an independent
+specification notes, the brief and the planning input alone. The reference implementation
+is everything under the location the brief names, its published interface headers
+included — their content reaches clean-room sessions only through the specification
+notes' restatement. Walls and permissions live in this charter alone, and a lower
+document may narrow them, never widen them — widening is the person's ruling, carried
+as an open question until given. The deliverable is an independent
 implementation of the specified external contracts; internal structure is free, and
 structural resemblance to the reference implementation beyond those contracts is a
 defect, not a goal. Where the specification is silent, the minimal behavior consistent
