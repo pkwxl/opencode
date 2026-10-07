@@ -593,6 +593,15 @@ export async function begin(dir: string, id: string): Promise<void> {
   emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "in_progress" })
 }
 
+// Book one fix round of the verification loop into the task's `attempts`
+// (plans/0083 D7): the round is execution the same way a re-run attempt is,
+// and the attempts count is the unit's single "how many sessions has this
+// unit burned" figure. No status transition and no event — the task is
+// already in_progress and its bracket is open.
+export async function bookAttempt(dir: string, id: string): Promise<void> {
+  await updateTask(dir, id, (entry) => ({ ...entry, attempts: (entry.attempts ?? 0) + 1 }))
+}
+
 // Crash recovery at run start: an interrupted run (kill, crash) leaves tasks
 // in_progress although no session runs. Reset them to pending; the loop
 // resumes them through next() either way, attempts survive.

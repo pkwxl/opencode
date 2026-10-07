@@ -9,6 +9,8 @@ import {
   BUILTIN_PHASE_TYPES,
   PHASE_LETTERS,
   TIERS,
+  anyCodeWork,
+  codeWork,
   expandPhases,
   isPhaseLetter,
   phaseType,
@@ -53,6 +55,31 @@ describe("builtin phase types", () => {
   test("only knowledge runs without tasks; only acceptance carries the verdict gate", () => {
     expect(BUILTIN_PHASE_TYPES.filter((entry) => !entry.hasTasks).map((entry) => entry.type)).toEqual(["knowledge"])
     expect(BUILTIN_PHASE_TYPES.filter((entry) => entry.gates.includes("verdict")).map((entry) => entry.type)).toEqual(["acceptance"])
+  })
+
+  // 0083 D9's review ruling: test in — implement and test carry the codeWork
+  // flag, nothing else; the derived scope helper falls back to implement (the
+  // no-phase mode's definition), so a phase-less answer is always true.
+  test("codeWork (the --test-by-driver channel's derived scope, 0083 D9): implement and test in, the rest out, no-phase = implement", () => {
+    expect(Object.fromEntries(BUILTIN_PHASE_TYPES.map((entry) => [entry.type, entry.codeWork === true]))).toEqual({
+      analysis: false,
+      design: false,
+      implement: true,
+      test: true,
+      acceptance: false,
+      knowledge: false,
+    })
+    expect(codeWork(undefined)).toBe(true)
+    expect(codeWork(phaseType("implement"))).toBe(true)
+    expect(codeWork(phaseType("design"))).toBe(false)
+    expect(codeWork({ codeWork: false })).toBe(false)
+    // The run-level fact the capability clamp threads: the implement type is
+    // required in every valid flow, so a resolved list always has one — and
+    // an unresolvable value conservatively counts as code work.
+    expect(anyCodeWork(expandPhases("m"))).toBe(true)
+    expect(anyCodeWork(expandPhases("admtvk"))).toBe(true)
+    expect(anyCodeWork(null)).toBe(true)
+    expect(anyCodeWork([phaseType("design")!])).toBe(false)
   })
 
   test("standard artifacts follow plans/0047 §5", () => {

@@ -495,7 +495,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
     try {
       const { client } = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const result = await runSession(client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await runSession(client, task, "prompt text", { dir, testByDriver: true, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("idle")
       expect((result as { testHandover?: boolean }).testHandover).toBe(true)
       // The frozen session's (here ses_new_1) task is complete: neither the chain nor the record claims it any more.
@@ -517,7 +517,7 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       // Part one: run one full test handover; the ending drops the frozen session (same as the previous case).
       const pin = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const handedOver = await runSession(pin.client, task, "prompt text", { dir, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const handedOver = await runSession(pin.client, task, "prompt text", { dir, testByDriver: true, git: noCommitGit() }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect((handedOver as { testHandover?: boolean }).testHandover).toBe(true)
       // Simulates runExecSession's handover close-out (after archiving + commit #2 + running the script, the in-flight
       // record moves to the closed-out state: the script and the frozen anchor are voided, waiting for attempt to

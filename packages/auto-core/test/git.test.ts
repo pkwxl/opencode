@@ -30,6 +30,8 @@ import {
   unitBaseline,
   unitViolations,
   writeLocalIdentity,
+  scriptGuardSnapshot,
+  scriptGuardCheck,
   WORKTREE_TEARDOWN,
 } from "../src/git"
 import { noCommitGit } from "../src/git-ops"
@@ -998,5 +1000,147 @@ describe("the git seam's lane members (the no-commit double)", () => {
     expect(landed.type).toBe("failed")
     expect(await double.removeWorktree("/nowhere", "/nowhere/park")).toEqual({ ok: true })
     expect(await double.pruneWorktrees("/nowhere")).toEqual({ ok: true })
+  })
+})
+
+// The side-effect guard of driver-run scripts (plans/0083 D11): the pre-run
+// `git stash create` snapshot (nothing touched on disk, no stash entry) and
+// the post-run read — tracked mutations restored per path, a moved HEAD the
+// hard-block case with no auto-undo, byte-identical writes undetectable and
+// harmless, untracked files staying, nested repositories covered root by
+// root.
+describe("scriptGuardSnapshot / scriptGuardCheck (the side-effect guard, plans/0083 D11)", () => {
+  async function seeded(): Promise<string> {
+    const dir = await fresh()
+    await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+    await writeFile(join(dir, "src.ts"), "// baseline\n")
+    await mkdir(join(dir, "sub"), { recursive: true })
+    await writeFile(join(dir, "sub", "nested.txt"), "nested baseline\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  test("a tracked mutation over a clean pre-run tree is restored from HEAD and reported", async () => {
+    const dir = await seeded()
+    try {
+      const shots = await scriptGuardSnapshot(dir)
+      await writeFile(join(dir, "src.ts"), "// mutated by the script\n")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      // `git stash create` on the clean tree stored no ref and touched nothing.
+      expect((await git(dir, "stash", "list")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a deleted tracked file is restored too; untracked files stay (not git-managed content)", async () => {
+    const dir = await seeded()
+    try {
+      const shots = await scriptGuardSnapshot(dir)
+      await rm(join(dir, "src.ts"))
+      await writeFile(join(dir, "scratch.out"), "script output\n")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
+      expect(await Bun.file(join(dir, "scratch.out")).text()).toBe("script output\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("session work-in-progress is in the snapshot: the restore puts the pre-run WIP back, and a path the script never touched keeps its WIP untouched", async () => {
+    const dir = await seeded()
+    try {
+      // The session's own tracked WIP: one committed file the session then
+      // modified (the script will overwrite it further), one file the script
+      // never touches.
+      await writeFile(join(dir, "wip-a.ts"), "// committed\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "wip baseline")
+      await writeFile(join(dir, "wip-a.ts"), "// session wip\n")
+      await writeFile(join(dir, "wip-b.ts"), "// session wip kept\n")
+      const shots = await scriptGuardSnapshot(dir)
+      expect(shots[0]!.stash).toBeTruthy()
+      await writeFile(join(dir, "wip-a.ts"), "// session wip + script edit\n")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation?.kind).toBe("tracked")
+      if (violation?.kind === "tracked") expect(violation.restored).toEqual(["wip-a.ts"])
+      expect(await Bun.file(join(dir, "wip-a.ts")).text()).toBe("// session wip\n")
+      expect(await Bun.file(join(dir, "wip-b.ts")).text()).toBe("// session wip kept\n")
+      // The restore puts the pre-run content back through the index (git
+      // checkout semantics), so the session WIP carries staged form — the
+      // next unified commit absorbs it either way; the untracked file stays.
+      const status = (await git(dir, "status", "--porcelain")).split("\n").filter(Boolean).sort()
+      expect(status).toEqual(["?? wip-b.ts", "M  wip-a.ts"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a byte-identical rewrite is undetectable and harmless (no violation)", async () => {
+    const dir = await seeded()
+    try {
+      const shots = await scriptGuardSnapshot(dir)
+      // The script rewrites the file with identical bytes.
+      await writeFile(join(dir, "src.ts"), "// baseline\n")
+      expect(await scriptGuardCheck(dir, shots)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a mutation inside a nested repository is restored by that repository's own snapshot", async () => {
+    const dir = await fresh()
+    try {
+      await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // sub/ becomes its own repository, recorded in the outer repository as
+      // the nested root it is (the unified commit's own shape).
+      await mkdir(join(dir, "sub"), { recursive: true })
+      await writeFile(join(dir, "sub", "nested.txt"), "nested baseline\n")
+      await git(join(dir, "sub"), "init", "-q")
+      await writeLocalIdentity(join(dir, "sub"), { name: "auto", email: "auto@example.com" })
+      await git(join(dir, "sub"), "add", "-A")
+      await git(join(dir, "sub"), "commit", "-qm", "nested init")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "nested root")
+      const shots = await scriptGuardSnapshot(dir)
+      expect(shots.length).toBe(2)
+      await writeFile(join(dir, "sub", "nested.txt"), "mutated by the script\n")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation?.kind).toBe("tracked")
+      if (violation?.kind === "tracked") expect(violation.restored).toEqual(["sub/nested.txt"])
+      expect(await Bun.file(join(dir, "sub", "nested.txt")).text()).toBe("nested baseline\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a moved HEAD is the hard-block case: reported, nothing restored, no stash entry left", async () => {
+    const dir = await seeded()
+    try {
+      const shots = await scriptGuardSnapshot(dir)
+      // The script ran a commit (the git-state-command family).
+      await writeFile(join(dir, "scripted.txt"), "committed by the script\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "scripted by the script")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation).toMatchObject({ kind: "head" })
+      if (violation?.kind === "head") {
+        expect(violation.moved[0]!.from).toBe(shots[0]!.head)
+        expect(violation.moved[0]!.root).toBe(".")
+      }
+      // No auto-undo ran: the commit stands for the human.
+      expect((await git(dir, "log", "--format=%s")).split("\n")[0]).toBe("scripted by the script")
+      expect((await git(dir, "stash", "list")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

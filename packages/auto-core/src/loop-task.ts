@@ -316,7 +316,12 @@ async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: T
   // transition itself was booked by begin() inside runTask.
   await taskBracket(directory, task.id, task.title, "starting execution", task.attempts)
   const start = Date.now()
-  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }))
+  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }), {
+    // The unit-start SHA baseline beginUnit recorded (plans/0083 D1: the
+    // verification charter's commit range; a dryrun's idle gate leaves it
+    // undefined and the charter words its inspection without a range).
+    ...(taskBaseline ? { baseline: taskBaseline } : {}),
+  })
   if (outcome.type === "dirty") {
     // Unit-startup clean gate failure (runTask inner layer): no state
     // write, no sweep-up commit — the git state decision belongs to the
@@ -931,7 +936,15 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   // event-then-bucket order, taskBracket's AUTO-DECISION above).
   await taskBracket(directory, unit, task.title, `lane worker: running the ${stream !== undefined ? "stream" : "unit"}`, task.attempts)
   const taskBaseline = await ctx.git.unitBaseline(directory)
-  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(route.phase), ...(stream !== undefined ? { stream: stream.index } : {}) }))
+  const outcome = await runTask(
+    serverHandle,
+    plan,
+    task,
+    sessionOpts(ctx, { site: "task", phase: phaseKey(route.phase), ...(stream !== undefined ? { stream: stream.index } : {}) }),
+    // The unit-start baseline for the verification charter's commit range
+    // (plans/0083 D1) — the lane worker's own worktree, its own range.
+    { baseline: taskBaseline },
+  )
   if (outcome.type === "dirty") {
     log(`⏸ ${unit} worktree not clean before the execution unit starts; handle it manually (commit/clean) and re-run:`)
     for (const file of outcome.files) log(`  ${file}`)

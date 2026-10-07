@@ -66,6 +66,10 @@ export type StartPoolOpts = {
   server?: string
   permission?: PermissionMode
   testByDriver?: boolean
+  // The run-level derived fact "this run includes a code-producing phase"
+  // (plans/0083 D9): threads into the --test-by-driver steer clamp of the
+  // capability degradation; absent = the channel may run.
+  codeWork?: boolean
   interactive?: boolean
   dryrun?: boolean
   // An already started host (tests); taken as is, no agent is started and no

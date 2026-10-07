@@ -22,8 +22,13 @@ import { basename, dirname, join } from "node:path"
 // Task-document roles (R4: role file names fixed); index (the subtask
 // artifact) is constructed only through subtaskDoc. shared is the
 // common-context reference index of the M1.0 merged understand+decompose
-// session (plans/0030 D3).
-export type TaskRole = "context" | "shared" | "subtasks" | "report" | "handoff" | "testhandoff"
+// session (plans/0030 D3). gaps is the verification loop's gap list
+// (plans/0083 D3): docs/T-NNN/gaps.md, written by the verification session
+// on a FAIL verdict, transient like handoff.md (deleted at closeout and by
+// closeUnit) and carrying no eof terminator — the role exists so the path
+// never doubles as the handoff channel the driver parses a `Status:` line
+// out of.
+export type TaskRole = "context" | "shared" | "subtasks" | "report" | "gaps" | "handoff" | "testhandoff"
 
 // Subtask numbers zero-padded to two digits (S2 → S02), three digits carry
 // over naturally (matching the existing padStart(2,"0") convention).
@@ -109,6 +114,8 @@ export function taskDocPaths(id: string) {
   return {
     handoff: handoffFile({ id }),
     subtasks: taskDoc(id, "subtasks"),
+    report: taskDoc(id, "report"),
+    gaps: taskDoc(id, "gaps"),
     testHandoff: taskDoc(id, "testhandoff"),
     subtask: (k: number) => ({
       testHandoff: subtaskDoc(id, k, "testhandoff"),

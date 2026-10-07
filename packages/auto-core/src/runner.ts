@@ -10,7 +10,7 @@ import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
 import { failbackApplies } from "./failback"
 import { formatTokens } from "./format"
-import { removeIfUntracked, unitBaseline } from "./git"
+import { removeIfUntracked, unitBaseline, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type UnitStop } from "./opts"
@@ -157,6 +157,7 @@ export async function runTask(
   plan: Plan,
   task: Task,
   opts: Opts,
+  input: { baseline?: UnitBaseline } = {},
 ): Promise<Outcome> {
   // Experiment switches (the OPENCODE_AUTO_* environment-variable layer,
   // plans/0003-fork-decompose-design.md §4.6): parsed once at the entry
@@ -202,9 +203,13 @@ export async function runTask(
   // baseline is taken here (no commit between here and loop's beginUnit, so
   // the same HEAD; the path that exempts a resumed run from the clean gate
   // applies the same way) — the subtask/pipeline-stage boundaries refresh it
-  // to a nearer unit baseline via runSubtask/persistStage.
+  // to a nearer unit baseline via runSubtask/persistStage. The same figure is
+  // the verification charter's commit range (plans/0083 D1): the loop callers
+  // hand the beginUnit baseline in (the unit's true start), everything else
+  // falls back to this entry point's HEAD.
   const strict = strictResumeActive(opts, switches)
-  if (strict) anchorBaseline(chain, await unitBaseline(dir))
+  const unitStart = input.baseline ?? (await unitBaseline(dir))
+  if (strict) anchorBaseline(chain, unitStart)
   // Interruption recovery (progress record): a session interrupted mid-way
   // and unsummarized (active) that still exists on the server → reuse the
   // original session to continue (isomorphic to `opencode -r`, context not
@@ -733,20 +738,36 @@ export async function runTask(
         }
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
-      // (--no-wrapup, default true). The report.md existence + shape-check
-      // gates live inside runWrapup (session-boundary-hardening §4.5 D5, S3b).
+      // (--no-wrapup, default true). Since plans/0083 (D1–D5) the wrap-up
+      // session is the verification session, and a FAIL verdict opens the
+      // bounded fix loop inside runWrapup (verify → gaps.md → fix → re-verify,
+      // at most FIX_ROUNDS rounds, then today's ladder); the report.md and
+      // gaps.md shape gates live inside it too. The loop is lane-local (D8):
+      // it sits here in runTask's tail, so every lane runs it without parent
+      // involvement.
       if (opts.wrapup ?? true) {
-        await persistStage({ kind: "wrapup" })
-        const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "true", label: "wrapup session" })
+        const stopped = await runWrapup(client, plan, task, opts, chain, {
+          solo: mode !== "true",
+          label: "wrapup session",
+          // D7: the fix rounds this task has already spent (a round counts
+          // once it opens, so a resumed run never re-runs a spent round).
+          round: resume?.kind === "wrapup" ? (resume.round ?? 0) : 0,
+          persist: persistStage,
+          baseline: unitStart,
+        })
         if (stopped) return stopped
       }
     }
     // Result line of the task report (FAIL stops the run): the report and the
     // work are already committed by the wrap-up session, so a FAIL only has
     // to block — the loop's blocked path marks it blocked and commits the
-    // interruption scene. A person then decides: `close` accepts the result
-    // (the Closed: field records why); `plan --force-close … --append -p`
-    // replaces the task with a better one; listing fix tasks before it in
+    // interruption scene. Under the verification loop (plans/0083 D6) this
+    // closeout read is the --no-wrapup path's own: a task-written report is
+    // still read here unchanged, and every loop-exiting verdict was already
+    // acted on inside runWrapup (a loop PASS re-reads as PASS, a loop FAIL
+    // never reaches this line). A person then decides: `close` accepts the
+    // result (the Closed: field records why); `plan --force-close … --append
+    // -p` replaces the task with a better one; listing fix tasks before it in
     // tasks.md gets the gap fixed first (a hand-added checklist item is
     // illegal subtask state in true mode, so fixes are planned as tasks).
     // The phase is rewound to wrapup, so re-running the task itself only

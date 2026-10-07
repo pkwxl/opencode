@@ -49,7 +49,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Phase-type registry | Builtin types and their `--phases` preset letters (admtvk), decompose template, duties key, standard artifacts, gate; phases-value resolution | `src/phases/registry.ts` (0047 §5) |
+| Phase-type registry | Builtin types and their `--phases` preset letters (admtvk), decompose template, duties key, standard artifacts, gate, the `codeWork` flag (the `--test-by-driver` channel's derived scope, a custom type's `Code-work:` field); phases-value resolution | `src/phases/registry.ts` (0047 §5; 0083 D9) |
 | Custom phase types | `.opencode/auto/phases/<type>.md` loader | `src/phases/custom.ts` |
 | Phase state machine | Round `docs/R-NN/phases.md` index + `P<nn>-<type>/` directories, routing, `completePhase` (todo.md → done.md), round establishment, phase-index drift detection | `src/phases.ts` (0006, 0047 §3–§4, 0048, 0053 D34) |
 
@@ -58,7 +58,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Frozen schema | Artifact-spec and role types | `src/document/types.ts` (0031) |
-| Role model | `roleOf` path classifier + per-role policies (eof-scan exemption, protect list, handoff checks); the project's scan exemptions (config `scanExempt`, `scanExempted`) | `src/document/roles.ts` (0045, 0059 X2) |
+| Role model | `roleOf` path classifier + per-role policies (eof-scan exemption, protect list, handoff checks; the `gaps` gap-list role, transient and terminator-free); the project's scan exemptions (config `scanExempt`, `scanExempted`) | `src/document/roles.ts` (0045, 0059 X2; 0083 D3) |
 | Unit model | Phase/task/subtask refs and paths, todo/done scan and rename, index parsing, `Depends:`/`Touches:` fields, the `closed` map read from `Closed:` lines, `nextReady` selection | `src/document/unit.ts` (0047, 0053 D16) |
 | Subtask state protocol | `docs/T-NNN/S<nn>/todo.md` → `done.md` | `src/document/state.ts` (0030, 0045) |
 | Artifact specs | `Artifacts:` declaration parsing, spec tables, spec-driven mechanical checks | `src/document/spec.ts` (0034) |
@@ -103,7 +103,7 @@ Grouped by sub-domain (R10) — the sub-domain column the direction test holds i
 | Numbering | `--auto-number`, `.auto/next-task` | `src/numbering.ts` (0001) |
 | Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket and per-model protocol-drift counters; the time slept for quota windows per model (`quotaWaits`); knowledge-digest counters (`digests`: per-planning-session digest sizes, cap trips, knowledge-phase use) with the 25% digest cap on the planning prompt's prevRound slot (`templates/prompts/digest-index.md` is the index form) | `src/stats.ts` (0019, 0055 §7.1, 0057 §11 item 7, 0061 R3) |
 | Proxy-answer ledger | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting | `src/resolve.ts` (0020) |
-| Driver scripts | `tmp/test.sh` request marker, output capture, watchdog | `src/script.ts` |
+| Driver scripts | `tmp/test.sh` request marker, output capture, watchdog, the side-effect guard (`git stash create` snapshot per repository root; tracked mutations restored from the pre-run snapshot, a moved HEAD hard-blocks) | `src/script.ts`, `src/git.ts` (0083 D11) |
 | Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`: 2×cap raised to a quarter of a large window, capped at 80% of it) (no session imports) | `src/testrun.ts` (0023, 0056, 0059 D6) |
 
 ### engine — one turn, one dispatch, one ladder
@@ -144,7 +144,7 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | models command data | `checkModels` / `describeModels` / `formatModels`: the run start's registry problems and the effective table as data; the shell only prints | `src/models-describe.ts` (0055) |
 | Learned windows | `.auto/windows.json`: a spent quota window's reset per account, kept across runs and read only to time the scheduled wait; never a down mark | `src/quota-windows.ts` (0057 §8) |
 | Usage source | Four `UsageTier`s and their effect on handover, steer, fork | `src/usage.ts` (0038) |
-| Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records; a fleet that cannot fork withholds auto's split clause (`leadSplit`) | `src/capability.ts` (0040, 0055, 0059 D7) |
+| Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records; a fleet that cannot fork withholds auto's split clause (`leadSplit`); the `--test-by-driver` steer error threads the run's derived code-work fact | `src/capability.ts` (0040, 0055, 0059 D7; 0083 D9) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries | `src/step.ts` (0012) |
 | Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included; the request flag and its sleepers are the control service's (one per run on the services holder, the clock's `sleepUnlessExit` delegating to it) | `src/exit.ts` (0014, 0057 §6, 0061 C5) |
@@ -167,11 +167,11 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | Parallel lanes | The lanes layer of plans/0068: the readiness predicate (`readyUnits` over declared `Depends`/`Touches`, `laneEligible`), the dispatch choreography (`dispatchLane` — the park worktree, the scaffolding copy, the spawn through the profile's `laneLauncher`, the Windows path-length guard) and the landing protocol (`landLane`, D7's five steps with `syncIndexTicks`/`syncChecklistTicks`), the lane report contract (`.auto/lane.json`, `parseLaneReport`/`laneOutcome`), stream-unit expansion (`streamUnits`, `T-NNN.S<nn>`), the `[<id>]` prefix relay (the lane's own `.auto/logs/` is discarded at teardown — the parent's relayed audit log keeps the run story; §11 item 6's choice), the activation and conflict policies (`schedulerActive`, `conflictRepair`), pid liveness and the dispatch cap | `src/lanes.ts` (0068) |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only; per-model lines and the per-tier summary under a registry; the time lost to quota windows) | `src/conclusion.ts` (0019, 0020, 0055, 0057) |
-| Task pipeline | `runOnce`/`runTask`: dispatch by `--subtask` (`true`: decompose → subtasks; `auto`: the lead, then its streams when its split is taken; `off`/`ondemand`: whole) → wrap-up → closeout; resume; the task-level repair round under `run --repair <n>` (a FAIL report with budget closes the task and appends rework) | `src/runner.ts` (0059 D1, 0079 §4) |
+| Task pipeline | `runOnce`/`runTask`: dispatch by `--subtask` (`true`: decompose → subtasks; `auto`: the lead, then its streams when its split is taken; `off`/`ondemand`: whole) → wrap-up (the verification loop, lane-local in `runTask`'s tail) → closeout; resume (the wrapup stage's `round`); the task-level repair round under `run --repair <n>` (a FAIL verdict past the fix loop with budget closes the task and appends rework) | `src/runner.ts` (0059 D1, 0079 §4, 0083 D5/D7–D8) |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session (auto's lead, its split judged after each session), the split's streams as forks of the lead with their own handover | `src/execute.ts` (0030, 0059) |
 | Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check and the driver-state filter of its changed-files list (a checklist item's title is `tasks.ts` `checklistTitle`, shared with the pipeline's subtask prompt) | `src/split.ts` (0059 D3–D5, T1) |
 | Bypass-session skeleton | `requireArtifact`: dispatch → collect → one retry → implicit block; hidden-unit commit boundary | `src/artifact.ts` |
-| Wrap-up | Wrap-up session, `Result: PASS\|FAIL` parsing | `src/wrapup.ts` (0044) |
+| Wrap-up | The verification session (verify + report, the evidence form on PASS), the gap list `docs/T-NNN/gaps.md` on FAIL, the shape gates, the constant two fix rounds (`FIX_ROUNDS`) and the exhausted-budget block, `Result: PASS\|FAIL` parsing | `src/wrapup.ts`, `templates/prompts/wrapup.md`, `templates/prompts/fix.md` (0044; 0083 M1) |
 | Knowledge | Knowledge phase and prior-knowledge extraction | `src/knowledge.ts` |
 | Status tree | Read-only round → phase → task → subtask view | `src/status.ts` |
 | Round close | Whole-tree P1 scan, build check, close listing, the round user report's existence/shape before `plan` opens the next round | `src/round-close.ts` (0049; the report check 0081 D4) |

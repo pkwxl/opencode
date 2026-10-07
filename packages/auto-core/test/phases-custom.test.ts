@@ -65,6 +65,13 @@ describe("parsePhaseTypeFile", () => {
     expect(parsePhaseTypeFile("review", "# Review\n\nreasoning: Simple\n\n## plan duties\n\nx\n").reasoning).toBe("simple")
   })
 
+  test("Code-work takes yes or no, case-insensitively; absent = not declared (plans/0083 D9)", () => {
+    expect(parsePhaseTypeFile("review", "# Review\n\nCode-work: yes\n\n## plan duties\n\nx\n").codeWork).toBe(true)
+    expect(parsePhaseTypeFile("review", "# Review\n\nCode-work: no\n\n## plan duties\n\nx\n").codeWork).toBe(false)
+    expect(parsePhaseTypeFile("review", "# Review\n\ncode-work: YES\n\n## plan duties\n\nx\n").codeWork).toBe(true)
+    expect(parsePhaseTypeFile("review", MINIMAL).codeWork).toBeUndefined()
+  })
+
   test("minimal file → defaults: tasks, no gate, deep reasoning, no artifacts, no decompose duties", () => {
     const entry = parsePhaseTypeFile("review", MINIMAL)
     expect(entry).toMatchObject({ hasTasks: true, gates: [], reasoning: "deep", phaseArtifacts: [], taskArtifacts: [] })
@@ -80,8 +87,11 @@ describe("parsePhaseTypeFile", () => {
       ["# R\n\nGate: strict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
       ["# R\n\nGate: verdict, verdict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
       ["# R\n\nReasoning: medium\n\n## plan duties\n\nx\n", /Reasoning must be deep or simple; got "medium"/],
+      ["# R\n\nCode-work: sometimes\n\n## plan duties\n\nx\n", /Code-work must be yes or no; got "sometimes"/],
+      ["# R\n\nCode-work:\n\n## plan duties\n\nx\n", /Code-work must be yes or no; got ""/],
+      ["# R\n\nTask-artifacts: gaps.md\n\n## plan duties\n\nx\n", /driver-owned file name/],
       ["# R\n\nReasoning:\n\n## plan duties\n\nx\n", /Reasoning must be deep or simple; got ""/],
-      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner \(available: Tasks, Gate, Reasoning, Phase-artifacts, Task-artifacts\)/],
+      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner \(available: Tasks, Gate, Reasoning, Code-work, Phase-artifacts, Task-artifacts\)/],
       ["# R\n\nPhase-artifacts: ../out.md\n\n## plan duties\n\nx\n", /must be relative to the unit directory/],
       ["# R\n\nPhase-artifacts: /abs.md\n\n## plan duties\n\nx\n", /must be relative/],
       ["# R\n\nPhase-artifacts: handover.md\n\n## plan duties\n\nx\n", /driver-owned file name/],

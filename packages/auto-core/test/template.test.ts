@@ -94,7 +94,7 @@ describe("shared partial parsing", () => {
 })
 
 describe("built-in template registry", () => {
-  test("all 36 templates present (33 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; the 0082 trio see §3-§5)", () => {
+  test("all 37 templates present (34 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; fix see 0083 D4; the 0082 trio see §3-§5)", () => {
     expect(promptTemplateNames()).toEqual([
       "_mode-brief",
       "_partials",
@@ -112,6 +112,7 @@ describe("built-in template registry", () => {
       "digest-index",
       "dryrun",
       "fanout",
+      "fix",
       "handoff-steer",
       "implement-plan",
       "knowledge",

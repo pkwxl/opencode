@@ -46,10 +46,19 @@
 //                    `Choice:` line and closed by the driver's `Executed:`
 //                    line; process, no eof terminator (its mark lines are
 //                    the protocol).
+// - gaps:            the verification loop's gap list docs/T-NNN/gaps.md
+//                    (plans/0083 D3): the FAIL verdict's channel — written
+//                    by the verification session, read by the fix session,
+//                    transient like the handoff family (deleted at closeout
+//                    and by closeUnit) but deliberately its own role so the
+//                    path never doubles as the handoff channel the driver
+//                    parses a `Status:` line out of; process, no eof
+//                    terminator (existence and non-emptiness are the whole
+//                    shape the driver checks).
 // - freeform:        everything else — the deliverable itself and the
 //                    project's own documents; the standardization boundary
 //                    places no schema on it beyond the P1 prohibition.
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "userReport" | "blockage" | "freeform"
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "userReport" | "blockage" | "gaps" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `Artifacts:` line, M1.4). The driver derives its mechanical checks from this

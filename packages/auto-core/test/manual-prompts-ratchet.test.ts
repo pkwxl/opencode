@@ -158,13 +158,25 @@ describe("manual-driver prompt ratchet", () => {
     }
   })
 
-  test("the ruled divergences stay explicit (plans/0078 §3)", () => {
-    // handoff.md is this suite's verification gap-list channel — the
-    // driver's own use of that path (the context-budget handover ending
-    // Status: continue|done) is deliberately not offered here, so no worker
-    // prompt carries a Status protocol. Reversing either ruling means
-    // updating this test together with prompts/ and plans/0078.
-    expect(text("run-verify.md")).toContain("`docs/<task id>/handoff.md`")
+  test("the gap channel converged on gaps.md (plans/0083 D3 overturns 0078 §3)", () => {
+    // The verification gap list lives in `docs/T-NNN/gaps.md` — the driver's
+    // own verification loop uses the same path since plans/0083 (D3), and the
+    // manual suite converged on it in the same change that landed the
+    // mechanism (the ratchet's requirement). Reversing means updating this
+    // test together with prompts/ and plans/0083. The other half of 0078 §3's
+    // ruling stands: no worker prompt carries a Status protocol — the
+    // driver's use of handoff.md (the context-budget handover ending
+    // `Status: continue|done`) is deliberately not offered here.
+    expect(text("run-verify.md")).toContain("`docs/<task id>/gaps.md`")
+    expect(text("run-fix.md")).toContain("`docs/<task id>/gaps.md`")
+    expect(text("run.md")).toContain("`docs/T-NNN/gaps.md`")
+    // The converged channel is the only gap-list channel: the handoff path no
+    // longer appears anywhere in the suite (testhandoff is the test-handover
+    // family, a different channel).
+    for (const name of FILES) {
+      expect(text(name), name).not.toContain("docs/<task id>/handoff.md")
+      expect(text(name), name).not.toContain("docs/T-NNN/handoff.md")
+    }
     for (const name of ["run-task.md", "run-fix.md"]) {
       expect(text(name), name).not.toContain("Status: continue")
       expect(text(name), name).not.toContain("Status: done")

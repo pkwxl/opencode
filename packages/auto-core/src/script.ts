@@ -1,6 +1,8 @@
 import { access, constants, mkdir } from "node:fs/promises"
 import { statSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { scriptGuardCheck, scriptGuardSnapshot, type ScriptGuardViolation } from "./git"
+import { log } from "./log"
 
 // Driver-run scripts (--test-by-driver) live under the target directory's tmp/
 // subdirectory: tmp/test.sh is the request marker, test.<n>.out holds each
@@ -39,6 +41,13 @@ export type ScriptRunResult = {
   // Whole content of the merged stdout+stderr output file (see runScript).
   // Kept for logs and debugging; sessions read the file on disk.
   out: string
+  // The side-effect guard's finding (plans/0083 D11): tracked = the script
+  // modified or deleted tracked files and the driver restored them from the
+  // pre-run snapshot; head = the script moved a repository's HEAD and no
+  // auto-undo ran (the caller hard-blocks). Undefined = the script left
+  // git-managed content alone. Outside git (no repository roots) the guard
+  // idles and this stays undefined.
+  violation?: ScriptGuardViolation
 }
 
 // Runs a driver-managed script in the target directory. stdout and stderr are
@@ -64,6 +73,12 @@ export async function runScript(
   const outPath = opts.out
   await Bun.write(outPath, "")
   const start = Date.now()
+  // The side-effect guard's pre-run snapshot (plans/0083 D11): taken before
+  // the child exists, checked after it exited — the delta between the two
+  // reads is causally the script's (it ran alone between them). Inert
+  // outside git and under the no-commit double (no repository roots → no
+  // snapshot → no check).
+  const guard = await scriptGuardSnapshot(dir)
   // bash -c receives the script and output paths as positional parameters, so
   // no shell quoting is needed; the inner redirection merges the script's own
   // stdout/stderr into the output file and the outer bash prints nothing. Both
@@ -105,7 +120,19 @@ export async function runScript(
   await proc.exited
   clearInterval(timer)
   const out = await Bun.file(outPath).text()
-  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, out }
+  const violation = await scriptGuardCheck(dir, guard)
+  if (violation) {
+    // The restore already ran inside the check (tracked mutations are back to
+    // pre-run content); the steered-back result names the violation and the
+    // drift counter books it at the steer sites (engine concern / exec
+    // session).
+    if (violation.kind === "head") {
+      log(`  ⚠ a driver-run script moved HEAD (${violation.moved.map((m) => `${m.root}: ${m.from} → ${m.to}`).join("; ")}); no auto-undo — blocking for the human`)
+    } else {
+      log(`  ⚠ a driver-run script changed tracked files; restored from the pre-run snapshot: ${violation.restored.join(", ")}${violation.unrestorable.length ? `; unrestorable: ${violation.unrestorable.map((u) => `${u.path} (${u.error})`).join(", ")}` : ""}`)
+    }
+  }
+  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, out, ...(violation ? { violation } : {}) }
 }
 
 // statSync rather than async stat: avoids racing the next tick inside the poll

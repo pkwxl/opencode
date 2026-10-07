@@ -44,6 +44,7 @@ import tplDiagnose from "../templates/prompts/diagnose.md" with { type: "file" }
 import tplDigestIndex from "../templates/prompts/digest-index.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
+import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplImplementPlan from "../templates/prompts/implement-plan.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
@@ -101,6 +102,10 @@ const embedded: Record<string, string> = {
   "digest-index": tplDigestIndex,
   dryrun: tplDryrun,
   fanout: tplFanout,
+  // The verification loop's fix session (plans/0083 D4): run-fix.md as
+  // driver machinery — the gap list + the task document in, exactly the
+  // listed gaps out, under the pack's repair discipline.
+  fix: tplFix,
   "handoff-steer": tplHandoffSteer,
   "implement-plan": tplImplementPlan,
   knowledge: tplKnowledge,
@@ -149,6 +154,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // carries the status protocol like handoff-steer.
   // AUTO-DECISION: fanout gets tier-1 markers although whole and subtask have none (an override dropping the item line would send a fork no assignment, and the status line is a string the driver parses, as in handoff-steer)
   fanout: ["{{subtask}}", "Status: continue", "Status: done"],
+  // The verification loop's fix session (plans/0083 D4): the gap list path
+  // and the task block are the session's whole assignment — an override
+  // dropping either sends the fix at nothing.
+  fix: ["{{taskBlock}}", "{{gapsFile}}"],
   "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "number-recovery": [".auto/next-task"],
   // The plan-step consistency verifier (plans/0080 §5): the driver parses the
@@ -195,7 +204,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // full status protocol like handoff-steer.
   "usage-note-info": ["{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
   "usage-note-winddown": ["Status: continue", "Status: done", "{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
-  wrapup: ["Result: PASS", "Result: FAIL"],
+  // The wrap-up = verification session (plans/0083): the two verdict forms of
+  // the single result line, plus the FAIL channel's target — an override
+  // dropping gaps.md converts every FAIL verdict into a hidden blockage (the
+  // shape gate re-prompts for a file the session was never told to write).
+  wrapup: ["Result: PASS", "Result: FAIL", "gaps.md"],
 }
 // (decompose family: the checklist format plus the context.md / todo.md
 // artifact paths are what the driver validates the session output against —

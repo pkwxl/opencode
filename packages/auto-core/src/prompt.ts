@@ -51,7 +51,7 @@ export type PromptFacts = {
 
 // A phase type as the render layer sees it (the phases registry's
 // PhaseTypeEntry satisfies it structurally): the preset letter or type id
-// (the {{phase}} var), the display name, and the decompose-side fields plus
+// (the {{phase}} var), the display name, the decompose-side fields plus
 // a custom type's own plan duties (the planDutyText tier, plans/0080 §4).
 export type PhaseEntry = {
   type: string
@@ -61,6 +61,12 @@ export type PhaseEntry = {
   planDuties?: string
   decomposeTemplate: string
   decomposeDuties?: string
+  // The type produces code work (plans/0083 D9): the test-protocol's
+  // derived scope — `testByDriver && codeWork(phase)`. Structural mirror of
+  // the registry's flag; absent = not code work, except that a phase-less
+  // render falls back to the facts' implement entry (implement by
+  // definition), which carries it.
+  codeWork?: boolean
 }
 
 // One checklist item as the render layer sees it: the full line text (the
@@ -96,6 +102,8 @@ export type PlanView = {
 export type TaskDocs = {
   handoff: string
   subtasks: string
+  report: string
+  gaps: string
   testHandoff: string
   subtask(k: number): { testHandoff: string; todo: string; output: string }
 }
@@ -229,6 +237,16 @@ export function renderPrompt(facts: PromptFacts, name: string, ctx: Ctx): string
 // absolute path of the merged stdout+stderr file, read by the session directly
 // (never truncated by tool output). timeoutReason: idle = killed by the
 // no-output watchdog; max = killed after the absolute run-time cap.
+// violation is the side-effect guard's finding (plans/0083 D11) — the
+// structural mirror of git.ts's ScriptGuardViolation, taken as data (the
+// render layer is off the driver): tracked = the script modified or deleted
+// tracked files, already restored from the pre-run snapshot (restored names
+// the paths, target-directory-relative); head = the script moved a
+// repository's HEAD — the caller blocks instead of steering.
+export type ScriptViolation =
+  | { kind: "tracked"; restored: string[]; unrestorable?: { path: string; error: string }[] }
+  | { kind: "head"; moved: { root: string; from: string; to: string }[] }
+
 export type ScriptRun = {
   script: string
   code: number
@@ -236,6 +254,7 @@ export type ScriptRun = {
   timedOut: boolean
   timeoutReason?: "idle" | "max"
   out: string
+  violation?: ScriptViolation
 }
 
 // One test execution of --test-by-driver (ScriptRun + the sequence number
@@ -243,6 +262,19 @@ export type ScriptRun = {
 // script it is steered into the executing session; the AI reads the merged
 // output file directly to judge.
 export type TestRunInfo = ScriptRun & { seq: number }
+
+// One side-effect violation as one line for the steered-back result (the
+// caller-side join the template syntax has no loops for, plans/0083 D11).
+export function scriptViolationLine(violation: ScriptViolation): string {
+  if (violation.kind === "head") {
+    return `the script ran a git state command and moved HEAD (${violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}) — a driver-run script is an observation, never that`
+  }
+  const restored = `the script modified or deleted tracked files, and DRIVER restored them from the pre-run snapshot: ${violation.restored.join(", ") || "(none)"}`
+  const unrestorable = violation.unrestorable?.length
+    ? `; paths the restore could not put back (handle them yourself): ${violation.unrestorable.map((entry) => `${entry.path} (${entry.error})`).join(", ")}`
+    : ""
+  return `${restored}${unrestorable}`
+}
 
 // Test execution result feedback (steered into the executing session): exit code
 // and output file path; the AI reads the file directly to judge.
@@ -256,6 +288,7 @@ export function renderTestResult(facts: PromptFacts, run: TestRunInfo): string {
       ? `yes (terminated by the driver${run.timeoutReason === "max" ? ": absolute duration limit exceeded" : ": no output throughout, the watchdog judged no progress"})`
       : "no",
     out: run.out,
+    violation: run.violation ? scriptViolationLine(run.violation) : undefined,
   })
 }
 
@@ -316,6 +349,7 @@ export function renderTestContinue(facts: PromptFacts, input: { handoffFile: str
     runScript: input.run?.script,
     runCode: input.run ? String(input.run.code) : undefined,
     runOut: input.run?.out,
+    violation: input.run?.violation ? scriptViolationLine(input.run.violation) : undefined,
     stuck: input.stuck ? String(input.stuck) : undefined,
   })
 }
@@ -554,8 +588,15 @@ export function renderFanout(
   })
 }
 
-// Wrap-up session: every subtask is already ticked by the driver. Only docs
-// and the output-summary report remain.
+// Wrap-up session — the verification session since plans/0083 (D1/D2): every
+// subtask is already ticked by the driver; this one fresh session judges the
+// task's acceptance by inspection and writes the evidence-form report (or,
+// on FAIL, no report at all and the gap list instead — the wrapup template's
+// verification charter carries the whole ruling, rendered only under the
+// pack's result-line subsection so the zero-intent floor stays byte-identical).
+// commitRange is the unit's commit range (the SHA baseline at unit start
+// through HEAD, wrapup.ts commitRangeText); undefined words the inspection
+// without one (outside git / the no-commit double).
 // resolves (wrap-up closed loop H7, plans/0020-auto-resolve-design.md §I):
 // the proxy-answer list the driver observed for this task; once injected,
 // report.md is required to carry a dedicated "Proxy-answered questions"
@@ -570,7 +611,7 @@ export function renderFanout(
 // items (which session-identified proxy calls also belong in the section) from
 // `## governance` / `### wrapup-audit`. The driver-listed items and their
 // "every one must appear" demand stay core: they are the persistent audit trail.
-export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { solo?: boolean; resolves?: ResolveEntry[] } = {}): string {
+export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { solo?: boolean; resolves?: ResolveEntry[]; commitRange?: string } = {}): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "wrapup", {
     ...ctx,
@@ -581,8 +622,31 @@ export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView,
     // Result-line discipline (plans/0044 §3.1): when to write the line and what
     // counts as FAIL is intent (`## acceptance` / `### result-line`); the literal
     // and its placement stay core. A pack without the subsection drops the
-    // whole instruction — no result line, the run never stops on a verdict.
+    // whole instruction — no result line, no verdict, no fix loop (the
+    // zero-intent floor of plans/0083 D6).
     resultRule: intentText(facts, "acceptance", "result-line", ctx),
+    // The verification charter's inspection range (0083 D1); undefined outside
+    // git — the charter's {{#if commitRange}} clause drops out cleanly.
+    commitRange: opts.commitRange,
+  })
+}
+
+// The verification loop's fix session (plans/0083 D4, run-fix.md as driver
+// machinery): one fresh session that reads the gap list and the task
+// document, closes exactly the listed gaps and nothing else — the pack's
+// repair discipline (`## governance` / `### repair`, plans/0080 §6) renders
+// into the prompt as the anti-re-architecting boundary — and re-runs the
+// checks covering its own changes. The driver commits its output with stage
+// `execute` (wrapup.ts runFixRound); the template carries no terminator of
+// its own (a prompt, not a document).
+export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts = {}): string {
+  const ctx = baseCtx(facts, plan, task, docs, opts)
+  return renderPrompt(facts, "fix", {
+    ...ctx,
+    gapsFile: docs.gaps,
+    // The pack's repair discipline (plans/0080 §6): the boundary that keeps a
+    // fix from re-architecting; absent subsection drops the block cleanly.
+    repairDuties: intentText(facts, "governance", "repair", ctx),
   })
 }
 
@@ -899,7 +963,12 @@ function baseCtx(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskD
     taskId: task.id,
     taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}${notes ? `\n\n${notes}` : ""}`,
     doneList: doneList(plan),
-    testByDriver: Boolean(opts.testByDriver),
+    // The test channel's derived condition (plans/0083 D9): the config flag
+    // AND the phase type's codeWork — the entry already fell back to the
+    // implement entry for phase-less renders (the no-phase mode is implement
+    // by definition), so the AND keeps every phase-less render byte-identical
+    // while a survey/design/analysis phase drops the protocol block.
+    testByDriver: Boolean(opts.testByDriver) && entry.codeWork === true,
     handoverTest: Boolean(opts.handoverTest),
     // The test handover document is named per execution scope: when index
     // (passed only by renderSubtask, the subtask ordinal) exists it lands

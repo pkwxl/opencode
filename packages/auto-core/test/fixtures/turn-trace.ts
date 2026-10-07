@@ -490,7 +490,11 @@ export async function runScenario(scenario: TurnScenario): Promise<TurnTrace> {
     const hand: ScenarioHand = {
       agent,
       clock,
-      opts: { ...(scenario.opts ?? {}) },
+      // The test channel's derived condition (plans/0083 D9) reads the
+      // config flag off the turn's options: a scenario driving a test run is
+      // a channel turn, so the harness carries the flag by default (a
+      // scenario overrides it through its own opts as usual).
+      opts: { testByDriver: true, ...(scenario.opts ?? {}) },
       gate,
       script,
       interactive: gatedInteractive,

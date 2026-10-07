@@ -57,7 +57,20 @@ export type Degradation = {
 }
 
 // The run-start options degradation reads.
-export type DegradeOpts = { permission?: PermissionMode; testByDriver?: boolean; interactive?: boolean; dryrun?: boolean; subtask?: SubtaskMode }
+export type DegradeOpts = {
+  permission?: PermissionMode
+  testByDriver?: boolean
+  interactive?: boolean
+  dryrun?: boolean
+  subtask?: SubtaskMode
+  // The run-level derived fact "this run includes a code-producing phase"
+  // (plans/0083 D9, registry.ts anyCodeWork): the --test-by-driver steer
+  // error below applies only to a run whose test channel can ever run — a
+  // run over non-code phases only never steers a test result, so a fleet
+  // without mid-turn steer is fine there. Absent = the channel may run
+  // (the conservative default keeps every pre-0083 caller's behavior).
+  codeWork?: boolean
+}
 
 // Whether an agent can fork a session: a copy must exist (fork not "none")
 // and the session it copies must still be resumable.
@@ -169,8 +182,13 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
       `the agent keeps no readable session history: a persisted fork base starts cold, a recovered session's usage counts as unknown${by(forced((c) => !c.history))}`,
     )
   const weakSteer = forced((c) => !c.steer)
+  // The test channel's clamp (plans/0083 D9): the error fires only when the
+  // run's phases include a code-producing type (the derived fact opts.codeWork,
+  // absent = may run) — over non-code phases the channel never steers, so a
+  // steer-less agent is no obstacle. The condition threads the derived fact;
+  // the config keys keep their constitutional on/off meaning.
   const error =
-    opts.testByDriver && !opts.dryrun && !caps.steer
+    opts.testByDriver && opts.codeWork !== false && !opts.dryrun && !caps.steer
       ? `--test-by-driver needs an agent that takes messages into a live session (the driver feeds test results back that way); this agent cannot${labelNotes && weakSteer ? ` (${weakSteer.label})` : ""}. Re-init the project without --test-by-driver.`
       : undefined
   return { switches: patch, notes, ...(error ? { error } : {}), ...(forks ? {} : { leadSplit: false as const }) }

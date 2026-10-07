@@ -67,7 +67,11 @@ export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 //   item); index = the owning subtask's 1-based ordinal, carried only by the
 //   active record of a subtask session (interim / summary-state records do not
 //   carry it)
-// - wrapup: the wrap-up session phase
+// - wrapup: the wrap-up session phase — the verification session since
+//   plans/0083 (D1/D7: one session does verify + report); round = the fix
+//   rounds this task has already spent (a round counts once it opens, so a
+//   resumed run never re-runs a spent fix round; absent = none yet). The
+//   kind stays "wrapup" for resume compatibility with pre-0083 records.
 // - closeout: the wrap-up is finished, only the task report result-line check
 //   and the completion mark remain (no session); on resume the wrap-up is
 //   skipped. Retired verify/review records (D13; both only ever appeared after
@@ -91,7 +95,7 @@ export type Phase =
   | { kind: "decompose" }
   | { kind: "whole" }
   | { kind: "subtasks"; index?: number }
-  | { kind: "wrapup" }
+  | { kind: "wrapup"; round?: number }
   | { kind: "closeout" }
   | { kind: "step"; step: StepKind; unit: string }
 
@@ -197,6 +201,18 @@ async function readProgress(dir: string): Promise<Progress | undefined> {
   return raw ? parseProgress(raw) : undefined
 }
 
+// The wrapup phase's fix-round count (plans/0083 D7): kept only when it is a
+// non-negative finite number, dropped otherwise (a corrupt or hand-edited
+// record re-enters with zero rounds spent — conservative for the budget:
+// re-running a verify round is always safe, skipping a spent fix round
+// never re-books it).
+function sanitizePhaseRound(phase: Phase | undefined): Phase | undefined {
+  if (phase?.kind !== "wrapup" || phase.round === undefined) return phase
+  return typeof phase.round === "number" && Number.isFinite(phase.round) && phase.round >= 0
+    ? phase
+    : { kind: "wrapup" }
+}
+
 function parseProgress(raw: string): Progress | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<Progress>
@@ -214,7 +230,7 @@ function parseProgress(raw: string): Progress | undefined {
           ? ({ kind: "decompose" } satisfies Phase)
           : rawKind === "verify" || rawKind === "review"
             ? ({ kind: "closeout" } satisfies Phase)
-            : parsed.phase
+            : sanitizePhaseRound(parsed.phase)
     return {
       task: parsed.task,
       session: typeof parsed.session === "string" ? parsed.session : undefined,

@@ -30,7 +30,11 @@
 // The blockage document (plans/0082 §5 D6) extends the boundary's index/state
 // family: its `Choice:` and `Executed:` lines are driver-parsed marks on a
 // round-level document the person answers in place — the same standing the
-// acceptance sign-off and the clarified mark hold.
+// acceptance sign-off and the clarified mark hold. The verification loop's
+// gap list docs/T-NNN/gaps.md (plans/0083 D3) extends the handoff family's
+// transient standing the same way: its closing `Result: FAIL <reason>` line
+// reuses the report's single result-line protocol, and the file is checked by
+// existence and non-emptiness only — no schema on its body.
 //
 // Process documents are not design dependencies (P1, root plan D12). Every
 // role except freeform is a process role: the tool's record of long-running
@@ -92,6 +96,12 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // and it never carries the eof terminator — the blockage machinery owns
   // the whole format.
   blockage: { eofScan: false, process: true },
+  // The verification loop's gap list (plans/0083 D3): docs/T-NNN/gaps.md,
+  // written by the verification session on a FAIL verdict and deleted at the
+  // task's closeout (and by closeUnit) — transient like the handoff family,
+  // and like it carrying its own final-state contract (the closing
+  // `Result: FAIL <reason>` line) instead of the eof terminator.
+  gaps: { eofScan: false, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -144,6 +154,12 @@ const USER_REPORT = new RegExp(`^docs/R-\\d+/${REPORT_FOR_USER_NAME.replace(".",
 // sequentially numbered within the round.
 const BLOCKAGE_DOC = /^docs\/R-\d+\/blockage-\d+\.md$/
 
+// The verification loop's gap list: docs/T-NNN/gaps.md (plans/0083 D3) —
+// task-level only, one per task (a re-verification overwrites it), checked
+// before PROCESS_DOCS so it classifies as its own role rather than a plain
+// task artifact.
+const GAPS_DOC = /^docs\/T-\d+\/gaps\.md$/
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -168,6 +184,7 @@ export function roleOf(rel: string): DocumentRole {
   if (PLANNING_INPUT.test(path)) return "planningInput"
   if (USER_REPORT.test(path)) return "userReport"
   if (BLOCKAGE_DOC.test(path)) return "blockage"
+  if (GAPS_DOC.test(path)) return "gaps"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

@@ -2,13 +2,13 @@
 
 <!-- Companion of run.md (master control). run.md's primary fills <task id> and hands this whole file to a
 fresh fix child session as its prompt; it launches this session only after a verification came back INCOMPLETE
-with a handoff. The session reads every file it needs itself, at the paths named below. -->
+with the gap list. The session reads every file it needs itself, at the paths named below. -->
 
 You are the fix session for task <task id> of this target directory: a verification session found the task
 session's output incomplete; you close exactly the gaps it listed. The uncommitted working tree holds the work
 so far — build on it, do not restart, and do not redo what the verification already accepted.
 
-Read first: `docs/<task id>/handoff.md` — the verification's gap list (a compact summary of what it verified as
+Read first: `docs/<task id>/gaps.md` — the verification's gap list (a compact summary of what it verified as
 OK, then one entry per gap: the required action that is missing or wrong, where — files —, and what exactly to
 do) — and `docs/<task id>/todo.md`, the task document, for the goal and acceptance behind the gaps.
 
@@ -24,7 +24,7 @@ do) — and `docs/<task id>/todo.md`, the task document, for the goal and accept
 1. Other tasks belong to other sessions — do not touch them.
 2. todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER
    alone; do not create, rename or delete `docs/<task id>/todo.md` or `done.md`.
-3. Do not edit `docs/<task id>/handoff.md` — it belongs to the verification channel; the next verification
+3. Do not edit `docs/<task id>/gaps.md` — it belongs to the verification channel; the next verification
    round rewrites or clears it.
 4. A decision of your own must leave a record in the relevant document or code comment: a call that should have
    been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other

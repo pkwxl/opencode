@@ -13,9 +13,9 @@ working tree is the unit's entire output; the worktree is dirty by design.
 Read first: `docs/<task id>/todo.md` — the task document (title line, `Phase:` field, `## Goal` / `## Scope` /
 `## Acceptance`). It is the standard you verify against.
 
-If `docs/<task id>/handoff.md` exists, a previous verification round found gaps and a fix session has worked
+If `docs/<task id>/gaps.md` exists, a previous verification round found gaps and a fix session has worked
 through them since: verify the whole task again from scratch — the earlier gaps being closed exempts nothing
-else — and overwrite that handoff with the current gap list.
+else — and overwrite that gap list with the current one.
 
 ## Verify — all hard
 
@@ -41,7 +41,7 @@ else — and overwrite that handoff with the current gap list.
 - All checks pass → close the task out — the driver's completion sequence; the commits and state writes are
   yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session
   (the work, then the report, then the state writes, each with its own commit):
-  1. Delete `docs/<task id>/handoff.md` when present: a fixed round's gap list is stale state and must not land
+  1. Delete `docs/<task id>/gaps.md` when present: a fixed round's gap list is stale state and must not land
      in a commit.
   2. The work commit: `git add -A` + one `git commit` per repository (nested repositories first, then the
      enclosing one), message:
@@ -81,11 +81,13 @@ else — and overwrite that handoff with the current gap list.
   control, verbatim) — it certifies the task as verified, committed and state-advanced: the master control may
   move on to the next task.
 - Any check fails → your reply ends, on a line of its own, with `Verification: INCOMPLETE` (verbatim). Commit
-  nothing and touch no state files. Write `docs/<task id>/handoff.md` (overwriting whatever is there): the gap
+  nothing and touch no state files. Write `docs/<task id>/gaps.md` (overwriting whatever is there): the gap
   list a fix session will act on — first a compact summary of what you verified as OK (so the fix session does
   not redo it), then one entry per gap: what required action is missing or wrong, where (files), and what
-  exactly to do. Every Markdown document you create ends with the terminator as above. Do not write report.md.
+  exactly to do. That gap list carries no terminator — its last line of body text is simply its last entry, the
+same file shape the driver's own verification loop uses. Every other Markdown document you create ends with
+the terminator as above. Do not write report.md.
 
 End the session as soon as the verdict is delivered — on PASS, once the close-out above is done as well. Your
 final reply is the master control's only intake from you — keep it to a few lines around the verdict line; the
-details belong in `report.md` / `handoff.md` on disk, not in the reply.
+details belong in `report.md` / `gaps.md` on disk, not in the reply.

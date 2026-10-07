@@ -19,6 +19,7 @@ import type { Watch } from "../../chain"
 import { suffixedTitle } from "../../git"
 import { handoffComplete } from "../../handover"
 import { commitBlocked, strictResumeActive } from "../../unit-commit"
+import { codeWork } from "../../phases/registry"
 import { renderTestResult, renderTestWrapup } from "../../prompt"
 import { promptFacts } from "../../prompt-facts"
 import { formatTokens } from "../../format"
@@ -61,6 +62,13 @@ export const makeTestConcern = (deps: TestDeps): Concern<"test"> => ({
     if (input.kind !== "event" || input.event.type !== "idle") return "pass"
     const test = ctx.test
     if (test === undefined) return "pass"
+    // The channel's derived condition (plans/0083 D9): a turn whose phase
+    // produces no code work never settles a test request, whatever a stray
+    // tmp/test.sh marker would suggest — the render and execSession already
+    // gate on the same fact, this is the engine's own copy of the gate (a
+    // marker in a gated-off session is inert by design, D9's housekeeping
+    // ruling; the concern passes the row on).
+    if (!(ctx.opts.testByDriver && codeWork(ctx.opts.phase?.entry))) return "pass"
     // Test execution protocol: idle first settles any pending test request
     // (execute + steer the result / handover request) before ending; the
     // session is only truly over when there is no pending test request and
@@ -199,6 +207,20 @@ const idleProtocol = async (test: NonNullable<TurnContext["test"]>, own: TurnSta
   // Archive (a protocol marker whose presence is the request, removed after
   // execution so it can be requested again) → execute → feed back.
   const run = await fx.runTest()
+  // The side-effect guard's verdict (plans/0083 D11): a moved HEAD is the
+  // corrupted-baseline family — no steer, no auto-undo, a hard block for the
+  // human. A tracked mutation is already restored inside the guard; the
+  // steered-back result names it, and the per-model protocol-drift counter
+  // books the miss (the same reprompt caliber as the shape-check re-prompts).
+  if (run.violation?.kind === "head") {
+    return {
+      type: "blocked",
+      question:
+        `a driver-run test script ran a git state command and moved HEAD (${run.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}); ` +
+        `no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`,
+    }
+  }
+  if (run.violation) await fx.statsModelEvent("reprompt")
   const ok = await fx.steer(renderTestResult(promptFacts(ctx.opts), run))
   if (!ok) return { type: "blocked", question: "steer dispatch failed (test result feedback); cannot continue the session, see the log." }
   return { type: "continue" }

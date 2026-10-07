@@ -21,6 +21,7 @@ import {
   renderDecompose,
   renderDryrun,
   renderFanout,
+  renderFix,
   renderHandoffSteer,
   renderKnowledge,
   renderNumberRecovery,
@@ -207,6 +208,13 @@ describe("golden render snapshots", () => {
     // lead arranges its streams for the width they will actually get.
     golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true, parallel: "medium" }))
     golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
+    // The verification loop's fix session (plans/0083 D4): the gap list + the
+    // task document in, exactly the listed gaps out, under the pack's
+    // repair discipline (the default pack's `### repair` rides in).
+    golden(
+      "fix",
+      renderFix(facts, views.plan, views.task, docs, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter("m") } }),
+    )
   })
 
   // The standalone work order (plans/0076, T-137): the constitution preamble

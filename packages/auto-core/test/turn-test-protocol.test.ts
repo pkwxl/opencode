@@ -100,6 +100,10 @@ const setup = (over: { test?: TestRun; switches?: Switches; steerOk?: boolean; f
   const source = usageSource("events")
   const ctx = turnContext({
     source,
+    // The channel's derived condition (plans/0083 D9) needs the config flag
+    // on the turn's options — a turn with a test run is a test-channel turn,
+    // exactly what production opts carry here.
+    opts: { testByDriver: true },
     ...(over.test !== undefined ? { test: over.test } : {}),
     ...(over.switches !== undefined ? { switches: over.switches } : {}),
   })
@@ -192,6 +196,30 @@ describe("the test concern (idle: run and feedback)", () => {
     expect(fx.steers[0]).toContain("test/build.sh")
     expect(fx.steers[0]).toContain("Exit code: 1")
     expect(fx.steers[0]).toContain("fixture-fail")
+  })
+
+  test("a tracked side-effect violation (0083 D11) is steered back naming it and books the drift counter", async () => {
+    const testRun = repoTestRun()
+    await scriptRequest(testRun)
+    const run: TestRunInfo = { script: "test/build.sh", code: 0, ms: 12, timedOut: false, out: "fixture-ok", seq: 2, violation: { kind: "tracked", restored: ["src/widget.ts"] } }
+    const { fx, idle } = setup({ test: testRun, run })
+    await expect(idle()).resolves.toBe("consumed")
+    expect(fx.steers).toHaveLength(1)
+    expect(fx.steers[0]).toContain("Side-effect violation")
+    expect(fx.steers[0]).toContain("restored them from the pre-run snapshot: src/widget.ts")
+    expect(fx.steers[0]).toContain("rewrite the script read-only")
+    expect(fx.calls).toEqual(["exists", "runTest", "statsModelEvent", "steer"])
+  })
+
+  test("a moved HEAD (0083 D11) settles blocked for the human — no steer, no auto-undo", async () => {
+    const testRun = repoTestRun()
+    await scriptRequest(testRun)
+    const run: TestRunInfo = { script: "test/build.sh", code: 0, ms: 12, timedOut: false, out: "fixture-ok", seq: 2, violation: { kind: "head", moved: [{ root: ".", from: "abc1234", to: "def5678" }] } }
+    const { fx, idle, blockedExtra } = setup({ test: testRun, run })
+    const question = "a driver-run test script ran a git state command and moved HEAD (.: abc1234 → def5678); no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run."
+    await expect(idle()).resolves.toEqual({ settle: { kind: "blocked", question } })
+    expect(fx.steers).toHaveLength(0)
+    expect(blockedExtra.extra).toEqual({ blocked: { type: "blocked", question }, testHandover: false })
   })
 
   test("the feedback steer's failed dispatch settles blocked with the fixed question", async () => {

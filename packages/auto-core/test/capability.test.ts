@@ -69,6 +69,18 @@ describe("degrade: run-start clamp", () => {
     expect(got.notes.length).toBe(2)
   })
 
+  test("the --test-by-driver steer error threads the derived code-work fact (plans/0083 D9): a run over non-code phases never errors", () => {
+    // A steer-less agent under the raw flag is today's error.
+    expect(degrade(HEADLESS, ALL_ON, { testByDriver: true })).toMatchObject({
+      error: expect.stringContaining("--test-by-driver needs an agent that takes messages into a live session"),
+    })
+    // The same run over non-code phases only: the channel can never run, the
+    // clamp goes quiet. Absent = the channel may run (the conservative
+    // default keeps every pre-0083 caller's behavior).
+    expect(degrade(HEADLESS, ALL_ON, { testByDriver: true, codeWork: false }).error).toBeUndefined()
+    expect(degrade(HEADLESS, ALL_ON, { testByDriver: true, codeWork: true }).error).toBeString()
+  })
+
   test("fork none or no resume: fork off", () => {
     expect(degrade({ ...OPENCODE_CAPABILITIES, fork: "none" }, ALL_ON, {}).switches).toEqual({ fork: false })
     expect(degrade({ ...OPENCODE_CAPABILITIES, resume: false }, ALL_ON, {}).switches).toEqual({ fork: false })

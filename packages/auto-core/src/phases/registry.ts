@@ -72,6 +72,14 @@ export type PhaseTypeEntry = {
   // src/tier.ts defaultTier derives every session's default tier from it and
   // the session's role. A custom type's is its `Reasoning:` field.
   reasoning: Tier
+  // The type produces code work (plans/0083 D9): builtin `implement` and
+  // `test` carry it, a custom type declares it with `Code-work: yes` beside
+  // `Reasoning:`. The --test-by-driver channel's active condition derives
+  // from it — `testByDriver && codeWork(phase)` — so the protocol runs only
+  // in code-producing phases; absent = not code work (the channel is off for
+  // the type). Derivation, not configuration: the config keys keep their
+  // constitutional on/off meaning.
+  codeWork?: boolean
   // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
   origin: "builtin" | "project"
 }
@@ -125,6 +133,9 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     hasTasks: true,
     gates: [],
     reasoning: "simple",
+    // 0083 D9's review ruling: test in — the test type's sessions also route
+    // their checks through the driver-run channel.
+    codeWork: true,
     origin: "builtin",
   },
   {
@@ -138,6 +149,8 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     hasTasks: true,
     gates: [],
     reasoning: "simple",
+    // 0083 D9's review ruling: test in (the type's whole point is code work).
+    codeWork: true,
     origin: "builtin",
   },
   {
@@ -246,6 +259,29 @@ export function phasesProblem(raw: string, types: readonly PhaseTypeEntry[] = BU
 // Shared-partial section holding this type's phase-plan duty paragraph.
 export function planDutiesPartial(entry: PhaseTypeEntry): string {
   return `plan-duties-${entry.dutiesRef}`
+}
+
+// The --test-by-driver channel's derived scope (plans/0083 D9): the protocol
+// runs only in code-producing phases. An absent entry is the no-phase mode's
+// single implement phase by definition ("m" is implement), and the required
+// builtin type of every phased flow carries the flag — so the answer stays
+// `true` for every phase-less render, exactly the pre-0083 behavior of the
+// raw flag. Gates that read it: the test-protocol render (prompt.ts baseCtx),
+// runExecSession, the engine's test concern and the capability clamp — all
+// derive from this one function, never from the config keys.
+export function codeWork(entry: { codeWork?: boolean } | undefined): boolean {
+  return (entry ?? phaseType(REQUIRED_TYPE))!.codeWork === true
+}
+
+// Whether a phases value includes at least one code-producing type (the
+// run-level fact the capability clamp threads, plans/0083 D9): the run start
+// knows the phases value, not the per-task phase, and a run without any
+// code-producing phase never runs the test channel — so its steer-capability
+// error is moot. types is the resolved entry list (resolvePhases's output);
+// an unresolvable value (null — a usage error elsewhere) conservatively
+// counts as code work so the clamp never goes quiet on a broken config.
+export function anyCodeWork(entries: readonly PhaseTypeEntry[] | null): boolean {
+  return entries === null || entries.some((entry) => codeWork(entry))
 }
 
 // Resolve unit-relative artifact specs against a unit directory (repository-

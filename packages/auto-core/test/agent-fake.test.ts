@@ -3284,21 +3284,44 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
       if (id) {
         mkdirSync(join(dir, "docs", id), { recursive: true })
-        writeFileSync(
-          join(dir, "docs", id, "report.md"),
-          [
-            `# Report (${id})`,
-            "",
-            "The wrap-up session reviewed the work against the task's acceptance statements and",
-            "recorded the verification evidence: what was delivered, where it lives, and how it",
-            "was checked.",
-            "",
-            failing.has(id) ? "Result: FAIL the acceptance gap" : "Result: PASS",
-            "",
-            "<!-- auto: eof -->",
-            "",
-          ].join("\n"),
-        )
+        if (failing.has(id)) {
+          // The verification loop's FAIL channel (plans/0083 D2/D3): no
+          // report at all — the gap list instead, its closing result line the
+          // verdict, no terminator.
+          writeFileSync(
+            join(dir, "docs", id, "gaps.md"),
+            [
+              `# Gaps (${id})`,
+              "",
+              "## Verified OK",
+              "",
+              "- The wrap-up session inspected the work against the task's acceptance statements.",
+              "",
+              "## Gaps",
+              "",
+              "- The acceptance gap stands: the required behavior is not delivered (src/widget.ts).",
+              "",
+              "Result: FAIL the acceptance gap",
+              "",
+            ].join("\n"),
+          )
+        } else {
+          writeFileSync(
+            join(dir, "docs", id, "report.md"),
+            [
+              `# Report (${id})`,
+              "",
+              "The wrap-up session reviewed the work against the task's acceptance statements and",
+              "recorded the verification evidence: what was delivered, where it lives, and how it",
+              "was checked.",
+              "",
+              "Result: PASS",
+              "",
+              "<!-- auto: eof -->",
+              "",
+            ].join("\n"),
+          )
+        }
       }
       return undefined
     }

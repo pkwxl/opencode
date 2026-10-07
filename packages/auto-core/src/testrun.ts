@@ -379,6 +379,9 @@ export async function runTestScript(test: TestRun, opts: Opts, script: string, s
     timeoutReason: run.timeoutReason,
     out,
     seq,
+    // The side-effect guard's finding rides along (plans/0083 D11): the
+    // steered-back renders name it.
+    ...(run.violation ? { violation: run.violation } : {}),
   }
   test.last = info
   return info

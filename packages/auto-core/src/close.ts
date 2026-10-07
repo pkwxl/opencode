@@ -493,9 +493,12 @@ async function clearRecords(dir: string, tasks: readonly ClosingTask[], closedPh
 
   // The session handover and the test-handover chains of the closed tasks,
   // task and subtask level, removed the way task completion removes them; the
-  // deletions of the tracked files land in the close commit.
+  // deletions of the tracked files land in the close commit. The verification
+  // loop's gap list (plans/0083 D3) joins them: transient like handoff.md,
+  // and a closed task's verification never re-runs to clear it itself.
   for (const id of ids) {
     await rm(join(dir, taskDoc(id, "handoff")), { force: true })
+    await rm(join(dir, taskDoc(id, "gaps")), { force: true })
     await removeHandoffChain(dir, taskDoc(id, "testhandoff"))
     const entries = await readdir(join(dir, "docs", id), { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {

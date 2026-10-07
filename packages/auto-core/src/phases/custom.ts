@@ -9,6 +9,9 @@
 //   Tasks: yes                        optional; only yes (task-less types stay builtin)
 //   Gate: none                        optional; none | a comma list of verdict / acceptance / human
 //   Reasoning: deep                   optional; deep | simple, the execute tier (absent = deep)
+//   Code-work: yes                    optional; yes | no — the --test-by-driver channel's scope
+//                                     (plans/0083 D9; absent = no: the type declares itself
+//                                     non-code and the driver-run test protocol never renders)
 //   Phase-artifacts: threat-model.md  optional; standard artifacts in the phase dir
 //   Task-artifacts: review.md         optional; standard artifacts in each task dir
 //
@@ -35,7 +38,7 @@ export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 // P<nn>-<type> accepts it).
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
-const FIELDS = ["tasks", "gate", "reasoning", "phase-artifacts", "task-artifacts"] as const
+const FIELDS = ["tasks", "gate", "reasoning", "code-work", "phase-artifacts", "task-artifacts"] as const
 const SECTIONS: Record<string, "planDuties" | "decomposeDuties"> = {
   "plan duties": "planDuties",
   "decompose duties": "decomposeDuties",
@@ -45,7 +48,7 @@ const EOF_LINE = "<!-- auto: eof -->"
 // Driver-owned or protocol file names a standard artifact may not take, per
 // unit directory (a phase dir resp. a task dir).
 const RESERVED_PHASE_FILES = ["todo.md", "done.md", "tasks.md", "handover.md", "acceptance.md"]
-const RESERVED_TASK_FILES = ["todo.md", "done.md", "subtasks.md", "context.md", "shared.md", "report.md", "handoff.md", "testhandoff.md"]
+const RESERVED_TASK_FILES = ["todo.md", "done.md", "subtasks.md", "context.md", "shared.md", "report.md", "gaps.md", "handoff.md", "testhandoff.md"]
 
 // Builtins plus the project's custom types. Invalid files throw, naming the
 // file (the CLI turns this into an exit-1 usage error). No dir, or no
@@ -78,7 +81,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   const name = lines[0]!.trim().replace(/^#\s+/, "")
   const unknown = Object.keys(doc.fields).filter((key) => !(FIELDS as readonly string[]).includes(key))
   if (unknown.length) {
-    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Phase-artifacts, Task-artifacts)`)
+    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Code-work, Phase-artifacts, Task-artifacts)`)
   }
   const tasks = (doc.fields.tasks ?? "yes").toLowerCase()
   if (tasks === "no") {
@@ -87,6 +90,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   if (tasks !== "yes") throw new Error(`${where}: Tasks must be yes; got "${doc.fields.tasks}"`)
   const gates = gateList(where, doc.fields.gate)
   const reasoning = reasoningTier(where, doc.fields.reasoning)
+  const codeWork = codeWorkFlag(where, doc.fields["code-work"])
   const phaseArtifacts = artifactList(where, "Phase-artifacts", doc.fields["phase-artifacts"], RESERVED_PHASE_FILES)
   const taskArtifacts = artifactList(where, "Task-artifacts", doc.fields["task-artifacts"], RESERVED_TASK_FILES)
   const sections = parseSections(where, lines)
@@ -103,6 +107,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
     hasTasks: true,
     gates,
     reasoning,
+    ...(codeWork !== undefined ? { codeWork } : {}),
     origin: "project",
   }
 }
@@ -117,6 +122,19 @@ function gateList(where: string, raw: string | undefined): PhaseGate[] {
     throw new Error(`${where}: Gate must be none or a comma list of distinct ${PHASE_GATES.join(" / ")}; got "${raw}"`)
   }
   return items as PhaseGate[]
+}
+
+// `Code-work:` — whether the type's sessions produce code work and so fall
+// inside the --test-by-driver channel (plans/0083 D9, beside `Reasoning:`).
+// Absent = no: a custom type declares the channel's scope explicitly (a
+// type that never touches code pays no protocol overhead); `yes` turns it
+// on. Like the sibling fields the value is read case-insensitively, and an
+// empty line fails like any other value that is not yes or no.
+function codeWorkFlag(where: string, raw: string | undefined): boolean | undefined {
+  if (raw === undefined) return undefined
+  const value = raw.trim().toLowerCase()
+  if (value !== "yes" && value !== "no") throw new Error(`${where}: Code-work must be yes or no; got "${raw}"`)
+  return value === "yes"
 }
 
 // `Reasoning:` — the execute tier of the type's task sessions (plans/0055 §5).

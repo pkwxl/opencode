@@ -185,6 +185,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/turn-usage.test.ts",
   "test/turn-windows.test.ts",
   "test/usage.test.ts",
+  // The verification loop (plans/0083): drives runTask and the wrap-up loop over
+  // real git repositories (the loop fixture, freshRepo).
+  "test/verify-loop.test.ts",
   "test/wrapup-result.test.ts",
 ]
 

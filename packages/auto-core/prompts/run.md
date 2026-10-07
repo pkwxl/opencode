@@ -6,13 +6,13 @@ coding-agent session opened in the target directory, together with its three com
 in. The session takes the role of the driver (`opencode-auto run`) and executes **every** incomplete task of the
 current phase, one at a time: it determines the next ready task, launches a child session that carries the whole
 task to completion, then a fresh verification child session that judges whether the task's required actions were
-completed; a verification that finds gaps leads — through the verification's `docs/T-NNN/handoff.md` — to a fix
+completed; a verification that finds gaps leads — through the verification's `docs/T-NNN/gaps.md` — to a fix
 child session and a re-verification. The verification judges the work's completeness by inspection only: the
 task session has already run the acceptance's executable checks (its tests, the typecheck or build) and
 repaired what they found, so the verification re-runs none of them — a defect only a re-run would catch is
 left for the person to judge once all tasks are done. A verification that passes performs the close-out itself —
 the driver's completion commits exactly as it makes them after a whole-task session: the work commit, the
-wrap-up report's own commit, then the completion commit over the state writes (the handoff deletion,
+wrap-up report's own commit, then the completion commit over the state writes (the gap-list deletion,
 `todo.md` → `done.md`, the index tick) — and its `PASS` verdict
 tells you the task is safe to advance past. All implementation
 work happens in child sessions launched through the host coding agent's subagent facility; the master-control
@@ -46,8 +46,8 @@ checks specified below.
 
 You may drive dozens of tasks in this one session; your context is the scarce resource. Read only what the
 mechanical decisions need: the phase index lines, the `Depends:` field lines at the head of a picked task's
-`todo.md`, and file-existence checks (`todo.md` / `done.md` / `subtasks.md` / `handoff.md` / `report.md` /
-`S<nn>/` state). Never read a whole task document, a handoff, a report or the work diff yourself — content
+`todo.md`, and file-existence checks (`todo.md` / `done.md` / `subtasks.md` / `gaps.md` / `report.md` /
+`S<nn>/` state). Never read a whole task document, a gap list, a report or the work diff yourself — content
 judgment belongs to the child sessions: the task session reads its task document and the sources, the
 verification session reads the work, the fix session reads the gap list. Fill child prompts with short facts
 only, take a child's outcome only through its verdict line plus the mechanical checks below, and keep every
@@ -86,7 +86,7 @@ reply a child sends you to a few lines (the companions instruct them so).
     clean-worktree preflight already covers the commit half). A predecessor still pending or half-done → stop and
     report; forcing past it would build on unlanded work.
   - The next task has not started: its `todo.md` exists, no `done.md`, and none of its execution artifacts exist
-    yet — no `docs/T-NNN/subtasks.md`, no `docs/T-NNN/S<nn>/` state files, no `docs/T-NNN/handoff.md`, no
+    yet — no `docs/T-NNN/subtasks.md`, no `docs/T-NNN/S<nn>/` state files, no `docs/T-NNN/gaps.md`, no
     `docs/T-NNN/report.md`. Any of those present means the task already began (an interrupted run's state): stop
     and report — resuming it is a driver run's business, not this file's.
 - The task document is `docs/T-NNN/todo.md` (title line, `Phase: R-NN.P<nn>` field, `## Goal` / `## Scope` /
@@ -109,14 +109,14 @@ iteration.
    anything — carry the task out"); still zero writes → stop and report.
 4. Launch the verification child session: `run-verify.md` with `<task id>`, `<baseline commit>` (the recorded
    HEAD), `<task title>` (from the index line) and the wrap-up line (`WRITE` or `SKIP` per the config's
-   `wrapup` key) filled. The prompt's re-verification behavior keys on `docs/T-NNN/handoff.md` existing — you
+   `wrapup` key) filled. The prompt's re-verification behavior keys on `docs/T-NNN/gaps.md` existing — you
    write nothing for it. On `PASS` the verification itself performs the close-out (the commits and state
    writes); you only check its outcome.
 5. Read the verification's verdict — the last line of its reply: `Verification: PASS` or
    `Verification: INCOMPLETE` (protocol strings, verbatim). A reply without the verdict line → relaunch the
    verification child session once with the feedback "end your reply with the verdict line"; still missing → stop
    and report.
-   - `INCOMPLETE` → the gap list is `docs/T-NNN/handoff.md` (the verification wrote it). First confirm nothing
+   - `INCOMPLETE` → the gap list is `docs/T-NNN/gaps.md` (the verification wrote it). First confirm nothing
      was committed and the state files are untouched (HEAD still the baseline; `todo.md` present, no `done.md`,
      the index line unticked — a verification that committed or wrote them on INCOMPLETE is a hard failure, stop
      and report). If two fix rounds have already run for this task, stop and report: the work stays uncommitted
@@ -126,7 +126,7 @@ iteration.
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: HEAD advanced
      from the baseline by exactly its close-out commits — `T-NNN exec <task title>`, then (wrap-up line `WRITE`
      only) `T-NNN wrapup <task title>`, then `T-NNN done <task title>`; `git status --porcelain` lists nothing;
-     `docs/T-NNN/done.md` exists (no `todo.md`), the index line is ticked, and `docs/T-NNN/handoff.md` is gone.
+     `docs/T-NNN/done.md` exists (no `todo.md`), the index line is ticked, and `docs/T-NNN/gaps.md` is gone.
      When the wrap-up line was `WRITE`, also check `docs/T-NNN/report.md` mechanically — it exists and is
      non-empty, the terminator is its last body line, and its last `Result:` line is `Result: PASS` (a tail of
      the file; do not read the body). Anything missing → relaunch the verification child session once with the

@@ -16,6 +16,8 @@ import { gitOf } from "./git-ops"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
+import { codeWork } from "./phases/registry"
+import { statsModelEvent } from "./stats"
 
 import type { Plan, Task } from "./tasks"
 import { autoSwitches } from "./switches"
@@ -65,7 +67,11 @@ export async function runExecSession(
   subtask?: number,
   unit = subtask !== undefined ? `subtask ${subtask}` : "execute",
 ): Promise<SessionResult> {
-  if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
+  // The test channel's derived condition (plans/0083 D9): the config flag AND
+  // the phase type's codeWork — the protocol wraps only code-producing
+  // execution sessions (a phase-less opts resolves onto implement, the
+  // no-phase mode's definition, so the bare runs keep the raw-flag behavior).
+  if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? plan.dir
   // The run's git service (git-ops.ts gitOf, the seam's one resolution
   // point: the opts carrier the loop filled, else the holderless production
@@ -201,7 +207,10 @@ export async function runExecSession(
     // script cleared at close-out already means executed — no re-run, no
     // invented result; the continuation session reads the handover document
     // and the existing output under tmp/.
-    let ran = record?.ran
+    // The persisted `ran` of the in-flight record is a structural subset of
+    // TestRunInfo (handover.ts declares it locally, no reverse dependency);
+    // the violation field is transient guard state and never persisted.
+    let ran: TestRunInfo | undefined = record?.ran
     if (ran) {
       test.last = ran
     } else {
@@ -209,6 +218,19 @@ export async function runExecSession(
       if (script) {
         log(`↻ ${test.label} resume after interruption: test script ${script} pending execution on the frozen rerun`)
         ran = await runTestScript(test, opts, script)
+        // The side-effect guard's verdict (plans/0083 D11): a moved HEAD is
+        // the corrupted-baseline family — no continuation over a corrupted
+        // baseline; a tracked mutation is restored and the drift counter
+        // books it (the continuation prompt names it through renderTestContinue).
+        if (ran.violation?.kind === "head") {
+          return {
+            type: "blocked",
+            question:
+              `a driver-run test script ran a git state command and moved HEAD (${ran.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}); ` +
+              `no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`,
+          }
+        }
+        if (ran.violation) await statsModelEvent(dir, chain.modelEntry, "reprompt")
       }
     }
     // The continuation session was already opened and then interrupted →
@@ -281,14 +303,27 @@ export async function runExecSession(
     const committed = await git.afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
     if (committed.type === "failed") return commitBlocked(subject, committed)
     // The frozen script runs only after the handover close-out — what it
-    // tests is exactly the tree of commit #2. If the script itself rewrites
-    // tracked files (e.g. rustfmt apply), that stays as an uncommitted
-    // delta, absorbed by the next unit's commit.
+    // tests is exactly the tree of commit #2. A script that rewrites tracked
+    // files is a side-effect violation: the guard (plans/0083 D11) restores
+    // the pre-run content and the continuation prompt below names it.
     let ran: TestRunInfo | undefined
     if (test.pending) {
       const pending = test.pending
       test.pending = undefined
       ran = await runTestScript(test, opts, pending.script, pending.seq)
+      // The side-effect guard's verdict (plans/0083 D11): a moved HEAD is the
+      // corrupted-baseline family — block, no continuation over a corrupted
+      // baseline; a tracked mutation is restored, the continuation prompt
+      // names it and the drift counter books it.
+      if (ran.violation?.kind === "head") {
+        return {
+          type: "blocked",
+          question:
+            `a driver-run test script ran a git state command and moved HEAD (${ran.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}); ` +
+            `no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`,
+        }
+      }
+      if (ran.violation) await statsModelEvent(dir, chain.modelEntry, "reprompt")
     }
     // Close-out complete: the in-flight record enters the "closed out" state
     // — the pending script is consumed, the frozen anchor voided, the

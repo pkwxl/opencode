@@ -500,7 +500,7 @@ describe("renderSubtask", () => {
 
   test("test-by-DRIVER: the protocol's operational extras are injected (the principle itself is the constitution's); when not enabled the whole block disappears", () => {
     const on = subOf(plan, task, subtask, { testByDriver: true })
-    expect(on).toContain("Test execution protocol (--test-by-driver)")
+    expect(on).toContain("Test execution protocol (--test-by-driver, compilation and test runs only")
     expect(on).toContain("tmp/test.sh")
     // 0072 U-B/T-131 (K6): only the operational extras stayed — the wait
     // rhythm and the re-run mechanics; the principle's wording (which
@@ -688,11 +688,14 @@ describe("renderWrapup", () => {
   test("wrap-up: the task status is recorded by the DRIVER; the result-line protocol (Result: PASS|FAIL) lands in report.md; writing discipline comes from the intent pack", () => {
     const text = wrapOf(plan, task)
     expect(text).toContain("The task status is recorded by the DRIVER in one pass after the session ends")
-    expect(text).toContain("`Result: PASS` or `Result: FAIL <one-sentence reason>`")
-    expect(text).toContain(`last line of body text of docs/${task.id}/report.md`)
+    expect(text).toContain("`Result: PASS` ends the report (docs/T-002/report.md, the last line of body text before the terminator)")
+    expect(text).toContain("`Result: FAIL <one-sentence reason>` ends the gap list (docs/T-002/gaps.md, the last line of body text, no terminator)")
+    expect(text).toContain("docs/T-002/gaps.md (overwriting whatever is there)")
+    expect(text).toContain("at most two fix rounds")
     // (b)-class discipline comes from the built-in intent pack ## acceptance / ### result-line
     expect(text).toContain("Never write PASS for a check you did not run or observe")
-    expect(text).not.toContain("verified")
+    // The charter's own wording is English; the retired Chinese verdict never returns.
+    expect(text).toContain("a compact summary of what you verified as OK")
     expect(text).not.toContain("结论: 通过")
   })
 
@@ -879,7 +882,7 @@ describe("renderWhole", () => {
 
   test("test-by-DRIVER: the test execution protocol is injected (can coexist with the ondemand context-budget protocol)", () => {
     const text = wholeOf(plan, task, { ondemand: true, budget: true, testByDriver: true, handoverTest: true })
-    expect(text).toContain("Test execution protocol (--test-by-driver)")
+    expect(text).toContain("Test execution protocol (--test-by-driver, compilation and test runs only")
     expect(text).toContain("tmp/test.sh")
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("docs/T-002/testhandoff.md")
@@ -983,7 +986,7 @@ describe("renderFanout and the stream's full prompt (plans/0059 D5)", () => {
   })
 })
 
-describe("Test execution protocol (--test-by-driver)", () => {
+describe("Test execution protocol (--test-by-driver, compilation and test runs only", () => {
   const run: TestRunInfo = {
     seq: 3,
     script: "/tmp/pkg/test/build.sh",
@@ -1331,5 +1334,56 @@ describe("the render gate (plans/0080 §3, `## guarantees` / `### asserts`)", ()
     // The built-in default pack itself declares no guarantees (the floor a
     // project without an intent bundle runs on).
     expect(wholeOf(plan, task)).not.toContain("Authority order")
+  })
+})
+
+
+// The test channel's per-phase-type scope (plans/0083 D9): the derived
+// condition `testByDriver && codeWork(phase)` gates the test-protocol block
+// of the execution templates — implement and test render it, the reasoning
+// types do not, a custom type declares it with `Code-work:` beside
+// `Reasoning:`, and a phase-less render falls back to implement (the
+// no-phase mode's definition), keeping every bare render byte-identical.
+describe("the test protocol's per-phase-type scope (0083 D9)", () => {
+  const PROTOCOL = "Test execution protocol (--test-by-driver, compilation and test runs only"
+  const entry = (letter: PhaseLetter) => phaseTypeOfLetter(letter)
+
+  test("the whole-task render: implement and test carry the protocol; analysis, design, acceptance, knowledge do not", () => {
+    for (const letter of ["m", "t"] as PhaseLetter[]) {
+      const text = wholeOf(plan, task, { testByDriver: true, phase: { id: "R-01.P01", entry: entry(letter) } })
+      expect(text).toContain(PROTOCOL)
+    }
+    for (const letter of ["a", "d", "v", "k"] as PhaseLetter[]) {
+      const text = wholeOf(plan, task, { testByDriver: true, phase: { id: "R-01.P01", entry: entry(letter) } })
+      expect(text, letter).not.toContain("Test execution protocol")
+    }
+  })
+
+  test("the subtask render follows the same derivation; a gated-off session's handover path drops out with it", () => {
+    const on = subOf(plan, task, "write the execution logic", { testByDriver: true, handoverTest: true, phase: { id: "R-01.P01", entry: entry("t") } })
+    expect(on).toContain(PROTOCOL)
+    expect(on).toContain("docs/T-002/testhandoff.md")
+    const off = subOf(plan, task, "write the execution logic", { testByDriver: true, handoverTest: true, phase: { id: "R-01.P01", entry: entry("a") } })
+    expect(off).not.toContain("Test execution protocol")
+    // The protocol's handover document drops out with it (doc-layout's
+    // placement-rules mention of the testhandoff family is unrelated copy).
+    expect(off).not.toContain("write the test-related progress and next steps into")
+  })
+
+  test("a custom type declares the scope with Code-work beside Reasoning; the flag alone is inert without it", () => {
+    const base = ["# Spec read", "", "Reasoning: deep", "", "## plan duties", "", "Read the specification.", ""].join("\n")
+    const code = parsePhaseTypeFile("spec-read", base.replace("Reasoning: deep", "Reasoning: deep\nCode-work: yes"))
+    const noCode = parsePhaseTypeFile("spec-read", base)
+    expect(code.codeWork).toBe(true)
+    expect(noCode.codeWork).toBeUndefined()
+    const withFlag = wholeOf(plan, task, { testByDriver: true, phase: { id: "R-01.P01", entry: code } })
+    const withoutFlag = wholeOf(plan, task, { testByDriver: true, phase: { id: "R-01.P01", entry: noCode } })
+    expect(withFlag).toContain(PROTOCOL)
+    expect(withoutFlag).not.toContain("Test execution protocol")
+  })
+
+  test("a phase-less render falls back to implement (the no-phase mode by definition): the raw-flag behavior is unchanged", () => {
+    expect(wholeOf(plan, task, { testByDriver: true })).toContain(PROTOCOL)
+    expect(wholeOf(plan, task, {})).not.toContain("Test execution protocol")
   })
 })

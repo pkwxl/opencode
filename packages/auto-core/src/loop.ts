@@ -14,6 +14,8 @@ import { log } from "./log"
 import { commitsSince, headSha } from "./git"
 import { writeLaneReport, type LaneReport } from "./lanes"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
+import { anyCodeWork, resolvePhases } from "./phases/registry"
+import { loadPhaseTypes } from "./phases/custom"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
 import { promptFacts } from "./prompt-facts"
@@ -190,6 +192,15 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       // form of the io/Interactive seam is interactive too.
       interactive: typeof opts.interactive === "boolean" ? opts.interactive : opts.interactive === undefined ? undefined : true,
       registry,
+      // The test channel's run-level derived fact (plans/0083 D9): whether
+      // the phases value includes a code-producing type — the --test-by-driver
+      // steer clamp reads it, so a run over non-code phases only never errors
+      // on a steer-less agent. The resolve cannot fail here (the preflight
+      // and the drift check above already refused a bad phases value), and a
+      // null still counts as code work (the clamp stays conservative).
+      ...(opts.testByDriver
+        ? { codeWork: anyCodeWork(resolvePhases(phases, loadPhaseTypes(directory))) }
+        : {}),
     })
     server = started.pool
     if (started.error !== undefined || server === undefined) {

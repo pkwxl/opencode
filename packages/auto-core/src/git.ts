@@ -189,6 +189,92 @@ export async function stashTree(
   return { failures, stashes }
 }
 
+// —— The side-effect guard of driver-run scripts (plans/0083 D11) ——
+//
+// Causality by construction: a driver-run script executes synchronously while
+// the session sits idle at its turn boundary waiting for the result, so any
+// tracked delta between the pre-run and post-run reads *is* the script's.
+// The pre-run read is `git stash create` — it snapshots index + worktree
+// (session work-in-progress included) touching nothing on disk and storing
+// no ref, so the stash list and the worktree are exactly as they were — plus
+// the HEAD sha, recursively over nested repositories as the unified commit
+// walks them. The post-run read restores tracked mutations from the snapshot
+// (`git checkout <stash-sha> -- <paths>`, pre-run content, session WIP
+// included) and hard-blocks on a moved HEAD. Named residuals (D11): a
+// mutation that lands byte-identical to the snapshot is undetectable and
+// harmless; untracked files are not git-managed content and stay.
+
+// One repository's pre-run snapshot. stash is the `git stash create` commit
+// sha, or the empty string when the worktree was clean (the snapshot then is
+// HEAD itself).
+export type ScriptGuardShot = { root: string; head: string; stash: string }
+
+export async function scriptGuardSnapshot(dir: string): Promise<ScriptGuardShot[]> {
+  const shots: ScriptGuardShot[] = []
+  for (const root of await repoRoots(dir)) {
+    const head = (await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim() ?? ""
+    const stash = (await git(root, ["stash", "create"]).catch(() => undefined))?.out.trim() ?? ""
+    shots.push({ root, head, stash })
+  }
+  return shots
+}
+
+// The violation the post-run read found: tracked = the script modified or
+// deleted tracked files (already restored from the snapshot — restored lists
+// the paths, target-directory-relative; unrestorable lists paths the restore
+// could not put back, with git's error); head = the script moved a
+// repository's HEAD (a commit/rebase/reset ran) — no auto-undo, the caller
+// hard-blocks for the human, the corrupted-baseline family.
+export type ScriptGuardViolation =
+  | { kind: "tracked"; restored: string[]; unrestorable: { path: string; error: string }[] }
+  | { kind: "head"; moved: { root: string; from: string; to: string }[] }
+
+// The post-run read over every snapshotted repository. Returns undefined
+// when the script left git-managed content alone.
+export async function scriptGuardCheck(dir: string, shots: readonly ScriptGuardShot[]): Promise<ScriptGuardViolation | undefined> {
+  if (!shots.length) return undefined
+  const moved: { root: string; from: string; to: string }[] = []
+  const changed: { root: string; source: string; paths: string[] }[] = []
+  for (const shot of shots) {
+    const head = (await git(shot.root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim() ?? ""
+    if (head !== shot.head) moved.push({ root: relative(dir, shot.root) || ".", from: shot.head, to: head })
+    // The tracked-changed paths of this repository (porcelain paths are
+    // root-relative under -C; untracked entries are not git-managed content
+    // and stay, D11's residual).
+    const status = await git(shot.root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."]).catch(() => undefined)
+    const tracked = (status?.out ?? "")
+      .split("\0")
+      .filter((entry) => entry && !entry.startsWith("?? "))
+      .map((entry) => entry.slice(3))
+    if (!tracked.length) continue
+    // The snapshot to compare against and restore from: the stash commit, or
+    // HEAD when the worktree was clean before the run.
+    const source = shot.stash || "HEAD"
+    // Only paths the script actually changed (a session-WIP path the script
+    // never touched compares equal against the snapshot and drops out — the
+    // byte-identical residual). One diff per repository over the tracked set.
+    const diff = await git(shot.root, ["diff", "--name-only", "-z", "--ignore-submodules=all", source, "--", ...tracked]).catch(() => undefined)
+    const differs = (diff?.out ?? "")
+      .split("\0")
+      .filter(Boolean)
+    if (differs.length) changed.push({ root: shot.root, source, paths: differs })
+  }
+  if (moved.length) return { kind: "head", moved }
+  if (!changed.length) return undefined
+  const restored: string[] = []
+  const unrestorable: { path: string; error: string }[] = []
+  for (const repo of changed) {
+    const checkout = await git(repo.root, ["checkout", repo.source, "--", ...repo.paths])
+    if (checkout.code === 0) {
+      restored.push(...repo.paths.map((path) => relative(dir, join(repo.root, path)) || path))
+    } else {
+      unrestorable.push(...repo.paths.map((path) => ({ path: relative(dir, join(repo.root, path)) || path, error: firstLine(checkout.err || checkout.out) || `git checkout exit code ${checkout.code}` })))
+    }
+  }
+  if (!restored.length && !unrestorable.length) return undefined
+  return { kind: "tracked", restored, unrestorable }
+}
+
 // —— Unit commit boundary (plans/0021-commit-boundary-design.md) ——
 
 // Driver-exclusive state writes (when a unit starts dirty: the dirty area

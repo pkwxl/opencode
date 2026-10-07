@@ -26,30 +26,66 @@ async function fixture(phases: string, turn: (dir: string) => TurnScript): Promi
 }
 
 // The repair-loop turn script: the artifact turns (planning and handover
-// distillation) plus a wrap-up turn that writes each named task's report —
-// FAIL for the ids in `failing`, PASS for everything else — plus the accepted
+// distillation) plus a wrap-up turn that writes each named task's verdict —
+// FAIL for the ids in `failing` (the gap list, plans/0083 D3), PASS for
+// everything else — the fix-round turns (each writes one line, so every fix
+// round posts its own `T-NNN fix <round>` commit), plus the accepted
 // append turn. The whole-task sessions settle on the fake agent's default.
-const repairTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript => (ctx) => {
-  if (ctx.text.includes("only performs the wrap-up")) {
+const repairTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript => {
+  const fixes = new Map<string, number>()
+  return (ctx) => {
+    if (ctx.text.includes("You are the fix session")) {
+      const id = /docs\/(T-\d+)\/gaps\.md/.exec(ctx.text)?.[1]
+      if (id) {
+        const n = (fixes.get(id) ?? 0) + 1
+        fixes.set(id, n)
+        writeFileSync(join(dir, "FIXES.md"), `${id} fix round ${n}\n`)
+      }
+      return undefined
+    }
+    if (ctx.text.includes("only performs the wrap-up")) {
     const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
     if (id) {
       mkdirSync(join(dir, "docs", id), { recursive: true })
-      const verdict = failing.has(id) ? "Result: FAIL the acceptance gap" : "Result: PASS"
-      writeFileSync(
-        join(dir, "docs", id, "report.md"),
-        [
-          `# Report (${id})`,
-          "",
-          "The wrap-up session reviewed the work against the task's acceptance statements and",
-          "recorded the verification evidence: what was delivered, where it lives, and how it",
-          "was checked. The modules the task touched are listed with their outcomes.",
-          "",
-          verdict,
-          "",
-          "<!-- auto: eof -->",
-          "",
-        ].join("\n"),
-      )
+      if (failing.has(id)) {
+        // The verification loop's FAIL channel (plans/0083 D2/D3): no report
+        // at all — the gap list instead, its closing result line the verdict,
+        // no terminator. Every verify round of the failing task rewrites it;
+        // the fix-round sessions take the default turn (nothing to write).
+        writeFileSync(
+          join(dir, "docs", id, "gaps.md"),
+          [
+            `# Gaps (${id})`,
+            "",
+            "## Verified OK",
+            "",
+            "- The wrap-up session inspected the work against the task's acceptance statements.",
+            "",
+            "## Gaps",
+            "",
+            "- The acceptance gap stands: the required behavior is not delivered (src/widget.ts).",
+            "",
+            "Result: FAIL the acceptance gap",
+            "",
+          ].join("\n"),
+        )
+      } else {
+        writeFileSync(
+          join(dir, "docs", id, "report.md"),
+          [
+            `# Report (${id})`,
+            "",
+            "The wrap-up session reviewed the work against the task's acceptance statements and",
+            "recorded the verification evidence: what was delivered, where it lives, and how it",
+            "was checked. The modules the task touched are listed with their outcomes.",
+            "",
+            "Result: PASS",
+            "",
+            "<!-- auto: eof -->",
+            "",
+          ].join("\n"),
+        )
+      }
     }
     return undefined
   }
@@ -59,6 +95,7 @@ const repairTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript 
     return undefined
   }
   return artifactTurns(dir)(ctx)
+  }
 }
 
 // The verdict-gate variant: every wrap-up passes, and each distillation of
@@ -120,11 +157,15 @@ const gateTurns = () => (dir: string): TurnScript => {
 const has = (f: LoopFixture, path: string) => existsSync(join(f.dir, path))
 
 describe("repair (task level, m mode)", () => {
-  test("a FAIL report with budget: the failed task is closed with the round recorded, the appended task re-verifies, the run completes", async () => {
+  test("a FAIL verdict with budget: the loop exhausts, the failed task is closed with the round recorded, the appended task re-verifies, the run completes", async () => {
     const f = await fixture("m", repairTurns(new Set(["T-001"])))
     const { code, lines } = await f.run({ repair: 1, planInput: { text: "migrate the widget" } })
     expect(code).toBe(0)
-    // The repair round ran: close (the Closed: field names it), append, re-run.
+    // The verification loop ran first (plans/0083): two fix rounds, each
+    // committed with the `T-001 fix <round>` subject and stage execute.
+    const subjects = await f.git("log", "--format=%s")
+    expect(subjects.split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
+    // Then the repair round: close (the Closed: field names it), append, re-run.
     expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
     const closed = await Bun.file(join(f.dir, "docs/T-001/done.md")).text()
     expect(closed).toContain("Closed: repair round 1: the task report concluded Result: FAIL")
@@ -136,12 +177,17 @@ describe("repair (task level, m mode)", () => {
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
-  test("no budget: the first FAIL blocks exactly as before (exit 2, the task pending, the human's ways listed)", async () => {
+  test("no budget: the FAIL blocks once the fix loop is spent (exit 2, the task pending, the rounds named, the human's ways listed)", async () => {
     const f = await fixture("m", repairTurns(new Set(["T-001"])))
     const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
     expect(code).toBe(2)
-    expect(lines.some((line) => line.includes("the task report concluded Result: FAIL"))).toBe(true)
+    // The block message names the verdict and the rounds spent (plans/0083 D5).
+    expect(lines.some((line) => line.includes("the verification of T-001 concluded Result: FAIL"))).toBe(true)
+    expect(lines.some((line) => line.includes("2 fix rounds already ran (the budget is 2)"))).toBe(true)
+    expect(lines.some((line) => line.includes("docs/T-001/gaps.md"))).toBe(true)
     expect(lines.some((line) => line.includes("repair round"))).toBe(false)
+    // Both fix rounds ran before the block (the loop precedes the ladder).
+    expect((await f.git("log", "--format=%s")).split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
     // Not closed, not done: the state files stay pending for the human.
     expect(has(f, "docs/T-001/todo.md")).toBe(true)
     expect(has(f, "docs/T-001/done.md")).toBe(false)
@@ -153,11 +199,11 @@ describe("repair (task level, m mode)", () => {
     const { code, lines } = await f.run({ repair: 1, planInput: { text: "migrate the widget" } })
     expect(code).toBe(2)
     // The first FAIL consumed the round (T-001 closed, T-002 appended); the
-    // second FAIL (T-002's own report) blocks — the budget is spent.
+    // second FAIL (T-002's own verification) blocks — the budget is spent.
     expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/T-001/done.md")).text()).toContain("Closed: repair round 1")
     expect(has(f, "docs/T-002/todo.md")).toBe(true)
-    expect(lines.some((line) => line.includes("the task report concluded Result: FAIL"))).toBe(true)
+    expect(lines.some((line) => line.includes("the verification of T-002 concluded Result: FAIL"))).toBe(true)
   })
 })
 

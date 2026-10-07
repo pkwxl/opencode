@@ -177,10 +177,10 @@ describe("I3 misjudged-complete zero-write (kernel-dm T-068 S01)", () => {
   })
 })
 
-describe("I4 the test script rewriting sources in place (kernel-spi-nor T-028)", () => {
+describe("I4 the test script rewriting sources in place (kernel-spi-nor T-028; the side-effect guard plans/0083 D11 since restored the rewrite)", () => {
   const HANDOFF = "docs/T-001/S01/testhandoff.md"
 
-  test("sequential state: freeze commit → archive + commit #2 → the script runs after that; its rewrite stays in the worktree uncommitted, no stash at any point", async () => {
+  test("sequential state: freeze commit → archive + commit #2 → the script runs after that; its tracked rewrite is restored from the pre-run snapshot and named back, no stash at any point", async () => {
     const dir = await incidentRepo(`## T-001: sample task [in_progress]\n\n- [ ] implement the logic\n`)
     try {
       // Round 1: usage over the limit → initiates a test (the script rewrites
@@ -225,13 +225,16 @@ describe("I4 the test script rewriting sources in place (kernel-spi-nor T-028)",
       const tracked = await git(dir, "ls-files")
       expect(tracked).toContain("docs/T-001/S01/testhandoff-1.md")
       // The key ordering (T-028): the script runs after the close-out commit —
-      // src.ts in HEAD is still the baseline, the rewrite stays in the worktree
-      // uncommitted and is absorbed by the next unit; stash is never touched
-      // (the retest guard is retired).
+      // src.ts in HEAD is the baseline. The side-effect guard (plans/0083
+      // D11): the tracked rewrite is a violation — the driver restored the
+      // pre-run content (the tree of commit #2 back), and the continuation
+      // prompt names the violation; `git stash create` touched nothing on
+      // disk and left the stash list empty.
       expect(await git(dir, "show", "HEAD:src.ts")).not.toContain("formatted rewrite")
-      expect(await Bun.file(join(dir, "src.ts")).text()).toContain("formatted rewrite")
-      expect((await git(dir, "status", "--porcelain")).trimEnd()).toBe(" M src.ts")
+      expect(await Bun.file(join(dir, "src.ts")).text()).not.toContain("formatted rewrite")
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect((await git(dir, "stash", "list")).trim()).toBe("")
+      expect(calls.prompts.some((prompt) => JSON.stringify(prompt).includes("side-effect violation: the script modified or deleted tracked files") && JSON.stringify(prompt).includes("restored them from the pre-run snapshot: src.ts"))).toBe(true)
       // The continuation round only adds one continuation message, no
       // re-dispatch from scratch: two prompts (initial + continuation).
       expect(calls.prompts.length).toBe(2)
@@ -296,10 +299,11 @@ describe("I5 handover chain close-out (test-handover-early §N F4)", () => {
   })
 })
 
-describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3)", () => {
+describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3; the verify → fix loop plans/0083 in front since)", () => {
   const filler = "Acceptance evidence line. ".repeat(20)
   // Round 1 = whole-task session (off mode): a source change. Round 2 = the
-  // wrap-up session: the task report, ending in the given result line.
+  // verify session: a passing report (the given PASS form). The FAIL variant
+  // below scripts the loop's rounds by hand.
   const scenario = (dir: string, resultLine: string) =>
     scriptedClient([
       async () => {
@@ -310,21 +314,51 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3)", () => {
       },
     ])
 
-  test("Result: FAIL → blocked with the reason, task not done, report committed, phase rewound to wrapup", async () => {
+  test("Result: FAIL → the fix loop runs its two rounds, then blocked with the reason and the spent rounds, task not done, gap list committed, phase rewound to wrapup", async () => {
     const dir = await incidentRepo(`## T-001: acceptance [pending]\n\nCheck x.\n\n## T-002: follow-up [pending]\n\nFollow-up work.\n`)
+    // The verify loop's FAIL protocol (0083 D2/D3): no report at all — the gap
+    // list with its closing FAIL result line instead; fix rounds write source
+    // (so each posts its own `T-001 fix <n>` commit); the gap list is
+    // rewritten by every re-verification.
+    const gapList = () =>
+      Bun.write(
+        join(dir, "docs/T-001/gaps.md"),
+        ["# Gaps (T-001)", "", "## Verified OK", "", `- ${filler}`, "", "## Gaps", "", "- x is not exported under the expected name (src.ts).", "", "Result: FAIL x is not exported under the expected name", ""].join("\n"),
+      )
     try {
-      const { client } = scenario(dir, "Result: FAIL x is not exported under the expected name")
+      const { client } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "src.ts"), "// source baseline\nexport const x = 1\n")
+        },
+        gapList,
+        async () => {
+          await Bun.write(join(dir, "src.ts"), "// fix round 1\nexport const x = 1\n")
+        },
+        gapList,
+        async () => {
+          await Bun.write(join(dir, "src.ts"), "// fix round 2\nexport const x = 1\n")
+        },
+        gapList,
+      ])
       const plan = await reloadUnits(dir)
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
       expect(outcome).toMatchObject({ type: "blocked" })
-      expect((outcome as { question: string }).question).toContain("Result: FAIL (x is not exported under the expected name)")
+      expect((outcome as { question: string }).question).toContain("the verification of T-001 concluded Result: FAIL (x is not exported under the expected name)")
+      expect((outcome as { question: string }).question).toContain("2 fix rounds already ran (the budget is 2)")
       const after = await reloadUnits(dir)
       expect(after.tasks[0]!.status).not.toBe("done")
       expect(after.tasks[1]!.status).toBe("pending")
-      // The wrap-up commit already carries the report and the work (iii).
-      expect(await git(dir, "ls-files")).toContain("docs/T-001/report.md")
-      expect(await git(dir, "show", "HEAD:docs/T-001/report.md")).toContain("Result: FAIL")
-      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup" })
+      // The loop's commits: each fix round posts its own execute-stage
+      // commit; the gap list lands through the wrap-up session's commit and
+      // no report was written at all.
+      const subjects = await git(dir, "log", "--format=%s")
+      expect(subjects.split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
+      expect(await git(dir, "ls-files")).toContain("docs/T-001/gaps.md")
+      expect(await git(dir, "ls-files")).not.toContain("docs/T-001/report.md")
+      expect(await git(dir, "show", "HEAD:docs/T-001/gaps.md")).toContain("Result: FAIL")
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      // The rounds spent persist with the rewound phase (0083 D7).
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 2 })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

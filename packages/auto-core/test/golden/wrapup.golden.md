@@ -23,16 +23,17 @@ All subtasks of this task were completed one by one in earlier sessions; do not 
    artifact path docs/T-002/S<NN>/index.md or code location); do not copy or rewrite the content of the subtask artifacts, add only
    two sections of your own, overall conclusion and open issues, so that later sessions and reviewers can learn what this task produced from the files on disk alone. Every reference in the
    report (to a document or to code) follows the directory's reference conventions as the AGENTS.md block states them;
-3. The task status is recorded by the DRIVER in one pass after the session ends.
+3. Verify the task: you are this task's verification session — a fresh pair of eyes over the work, never the work sessions' self-report. Inspect the task's own output directly, and judge every `## Acceptance` criterion of the task above by that inspection alone — never from the work sessions' claims, without re-running the acceptance's executable checks (its tests, the typecheck or build — the work sessions already ran them under the task's self-check constraint), and never accepting a claim you have not inspected yourself. Then, by outcome:
+   - every criterion met → write the report of 2 in the evidence form: one short section per acceptance criterion — what was done, and the evidence (your inspection and its outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open issues, and end the report with `Result: PASS`;
+   - any criterion unmet → write no report at all. Instead write docs/T-002/gaps.md (overwriting whatever is there): first a compact summary of what you verified as OK (so the fix session does not redo it), then one entry per gap — the missing or wrong required action, where (files), and what exactly to do — ending with `Result: FAIL <one-sentence reason>` as that file's last line of body text (no terminator in that file). A fix session then closes exactly the listed gaps and the verification re-runs from scratch;
+4. The task status is recorded by the DRIVER in one pass after the session ends.
    Result line: Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
    you found that the task's goal was not met. `Result: PASS` means every check the task asked for was actually run or observed
    and passed, with the evidence written in this report; `Result: FAIL` means a required check failed, could not be run, or the
    goal is not met — say why in one line. Never write PASS for a check you did not run or observe. A task that is not an
    acceptance task and met its goal may omit the line.
-   Write the result line as the last line of body text of docs/T-002/report.md (before the terminator), on a line of its own; it
-   may only be `Result: PASS` or `Result: FAIL <one-sentence reason>` — a DRIVER protocol string: write it exactly as given, do not
-   translate, bold or list-mark it; on `Result: FAIL` the DRIVER marks this task blocked and stops the run for human handling.
-4. While this task was running, the DRIVER auto-answered the following questions that you should have asked the user (with nobody at
+   The result line is a DRIVER protocol string, on a line of its own — write it exactly as given, do not translate, bold or list-mark it: `Result: PASS` ends the report (docs/T-002/report.md, the last line of body text before the terminator), `Result: FAIL <one-sentence reason>` ends the gap list (docs/T-002/gaps.md, the last line of body text, no terminator). On `Result: FAIL` the DRIVER runs a bounded fix loop over the gap list — at most two fix rounds, each closing exactly the listed gaps, then the verification re-runs from scratch; past the budget the task blocks and the run stops for human handling.
+5. While this task was running, the DRIVER auto-answered the following questions that you should have asked the user (with nobody at
    the keyboard, the DRIVER closed them on the user's behalf, and what you received at the time was an automatic reply):
 
    - strategy A or B?
