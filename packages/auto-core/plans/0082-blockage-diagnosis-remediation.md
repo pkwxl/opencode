@@ -2,6 +2,9 @@
 
 Status: **proposal** (2026-10-07), awaiting review; Part II (root cause and prevention) added the same
 day after review — prevention outranks resolution, and the re-ranked stages in §14 put it first. The
+2026-10-07 consistency review's corrections applied the same day: D4/D12 vocabulary pinned to the real
+registries, D6's document-role decision added, D7's prelude placement stated against D5's rows, D12's
+check hook named (the post-session scan), §7 cross-referenced to plans/0083's escalation ladder. The
 triggering record: the 2026-10-07 plan-verify blockage of the cleanroom run (`~/workspace/cleanroom`,
 R-01.P03), the out-of-tool analysis session that diagnosed it, and the artifact trail showing the
 pipeline had manufactured the conflict two phases earlier.
@@ -144,9 +147,11 @@ task documents, audit — on disk, read through tools); output = one artifact, t
 session's toolset is read-only where the adapter can enforce it (permission preset); where an adapter
 cannot restrict tools, the charter line ("propose only — you never edit; the executor ignores anything
 outside the format") carries the discipline and the strict parse is the backstop. The session never
-writes, never runs the work, never judges completion — it proposes. A new `diagnose` role in the roles
-registry (tier with the analysis roles, routed through the ordinary model-route machinery) names its
-model; the cost is one session per blockage, bounded by consent (§5).
+writes, never runs the work, never judges completion — it proposes. A new `diagnose` word in
+`MODEL_ROLES` (src/switches.ts, the roles registry) names its model, tiered beside
+`knowledge`/`prior-knowledge` — the simple side-channel tier — through a `ROLE_TIERS` descriptor
+(src/tier.ts; the table's build fails loudly until the descriptor lands); the cost is one session per
+blockage, bounded by consent (§5).
 
 **D5 — a strict plan format, parsed like RESOLVE_FORMAT; Escalation is a first-class outcome.**
 
@@ -186,8 +191,16 @@ person just sanctioned, through a channel that records the sanction.** "The driv
 words" holds — the driver never *chooses* them. A `Notes:` line may accompany the choice; free-text
 rulings ride in as planning-input channels or notes on the next diagnosis, not as interpreted prose.
 
-**D7 — the executor is mechanical over the enumerated edits.** A new early prelude row (before the
-drift re-sync row) finds the round's unexecuted `Choice:` marks and executes them:
+The document takes its own role in the document-role model (src/document/roles.ts): process, no eof
+terminator — the `Choice:`/`Executed:` lines extend the standardization boundary the roles module
+states (protocol markers beyond the index/state files and the handoff documents), and D9's interactive
+pick is a driver write recording the person's sideband sanction — protect passes it as it passes the
+survey gate's install.
+
+**D7 — the executor is mechanical over the enumerated edits.** A new prelude row after round
+establishment, immediately before the drift re-sync row (D5's rows 1–3 keep their no-write order;
+the executor's edits are this row's first write) finds the round's unexecuted `Choice:` marks and
+executes them:
 
 - each edit applies only on **old-span literal match** (the first and last lines of the replaced span
   must still match the file) — a stale document re-blocks with "the file changed since diagnosis",
@@ -233,8 +246,9 @@ a second mechanism.
 - v2 candidates, each appended by a real incident rather than speculation: dirty-tree blockages at unit
   start (diagnosis: what is dirty, driver-state leftovers vs person edits, the split action), the
   round-close gate's report problems, `phaseTailDrift` (exit 1 today).
-- Explicitly separate: FAIL verdicts stay with `--repair` (work rework, budgeted, no per-round consent
-  needed); the survey clarification gate stays its own human gate (its fork questions ARE the decision —
+- Explicitly separate: FAIL verdicts stay outside this design's dossier loop — plans/0083's task-local
+  fix rounds run first, then `--repair`'s budgeted rework (work rework, no per-round consent needed),
+  then the human; the survey clarification gate stays its own human gate (its fork questions ARE the decision —
   though its round-report listing may grow a pointer to open blockage documents); usage/environment
   exit-1 errors keep static messages (mechanical causes, mechanical fixes); stuck/session-failure
   recovery keeps its existing machinery.
@@ -329,11 +343,11 @@ moves, one per link, each closing its cause at the earliest possible moment.
   guidance gains the matching rule: every term the verifier will enforce is defined by the charter;
   carve-outs are charter text. Existing targets get the sentence through the ordinary pack-amend
   channel (Part I's `pack-amend`, or by hand between runs).
-- **D12 — charter-clamped defaults: check at record time, clamp to the charter, then surface without
-  correctness depending on the person seeing it (closes RC2).** Every AUTO-RESOLVE default a session
-  records gets one cheap one-shot charter check at record time (the 0080 verifier call reused:
-  charter vs the recorded default's text — defaults are rare, a handful per round, one classifier-tier
-  call each). A default the check flags is **clamped**: the recording session re-records it so the
+- **D12 — charter-clamped defaults: check at the post-session scan, clamp to the charter, then surface
+  without correctness depending on the person seeing it (closes RC2).** Every AUTO-RESOLVE default a
+  session records gets one cheap one-shot charter check at the post-session scan that already collects
+  the markers (taskResolveLines / wrapupResolves; the 0080 verifier call reused: charter vs the
+  recorded default's text — defaults are rare, a handful per round, one simple-tier call each). A default the check flags is **clamped**: the recording session re-records it so the
   default *in force* is the charter-consistent reading, and the wider grant it wanted becomes the OPEN
   question's option — a person may widen a wall by answering or through the charter channel
   (pack-amend), but the pipeline never proceeds under a default that contradicts the charter. The
