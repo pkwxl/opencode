@@ -296,6 +296,38 @@ function optionComplete(option: RemediationOption): boolean {
   return option.edits.length > 0 && Boolean(option.consequences)
 }
 
+// Locate an edit's old span in the file's current lines — the executor's
+// guard and the diagnosis-time validation share it. Four tiers, strongest
+// first: exact lines at the stated position, a unique exact occurrence
+// elsewhere, the same two with outer whitespace trimmed. The trimmed tiers
+// are the blockage-1 lesson: a diagnosis session quotes prose content, not
+// markdown indentation (an anchor failed on the two leading spaces of a
+// wrapped continuation line and a person's approved Choice dead-ended).
+// Position plus content is always accepted; content alone must be unique;
+// nothing found, or a trimmed pair occurring more than once, is a refusal —
+// a stale document re-blocks, never a blind overwrite.
+export type SpanLocation = { at: number } | { stale: true } | { ambiguous: true }
+
+export function locateEditSpan(lines: readonly string[], edit: RemediationEdit): SpanLocation {
+  const width = edit.last - edit.first + 1
+  const same = (a: string, b: string, trim: boolean): boolean => (trim ? a.trim() === b.trim() : a === b)
+  const at = (start: number, trim: boolean): boolean =>
+    start >= 0 && start + width <= lines.length && same(lines[start]!, edit.oldFirst, trim) && same(lines[start + width - 1]!, edit.oldLast, trim)
+  if (at(edit.first - 1, false)) return { at: edit.first - 1 }
+  const exact = occurrences(false)
+  if (exact.length === 1) return { at: exact[0]! }
+  if (at(edit.first - 1, true)) return { at: edit.first - 1 }
+  const trimmed = occurrences(true)
+  if (trimmed.length === 1) return { at: trimmed[0]! }
+  return trimmed.length > 1 ? { ambiguous: true } : { stale: true }
+
+  function occurrences(trim: boolean): number[] {
+    const found: number[] = []
+    for (let i = 0; i + width <= lines.length; i++) if (at(i, trim)) found.push(i)
+    return found
+  }
+}
+
 // —— the blockage document (D6) ——
 
 export const CHOICE_LINE = "Choice:"
@@ -331,6 +363,16 @@ export function executedMark(text: string): { option: string; shas: string } | u
     if (mark) found = { option: mark[1]!, shas: mark[2]!.trim() }
   }
   return found
+}
+
+// The stale-spec rejection's record (D7's continuation): a document whose
+// chosen edit could not be applied carries `Rejected: <option> — …` under
+// the Choice. It stops the document being pending — a rejected spec must not
+// be retried every run nor shadow later documents — while the Choice itself
+// stays for the record; a person who re-decides on the same document removes
+// the Rejected line with their new Choice.
+export function rejectedMark(text: string): boolean {
+  return text.split("\n").some((line) => /^Rejected:\s*[A-Z]\b/.test(line))
 }
 
 // The document's Step field (its diagnosis-suspension key, D8): the step

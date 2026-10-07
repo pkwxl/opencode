@@ -21,8 +21,10 @@ import { join } from "node:path"
 import {
   choiceMark,
   executedMark,
+  locateEditSpan,
   parseRemediationPlan,
   readBlockageDocs,
+  rejectedMark,
   type RemediationEdit,
   type RemediationOption,
 } from "./blockage"
@@ -42,8 +44,14 @@ export type ExecutionOk = { type: "executed"; file: string; option: string; edit
 // The executor refuses or re-blocks: a dirty tree before the first write, a
 // stale old span, a commit failure mid-sequence, or an edit naming a surface
 // no remediation may touch. The reason line names the partial state when
-// some edits already landed.
-export type ExecutionStop = { type: "reblocked"; file?: string; landed: string[]; reason: string }
+// some edits already landed. `stale` marks the one non-fatal class — the
+// chosen edit's old span no longer locates (the file changed since the
+// document, or the quoted anchors were born wrong): the rejection is
+// recorded on the document and the run continues, because the blocked step
+// re-runs its gate and re-diagnoses into a fresh, executable document. Every
+// other refusal needs the person or a clean tree before anything downstream
+// can run, and stops as before.
+export type ExecutionStop = { type: "reblocked"; file?: string; landed: string[]; reason: string; stale?: boolean }
 
 export type ExecutionOutcome = ExecutionOk | ExecutionStop | { type: "none" }
 
@@ -52,7 +60,7 @@ export type ExecutionOutcome = ExecutionOk | ExecutionStop | { type: "none" }
 // when nothing is pending — the ordinary run's path.
 export async function executeBlockageChoices(dir: string, round: number): Promise<ExecutionOutcome> {
   const docs = await readBlockageDocs(dir, round)
-  const pending = docs.filter((doc) => choiceMark(doc.text) !== undefined && executedMark(doc.text) === undefined)
+  const pending = docs.filter((doc) => choiceMark(doc.text) !== undefined && executedMark(doc.text) === undefined && !rejectedMark(doc.text))
   if (!pending.length) return { type: "none" }
   // The executor's edits are this row's first write: the tree must be clean
   // first (driver-state leftovers self-heal through beginUnit's gate, like
@@ -64,6 +72,18 @@ export async function executeBlockageChoices(dir: string, round: number): Promis
   let outcome: ExecutionOutcome = { type: "none" }
   for (const doc of pending) {
     const result = await executeBlockageChoice(dir, doc.file, doc.text)
+    if (result.type === "reblocked" && result.stale) {
+      // The stale continuation (D7): record the rejection on the document
+      // (its own mark line, committed like the edits) and keep going — the
+      // run reaches the blocked step, its gate fails again, and a fresh
+      // diagnosis writes the next document. A Choice never dead-ends.
+      const option = choiceMark(doc.text)!.choice
+      await Bun.write(join(dir, doc.file), appendRejected(doc.text, option, result.reason))
+      const recorded = await commitTree(dir, { id: "PLAN", title: `remediation (${doc.file})` }, { stage: "remediation", subject: `${remediationSubjectPrefix(doc.file)}${option}: record rejection (stale)` })
+      if (!recorded.ok) log(`⏸ the rejection record of ${doc.file} is written but not committed (${recorded.failures.map((failure) => failure.rel).join(", ")}) — commit it manually`)
+      outcome = result
+      continue
+    }
     if (result.type === "reblocked") {
       outcome = result
       break
@@ -168,40 +188,31 @@ export async function executeBlockageChoice(dir: string, file: string, text: str
   return { type: "executed", file, option: option.id, edits: landed, shas, ...(advice.length ? { advice } : {}) }
 }
 
-// One edit's application: old-span literal match (D7) — the recorded range's
-// first and last lines must still equal the quoted anchors; when they do not
-// (an earlier edit of the same option shifted the file), the anchors' single
-// unambiguous occurrence elsewhere in the file is accepted; no match or an
-// ambiguous one re-blocks naming staleness, never a blind overwrite.
+// One edit's application: the shared span locator (D7's old-span guard) —
+// exact lines at the recorded position, a unique exact occurrence elsewhere,
+// then the same two tiers whitespace-trimmed; a pair that locates nowhere,
+// or trimmed-matches more than once, is a non-fatal stale rejection (recorded
+// on the document, the run continues into the gate's fresh diagnosis), never
+// a blind overwrite.
 async function applyEdit(dir: string, doc: string, option: RemediationOption, edit: RemediationEdit): Promise<{ type: "ok" } | ExecutionStop> {
   const path = join(dir, edit.path)
   const raw = await Bun.file(path).text().catch(() => undefined)
   if (raw === undefined) {
-    return { type: "reblocked", file: doc, landed: [], reason: `the file changed since diagnosis: ${edit.path} no longer exists (${doc} option ${option.id})` }
+    return { type: "reblocked", stale: true, file: doc, landed: [], reason: `the file changed since diagnosis: ${edit.path} no longer exists (${doc} option ${option.id})` }
   }
   const lines = raw.split("\n")
-  const width = edit.last - edit.first + 1
-  const matchesAt = (start: number): boolean =>
-    start >= 0 && start + width <= lines.length && lines[start] === edit.oldFirst && lines[start + width - 1] === edit.oldLast
-  let at: number | undefined
-  if (matchesAt(edit.first - 1)) {
-    at = edit.first - 1
-  } else {
-    const found: number[] = []
-    for (let i = 0; i + width <= lines.length; i++) {
-      if (lines[i] === edit.oldFirst && lines[i + width - 1] === edit.oldLast) found.push(i)
-    }
-    if (found.length === 1) at = found[0]
-  }
-  if (at === undefined) {
+  const located = locateEditSpan(lines, edit)
+  if (!("at" in located)) {
     return {
       type: "reblocked",
+      stale: true,
       file: doc,
       landed: [],
-      reason: `the file changed since diagnosis: ${edit.path}'s old span no longer matches the quoted lines (${doc} option ${option.id}) — re-diagnose or fix the document`,
+      reason: `the file changed since diagnosis: ${edit.path}'s old span no longer matches the quoted lines${"ambiguous" in located ? " (the quoted pair matches more than one place)" : ""} (${doc} option ${option.id}) — the rejection is recorded and the gate re-diagnoses into a fresh document`,
     }
   }
-  const next = [...lines.slice(0, at), ...edit.text.split("\n"), ...lines.slice(at + width)]
+  const width = edit.last - edit.first + 1
+  const next = [...lines.slice(0, located.at), ...edit.text.split("\n"), ...lines.slice(located.at + width)]
   const text = next.join("\n")
   // brief-amend writes through the brief's protect-passing channel (D7, the
   // survey install's mechanism); every other channel writes plainly.
@@ -245,6 +256,16 @@ function remediationSubjectPrefix(file: string): string {
 // (<shas>)`. The advice channel records with no SHAs.
 export function appendExecuted(text: string, option: string, shas: readonly string[]): string {
   const record = `Executed: ${option} (${shas.length ? shas.join(", ") : "no commits — advice recorded"})`
+  return appendMarkLine(text, record)
+}
+
+// The stale rejection's record (D7's continuation), same placement: one line
+// under the Choice, committed like the edits.
+export function appendRejected(text: string, option: string, reason: string): string {
+  return appendMarkLine(text, `Rejected: ${option} — ${reason}`)
+}
+
+function appendMarkLine(text: string, record: string): string {
   const lines = text.split("\n")
   const at = lines.findLastIndex((line) => /^Choice:/.test(line))
   if (at < 0) return `${text.trimEnd()}\n\n${record}\n`

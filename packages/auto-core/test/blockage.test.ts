@@ -20,6 +20,8 @@ import {
   nextBlockageSeq,
   parseRemediationPlan,
   readBlockageDocs,
+  locateEditSpan,
+  rejectedMark,
 } from "../src/blockage"
 import { constraintPitfallResolves } from "../src/document/roles"
 import { parseResolveLine } from "../src/resolve"
@@ -189,6 +191,49 @@ describe("parseRemediationPlan (plans/0082 §4 D5, the RESOLVE_FORMAT discipline
 })
 
 // —— the blockage document's marks and the caps (D6/D8) ——
+
+describe("locateEditSpan (the executor's guard and the diagnosis-time validation share it)", () => {
+  const edit = (over: Partial<{ first: number; last: number; oldFirst: string; oldLast: string }>) => ({
+    path: "docs/R-01/P02-design/handover.md",
+    first: over.first ?? 5,
+    last: over.last ?? 6,
+    oldFirst: over.oldFirst ?? "the first line",
+    oldLast: over.oldLast ?? "the last line",
+    text: "replacement",
+  })
+
+  test("exact at the stated position wins", () => {
+    const lines = ["a", "b", "c", "d", "the first line", "the last line", "e"]
+    expect(locateEditSpan(lines, edit({}))).toEqual({ at: 4 })
+  })
+
+  test("a shifted exact pair relocates by its single occurrence", () => {
+    const lines = ["x", "x", "the first line", "the last line"]
+    expect(locateEditSpan(lines, edit({}))).toEqual({ at: 2 })
+  })
+
+  test("the blockage-1 incident: an anchor quoted without its leading indent matches trimmed at the position", () => {
+    const lines = ["a", "b", "c", "d", "the first line", "  the last line", "e"]
+    expect(locateEditSpan(lines, edit({}))).toEqual({ at: 4 })
+  })
+
+  test("an indented pair quoted clean relocates by its single trimmed occurrence", () => {
+    const lines = ["  the first line", "  the last line"]
+    expect(locateEditSpan(lines, edit({ first: 1, last: 2 }))).toEqual({ at: 0 })
+  })
+
+  test("a trimmed pair occurring more than once away from the stated position is ambiguous; a pair occurring nowhere is stale", () => {
+    expect(locateEditSpan(["y", "z", "  the first line", "  the last line", "q", "  the first line", "  the last line"], edit({ first: 1, last: 2 }))).toEqual({ ambiguous: true })
+    expect(locateEditSpan(["nothing", "matches"], edit({}))).toEqual({ stale: true })
+  })
+})
+
+describe("rejectedMark (the stale rejection's record, D7's continuation)", () => {
+  test("a Rejected line under a Choice marks the document; its absence does not", () => {
+    expect(rejectedMark("Choice: A\nRejected: A — the span went stale")).toBe(true)
+    expect(rejectedMark("Choice: A\nExecuted: A (sha)")).toBe(false)
+  })
+})
 
 describe("the blockage document's marks and the caps (plans/0082 §5 D6 / D8)", () => {
   test("the person's Choice mark: the last line wins, the template's placeholders are not notes", () => {

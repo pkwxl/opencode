@@ -28,6 +28,7 @@ import {
   dossierState,
   evidenceFragments,
   honestBlockLines,
+  locateEditSpan,
   locateSpans,
   nextBlockageSeq,
   parseRemediationPlan,
@@ -83,6 +84,28 @@ export type BlockageCall = { server: ClientSource; opts: Opts; repl?: Interactiv
 export type BlockageStatus = "off" | "suspended" | "documented" | "remediated" | "failed" | "dirty"
 
 export type BlockageResult = { status: BlockageStatus; lines: string[]; file?: string }
+
+// The write-time anchor validation (the executor's old-span guard,
+// left-shifted to the document's birth): every edit's old span must locate
+// in the named file — exact or whitespace-trimmed, unambiguous, through the
+// same shared locator — before the document is committed, so a blockage
+// document is born executable and a person's Choice can never dead-end on a
+// misquoted anchor. The planning-input channel writes its file fresh and
+// carries no anchors; advice carries no edits. The message teaches the
+// session to re-quote byte-for-byte from the file.
+async function anchorProblem(dir: string, plan: Extract<RemediationPlan, { kind: "options" }>): Promise<string | undefined> {
+  for (const option of plan.options) {
+    if (option.channel === "planning-input" || option.channel === "advice") continue
+    for (const edit of option.edits) {
+      const raw = await Bun.file(join(dir, edit.path)).text().catch(() => undefined)
+      if (raw === undefined) return `option ${option.id}: edit file ${edit.path} does not exist — name an existing file`
+      const located = locateEditSpan(raw.split("\n"), edit)
+      if ("at" in located) continue
+      return `option ${option.id}: ${edit.path}'s old span (lines ${edit.first}–${edit.last}, quoted "${edit.oldFirst}" | "${edit.oldLast}") does not occur in the file${"ambiguous" in located ? " unambiguously" : ""} — quote the span's first and last lines exactly as they sit in the file (leading spaces included) and use their true line numbers`
+    }
+  }
+  return undefined
+}
 
 // The one entry the covered block sites call (verifyPlanStep's two block
 // branches, the write-time handover check's fail-closed, the render gate's
@@ -161,6 +184,11 @@ export async function openBlockage(site: BlockageSite, call: BlockageCall): Prom
           const missing = plan.options.flatMap((option) => option.edits.map((edit) => edit.path)).filter((path) => path.includes("(") || path.startsWith("<"))
           if (missing.length) {
             unparsable = `edits name files that are not real paths: ${missing.join(", ")}`
+            return undefined
+          }
+          const anchors = await anchorProblem(site.directory, plan)
+          if (anchors !== undefined) {
+            unparsable = anchors
             return undefined
           }
         }

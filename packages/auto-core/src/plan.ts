@@ -199,11 +199,14 @@ export async function planPrelude(dir: string, opts: {
   // them mechanically (one Auto-Stage: remediation commit per edit,
   // old-span literal match, the planning-input channel through its own
   // commit); the blocked step then re-composes and re-verifies from scratch
-  // as the loop below runs it. A refusal or a re-block stops with the
-  // partial state named.
+  // as the loop below runs it. A refusal that needs the person or a clean
+  // tree stops with the partial state named; a stale-span rejection is
+  // recorded on its document and the run continues — the step's gate fails
+  // again and re-diagnoses into a fresh, executable document, so a Choice
+  // never dead-ends.
   {
     const executed = await executeBlockageChoices(dir, round)
-    if (executed.type === "reblocked") return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${bin} plan ${dir}`])
+    if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${bin} plan ${dir}`])
     for (const line of executionLines(executed)) log(line)
   }
   // Row 3 (plans/0053 D34): the phase index drifted from the phases value —

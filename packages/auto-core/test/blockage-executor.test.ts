@@ -163,7 +163,7 @@ describe("the executor's write ratchet (plans/0082 §5 D7, the chain-writes patt
     }
   })
 
-  test("old-span mismatch re-blocks: the file changed since diagnosis, nothing is written, no Executed line", async () => {
+  test("old-span mismatch is a stale rejection: the target is untouched, the document records Rejected, the outcome is non-fatal", async () => {
     const dir = await repo()
     try {
       await seededDoc(dir, blockageDoc())
@@ -175,9 +175,46 @@ describe("the executor's write ratchet (plans/0082 §5 D7, the chain-writes patt
       await git(dir, "commit", "-qm", "hand edit")
       const outcome = await executeBlockageChoices(dir, 1)
       expect(outcome.type).toBe("reblocked")
-      if (outcome.type === "reblocked") expect(outcome.reason).toContain("changed since diagnosis")
+      if (outcome.type === "reblocked") {
+        expect(outcome.reason).toContain("changed since diagnosis")
+        expect(outcome.stale).toBe(true)
+      }
       expect(await Bun.file(join(dir, HANDOVER)).text()).toBe(shifted.join("\n"))
-      expect((await Bun.file(join(dir, "docs/R-01/blockage-1.md")).text()).includes("Executed:")).toBe(false)
+      const doc = await Bun.file(join(dir, "docs/R-01/blockage-1.md")).text()
+      expect(doc.includes("Executed:")).toBe(false)
+      // The rejection is the document's own mark line, committed like the
+      // edits; the tree ends clean and the document stops being pending.
+      expect(doc).toMatch(/^Rejected: A — /m)
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      expect(await stageOf(dir)).toContain("Auto-Stage: remediation")
+      const again = await executeBlockageChoices(dir, 1)
+      expect(again.type).toBe("none")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the blockage-1 incident's shape: an anchor quoted without its leading indent still applies (the trimmed tier), never a rejection", async () => {
+    const dir = await repo()
+    try {
+      // The span sits on lines 5–6 as a wrapped pair; line 6 carries two
+      // leading spaces (markdown continuation indent) that the diagnosis's
+      // quoted last anchor omits — content, not indentation, is the quote.
+      const first = "uapi ABI-constant carve-out (AUTO-RESOLVE, T-011 §6.3): include"
+      const realLast = "  /uapi/linux/ext4.h may be read by grep/extract for constants only"
+      const quotedLast = realLast.trim()
+      const oldLine = "uapi ABI-constant carve-out (AUTO-RESOLVE, T-011 §6.3): include/uapi/linux/ext4.h may be read by grep/extract for constants only"
+      const doc = blockageDoc({ first: 5, last: 6 }).replace(`(${oldLine} | ${oldLine})`, `(${first} | ${quotedLast})`)
+      const file = [...HANDOVER_LINES.slice(0, 4), first, realLast, ...HANDOVER_LINES.slice(5)]
+      await seededDoc(dir, doc)
+      await writeFile(join(dir, HANDOVER), file.join("\n"))
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "the indented span")
+      const outcome = await executeBlockageChoices(dir, 1)
+      expect(outcome.type).toBe("executed")
+      const text = await Bun.file(join(dir, HANDOVER)).text()
+      expect(text).toContain("constants come from the restated ABI in the spec notes; no reference-header reads")
+      expect(text).not.toContain("may be read by grep/extract")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -277,22 +314,55 @@ describe("prelude row routing (plans/0082 §5 D7: mark present / absent / alread
     }
   })
 
-  test("a refusal stops the prelude with the partial state named (exit 2)", async () => {
+  test("a stale-span rejection does not stop the prelude: it is recorded and the routes continue (a Choice never dead-ends)", async () => {
     const dir = await repo()
     try {
       await establishRound(dir, { phases: "m" })
       await mkdir(join(dir, "docs/R-01"), { recursive: true })
       await writeFile(join(dir, "docs/R-01/blockage-1.md"), blockageDoc())
       await mkdir(dirname(join(dir, HANDOVER)), { recursive: true })
-      // The handover never exists: the old span cannot match → re-block.
+      // The handover never matched the quoted span: the file changed since
+      // diagnosis → a stale rejection, recorded on the document, and the
+      // prelude continues to m mode's ordinary stop (no exit 2 — the step's
+      // gate re-runs and re-diagnoses when it blocks again).
       await writeFile(join(dir, HANDOVER), "entirely different content\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "the blockage")
       const prelude = await planPrelude(dir, { phases: "m" })
       expect(prelude.type).toBe("stop")
       if (prelude.type === "stop") {
+        expect(prelude.code).not.toBe(2)
+        expect(prelude.lines.join("\n")).not.toContain("remediation re-blocked")
+      }
+      const doc = await Bun.file(join(dir, "docs/R-01/blockage-1.md")).text()
+      expect(doc).toMatch(/^Rejected: A — /m)
+      // The recorded rejection stops the document from being retried.
+      const again = await planPrelude(dir, { phases: "m" })
+      expect(again.type).toBe("stop")
+      expect((await Bun.file(join(dir, "docs/R-01/blockage-1.md")).text()).match(/^Rejected:/gm)?.length).toBe(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a fatal refusal (dirty tree before the edits) still stops the prelude with the partial state named (exit 2)", async () => {
+    const dir = await repo()
+    try {
+      await establishRound(dir, { phases: "m" })
+      await mkdir(join(dir, "docs/R-01"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/blockage-1.md"), blockageDoc())
+      await mkdir(dirname(join(dir, HANDOVER)), { recursive: true })
+      await writeFile(join(dir, HANDOVER), HANDOVER_LINES.join("\n"))
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "the blockage")
+      // A dirty non-driver file before the row's first write: fatal.
+      await writeFile(join(dir, HANDOVER), `${HANDOVER_LINES.join("\n")}\ndirty\n`)
+      const prelude = await planPrelude(dir, { phases: "m" })
+      expect(prelude.type).toBe("stop")
+      if (prelude.type === "stop") {
         expect(prelude.code).toBe(2)
         expect(prelude.lines[0]).toContain("remediation re-blocked")
+        expect(prelude.lines[0]).toContain("not clean")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
