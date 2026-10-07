@@ -685,6 +685,12 @@ export async function dispatchLane(
 // parent's learned quota windows, and every nested repository's content —
 // copied whole so builds and tests work inside the lane (their commits live
 // in the copy and cannot land through the main-repo merge, D15's rule).
+// A nested repository copies with verbatimSymlinks: the default resolves each
+// symlink against the source, rewriting every relative target into an
+// absolute path back into the parent's tree — the copy's own git then reads
+// the link as modified (the unit-start clean gate blocks the lane on it), and
+// a write through the rewritten link would reach the parent's tree, breaking
+// lane isolation.
 // Returns the error that failed the dispatch, or undefined.
 async function copyScaffolding(dir: string, worktree: string): Promise<string | undefined> {
   for (const rel of SCAFFOLD_FILES) {
@@ -704,7 +710,7 @@ async function copyScaffolding(dir: string, worktree: string): Promise<string | 
   }
   for (const root of (await repoRoots(dir)).filter((root) => root !== dir)) {
     const rel = relative(dir, root)
-    await cp(root, join(worktree, rel), { recursive: true }).catch(() => log(`⚠ copying the nested repository ${rel.replaceAll("\\", "/")} into the lane worktree failed; the lane runs without it`))
+    await cp(root, join(worktree, rel), { recursive: true, verbatimSymlinks: true }).catch(() => log(`⚠ copying the nested repository ${rel.replaceAll("\\", "/")} into the lane worktree failed; the lane runs without it`))
   }
   return undefined
 }

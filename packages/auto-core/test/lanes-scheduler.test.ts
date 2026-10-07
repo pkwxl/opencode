@@ -17,7 +17,7 @@
 // lane of the test manifest despite its pure S1 half.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { readdirSync } from "node:fs"
-import { mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -436,6 +436,30 @@ describe("dispatchLane (§6.5 ①–⑤)", () => {
     // The parent tree stays clean — the park is gitignored and skipped.
     expect(await changedFiles(dir)).toEqual([])
     expect(await laneExit(lane.worker)).toEqual({ code: 0, output: "" })
+  })
+
+  test("a nested repository's relative symlinks copy verbatim: the copy's own git reads clean (the unit-start clean gate)", async () => {
+    const task = await laneProject()
+    // The nested repository with a committed relative symlink — the shape the
+    // spi-nor-glm incident blocked on: linux/ and aster-spi-nor/ carried 63
+    // relative links, every copied lane worktree read them as modified, and
+    // each lane failed its unit-start clean gate (the run halted, exit 2).
+    await mkdir(join(dir, "vendor", "lib"), { recursive: true })
+    await git(join(dir, "vendor", "lib"), "init", "-q")
+    await mkdir(join(dir, "vendor", "lib", "include"), { recursive: true })
+    await Bun.write(join(dir, "vendor", "lib", "include", "header.h"), "#define V 1\n")
+    await symlink("include/header.h", join(dir, "vendor", "lib", "link.h"))
+    await git(join(dir, "vendor", "lib"), "add", "-A")
+    await git(join(dir, "vendor", "lib"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "vendored")
+    await git(dir, "add", "-A")
+    await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "nested vendor")
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    // The link target copies as written, not resolved against the source.
+    expect(await readlink(join(lane.worktree, "vendor", "lib", "link.h"))).toBe("include/header.h")
+    // The copy's repositories see no change — the clean gate's criterion.
+    expect(await changedFiles(lane.worktree)).toEqual([])
   })
 
   test("a re-dispatch reuses the recorded worktree (the crash-resume property) and books another attempt", async () => {
