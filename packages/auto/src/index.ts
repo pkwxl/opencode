@@ -149,7 +149,7 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -304,6 +304,18 @@ if (command !== "plan" && (flags.has("export") || flags.has("adopt"))) {
   console.error(
     `${flag} is a plan option: ${command ?? "this command"} takes no ${flag}. ` +
       `Render a ready unit's standalone work order with opencode-auto plan <dir> --export <task id>, and close the externally-driven unit out with opencode-auto plan <dir> --adopt <task id>`,
+  )
+  process.exit(1)
+}
+// --round/--phase are plan's alone too (auto-core plans/0084): the assisted
+// preparation stops — pointing the AGENTS.md guidance at the round brief or
+// the next phase's planning input — are plan routes; every other command
+// refuses the flags with a pointer to plan, the same pattern as --scaffold.
+if (command !== "plan" && (flags.has("round") || flags.has("phase"))) {
+  const flag = flags.has("round") ? "--round" : "--phase"
+  console.error(
+    `${flag} is a plan option: ${command ?? "this command"} takes no ${flag}. ` +
+      `Prepare the round brief with opencode-auto plan <dir> --round, or the next phase's planning input with opencode-auto plan <dir> --phase`,
   )
   process.exit(1)
 }
@@ -741,7 +753,7 @@ if (command === "plan") {
   }
   // --scaffold (plans/0081 D12.2) takes no other option: it only prints the
   // planning-input template and exits.
-  if (flagOn("scaffold") && (input || newTask !== undefined || forceClose !== undefined || flags.has("append") || flags.has("export") || flags.has("adopt"))) {
+  if (flagOn("scaffold") && (input || newTask !== undefined || forceClose !== undefined || flags.has("append") || flags.has("export") || flags.has("adopt") || flags.has("round") || flags.has("phase"))) {
     console.error("--scaffold takes no other option: it prints the planning-input template to stdout and exits — complete it into a file and pass it with -p <text> | --file <path>")
     process.exit(1)
   }
@@ -797,6 +809,22 @@ if (command === "plan") {
       console.error("--export / --adopt and --force-close are mutually exclusive: --force-close closes a unit and keeps planning in this process; a work order route does neither")
       process.exit(1)
     }
+  }
+  // --round / --phase (auto-core plans/0084): the assisted preparation stops —
+  // plan points the AGENTS.md guidance at the round brief (--round) or the
+  // next phase's planning input (--phase) and the person works with their own
+  // coding agent on the document. Mutually exclusive with each other and with
+  // every other route option, checked here before the lock; planPrelude
+  // backstops other shells and direct callers.
+  const prepRound = flagOn("round")
+  const prepPhase = flagOn("phase")
+  if (prepRound && prepPhase) {
+    console.error("--round and --phase are mutually exclusive: --round prepares the round brief of the round at hand, --phase the planning input of the next phase to plan — run them one at a time")
+    process.exit(1)
+  }
+  if ((prepRound || prepPhase) && (input || append || newTask !== undefined || forceClose !== undefined || exportRef !== undefined || adoptRef !== undefined)) {
+    console.error("--round / --phase take no other option: no planning input, no --append, no --new-task, no --force-close, no --export / --adopt — pass the flag alone (opencode-auto plan <dir> --round | --phase)")
+    process.exit(1)
   }
   const session = parseSessionFlags()
   // plan writes the round setup, which follows the config (phases): a
@@ -866,6 +894,11 @@ if (command === "plan") {
     // watchdog adopt's test handover runs under.
     export: exportRef,
     adopt: adoptRef,
+    // The assisted-preparation routes (auto-core plans/0084) and the intent
+    // pack's name --phase's scaffold lookup reads.
+    round: prepRound,
+    phase: prepPhase,
+    intent: config.intent,
     mode,
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
@@ -1962,10 +1995,11 @@ if (command === "init" || command === "amend") {
   // init's closing line (plans/0053 D31): plan owns the rounds; init points at it and writes nothing under docs/ itself.
   // AUTO-RESOLVE: the design pins one line — "next: <bin> plan <dir> (establishes round R-01 and stops at the round-start gate)"; print it verbatim on an overwrite init whose round is already established? -> no: the parenthetical is dropped there (it would state a falsehood over an existing round; both states keep a plan-pointing line, which is what the acceptance asks of fresh and overwrite init alike).
   // AUTO-DECISION (dead -p path): the shared block's promptText handling (the per-round brief write of `continue`'s -p and its non-empty check) was deleted rather than kept for a future caller — no command reaching this block accepts -p anymore (init's is a scoped retired flag, the amend command refuses it, `continue` itself is retired ahead of every flag), so the branch was unreachable.
+  // Since plans/0084 the fresh-project pointer names the assisted analysis (the first plan opens it, OPENCODE_AUTO_ANALYSIS=off aside).
   console.log(
     phaseState
       ? `next: opencode-auto plan ${directory}`
-      : `next: opencode-auto plan ${directory} (establishes round ${roundDirName(liveRound)} and stops at the round-start gate)`,
+      : `next: opencode-auto plan ${directory} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(liveRound)} opens on its release)`,
   )
   process.exit(0)
 }
@@ -2148,7 +2182,7 @@ if (command === "models") {
 console.error(`usage:
   opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
-  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--round | --phase] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto land [dir] [--keep] [--abandon] [--merge]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
@@ -2164,6 +2198,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
+         plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); --phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); the existing gates check the result — the round-start gate for the brief, the planning session's own input read for the input. On a fresh target (no rounds yet) the first plan opens the assisted project analysis instead: docs/analysis.md — the thorough analysis, the goals, one Fork: line per open decision, the project-brief proposal and the multi-round roadmap ("- R-NN <phases> — <goal>" per round, its phases value the exact "amend --phases" argument); your "Clarified: yes" line releases it (installs the brief, opens R-01, and the establish stop names the roadmap's phases advice for the round). OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did
          close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
          land [dir] lands each branch-isolated repository's round of work (config isolate, the auto/R-NN branch round establishment switched it onto) back onto its original branch as one commit — default git merge --squash (the deliverable's history gains exactly one commit; --merge takes a true merge commit instead) — deletes the round branch and prints the landed SHA. Landing mid-round is allowed with --keep: the branch is retained and checked back out — the round simply continues on it; a later land recognizes the previous landing and folds only the new commits. --abandon discards the round branch after a person-reviewed reset — the undo path: it checks the original branch back out, deletes auto/R-NN (its tip printed, recoverable via git reflog) and lands nothing. Refusal is never an automated merge resolution: the original branch moved, foreign commits mixed into auto/R-NN's range, a dirty repository or an ambiguous original branch all block (exit 2) naming what to settle; preflight warns about a leftover auto/R-NN of an abandoned round (recoverable state — land --abandon and plain git both address it). The audit-trail trade-off is stated, not hidden: one commit on the deliverable, the full per-unit trail in the driven root's git. Exit codes: 0 landed; 1 usage error; 2 blocked for human
          run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), close holds it around its writes, and land around its branch moves; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close

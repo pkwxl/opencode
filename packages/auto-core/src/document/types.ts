@@ -55,10 +55,19 @@
 //                    parses a `Status:` line out of; process, no eof
 //                    terminator (existence and non-emptiness are the whole
 //                    shape the driver checks).
+// - analysisDoc:     the pre-round project analysis docs/analysis.md
+//                    (plans/0084): stubbed by the driver, filled by the
+//                    person with their coding agent (the AGENTS.md block's
+//                    analysis guidance), released by `Clarified: yes`; its
+//                    `Fork:` lines and `## Roadmap` round lines are the
+//                    driver-parsed grammar (src/analysis.ts). A process role
+//                    (P1's referenced side), no eof terminator — it is a
+//                    preparation document the human commits, like the round
+//                    brief.
 // - freeform:        everything else — the deliverable itself and the
 //                    project's own documents; the standardization boundary
 //                    places no schema on it beyond the P1 prohibition.
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "userReport" | "blockage" | "gaps" | "freeform"
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "userReport" | "blockage" | "gaps" | "analysisDoc" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `Artifacts:` line, M1.4). The driver derives its mechanical checks from this

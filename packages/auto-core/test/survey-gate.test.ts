@@ -122,12 +122,13 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15)
     expect(released.code).toBe(0)
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
     // The approved `## Project brief` section is installed verbatim, in its
-    // own commit (D15.2).
+    // own commit (D15.2; the install names its source document since
+    // plans/0084 generalized it beyond the survey).
     const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
     expect(brief).toContain("a clean-room reimplementation of the core")
     expect(brief).toContain("rule separation")
     expect(brief).not.toContain("Fork:")
-    expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (P01-survey Survey)")
+    expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
     // The round completed and its report stands (the final m phase's
     // self-healed report task): the conclusion names the report path.
     expect(released.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)

@@ -201,6 +201,17 @@ export function reportForUserPath(round: number): string {
 // planning unit (src/plan-input.ts builds the path and owns the file).
 export const PLAN_INPUT_NAME = "plan-input.md"
 
+// The pre-round project analysis document (analysisDoc role, plans/0084):
+// docs/analysis.md, one per project, existing before round R-01 and never
+// owned by a round. Stubbed by the driver at the first plan; the person and
+// their coding agent fill it (guided through the AGENTS.md block's analysis
+// state); its `Clarified: yes` release installs the `## Project brief`
+// proposal and hands the round structure to its `## Roadmap` section
+// (src/analysis.ts owns the grammar). Sits outside the T-NNN/R-NN namespaces,
+// so its role needs its own classifier branch (roles.ts) — without one it
+// would read as freeform, the deliverable side P1 protects.
+export const ANALYSIS_DOC = join("docs", "analysis.md")
+
 // —— Archived copies of the test handover document (test-handover
 // front-loading design D4) ——
 //

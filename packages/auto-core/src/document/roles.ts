@@ -102,6 +102,12 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // and like it carrying its own final-state contract (the closing
   // `Result: FAIL <reason>` line) instead of the eof terminator.
   gaps: { eofScan: false, process: true },
+  // The pre-round project analysis (plans/0084): docs/analysis.md, stubbed by
+  // the driver and filled by the person with their coding agent. Its grammar
+  // lines (`Fork:`, `Clarified: yes`, the roadmap round lines) are checked by
+  // src/analysis.ts, not by a terminator — like the round brief, it is a
+  // preparation document the human reviews and commits.
+  analysisDoc: { eofScan: false, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -160,6 +166,10 @@ const BLOCKAGE_DOC = /^docs\/R-\d+\/blockage-\d+\.md$/
 // task artifact.
 const GAPS_DOC = /^docs\/T-\d+\/gaps\.md$/
 
+// The pre-round project analysis: docs/analysis.md (plans/0084) — exact path
+// only; an analysis.md inside a task or phase directory stays an artifact.
+const ANALYSIS_DOC_RE = /^docs\/analysis\.md$/
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -185,6 +195,7 @@ export function roleOf(rel: string): DocumentRole {
   if (USER_REPORT.test(path)) return "userReport"
   if (BLOCKAGE_DOC.test(path)) return "blockage"
   if (GAPS_DOC.test(path)) return "gaps"
+  if (ANALYSIS_DOC_RE.test(path)) return "analysisDoc"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

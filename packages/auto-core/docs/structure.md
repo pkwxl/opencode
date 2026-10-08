@@ -67,7 +67,8 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Shape check | Non-trivial + `<!-- auto: eof -->` last-line criterion (pure) | `src/doccheck.ts` (0026) |
 | Read-only guard | chmod driver-owned files and AGENTS.md during `run` | `src/protect.ts` |
 | Round brief | `docs/R-NN/round.md` stub and readers | `src/round-brief.ts` (0049) |
-| Project brief | `.opencode/auto/brief.md`: the person's optional seed (`init/amend --brief`), the planning-input reader, the survey's `## Project brief` proposal extraction | `src/brief.ts` (0052 D9, superseded by 0081 D11/D15) |
+| Project brief | `.opencode/auto/brief.md`: the person's optional seed (`init/amend --brief`), the planning-input reader, the survey's `## Project brief` proposal extraction, the approved-proposal install shared by the survey release and the analysis release | `src/brief.ts` (0052 D9, superseded by 0081 D11/D15; 0084) |
+| Project analysis | The pre-round `docs/analysis.md`: the stub, the section checks and the `## Roadmap` round-line grammar of the first-run analysis flow | `src/analysis.ts` (0084) |
 
 ### agent — talking to a coding agent
 
@@ -191,7 +192,7 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | Shell profile | `setShellProfile`: program name, `configDir`, recovery hints, log audit, agent; `registerAgentAdapter` lets a shell add an agent adapter without a core change | `src/shell.ts` (0055) |
 | Project config | Constitutional options fixed by init in `.opencode/auto/config.json` | `src/config.ts` (0004) |
 | Config fix | The rule table behind `fix`: fixable/manual findings over the raw config and the config-layer artifacts, planned then applied; `renderAgentContract` | `src/config-fix.ts` (0052 D10–D11) |
-| AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md | `src/agents-block.ts` (0054) |
+| AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md; since 0084 also the delivery surface for the preparation guidance states (primer + assist rule + the state's text, rendered beside the constitution at preparation stops, byte-identical in execution) | `src/agents-block.ts` (0054, 0084) |
 | reset command | Remove init's configuration artifacts (the project brief is always kept — a seed or the analysis phase's generated brief) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |
 | .gitignore | Driver work-directory entries | `src/gitignore.ts` |

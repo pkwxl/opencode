@@ -8,13 +8,22 @@
 // the standing acceptance — the existing commit / baseline / close-out /
 // rollback machinery runs unchanged against an isolated branch, with the
 // original branch never moving.
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { formatProjectConfig, isolateProblem, loadProjectConfig, saveProjectConfig, CONFIG_DEFAULTS } from "../src/config"
 import { commitTree, isolateRound, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
 import { planPrelude } from "../src/plan"
+import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
+
+// The analysis switch (plans/0084) off for this file: its establishment tests
+// run on fresh dirs, which the analysis flow would intercept; the memo reset
+// makes the env change take effect (autoSwitches parses once per process).
+beforeAll(() => {
+  process.env[SWITCH_ENV.analysis] = "off"
+  setSwitchModelRegistry(undefined)
+})
 
 function withDir(fn: (dir: string) => Promise<void>) {
   return async () => {

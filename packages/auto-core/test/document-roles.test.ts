@@ -36,6 +36,9 @@ describe("roleOf", () => {
     ["docs/R-01/P02-implement/plan-input.md", "planningInput"], // planning input (plans/0053 D10)
     ["docs/R-01/P02-implement/sub/plan-input.md", "artifact"], // not the phase's planning input
     ["docs/T-001/plan-input.md", "artifact"],
+    ["docs/analysis.md", "analysisDoc"], // the pre-round project analysis (plans/0084)
+    ["docs/T-001/analysis.md", "artifact"], // not the project analysis — task-level
+    ["docs/R-01/P01-analysis/analysis.md", "artifact"], // not the project analysis — phase-level
     ["docs/T-001/context.md", "artifact"],
     ["docs/T-001/S01/index.md", "artifact"],
     ["docs/T-001/S01/todo.md", "artifact"],

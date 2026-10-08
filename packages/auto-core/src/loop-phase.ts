@@ -6,11 +6,10 @@
 import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
-import { briefProposal, BRIEF_FILE } from "./brief"
+import { briefProposal, installBriefProposal } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { reportForUserPath } from "./docpaths"
-import { allowWrite, reprotect } from "./protect"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
@@ -363,38 +362,18 @@ function logGateStop(directory: string, phase: PhaseUnit, problems: string[], ac
 // The brief install on survey release (plans/0081 D15.2): the person's
 // `Clarified: yes` approves the forks and the proposed `## Project brief`
 // section in one act — on release the driver installs that section verbatim
-// into .opencode/auto/brief.md, one mechanical copy, a driver-exclusive
-// write through protect (D6c), its own commit. Idempotent: an installed
-// equal brief writes nothing. A survey released without a proposal installs
-// nothing (the seed, an earlier install or the default path's `a`-phase
-// proposal remain the brief's sources).
+// into .opencode/auto/brief.md (brief.ts installBriefProposal, shared with
+// the pre-round analysis release of plans/0084; the run's git seam carries
+// the commit strategy). Idempotent: an installed equal brief writes nothing.
+// A survey released without a proposal installs nothing (the seed, an earlier
+// install or the default path's `a`-phase proposal remain the brief's
+// sources).
 async function installApprovedBrief(ctx: LoopCtx, phase: PhaseUnit): Promise<void> {
   const survey = phaseSurveyDoc(phase)
   const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
   const proposal = briefProposal(text)
   if (proposal === undefined) return
-  const target = join(ctx.directory, BRIEF_FILE)
-  if ((await Bun.file(target).text().catch(() => "")) === `${proposal}\n`) return
-  await allowWrite(target)
-  await Bun.write(target, `${proposal}\n`)
-  await reprotect(target)
-  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
-    stage: "brief-install",
-    subject: `PLAN brief install the approved project brief (${phaseTitle(phase)})`,
-  })
-  if (!settled.ok) {
-    log(
-      `⚠ the approved project brief was written to ${BRIEF_FILE} but its commit failed: ` +
-        `${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Commit manually and re-run`,
-    )
-    return
-  }
-  log(`✓ approved project brief installed: ${survey} \`${briefProposalHeading()}\` section → ${BRIEF_FILE}`)
-}
-
-// The heading the install names in its log line (briefProposal's own).
-function briefProposalHeading(): string {
-  return "## Project brief"
+  for (const line of await installBriefProposal(ctx.directory, survey, proposal, ctx.git.commitTree)) log(line)
 }
 
 // The round-report self-heal (plans/0081 D4, §7 A2): when the round's final

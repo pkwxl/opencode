@@ -99,6 +99,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/agent-choice.test.ts",
   "test/agent-client.test.ts",
   "test/agent-events.test.ts",
+  // The pre-round analysis document's pure grammar (plans/0084); the route
+  // halves live in test/plan.test.ts's lanes.
+  "test/analysis.test.ts",
   "test/append.test.ts",
   "test/chain.test.ts",
   "test/chain-writes.test.ts",

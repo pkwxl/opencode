@@ -101,7 +101,9 @@ const CLASSIFIED: Record<string, Domain> = {
   doccheck: "document",
   // The round brief docs/R-NN/round.md: stub and section readers (M4.2, plans/0049 G2).
   "round-brief": "document",
-  // The project brief .opencode/auto/brief.md: stub and reader (plans/0052 D9).
+  // The project brief .opencode/auto/brief.md: stub and reader (plans/0052 D9),
+  // and since plans/0084 the approved-proposal install shared by the survey
+  // release and the pre-round analysis release.
   brief: "document",
   protect: "document",
   // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
@@ -120,6 +122,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // warning of preflight.
   "agent-env": "driver",
   "agents-block": "driver",
+  // The pre-round project analysis docs/analysis.md (plans/0084): stub and
+  // grammar (the roadmap round lines, the release checks) — the plan
+  // prelude's route helper; driver, not document, because it reads the
+  // phases domain's fork/clarified parsers and registry resolution directly.
+  analysis: "driver",
   artifact: "driver",
   attempt: "driver",
   // Intent bundles (plans/0079 §3): the parse/materialize/register surface of
@@ -590,6 +597,11 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   land: "pipeline",
   plan: "pipeline",
   "plan-input": "pipeline",
+  // The pre-round project analysis docs/analysis.md (plans/0084): stub and
+  // grammar of the analysis route — pipeline beside plan, its only consumer;
+  // it reaches only the provider domains (document, phases), so it binds no
+  // new driver edge.
+  analysis: "pipeline",
   "prompt-plan": "pipeline",
   close: "pipeline",
   "task-add": "pipeline",

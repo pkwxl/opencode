@@ -48,8 +48,10 @@ export function renderRoundBrief(round: number): string {
   ].join("\n")
 }
 
-// HTML comments are the stub's hints, never content.
-function stripComments(text: string): string {
+// HTML comments are the stub's hints, never content. Exported since the
+// project analysis document (src/analysis.ts, plans/0084) stubs the same way
+// and its section checks strip with the same rule.
+export function stripComments(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, "")
 }
 

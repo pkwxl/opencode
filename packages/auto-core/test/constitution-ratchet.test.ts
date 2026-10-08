@@ -23,7 +23,7 @@
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
-import { AGENTS_BLOCK_END, AGENTS_BLOCK_START, CONSTITUTION, renderAgentsBlock, renderConstitutionPreamble } from "../src/agents-block"
+import { AGENTS_BLOCK_END, AGENTS_BLOCK_START, CONSTITUTION, GUIDANCE, renderAgentsBlock, renderConstitutionPreamble } from "../src/agents-block"
 
 const TEMPLATES = resolve(import.meta.dir, "..", "templates")
 
@@ -284,5 +284,36 @@ describe("constitution drift ratchet", () => {
       expect(block.endsWith(`${AGENTS_BLOCK_END}`)).toBe(true)
       expect(preamble.split("\n\n")).toHaveLength(testByDriver ? 5 : 4)
     }
+  })
+
+  test("the preparation guidance renders beside the constitution only when asked (plans/0084)", () => {
+    // The execution floor stays byte-identical without `guidance` (the test
+    // above holds it); with it, the primer, the assist rule and the state's
+    // own text ride inside the markers — the whole delivery surface for the
+    // assisted-preparation states, pinned so the guidance cannot silently
+    // shrink to nothing.
+    expect(GUIDANCE.DRIVER_PRIMER.length).toBeGreaterThan(500)
+    expect(GUIDANCE.ASSIST_RULE).toContain("never invent the person's answer")
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("determines the key work of the rounds that follow")
+    for (const guidance of [
+      { kind: "analysis" },
+      { kind: "round", round: "R-01" },
+      { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "- What this step is for" },
+    ] as const) {
+      const rendered = renderAgentsBlock({ guidance })
+      expect(rendered.startsWith(`${AGENTS_BLOCK_START}\nThis directory is driven by opencode-auto.`)).toBe(true)
+      expect(rendered.endsWith(`${AGENTS_BLOCK_END}`)).toBe(true)
+      expect(rendered).toContain(GUIDANCE.DRIVER_PRIMER)
+      expect(rendered).toContain(GUIDANCE.ASSIST_RULE)
+      expect(rendered.length).toBeGreaterThan(renderAgentsBlock().length)
+    }
+    expect(renderAgentsBlock({ guidance: { kind: "analysis" } })).toContain(GUIDANCE.ANALYSIS_STATE)
+    expect(renderAgentsBlock({ guidance: { kind: "round", round: "R-02" } })).toContain("round R-02 preparation")
+    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s" } })).toContain(
+      "phase R-01.P02 preparation",
+    )
+    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s" } })).toContain(
+      "docs/R-01/P02-design/plan-input.md",
+    )
   })
 })

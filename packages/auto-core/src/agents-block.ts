@@ -82,6 +82,89 @@ export const CONSTITUTION = {
   REFS_SPEC,
 } as const
 
+// —— Preparation guidance (plans/0084) ——
+//
+// The block is also the delivery surface for preparation states: between
+// commands — while a round setup, a phase's planning input or the first-run
+// project analysis awaits the person — the block carries, beside the
+// constitution, the guidance that turns whatever agent reads AGENTS.md (the
+// person's interactive coding agent first, a driver-driven session just the
+// same) into an assistant for that preparation step. One primer (how the tool
+// works, so a plan written against it is well-formed), one assist rule (how
+// to help a person determine what is missing without deciding for them), one
+// state text naming the document of the moment and its spec. The guidance
+// never renders during a run (the execution state is the constitution alone,
+// byte-identical to before — the ratchet's floor), and the state flips only
+// at command boundaries: plan's preparation stops set it, run's preflight
+// renders it away. AGENTS.md is local-only, so the flips leave no git noise.
+
+// The primer: the tool's working model in one paragraph, distilled for
+// preparation work — the unit hierarchy, the lifecycle, the phase vocabulary,
+// the gates' marks, and where a round's phase list comes from. An agent that
+// understands this proposes roadmaps and round briefs the machinery can
+// actually execute (plans/0084 D4: the analysis must deeply understand
+// opencode-auto's mechanisms to formulate a long-term plan that fits).
+const DRIVER_PRIMER = `How opencode-auto works — the model a preparation plan must fit: work runs in rounds, one permanent \`docs/R-NN/\` directory per round. A round holds phases (\`docs/R-NN/P<nn>-<type>/\`, from the configured phases value — builtin types a analysis, d design, m implement, t test, v acceptance, k knowledge, plus custom types in \`.opencode/auto/phases/\`), each phase holds tasks (\`docs/T-NNN/\`, planned by the driver's planning session from the phase's \`plan-input.md\`), and a task may decompose into subtasks (\`docs/T-NNN/S<nn>/\`). Progress is the \`todo.md\` → \`done.md\` rename, made by DRIVER alone; \`phases.md\` and \`tasks.md\` are membership indexes DRIVER ticks. \`plan\` establishes rounds and runs the planning sessions; \`run\` executes — one session per unit, DRIVER commits everything after each session (an AI session never commits). A phase ends with a distilled \`handover.md\` for the next; gates hold for the person's mark where the phase type declares one (\`Clarified: yes\` on a survey, \`Accepted: yes\` on acceptance, a \`Result: PASS|FAIL\` verdict), and a round closes only with its \`round.md\` \`## Close\` section and its \`report-for-user.md\` in place. The phase list of every round comes from the config phases value — set it per round with \`amend --phases\` before the round opens; tasks may carry \`Depends:\`/\`Touches:\` fields to shape their order; everything under \`docs/T-*\`, \`docs/R-*\` and \`.auto/\` is process record the deliverable never references (P1).`
+
+// The assist rule: the interactive-determination discipline every preparation
+// state shares — enumerate the missing information, ask, propose, record the
+// open decisions as Fork: lines, and put each settled result into the document
+// it belongs to. The Fork: line is the non-interactive agent's outlet too, so
+// the same text is safe for both kinds of reader.
+const ASSIST_RULE = `Assisted preparation rule: in this state your job is to help the person determine what the next step needs, never to decide it for them. When information is missing, first enumerate what is unknown and which document each piece belongs to; then work it out with the person — targeted questions, options with consequences, a recommendation. What the person has not decided stays open as a \`Fork:\` line with its options and recommended default; never invent the person's answer. Every settled result goes into the named document, in the section it belongs to — chat text and session memory are not storage. A session with no person present follows the same rule with the \`Fork:\` line as its only outlet.`
+
+// The analysis state: the first-run step, before round R-01 exists. Names the
+// document, its sections, the reading order (the tool's own surfaces first),
+// and the release mark.
+const ANALYSIS_STATE = `Current state — project analysis (before round R-01 exists): the goals of the engagement are not fixed yet, so no round is open; the document to produce is \`docs/analysis.md\` (a stub with section hints is in place). Read the tool's own surfaces first — \`.opencode/auto/config.json\` (the phases value and switches as they stand), the active intent pack's planning-input scaffold (\`plan --scaffold\` prints it), \`.opencode/auto/phases/\` for the project's custom types — and the project's own material (README, docs/, the source tree; an existing codebase gets a real inventory). Then help the person fill the sections: \`## Analysis\` (the thorough, evidence-based analysis of the project), \`## Goals\` (the overall goals in the project's own terms), one \`Fork:\` line per open decision, \`## Project brief\` (the project's constants — goal, inputs, deliverable target, binding constraints; installed verbatim into \`.opencode/auto/brief.md\` on release), and \`## Roadmap\` — the long-term plan for the next few rounds, one line per round \`- R-NN <phases> — <goal>\` (<phases> is the value \`amend --phases\` sets for that round), with each round's key work at task granularity, its acceptance posture, its dependencies and the risks it resolves under the line. The bar: done thoroughly, this analysis determines the key work of the rounds that follow — later rounds should need little new deciding. The person releases it by adding the whole line \`Clarified: yes\` and committing; the next \`plan\` installs the approved brief and opens round R-01.`
+
+// The round-preparation state: the round-start gate's document and where its
+// content comes from. The m-mode caveat keeps the text honest where no stub
+// was written at establishment.
+function roundState(round: string): string {
+  return `Current state — round ${round} preparation (the round-start gate): the round's setup is on disk; the document to fill is \`docs/${round}/round.md\`, whose sections are \`## Goal\` (what this round must achieve, in the project's own terms), \`## Acceptance criteria\` (how a reviewer tells it was met) and \`## Release criteria\` (what must hold before the round closes); \`## Close\` stays empty until the round ends — the round-close gate requires it then. Derive the content from the project brief (\`.opencode/auto/brief.md\`), this round's line and key work in \`docs/analysis.md\`, and the previous round's \`report-for-user.md\` and \`## Close\` listing; settle anything still open with the person before it lands. When the sections hold the person's real intent, review together, commit, and run \`plan\` again — it plans the round's first phase. (In the manual single-phase mode the round brief is not stubbed at establishment; create the file before the round closes — its \`## Close\` is required there too.)`
+}
+
+// The phase-preparation state: the next phase's planning input, its scaffold
+// (the active intent pack's own `## planning-input` section, pre-rendered by
+// the caller), and its anchors.
+function phaseState(phase: string, inputPath: string, scaffold: string): string {
+  return [
+    `Current state — phase ${phase} preparation: the next step is this phase's planning session, and it reads the person's planning input. The document to fill is \`${inputPath}\` — the driver commits it unchanged before the session runs; free-form markdown, completed per the active intent pack's scaffold:`,
+    scaffold,
+    `Anchor it in the round brief (\`docs/R-NN/round.md\`), this round's roadmap line in \`docs/analysis.md\`, and the previous phase's \`handover.md\`; settle open points with the person — a \`Fork:\` line in the input is legitimate when a decision must stay open. When the file holds the person's intent, run \`plan\` — the planning session consumes it as written.`,
+  ].join("\n\n")
+}
+
+// The guidance a preparation stop renders: which state, plus the data only
+// the caller knows (the round name; the target phase, its input path and the
+// pack's scaffold).
+export type Guidance =
+  | { kind: "analysis" }
+  | { kind: "round"; round: string }
+  | { kind: "phase"; phase: string; inputPath: string; scaffold: string }
+
+// The static guidance texts as one exported record — the pinning surface for
+// the tests, in CONSTITUTION's shape (the state texts with data are reached
+// through renderAgentsBlock).
+export const GUIDANCE = {
+  DRIVER_PRIMER,
+  ASSIST_RULE,
+  ANALYSIS_STATE,
+} as const
+
+// The guidance's paragraphs, in block order: the primer, the assist rule,
+// then the state's own text.
+function guidanceParagraphs(guidance: Guidance): string[] {
+  const state =
+    guidance.kind === "analysis"
+      ? ANALYSIS_STATE
+      : guidance.kind === "round"
+        ? roundState(guidance.round)
+        : phaseState(guidance.phase, guidance.inputPath, guidance.scaffold)
+  return [DRIVER_PRIMER, ASSIST_RULE, state]
+}
+
 // The constitution preamble (plans/0076's standalone work orders, T-137): the
 // same five paragraphs as the block, rendered without the AGENTS.md markers —
 // a standalone session may run in an agent that reads no AGENTS.md and never
@@ -93,8 +176,12 @@ export function renderConstitutionPreamble(opts: { testByDriver?: boolean } = {}
   return constitutionParagraphs(opts).join("\n\n")
 }
 
-export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string {
-  return `${AGENTS_BLOCK_START}\n${renderConstitutionPreamble(opts)}\n${AGENTS_BLOCK_END}`
+// The block: the constitution, plus the preparation guidance when a
+// preparation stop asked for it (plans/0084). Without `guidance` the bytes
+// are exactly the constitution block — the run-time floor the ratchet freezes.
+export function renderAgentsBlock(opts: { testByDriver?: boolean; guidance?: Guidance } = {}): string {
+  const paragraphs = [...constitutionParagraphs(opts), ...(opts.guidance ? guidanceParagraphs(opts.guidance) : [])]
+  return `${AGENTS_BLOCK_START}\n${paragraphs.join("\n\n")}\n${AGENTS_BLOCK_END}`
 }
 
 // Idempotently syncs AGENTS.md's opencode-auto block: renders the template
@@ -108,9 +195,14 @@ export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string
 // content, while the other five named blocks are cleaned up by the delete
 // branch — that is the migration path from the old format to the new one.
 // dryRun computes the result without writing, so `fix` can print its plan first.
+// `guidance` (plans/0084) renders a preparation state beside the
+// constitution: a preparation stop (the analysis stub, a round establishment,
+// plan --round / --phase) passes it so the person's agent reads the step's
+// instructions; run's preflight and fix call without it, rendering the block
+// back to the execution floor.
 export async function ensurePointer(
   directory: string,
-  opts: { testByDriver?: boolean; dryRun?: boolean } = {},
+  opts: { testByDriver?: boolean; dryRun?: boolean; guidance?: Guidance } = {},
 ): Promise<{ block: "inserted" | "replaced" | "unchanged"; legacyRemoved: number }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")

@@ -5,16 +5,32 @@
 // D8) needs the loop harness (plans/0053 A7, B6); run's drift stop (D34)
 // lands here too — it precedes the agent pool's start, so runAll drives it without an
 // agent over the same fixtures.
-import { describe, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { completePhase, currentRound, establishRound, phaseLabel, phaseTailDrift, readPhases, type PhaseUnit } from "../src/phases"
 import { planPrelude, plannedLines, roundCompleteNext } from "../src/plan"
 import { saveProgress } from "../src/resume"
+import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
 
 const INPUT = { text: "Port the retry policy." }
+
+// The analysis switch (plans/0084): the direct-establishment rows below run
+// with it off — their fresh dirs would otherwise route into the analysis
+// flow — and the analysis describe flips it back on per test. autoSwitches
+// parses once per process, so every flip resets the memo through the
+// exported reset (setSwitchModelRegistry clears it).
+function analysisOff() {
+  process.env[SWITCH_ENV.analysis] = "off"
+  setSwitchModelRegistry(undefined)
+}
+function analysisOn() {
+  delete process.env[SWITCH_ENV.analysis]
+  setSwitchModelRegistry(undefined)
+}
+beforeAll(analysisOff)
 
 function withDir(fn: (dir: string) => Promise<void>) {
   return async () => {
@@ -88,6 +104,7 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
           "✓ round R-01 established: P01-analysis, P02-implement",
           "next (round-start gate): review the round setup, fill in docs/R-01/round.md (goal, acceptance and release criteria), and commit it; " +
             `then run: opencode-auto plan ${dir} to plan R-01.P01 analysis (or run to plan and execute)`,
+          "ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)",
         ],
       })
       expect(await exists(dir, "docs/R-01/phases.md")).toBe(true)
@@ -107,6 +124,7 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
           "✓ round R-01 established: single phase P01-implement",
           "next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, " +
             `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
+          "ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)",
         ],
       })
       expect(await exists(dir, "docs/R-01/round.md")).toBe(false)
@@ -772,6 +790,231 @@ describe("run's drift stop (D34)", () => {
       expect(refused.lines).toContain(
         '⏸ phase flow blocked: phases "mt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md',
       )
+    }),
+  )
+})
+
+// A filled, releasable analysis document: every section holds content, one
+// recorded fork (answered beside it), a brief proposal and a two-round roadmap
+// whose R-01 value deliberately differs from the config the tests pass ("am")
+// so the establish advice line is exercised.
+const FILLED_ANALYSIS = [
+  "# Project analysis",
+  "",
+  "## Analysis",
+  "",
+  "A CLI tool of three modules; the retry ladder is the risk area.",
+  "",
+  "## Goals",
+  "",
+  "Ship the port with the protocol intact.",
+  "",
+  "Fork: database — sqlite (recommended: zero-ops) or postgres.",
+  "Decision: sqlite, following the recommendation.",
+  "",
+  "## Project brief",
+  "",
+  "A faithful port of the core into the monorepo, tests included.",
+  "",
+  "## Roadmap",
+  "",
+  "- R-01 amt — port the core and its tests",
+  "- R-02 mtv — acceptance pass and knowledge",
+  "",
+  "Clarified: yes",
+  "",
+].join("\n")
+
+describe("planPrelude: the pre-round project analysis (rows 0a–0d, plans/0084)", () => {
+  afterEach(analysisOff)
+
+  test(
+    "row 0a: a fresh target gets the analysis stub and the AGENTS.md analysis guidance",
+    withDir(async (dir) => {
+      analysisOn()
+      const result = await planPrelude(dir, { phases: "am" })
+      expect(result.type).toBe("stop")
+      if (result.type !== "stop") return
+      expect(result.code).toBe(0)
+      expect(result.lines[0]).toBe("✓ the project analysis is open: docs/analysis.md written (a stub with section hints)")
+      expect(result.lines.at(-1)).toBe(
+        `then add the line \`Clarified: yes\`, commit, and re-run: opencode-auto plan ${dir} — the approved brief is installed and round R-01 opens`,
+      )
+      expect(await exists(dir, "docs/analysis.md")).toBe(true)
+      expect(await exists(dir, "docs/R-01")).toBe(false)
+      const agents = await read(dir, "AGENTS.md")
+      expect(agents).toContain("Current state — project analysis")
+      expect(agents).toContain("How opencode-auto works")
+      expect(agents).toContain("Assisted preparation rule")
+    }),
+  )
+
+  test(
+    "rows 0b/0c: an unfilled stub names its problems; a filled one awaits Clarified: yes",
+    withDir(async (dir) => {
+      analysisOn()
+      await planPrelude(dir, { phases: "am" })
+      const stub = await planPrelude(dir, { phases: "am" })
+      expect(stub.type === "stop" && stub.code).toBe(2)
+      expect(stub.type === "stop" && stub.lines.some((line) => line.includes("holds no content yet"))).toBe(true)
+      // Filled but unreleased: the awaiting-person pause names the fork count.
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS.replace("\nClarified: yes", ""))
+      const awaiting = await planPrelude(dir, { phases: "am" })
+      expect(awaiting.type === "stop" && awaiting.code).toBe(2)
+      expect(awaiting.type === "stop" && awaiting.lines[0]).toBe(
+        "⏸ the project analysis awaits you: review docs/analysis.md, resolve its 1 open Fork: line(s) (append your answers beside them), then add the line `Clarified: yes` and commit",
+      )
+      // A document that fails the grammar is told so before the release check.
+      writeFileSync(join(dir, "docs/analysis.md"), "# no sections\n")
+      const problems = await planPrelude(dir, { phases: "am" })
+      expect(problems.type === "stop" && problems.code).toBe(2)
+      expect(problems.type === "stop" && problems.lines[0]).toBe("⏸ docs/analysis.md has problems that hold its release:")
+    }),
+  )
+
+  test(
+    "row 0d: a released analysis installs the brief, establishes R-01, and the differing roadmap recommendation rides as advice",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS)
+      const result = await planPrelude(dir, { phases: "am" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      if (result.type !== "stop") return
+      expect(result.lines[0]).toBe("✓ approved project brief installed: docs/analysis.md `## Project brief` section → .opencode/auto/brief.md")
+      expect(result.lines).toContain("✓ round R-01 established: P01-analysis, P02-implement")
+      expect(result.lines).toContain(
+        `ℹ the roadmap of docs/analysis.md recommends phases "amt" for this round, config has "am"; ` +
+          `to follow it run opencode-auto amend ${dir} --phases amt before committing the setup, then opencode-auto plan ${dir} again`,
+      )
+      expect(await exists(dir, "docs/R-01/phases.md")).toBe(true)
+      expect((await read(dir, ".opencode/auto/brief.md")).trim()).toBe("A faithful port of the core into the monorepo, tests included.")
+      expect(await read(dir, "AGENTS.md")).toContain("round R-01 preparation")
+      // The re-run over the amended value: the install is idempotent (no
+      // line) and the round stands.
+      const again = await planPrelude(dir, { phases: "amt" })
+      expect(again.type === "stop" && again.code).toBe(0)
+      expect(again.type === "stop" && again.lines.some((line) => line.includes("approved project brief installed"))).toBe(false)
+    }),
+  )
+
+  test(
+    "OPENCODE_AUTO_ANALYSIS=off: a fresh target establishes directly, as before (the escape hatch)",
+    withDir(async (dir) => {
+      const result = await planPrelude(dir, { phases: "am" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(result.type === "stop" && result.lines).toContain("✓ round R-01 established: P01-analysis, P02-implement")
+      expect(await exists(dir, "docs/analysis.md")).toBe(false)
+    }),
+  )
+
+  test(
+    "the analysis rows refuse input, --new-task and --export before any write (D5's shape), and --phase has no phase yet",
+    withDir(async (dir) => {
+      analysisOn()
+      const input = await planPrelude(dir, { phases: "am", input: INPUT })
+      expect(input.type === "stop" && input.code).toBe(1)
+      expect(input.type === "stop" && input.lines[0]).toStartWith("no round exists yet: the project analysis comes first")
+      const newTask = await planPrelude(dir, { phases: "am", newTask: "thing" })
+      expect(newTask.type === "stop" && newTask.code).toBe(1)
+      const order = await planPrelude(dir, { phases: "am", export: "T-001" })
+      expect(order.type === "stop" && order.code).toBe(1)
+      const phase = await planPrelude(dir, { phases: "am", phase: true })
+      expect(phase.type === "stop" && phase.code).toBe(1)
+      expect(phase.type === "stop" && phase.lines[0]).toStartWith("no phase exists yet: the project analysis comes first")
+      expect(await exists(dir, "docs/analysis.md")).toBe(false)
+      expect(await exists(dir, "docs/R-01")).toBe(false)
+    }),
+  )
+
+  test(
+    "--round under the analysis routes into it: the analysis is the round-zero preparation",
+    withDir(async (dir) => {
+      analysisOn()
+      const result = await planPrelude(dir, { phases: "am", round: true })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(result.type === "stop" && result.lines[0]).toBe("✓ the project analysis is open: docs/analysis.md written (a stub with section hints)")
+    }),
+  )
+})
+
+describe("planPrelude: --round / --phase (rows 14–15, plans/0084)", () => {
+  test(
+    "the backstops: mutually exclusive, and no other route option rides them",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const both = await planPrelude(dir, { phases: "am", round: true, phase: true })
+      expect(both.type === "stop" && both.code).toBe(1)
+      expect(both.type === "stop" && both.lines[0]).toStartWith("--round and --phase are mutually exclusive")
+      const withInput = await planPrelude(dir, { phases: "am", round: true, input: INPUT })
+      expect(withInput.type === "stop" && withInput.code).toBe(1)
+      expect(withInput.type === "stop" && withInput.lines[0]).toStartWith("--round / --phase take no other option")
+    }),
+  )
+
+  test(
+    "--round on an established round points the guidance at the stub brief; a filled one says so",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const stub = await planPrelude(dir, { phases: "am", round: true })
+      expect(stub.type === "stop" && stub.code).toBe(0)
+      expect(stub.type === "stop" && stub.lines[0]).toStartWith("ℹ the round brief docs/R-01/round.md is the stub")
+      expect(await read(dir, "AGENTS.md")).toContain("round R-01 preparation")
+      writeFileSync(join(dir, "docs/R-01/round.md"), "# Round R-01\n\n## Goal\n\nPort it.\n")
+      const filled = await planPrelude(dir, { phases: "am", round: true })
+      expect(filled.type === "stop" && filled.code).toBe(0)
+      expect(filled.type === "stop" && filled.lines[0]).toStartWith("ℹ the round brief docs/R-01/round.md is filled")
+    }),
+  )
+
+  test(
+    "--round in m mode writes the stub establishment never wrote (round-close needs it)",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      expect(await exists(dir, "docs/R-01/round.md")).toBe(false)
+      const result = await planPrelude(dir, { phases: "m", round: true })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(await exists(dir, "docs/R-01/round.md")).toBe(true)
+    }),
+  )
+
+  test(
+    "--phase names the next phase to plan and its input path, the pack's scaffold riding in the guidance",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const result = await planPrelude(dir, { phases: "am", phase: true, intent: "default" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(result.type === "stop" && result.lines[0]).toBe("ℹ prepare the planning input of R-01.P01 analysis: docs/R-01/P01-analysis/plan-input.md")
+      const agents = await read(dir, "AGENTS.md")
+      expect(agents).toContain("phase R-01.P01 preparation")
+      expect(agents).toContain("docs/R-01/P01-analysis/plan-input.md")
+      expect(agents).toContain("What this step is for")
+    }),
+  )
+
+  test(
+    "--phase in m mode targets the single phase; on an execute route it points at --append",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const result = await planPrelude(dir, { phases: "m", phase: true, intent: "default" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(result.type === "stop" && result.lines[0]).toBe("ℹ prepare the planning input of R-01.P01 implement: docs/R-01/P01-implement/plan-input.md")
+      await listTasks(dir, (await phasesOf(dir))[0]!, [["T-001", false]])
+      const past = await planPrelude(dir, { phases: "m", phase: true })
+      expect(past.type === "stop" && past.code).toBe(1)
+      expect(past.type === "stop" && past.lines[0]).toStartWith("the single phase already lists tasks")
+    }),
+  )
+
+  test(
+    "--phase on a phased execute route points at --append",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      await listTasks(dir, (await phasesOf(dir))[0]!, [["T-001", false]])
+      const past = await planPrelude(dir, { phases: "am", phase: true })
+      expect(past.type === "stop" && past.code).toBe(1)
+      expect(past.type === "stop" && past.lines[0]).toStartWith("R-01.P01 analysis is past planning")
     }),
   )
 })

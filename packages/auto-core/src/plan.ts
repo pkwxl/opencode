@@ -10,11 +10,18 @@
 //
 // Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
-import { projectBriefText } from "./brief"
-import { roundBriefPath, roundDirName } from "./docpaths"
+import { mkdir } from "node:fs/promises"
+import { ensurePointer } from "./agents-block"
+import { analysisProblems, renderAnalysisStub, roadmapPhases } from "./analysis"
+import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
+import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
+import { loadIntents } from "./intent/load"
+import { planningInputScaffold } from "./intent/load"
 import {
+  clarifiedMark,
+  CLARIFIED_MARK,
   currentPhase,
   currentRound,
   establishRound,
@@ -24,18 +31,23 @@ import {
   phaseLabel,
   phaseTailDrift,
   readPhases,
+  roundRoot,
   routePhase,
+  surveyForks,
   syncPhaseIndex,
   type PhaseRoute,
   type PhaseState,
   type PhaseTailDrift,
   type PhaseUnit,
 } from "./phases"
-import { readPlanInput, type PlanInput } from "./plan-input"
-import { isolateRound } from "./git"
+import { loadPhaseTypes } from "./phases/custom"
+import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
+import { commitTree, isolateRound } from "./git"
+import { renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
+import { autoSwitches } from "./switches"
 import { executeBlockageChoices, executionLines } from "./blockage-execute"
 import { addTask } from "./task-add"
 import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan, type Task } from "./tasks"
@@ -45,12 +57,23 @@ type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
 
 // The routes the prelude decides, first match wins (plans/0053 D4):
+//   0. no rounds exist and the analysis switch is on (plans/0084) → the
+//      pre-round project analysis: 0a the stub + the AGENTS.md analysis
+//      guidance; 0b grammar problems hold the release; 0c an unreleased
+//      analysis awaits the person's `Clarified: yes`; 0d a released one
+//      installs the approved brief proposal and establishes R-01 (row 1's
+//      establish, with the roadmap's phases advice riding in its stop) —
+//      OPENCODE_AUTO_ANALYSIS=off falls through to row 1 directly;
 //   1. the current round is not established → (G8 of the previous round) + establish, G1 lines;
 //   2. the round is complete → G8; pass = establish the next round, fail = exit 2;
 //   3. the round's phase index drifted from the phases value → re-sync the
 //      unstarted tail (uncommitted), stop for review;
 //   4. the route is blocked → exit 1;
 //   5. an open step record → the loop finishes it first;
+//  14. --round → the assisted round-brief preparation stop: the AGENTS.md
+//      round guidance (and the m-mode stub establishment never wrote);
+//  15. --phase → the assisted planning-input preparation stop for the next
+//      phase to plan: the AGENTS.md phase guidance with the pack's scaffold;
 //   6. phased, plan or handover without --append → the loop (input: a phase must be left to plan it);
 //   7. phased, execute without --append → notice, exit 0 (input: exit 1);
 //   8. m mode, empty task index → input: the loop; else a notice;
@@ -74,7 +97,8 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 // snapshot and resume machinery must not be bypassed); rows 12–13 refuse the
 // planning input and an open step alike (the step machinery owns the phase's
 // index; a work order renders or closes one unit, a session never plans
-// from the input under these flags).
+// from the input under these flags); rows 14–15 share that open-step refusal
+// and take no other route option (plans/0084).
 export async function planPrelude(dir: string, opts: {
   phases: string
   build?: string
@@ -90,6 +114,17 @@ export async function planPrelude(dir: string, opts: {
   // and the adopt are mutually exclusive (the shell checks; one route runs).
   export?: string
   adopt?: string
+  // The assisted-preparation routes (plans/0084): --round points the AGENTS.md
+  // guidance at the round brief of the round at hand, --phase at the planning
+  // input of the next phase to plan. Mutually exclusive with each other and
+  // with every other route option; the shell checks before the lock, the
+  // backstops below catch other shells and direct callers.
+  round?: boolean
+  phase?: boolean
+  // The active intent pack's name (the config's `intent` key), for --phase's
+  // scaffold lookup — the prelude is config-blind by design, the shell passes
+  // the one key the route needs.
+  intent?: string
   mode?: ModeSpec
   testByDriver?: boolean
   handoverTest?: boolean
@@ -138,7 +173,104 @@ export async function planPrelude(dir: string, opts: {
       `--export / --adopt take only a task id: no planning input (a session never plans under them), no --append, no --new-task — pass the flag alone (${bin} plan ${dir} --export <task id> | --adopt <task id>)`,
     ])
   }
+  // The assisted-preparation backstop (plans/0084): --round and --phase are
+  // mutually exclusive and take no other route option. The shell checks this
+  // before the lock; this catches other shells and direct callers, before any
+  // route logic — the work-order backstop's pattern.
+  if (opts.round && opts.phase) {
+    return stop(1, [
+      `--round and --phase are mutually exclusive: --round prepares the round brief of the round at hand, --phase the planning input of the next phase to plan — run them one at a time (${bin} plan ${dir} --round | --phase)`,
+    ])
+  }
+  if ((opts.round || opts.phase) && (opts.input || opts.append || opts.newTask !== undefined || opts.export !== undefined || opts.adopt !== undefined)) {
+    return stop(1, [
+      `--round / --phase take no other option: no planning input, no --append, no --new-task, no --export / --adopt — pass the flag alone (${bin} plan ${dir} --round | --phase)`,
+    ])
+  }
   const round = await currentRound(dir)
+  // Rows 0a–0d (plans/0084): the pre-round project analysis — the assisted
+  // first-run step that fixes the engagement's goals before any round exists.
+  // Practice ruled the first analysis determines the key work of the rounds
+  // that follow, so it runs before R-01 opens and its roadmap decides the
+  // phases value each round should be established under (the config stays
+  // constitutional — the driver only advises the exact amend command). The
+  // switch's parse error is a usage stop here, the prelude being the first
+  // switch reader on the plan path.
+  let analysisOn: boolean
+  try {
+    analysisOn = autoSwitches().analysis
+  } catch (error) {
+    return stop(1, [error instanceof Error ? error.message : String(error)])
+  }
+  if (analysisOn && round === 1 && !(await roundRoot(dir, 1))) {
+    // The row-1 refusals' shape (D5: input is refused before any write) on
+    // the analysis rows: the flags name no round yet, so each refusal points
+    // at the analysis instead of an establishment.
+    if (opts.input) {
+      return stop(1, [
+        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without input, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\` and commit; round R-01 opens on the re-run and takes the input`,
+      ])
+    }
+    if (opts.newTask !== undefined) {
+      return stop(1, [
+        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without --new-task; round R-01 opens on its release, and the task lands in it`,
+      ])
+    }
+    if (opts.export !== undefined || opts.adopt !== undefined) {
+      return stop(1, [
+        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without --export / --adopt; round R-01 opens on its release, and the work order lands in it`,
+      ])
+    }
+    if (opts.phase) {
+      return stop(1, [
+        `no phase exists yet: the project analysis comes first — run ${bin} plan ${dir}, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\`, and round R-01 opens`,
+      ])
+    }
+    const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+    if (raw === undefined) {
+      await mkdir(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      return stop(0, [
+        `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
+        `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
+        `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} plan ${dir} — the approved brief is installed and round R-01 opens`,
+      ])
+    }
+    let types: ReturnType<typeof loadPhaseTypes>
+    try {
+      types = loadPhaseTypes(dir)
+    } catch (error) {
+      return stop(1, [`⏸ ${error instanceof Error ? error.message : String(error)}`])
+    }
+    const problems = analysisProblems(raw, types)
+    if (problems.length) {
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      return stop(2, [
+        `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
+        ...problems.map((problem) => `  ${problem}`),
+        `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} plan ${dir}`,
+      ])
+    }
+    if (!clarifiedMark(raw)) {
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      const forks = surveyForks(raw)
+      return stop(2, [
+        `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
+          (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
+          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
+        `then re-run: ${bin} plan ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
+      ])
+    }
+    // Row 0d, the release: install the approved brief proposal (the survey
+    // release's mechanism, D15.2 generalized), then establish R-01 like row
+    // 1 — the roadmap's phases advice rides in establish's stop, advisory:
+    // the person amends before committing the setup, or diverges on purpose.
+    const lines: string[] = []
+    const proposal = briefProposal(raw)
+    if (proposal !== undefined) lines.push(...(await installBriefProposal(dir, ANALYSIS_DOC, proposal, commitTree)))
+    return establish(dir, 1, opts, lines)
+  }
   // Row 1: no docs/R-NN/, or its phase index is missing (an interrupted
   // round start, plans/0049 G6).
   if (!(await Bun.file(join(dir, phaseIndexPath(round))).exists())) {
@@ -164,7 +296,7 @@ export async function planPrelude(dir: string, opts: {
       lines.push(...previous.lines)
     }
     lines.push(...(await planningNotices(dir, undefined, opts.input)))
-    return establish(dir, round, opts.phases, lines, opts.isolate)
+    return establish(dir, round, opts, lines)
   }
   const route = await routePhase(dir, { loadPlan, bin })
   // Row 2: m mode never gets here (its single phase stays open).
@@ -190,7 +322,7 @@ export async function planPrelude(dir: string, opts: {
     }
     const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
-    return establish(dir, round + 1, opts.phases, roundCloseLines(close), opts.isolate)
+    return establish(dir, round + 1, opts, roundCloseLines(close))
   }
   // The remediation executor row (plans/0082 §5 D7): after round
   // establishment and immediately before the drift re-sync row — D5's
@@ -257,7 +389,83 @@ export async function planPrelude(dir: string, opts: {
     const open = await openStep(dir)
     if (open) return stop(1, [openStepOrderLine(dir, open)])
   }
+  // The assisted-preparation flags' open-step refusal (plans/0084), the same
+  // reasoning as --new-task's: returning the loop here would silently ignore
+  // the flag, so the person hears the step first.
+  if (opts.round || opts.phase) {
+    const open = await openStep(dir)
+    if (open) return stop(1, [openStepAssistLine(dir, open)])
+  }
   if (await openStep(dir)) return { type: "loop" }
+  // Row 14 (--round, plans/0084): the assisted round-brief preparation stop.
+  // The route reaching here means the round is established and not complete:
+  // point the AGENTS.md guidance at its brief — writing the m-mode stub
+  // establishment never wrote (round-close requires the file eventually) —
+  // and stop. No session runs; the person and their agent fill the document,
+  // the round-start gate (or their own review) checks it, and planning
+  // proceeds on the next plan.
+  if (opts.round) {
+    const brief = join(dir, roundBriefPath(round))
+    if (!(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))
+    const filled = (await roundBriefText(dir, round)) !== undefined
+    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: roundDirName(round) } })
+    return stop(0, [
+      filled
+        ? `ℹ the round brief ${roundBriefPath(round)} is filled; revise it with your agent if the round's goals moved (this state's guidance is in AGENTS.md), then continue: ${bin} plan ${dir}`
+        : `ℹ the round brief ${roundBriefPath(round)} is the stub: work with your agent on its goal, acceptance and release criteria (this state's guidance is in AGENTS.md), review and commit, then continue: ${bin} plan ${dir}`,
+    ])
+  }
+  // Row 15 (--phase, plans/0084): the assisted planning-input preparation
+  // stop. The target is the phase an input would be planned into (row 6's
+  // planTarget selection, the listed refusal mirroring row 6's); the stop
+  // points the AGENTS.md guidance at that phase's plan-input.md with the
+  // pack's scaffold. The person and their agent write the file directly —
+  // the next plan's planning session consumes it as written (readPlanInput's
+  // re-entry), no new persistence channel.
+  if (opts.phase) {
+    if (route.type !== "plan" && route.type !== "handover") {
+      // m mode's execute route and a phased execute route reach the same
+      // refusal with their own pointer.
+      return stop(1, [
+        manual
+          ? `the single phase already lists tasks; --phase prepares a planning input for a phase with none — ` +
+            `add tasks with ${bin} plan ${dir} --append -p <text> | --file <path>, or list them by hand in ${taskIndexPath(route.phase)}`
+          : `${phaseRefText(route.phase)} is past planning; --phase prepares the planning input of a phase still to plan — ` +
+            `add tasks to a planned phase with ${bin} plan ${dir} --append -p <text> | --file <path>`,
+      ])
+    }
+    let target: { phase: PhaseUnit; listed: boolean } | undefined
+    try {
+      target = manual ? { phase: route.phase, listed: false } : await planTarget(dir, route)
+    } catch (error) {
+      return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+    }
+    if (!target) return stop(1, [`no phase is left to plan in round ${roundDirName(round)}; --phase would prepare nothing`])
+    if (target.listed) {
+      return stop(1, [
+        `${phaseRefText(target.phase)}, the next phase to plan, already lists tasks in ${taskIndexPath(target.phase)}; --phase prepares a planning input for a phase with none`,
+      ])
+    }
+    const inputPath = planInputPath(target.phase)
+    const scaffold = planningInputScaffold(loadIntents(dir), opts.intent ?? "default")
+    await ensurePointer(dir, {
+      testByDriver: opts.testByDriver,
+      guidance: {
+        kind: "phase",
+        phase: phaseKey(target.phase).id,
+        inputPath,
+        scaffold: scaffold ?? "(the active intent pack carries no planning-input scaffold — free-form markdown)",
+      },
+    })
+    const existing = await readPlanInput(dir, target.phase)
+    return stop(0, [
+      `ℹ prepare the planning input of ${phaseRefText(target.phase)}: ${inputPath}`,
+      existing?.trim()
+        ? `an input exists there already — revise it with your agent (this state's guidance is in AGENTS.md)`
+        : `work with your agent on it (this state's guidance and the scaffold are in AGENTS.md); a template also prints with ${bin} plan ${dir} --scaffold`,
+      `when the file holds your intent, run: ${bin} plan ${dir} — the planning session consumes it as written`,
+    ])
+  }
   // Row 11 (--new-task): add one task the person names, with no session, to
   // the phase the route names now — D23's targeting (never another phase,
   // including one a handover or gate holds) and D26's guard, then the
@@ -491,6 +699,18 @@ function openStepNewTaskLine(dir: string, open: { step: string; unit: string }):
   )
 }
 
+// The assisted-preparation flags' open-step refusal (plans/0084), rows 14–15:
+// returning the loop under the flags would silently ignore them, so the step
+// is named instead.
+function openStepAssistLine(dir: string, open: { step: string; unit: string }): string {
+  const { bin } = shellProfile()
+  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+  return (
+    `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
+    `finish it first (run: ${bin} plan ${dir}), then run the preparation flag again`
+  )
+}
+
 // Rows 12–13's open-step refusal (plans/0076): the same ownership as
 // --new-task's — the step owns the phase's index until it closes, and a work
 // order rendered or adopted under it would read or close a moving index.
@@ -542,13 +762,20 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 // failure or block leaves no round state and the re-run retries everything,
 // and a crash between the two leaves only content-neutral branches (a branch
 // at HEAD changes no file), which the idempotent skips finish.
-async function establish(dir: string, round: number, phases: string, before: string[], isolate?: string[]): Promise<PlanPrelude> {
+// Since plans/0084 the stop also renders the AGENTS.md round-preparation
+// guidance (the assisted half of this gate) and, when a released analysis's
+// roadmap recommends a different phases value for this round, the exact
+// amend command — advisory, never blocking: the person follows it before
+// committing the setup (the re-run re-establishes under the new value) or
+// diverges on purpose.
+async function establish(dir: string, round: number, opts: { phases: string; isolate?: string[]; testByDriver?: boolean }, before: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
   const name = roundDirName(round)
+  const phases = opts.phases
   const branch = `auto/${name}`
   let isolated: string[] = []
-  if (isolate?.length) {
-    const result = await isolateRound(dir, isolate, branch)
+  if (opts.isolate?.length) {
+    const result = await isolateRound(dir, opts.isolate, branch)
     if (result.type === "dirty") {
       return stop(2, [
         ...before,
@@ -573,22 +800,44 @@ async function establish(dir: string, round: number, phases: string, before: str
   // The isolation line rides both G1 shapes: the round's commits land on the
   // round branch, the original branch never moves.
   const isolatedLine = isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []
+  const advice = await roadmapAdvice(dir, round, phases)
+  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name } })
+  const guideLine = `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`
   if (phases === "m") {
     return stop(0, [
       ...before,
       `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
       ...isolatedLine,
+      ...(advice ? [advice] : []),
       `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(units[0]!)} by hand, ` +
         `or run: ${bin} plan ${dir} -p <text> | --file <path>`,
+      guideLine,
     ])
   }
   return stop(0, [
     ...before,
     `✓ round ${name} established: ${units.map(phaseLabel).join(", ")}`,
     ...isolatedLine,
+    ...(advice ? [advice] : []),
     `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
       `then run: ${bin} plan ${dir} to plan ${phaseRefText(units[0]!)} (or run to plan and execute)`,
+    guideLine,
   ])
+}
+
+// The roadmap's phases advice for one round (plans/0084): the released
+// analysis's `## Roadmap` recommends a phases value for this round; when it
+// differs from the config's, the establish stop names the exact amend
+// command. Advisory by construction — no released analysis, no line; a
+// matching recommendation, no line; the person diverging on purpose simply
+// commits the setup as established.
+async function roadmapAdvice(dir: string, round: number, phases: string): Promise<string | undefined> {
+  const { bin } = shellProfile()
+  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+  if (raw === undefined) return undefined
+  const recommended = roadmapPhases(raw, round)
+  if (recommended === undefined || recommended === phases) return undefined
+  return `ℹ the roadmap of ${ANALYSIS_DOC} recommends phases "${recommended}" for this round, config has "${phases}"; to follow it run ${bin} amend ${dir} --phases ${recommended} before committing the setup, then ${bin} plan ${dir} again`
 }
 
 // The phase a planning input would be planned into on a phased plan or
