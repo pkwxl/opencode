@@ -86,6 +86,24 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     }
   })
 
+  test("approved project analysis (plans/0085 A1): its block follows the round brief, framed as the person's settled decisions; absent or blank, nothing renders", () => {
+    const text = phasePlan({
+      phase: L("m"),
+      round: "Goal: ship the parser.",
+      analysis: "Ship the port with the protocol intact.\n\n- R-01 adm — port the core and its tests\n",
+      input: "Port the lexer first.\n",
+      inputPath: "docs/R-01/P02-implement/plan-input.md",
+    })
+    expect(text).toContain("## Input: approved project analysis (docs/analysis.md)")
+    expect(text).toContain("settles is settled: carry its decisions forward, never re-raise them as open questions")
+    expect(text).toContain("Ship the port with the protocol intact.")
+    expect(text.indexOf("## Input: round brief")).toBeLessThan(text.indexOf("## Input: approved project analysis"))
+    expect(text.indexOf("## Input: approved project analysis")).toBeLessThan(text.indexOf("## Input: planning input"))
+    for (const analysis of [undefined, " \n"]) {
+      expect(phasePlan({ phase: L("m"), analysis })).not.toContain("## Input: approved project analysis")
+    }
+  })
+
   test("handovers two states: with prior handovers the list is injected (naming the permanent handover.md path inside the phase directory); without them the whole block disappears", () => {
     const text = phasePlan({
       phase: L("m"),

@@ -217,10 +217,10 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
 // cleanroom pack (the repair duties the bounded repair loop consumes as
 // content), and the cleanroom mode carrying the clean-room boundary. Beside
 // it the intent family's other two postures (0080 §6), both on the builtin
-// admtv skeleton — no custom types, the pack re-voices all five phase duties:
-// faithful (behavior and structure: the reference is the primary input,
-// parity is the bar) and faithful-lean (external behavior exactly, internals
-// free, legacy debt deliberately shed).
+// admtv skeleton plus one custom type each — the survey (0081 D14) leading
+// the phase list: faithful (behavior and structure: the reference is the
+// primary input, parity is the bar) and faithful-lean (external behavior
+// exactly, internals free, legacy debt deliberately shed).
 let builtinTable: Record<string, IntentBundleFiles> | undefined
 function builtinBundles(): Record<string, IntentBundleFiles> {
   if (!builtinTable) {

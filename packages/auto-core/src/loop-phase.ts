@@ -346,7 +346,7 @@ function logGateStop(directory: string, phase: PhaseUnit, problems: string[], ac
     // acceptance gate's control point — done.md waits, and the person's
     // release simultaneously approves the proposed project brief (D15.2).
     const survey = phaseSurveyDoc(phase)
-    log(`  to release: review ${survey}, resolve the recorded forks (append your answers beside them, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
+    log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
     log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
   }
   if (acceptance) {

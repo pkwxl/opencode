@@ -59,7 +59,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
     // whose tasks are all done but whose survey still records open forks —
     // the round is waiting on the person, and status says so.
     const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
-    lines.push(`  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, then add `Clarified: yes`)" : ""}`)
+    lines.push(`  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`)" : ""}`)
     let tasks: Task[]
     try {
       tasks = (await loadPlan(dir, phase)).tasks

@@ -179,6 +179,26 @@ describe("bundle sources", () => {
     }
   })
 
+  test("the shipped survey duties carry the 0085 decision discipline: the analysis first, Settled lines, the Recommend-default fork bar", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const files = await resolveIntentBundle(name)
+      // Wrap-insensitive: the same paragraph wraps differently per bundle.
+      const duties = files!["phases/survey.md"]!.replace(/\n+/g, " ")
+      // The approved analysis is the first source; its decisions land as
+      // Settled lines, never re-raised as forks.
+      expect(duties).toContain("docs/analysis.md")
+      expect(duties).toContain("`Settled:`")
+      expect(duties).toContain("already made")
+      // The fork bar: project-level consequences and one Recommend: default,
+      // decidable from the line alone; no person-needed item outside the
+      // fork list (the depth/grading question category is retired).
+      expect(duties).toContain("`Recommend:`")
+      expect(duties).toContain("project's terms, not the technique's")
+      expect(duties).toContain("no separate depth/grading question list")
+      expect(duties).toContain("The survey decides what the person's approved decisions already decide")
+    }
+  })
+
   test("the built-in cleanroom bundle ships: it lists, resolves, parses, and materializes into a working project", async () => {
     expect(registeredIntentBundles()).toContain("cleanroom")
     const files = await resolveIntentBundle("cleanroom")

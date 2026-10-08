@@ -85,6 +85,11 @@ export function renderPhasePlan(facts: PromptFacts, input: {
   brief?: string
   // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
   round?: string
+  // The approved project analysis docs/analysis.md, comments stripped
+  // (plans/0085 A1): passed only for human-gated (survey) phases — the
+  // person's settled decisions, rendered so the survey records settled
+  // lines instead of re-raising settled questions as forks.
+  analysis?: string
   // The phase's planning input (plans/0053 D11): the text of its plan-input.md
   // and that file's path; absent = no input block.
   input?: string
@@ -120,6 +125,7 @@ export function renderPhasePlan(facts: PromptFacts, input: {
     precedence: intentText(facts, "guarantees", "precedence", {}),
     brief: input.brief?.trim() || undefined,
     round: input.round?.trim() || undefined,
+    analysis: input.analysis?.trim() || undefined,
     // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
     roundRules: input.round?.trim() ? intentText(facts, "acceptance", "round-brief", {}) : undefined,
     input: input.input?.trim() || undefined,

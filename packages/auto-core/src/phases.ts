@@ -327,10 +327,18 @@ export const phaseSurveyDoc = (unit: PhaseUnit): string => join(unit.dir, SURVEY
 export const CLARIFIED_MARK = "Clarified: yes"
 
 // The `Fork:` lines a survey records (D14.2): each a scope fork stated with
-// its options, consequences and a recommended default. A list marker before
-// the word is accepted ("- Fork: …").
+// its options, project-level consequences and one `Recommend:` default. A
+// list marker before the word is accepted ("- Fork: …").
 export function surveyForks(text: string): number {
   return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line)).length
+}
+
+// Fork lines missing their `Recommend:` default (plans/0085 A3): the person
+// decides from consequences plus one default, so a bare fork line is a gate
+// problem, not merely poor style — the check is the marker's presence, the
+// same tolerance as every other protocol string.
+export function forksWithoutRecommend(text: string): number {
+  return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line) && !line.includes("Recommend:")).length
 }
 
 // Whether the person released the survey (D14.3): at least one whole-line
@@ -357,7 +365,9 @@ export function phaseGates(unit: PhaseUnit, acceptanceGate: readonly string[] = 
 //   records at least one `Fork:` line the phase holds open — the acceptance
 //   gate's control point, an awaiting-person pause, not a failure — until
 //   the person's `Clarified: yes` line; a survey with zero `Fork:` lines
-//   completes the phase like an ungated one.
+//   completes the phase like an ungated one. While held, fork lines missing
+//   their `Recommend:` default are a second clarification problem (plans/
+//   0085 A3): the person cannot decide from consequences alone.
 export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: readonly PhaseGate[]): Promise<string[]> {
   const problems: string[] = []
   if (gates.includes("verdict")) {
@@ -380,8 +390,14 @@ export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: rea
       const forks = surveyForks(text)
       if (forks > 0 && !clarifiedMark(text)) {
         problems.push(
-          `clarification: ${doc} records ${forks} open Fork: line(s) — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase)`,
+          `clarification: ${doc} records ${forks} open Fork: line(s) — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase; it accepts every line's \`Recommend:\` default, overrides go beside the lines)`,
         )
+        const bare = forksWithoutRecommend(text)
+        if (bare > 0) {
+          problems.push(
+            `clarification: ${doc} has ${bare} Fork: line(s) without a \`Recommend:\` default — the person decides from project consequences plus one default`,
+          )
+        }
       }
     }
   }

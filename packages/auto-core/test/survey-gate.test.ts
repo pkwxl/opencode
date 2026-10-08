@@ -26,7 +26,7 @@ const SURVEY_DOC = [
   "",
   "The reference's map: two subsystem areas, ~2k lines.",
   "",
-  "Fork: scope — the journal too, or the core only? Recommended default: the core only.",
+  "Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
   "",
   "## Project brief",
   "",
@@ -60,8 +60,13 @@ const wrapupReport = (id: string) =>
 // the report self-heal's append lands a report task and the report; the
 // planning and handover sessions ride the artifact turns. surveyDir is a box
 // the fixture fills once the round is established (the whole-task prompt
-// carries no phase directory of its own).
-const turn = (dir: string, surveyDir: { path?: string }): TurnScript => (ctx) => {
+// carries no phase directory of its own). analysisBlocks records which
+// planning prompts carried the approved-analysis block (plans/0085 A1: the
+// survey's planner alone).
+const turn = (dir: string, surveyDir: { path?: string }, analysisBlocks: string[] = []): TurnScript => (ctx) => {
+  if (ctx.text.includes("## Input: approved project analysis")) {
+    analysisBlocks.push(ctx.text.includes('"Survey" phase') ? "survey" : ctx.text.includes('"Implementation" phase') ? "implement" : "other")
+  }
   // The wrap-up check comes first: its prompt embeds the task block too.
   if (ctx.text.includes("only performs the wrap-up")) {
     const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
@@ -89,13 +94,20 @@ const turn = (dir: string, surveyDir: { path?: string }): TurnScript => (ctx) =>
   return artifactTurns(dir)(ctx)
 }
 
-async function fixture(): Promise<LoopFixture> {
+async function fixture(analysisBlocks: string[] = []): Promise<LoopFixture> {
   const surveyDir: { path?: string } = {}
-  const f = await loopFixture("survey,implement", (dir): FakeAgentOptions => ({ turn: turn(dir, surveyDir) }))
+  const f = await loopFixture("survey,implement", (dir): FakeAgentOptions => ({ turn: turn(dir, surveyDir, analysisBlocks) }))
   made.push(f)
   await mkdirSync(join(f.dir, ".opencode/auto/phases"), { recursive: true })
   await Bun.write(join(f.dir, ".opencode/auto/phases/survey.md"), SURVEY_TYPE)
   await establishRound(f.dir, { phases: "survey,implement" })
+  // A released project analysis (plans/0085 A1): the survey phase's planning
+  // session must read it; no other planning session gets it.
+  await mkdirSync(join(f.dir, "docs"), { recursive: true })
+  await Bun.write(
+    join(f.dir, "docs/analysis.md"),
+    ["# Project analysis", "", "## Analysis", "", "Two modules, one risk area.", "", "## Goals", "", "Ship the port with the protocol intact.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 survey,implement — port the core", "", "Clarified: yes", ""].join("\n"),
+  )
   surveyDir.path = (await f.phase(0)).dir
   await f.commit("round setup")
   return f
@@ -103,7 +115,8 @@ async function fixture(): Promise<LoopFixture> {
 
 describe("the survey phase and the human clarification gate (plans/0081 D14/D15)", () => {
   test("a recorded fork holds the phase awaiting the person; Clarified: yes releases it and installs the approved brief", async () => {
-    const f = await fixture()
+    const analysisBlocks: string[] = []
+    const f = await fixture(analysisBlocks)
     // The survey task's session wrote survey.md with one open fork: the
     // handover distills, then the gate holds (exit 2, done.md waits).
     const held = await f.run()
@@ -111,6 +124,10 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15)
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(held.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
+    // The release accepts the recorded defaults (plans/0085 A3): the stop
+    // says so, and the fork carries its `Recommend:` clause.
+    expect(held.lines.some((line) => line.includes("it accepts every line's `Recommend:` default"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("without a `Recommend:` default"))).toBe(false)
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
     // The person's release: the release line beside the fork, committed like
@@ -135,5 +152,9 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15)
     expect(released.lines.some((line) => line.includes("round report for the person: docs/R-01/report-for-user.md"))).toBe(true)
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
+    // The approved analysis reached the survey's planning session alone
+    // (plans/0085 A1): the human-gated phase reads the person's settled
+    // decisions; the implement phase that followed did not.
+    expect(analysisBlocks).toEqual(["survey"])
   })
 })

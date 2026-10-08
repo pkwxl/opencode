@@ -17,9 +17,13 @@
 // bar the guidance states: a thorough analysis here determines the key work of
 // the rounds that follow) are the person's to judge at the release; a machine
 // check cannot see thoroughness, and pretending to would cheapen it.
+// After the release the text stays alive as the survey phase's planning
+// input (analysisText below, plans/0085): what the analysis settles is
+// settled — the survey records settled lines instead of re-raising forks.
+import { join } from "node:path"
 import { ANALYSIS_DOC } from "./docpaths"
 import { resolvePhases, type PhaseTypeEntry } from "./phases/registry"
-import { stripComments } from "./round-brief"
+import { stripComments, stubbedText } from "./round-brief"
 
 // The section headings the release requires (whole `## ` lines; the bodies are
 // free). `## Close` has no counterpart here — the analysis predates every
@@ -53,7 +57,8 @@ export function renderAnalysisStub(): string {
     "",
     "<!-- The overall project goals in the project's own terms, as clarified with the person. -->",
     "",
-    "<!-- Open decisions: one `Fork:` line each — options, consequences, a recommended default. -->",
+    "<!-- Open decisions: one `Fork:` line each — options with their project-level -->",
+    "<!-- consequences (goal, rounds, cost, acceptance), then `Recommend:` one default. -->",
     "<!-- The person answers beside them; an open Fork holds the release. -->",
     "",
     "## Project brief",
@@ -74,6 +79,15 @@ export function renderAnalysisStub(): string {
     "<!-- approved brief and opens round R-01. -->",
     "",
   ].join("\n")
+}
+
+// The analysis as planning input (plans/0085 A1): the survey phase's
+// planning session renders the approved text so its decisions travel —
+// undefined when the file is missing or holds only comments (no analysis,
+// or the not-yet-released stub; the survey then plans from the brief alone).
+export async function analysisText(dir: string): Promise<string | undefined> {
+  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+  return raw === undefined ? undefined : stubbedText(raw)
 }
 
 // The body of one `## ` section with the stub's comments stripped: undefined

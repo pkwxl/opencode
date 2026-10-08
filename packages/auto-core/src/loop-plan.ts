@@ -9,6 +9,7 @@
 // → loop-task; never imports loop-phase or loop.
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { analysisText } from "./analysis"
 import { requireArtifact } from "./artifact"
 import { openBlockage, type BlockageSite } from "./blockage-diagnose"
 import type { BlockMapEntry } from "./blockage"
@@ -18,7 +19,7 @@ import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
-import { reportForUserPath, roundBriefPath } from "./docpaths"
+import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
@@ -423,6 +424,13 @@ async function phasePlanPrompt(
   // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
   // plans against the round's goal and criteria; an untouched stub injects nothing.
   const round = await roundBriefText(directory, state.round)
+  // The approved project analysis (plans/0085 A1): the survey phase's
+  // planning session — the one that raises decisions — reads the person's
+  // settled decisions directly, so what the analysis settles is never
+  // re-raised as a fork. Human-gated phases only; later phases follow the
+  // round brief and the handover chain. An unreleased or absent analysis
+  // injects nothing.
+  const analysis = phase.entry.gates.includes("human") ? await analysisText(directory) : undefined
   // The round report duty (plans/0081 D2): this phase is final when it is the
   // round's last and lays out tasks — its planner ends the index with the
   // wrap-up task whose deliverable is docs/R-NN/report-for-user.md. A round
@@ -438,6 +446,7 @@ async function phasePlanPrompt(
     taskIndex: parts.taskIndex,
     brief: parts.brief,
     round,
+    analysis,
     input: parts.input,
     inputPath: planInputPath(phase),
     handovers,
@@ -459,6 +468,7 @@ async function phasePlanPrompt(
     { block: "phase duties", source: "the active pack's phase-duties section" },
     { block: "brief", source: parts.brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
     { block: "round brief", source: roundBriefPath(state.round) },
+    ...(analysis !== undefined ? [{ block: "analysis", source: ANALYSIS_DOC }] : []),
     { block: "planning input", source: parts.input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
     ...state.phases
       .slice(0, state.phases.findIndex((unit) => unit.id === phase.id))

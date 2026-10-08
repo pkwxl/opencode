@@ -80,7 +80,8 @@ document must be):
 2. What happened, phase by phase: what each phase delivered, its verdict, and headline counts (tasks done / failed /
    blocked / closed by hand);
 3. **Needs your attention** — the section the whole report exists for: every provisionally-defaulted planning question
-   with its options, implications and override path; open questions and the safe defaults currently in force; the round's
+   with its options, implications and override path, each phrased by its project consequence (what it changes for the
+   goal, the rounds, the cost, the acceptance — never the technique alone); open questions and the safe defaults currently in force; the round's
    AUTO-RESOLVE proxy decisions with enough context to confirm or overturn each; FAIL verdicts and what they mean;
    environment gaps; recorded deviations and assumption notes; mid-round decisions that belong in the project brief (the next survey folds them in);
 4. Where to look deeper: an artifact index (spec-notes, verdicts, notable task reports), one line each — the report

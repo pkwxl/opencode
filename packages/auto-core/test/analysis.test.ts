@@ -2,7 +2,10 @@
 // grammar checks and the roadmap's round lines, pure over text — the route
 // behavior over fixtures lives in test/plan.test.ts's analysis describe.
 import { describe, expect, test } from "bun:test"
-import { analysisProblems, ANALYSIS_SECTIONS, renderAnalysisStub, roadmapPhases, roadmapRounds } from "../src/analysis"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { analysisProblems, analysisText, ANALYSIS_SECTIONS, renderAnalysisStub, roadmapPhases, roadmapRounds } from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
 
@@ -96,5 +99,25 @@ describe("the project analysis document (plans/0084)", () => {
     expect(analysisProblems(missing, BUILTIN_PHASE_TYPES)).toEqual([
       "docs/analysis.md is missing its `## Project brief` section",
     ])
+  })
+
+  test("analysisText: the released text as the survey's planning input; missing or comment-only stays undefined (plans/0085 A1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "analysis-text-"))
+    try {
+      // No file: nothing to inject.
+      expect(await analysisText(dir)).toBeUndefined()
+      // The untouched stub injects nothing (comment-only, the brief's rule).
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, "docs/analysis.md"), renderAnalysisStub())
+      expect(await analysisText(dir)).toBeUndefined()
+      // A released analysis injects its text, comments stripped.
+      await Bun.write(join(dir, "docs/analysis.md"), RELEASED + "\n<!-- a trailing note -->\n")
+      const text = await analysisText(dir)
+      expect(text).toContain("Ship the port with the protocol intact.")
+      expect(text).toContain("- R-01 adm — port the core and its tests")
+      expect(text).not.toContain("<!--")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -27,6 +27,16 @@ The human's statement of what this round is for. Plan this phase's tasks toward 
 
 {{/if}}
 {{/if}}
+{{#if analysis}}
+## Input: approved project analysis (docs/analysis.md)
+
+The person's approved pre-round decisions — the goals, the constraints, the roadmap of rounds. What this analysis
+settles is settled: carry its decisions forward, never re-raise them as open questions; a decision its goals,
+constraints or roadmap implies is decided the same way, with the derivation recorded.
+
+{{analysis}}
+
+{{/if}}
 {{#if input}}
 ## Input: planning input ({{inputPath}})
 

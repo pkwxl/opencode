@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadProjectConfig } from "../src/config"
 import { acceptanceMark, p1Scope, roleOf } from "../src/document/roles"
-import { clarifiedMark, completePhase, establishRound, phaseGateProblems, phaseGates, readPhases, surveyForks } from "../src/phases"
+import { clarifiedMark, completePhase, establishRound, forksWithoutRecommend, phaseGateProblems, phaseGates, readPhases, surveyForks } from "../src/phases"
 import { renderPhaseHandover } from "../src/prompt"
 import { renderPhasePlan } from "../src/prompt-plan"
 import { closeSection, renderRoundBrief, roundBriefText } from "../src/round-brief"
@@ -262,9 +262,10 @@ describe("the human clarification gate (plans/0081 D14.3)", () => {
     expect(survey.phaseArtifacts.map((spec) => spec.path)).toEqual(["survey.md"])
   })
 
-  test("surveyForks / clarifiedMark: list-marker forks count; the whole-line release mark", () => {
-    const text = ["# Survey", "", "Fork: the journal — reimplement or stub it?", "- Fork: parity depth — core only or full?", "    * Fork: platform boundary — where does it sit?", "", "Forks: none (the other posture).", "Clarified: no"].join("\n")
+  test("surveyForks / clarifiedMark / forksWithoutRecommend: list-marker forks count; the whole-line release mark", () => {
+    const text = ["# Survey", "", "Fork: the journal — reimplement or stub it? Recommend: stub", "- Fork: parity depth — core only or full?", "    * Fork: platform boundary — where does it sit?", "", "Forks: none (the other posture).", "Clarified: no"].join("\n")
     expect(surveyForks(text)).toBe(3)
+    expect(forksWithoutRecommend(text)).toBe(2)
     expect(surveyForks("Forks: none\n")).toBe(0)
     expect(clarifiedMark(text)).toBe(false)
     expect(clarifiedMark("reviewed.\n\nClarified: yes\n")).toBe(true)
@@ -298,16 +299,32 @@ describe("the human clarification gate (plans/0081 D14.3)", () => {
       await establishRound(dir, { phases: "m" })
       const phase = (await readPhases(dir))!.phases[0]!
       const doc = join(dir, phase.dir, "survey.md")
-      await Bun.write(doc, "# Survey\n\nFork: scope — core only?\nFork: depth — full parity?\n")
+      await Bun.write(doc, "# Survey\n\nFork: scope — the journal too reshapes R-02; Recommend: the core only\n")
       const held = await completePhase(dir, phase, ["human"])
       expect(held).toEqual([
-        "clarification: docs/R-01/P01-implement/survey.md records 2 open Fork: line(s) — awaiting the person (add `Clarified: yes` to release the phase)",
+        "clarification: docs/R-01/P01-implement/survey.md records 1 open Fork: line(s) — awaiting the person (add `Clarified: yes` to release the phase; it accepts every line's `Recommend:` default, overrides go beside the lines)",
       ])
       expect(await Bun.file(join(dir, phase.dir, "done.md")).exists()).toBe(false)
       // The release line completes the phase in one act (D15.2's approval).
-      await Bun.write(doc, "# Survey\n\nFork: scope — core only?\n\nClarified: yes\n")
+      await Bun.write(doc, "# Survey\n\nFork: scope — the journal too reshapes R-02; Recommend: the core only\n\nClarified: yes\n")
       expect(await completePhase(dir, phase, ["human"])).toEqual([])
       expect(await Bun.file(join(dir, phase.dir, "done.md")).exists()).toBe(true)
+    })
+  })
+
+  test("a Fork: line without its Recommend: default is a second clarification problem (plans/0085 A3)", async () => {
+    await withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const phase = (await readPhases(dir))!.phases[0]!
+      const doc = join(dir, phase.dir, "survey.md")
+      await Bun.write(doc, "# Survey\n\nFork: scope — core only? Recommend: core\nFork: depth — full parity?\n")
+      expect(await completePhase(dir, phase, ["human"])).toEqual([
+        "clarification: docs/R-01/P01-implement/survey.md records 2 open Fork: line(s) — awaiting the person (add `Clarified: yes` to release the phase; it accepts every line's `Recommend:` default, overrides go beside the lines)",
+        "clarification: docs/R-01/P01-implement/survey.md has 1 Fork: line(s) without a `Recommend:` default — the person decides from project consequences plus one default",
+      ])
+      // The person's release passes regardless (D15.2's approval overrides).
+      await Bun.write(doc, "# Survey\n\nFork: scope — core only? Recommend: core\nFork: depth — full parity?\n\nClarified: yes\n")
+      expect(await completePhase(dir, phase, ["human"])).toEqual([])
     })
   })
 })
