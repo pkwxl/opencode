@@ -1,8 +1,9 @@
 # run — master control for all incomplete tasks
 
 For a target directory that the auto driver has already initialized (`init`): hand this file, unchanged, to a
-coding-agent session opened in the target directory, together with its three companions — `run-task.md`,
-`run-verify.md` and `run-fix.md` (same directory, or all four pasted into the session). There is nothing to fill
+coding-agent session opened in the target directory, together with its five companions — `run-task.md`,
+`run-verify.md`, `run-fix.md`, `run-handover.md` and `run-plan.md` (same directory, or all six pasted into
+the session). There is nothing to fill
 in. The session takes the role of the driver (`opencode-auto run`) and executes **every** incomplete task of the
 current phase, one at a time: it determines the next ready task, launches task child sessions that carry the
 task to completion — a session hands its context over through `docs/T-NNN/handoff.md` when its share of the
@@ -16,12 +17,16 @@ left for the person to judge once all tasks are done. A verification that passes
 the driver's completion commits exactly as it makes them after a whole-task session: the work commit, the
 wrap-up report's own commit, then the completion commit over the state writes (the deletions of the stale gap
 list and the consumed handover, `todo.md` → `done.md`, the index tick) — and its `PASS` verdict
-tells you the task is safe to advance past. All implementation
+tells you the task is safe to advance past. When a phase's tasks are all done the suite transfers between
+phases: a handover child session (`run-handover.md`) distills the phase handover document and performs the
+phase close-out — the driver's completion writes and commits — and a planning child session (`run-plan.md`)
+writes the next phase's task index and task documents, which the master control commits; the task loop then
+continues on the new phase, until the round's phases are done. All implementation
 work happens in child sessions launched through the host coding agent's subagent facility; the master-control
 session itself writes no implementation code and no state writes — its one driver write is the share commit
 that lands each task/fix session's work when the session ends (the driver's own unified commit after a
 session; its fix rounds and subtasks land the same way), and the close-out commits belong to the verification
-child. The goal is that the state files and git history afterwards look as if the driver had run the phase:
+child. The goal is that the state files and git history afterwards look as if the driver had run the round:
 the same grammar, one commit per session share where an undivided driver run would make one.
 
 You are the master control (the driver) for this target directory's incomplete tasks. Work from the directory's
@@ -40,12 +45,14 @@ checks specified below.
    the target holds (work inside a gitignored nested repository leaves the outer status clean). Every task
    starts from a clean tree (the driver's clean gate); a dirty tree is the person's to commit or clean first.
 5. You can launch child sessions (your platform's subagent facility) that work in this same directory, and the
-   three companion files are available to you verbatim. Otherwise stop: the whole design rests on them.
+   five companion files are available to you verbatim. Otherwise stop: the whole design rests on them.
 6. Read the config's `wrapup` key (default true): it decides whether a passing verification also writes the
    task's wrap-up report (`docs/T-NNN/report.md`).
 7. The config's `testByDriver` and `handoverTest` keys are both unset: this suite has no driver process to run
    the test script or relay its result. Either key set → stop: the person runs the driver itself
    (`opencode-auto run`) for these tasks, or `amend`s the config.
+8. The config's `acceptanceGate` key is unset (or empty): this suite drafts no acceptance.md and runs no
+   acceptance review. Set → stop: the person runs the driver itself for those phases, or `amend`s the config.
 
 ## Keep your own context small
 
@@ -113,7 +120,8 @@ reply a child sends you to a few lines (the companions instruct them so).
 
 - The current phase's index: config `phases: "m"` is the no-phase mode — `docs/R-01/P01-implement/tasks.md`;
   anything else is the phased mode — the latest round (the highest `docs/R-NN/` holding a `phases.md`), first
-  phase whose `phases.md` line is not marked ` (closed: …)` and whose directory holds a `tasks.md`.
+  phase whose `phases.md` line is not marked ` (closed: …)` — an established phase; when its directory holds
+  no `tasks.md` it is unplanned, and the loop's step 0 plans it before any task runs.
 - Unit files win over the index tick: a task with `docs/T-NNN/todo.md` is pending, with `done.md` is done
   (exactly one of the two — neither or both is an inconsistent index, stop and report). A task is ready when its
   `Depends:` (the field lines in its document; without the field the task before it in the index; `Depends:
@@ -136,7 +144,12 @@ reply a child sends you to a few lines (the companions instruct them so).
 State lives on disk, never in the conversation: re-read the index and the state files at the top of every
 iteration.
 
-1. Take the first ready task `T-NNN` in index order (rules above). Nothing ready → Finish. Record the baseline:
+0. Confirm the current phase is planned: its directory holds a `tasks.md`. Without one the phase is
+   established but unplanned → run the planning child on it (the Phase transfer section's step 4), then
+   re-read the index here.
+1. Take the first ready task `T-NNN` in index order (rules above). Nothing ready → either every task of the
+   phase is done — go to the Phase transfer section — or tasks remain pending but none is ready, an
+   unsatisfiable dependency graph: stop and report. Record the baseline:
    the current HEAD of this repository and of every nested repository. The task's first child session starts
    from the clean, committed tree; every later child of the same task works on the tree its predecessor's
    share left committed, with the handover document as the seam between them.
@@ -201,6 +214,47 @@ iteration.
      specific deficiency as feedback; still failing → stop and report.
 7. Next iteration: back to step 1 — the index now shows this task ticked and its `done.md` exists.
 
+## Phase transfer — when a phase completes
+
+State lives on disk as everywhere else: re-read `phases.md` and the phase directory at every step. In the
+no-phase mode (`phases: "m"`) the round is this one implicit phase: the same handover and close-out, no
+`phases.md` tick (there is no index), `<next target>` is `flow complete`, and the round is done.
+
+1. Confirm the phase complete: every line of its `tasks.md` ticked and every task's `done.md` present (the
+   unit-files-win rule; a `Closed:` field counts as done).
+2. The human gate: a `survey`-type phase holds for the person — its `survey.md` must carry a whole-line
+   `Clarified: yes` and no `Fork:` line left unanswered (a held fork without its `Recommend:` clause is the
+   same problem). Missing → stop and report: the person's clarification releases the phase (the driver's
+   `plan` installs the approved brief — this suite does not replicate that write). Other phase types pass.
+3. Launch the handover child session: `run-handover.md` with `<phase id>`, `<phase name>`, `<phase dir>` and
+   `<next target>` filled — the next phase's "<id> <name>" from the line after this one in `phases.md`, or
+   `flow complete` when this is the round's last. Then check its outcome mechanically: `<phase
+   dir>/handover.md` exists and holds the four section headings (`## Key decisions`, `## Constraints and
+   pitfalls`, `## Required reading for the next phase`, `## Artifact index` — a grep, not a read);
+   `<phase dir>/done.md` exists (no `todo.md`); the phase's `phases.md` line is ticked; HEAD advanced by
+   exactly its two commits — `PLAN handover <phase id> <phase name>`, then `PLAN transition <phase id>
+   <phase name> → <next target>`; `git status --porcelain` lists nothing (this repository and every nested
+   one). Anything missing → relaunch the handover child session once with the specific deficiency as
+   feedback; still failing → stop and report.
+4. The next phase: re-read `phases.md`. No uncompleted line remains → the round is complete: Finish — the
+   round's close (the round report, the person's review) is not this suite's business. Otherwise, for the
+   next not-closed phase:
+   - Its directory already holds a `tasks.md` → it was planned ahead: back to the loop's step 1 on it.
+   - Otherwise launch the planning child session: `run-plan.md` with `<phase id>`, `<phase name>`,
+     `<phase dir>` and `<round dir>` filled. Then validate mechanically: its `tasks.md` exists and holds at
+     least one `- [ ] T-NNN` line; every listed `T-NNN` has its `docs/T-NNN/todo.md` (title line, `Phase:`
+     field, the three sections — the terminator its last body line, a tail check as the report's); no listed
+     `T-NNN` reuses a `docs/T-NNN/` directory that existed before this planning. Anything invalid → relaunch
+     the planning child session once with the specific deficiency as feedback; still failing → stop and
+     report. Then land the plan commit — the same add + commit pass (nested repositories first), message:
+
+        PLAN plan <phase id> <phase name>
+
+        Auto-Task: PLAN
+        Auto-Stage: phase-plan
+
+     The trailers are written verbatim, never omitted. Back to the loop's step 1 on the new phase.
+
 ## Hands off — driver-adjacent rules
 
 - Never edit `.opencode/auto/config.json`, `AGENTS.md`, or anything under `.auto/`; never modify the
@@ -208,8 +262,9 @@ iteration.
   plan new work — planning is a planning session's business. The verification child's close-out is the one
   sanctioned writer of the state writes and the `units.json` record removal — none of it is yours.
 - You make no edits and no state writes of your own: everything on disk was written by child sessions; your
-  one write is the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
-  unified commit after a session), and the close-out is the verification child's, not yours.
+  writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
+  unified commit after a session) and the phase-plan commit (the Phase transfer section) — the task
+  close-out is the verification child's and the phase close-out the handover child's, not yours.
 - One task at a time, one child session at a time; the share commits happen at each task or fix session's
   end, and the close-out commits inside the verification child, after a verification passes.
 - One sanctioned exception: protocol edits under `prompts/` that the person directs mid-run are the master
@@ -223,6 +278,8 @@ iteration.
 ## Finish
 
 Report: every task executed with its commit subjects, each verification's verdict and fix rounds spent, the
-wrap-up verdicts, and what the person should review (the reports, the commit list, the `AUTO-RESOLVE`/
+wrap-up verdicts, the phases handed over and planned (their transition and plan commits), and what the
+person should review (the reports, the commit list, the `AUTO-RESOLVE`/
 `AUTO-DECISION` markers; the verifications inspected the work but did not re-run the acceptance's executable
-checks — a final test pass before accepting the phase is the person's call). Then stop.
+checks — a final test pass before accepting the phase is the person's call; when the round completed, its
+close — the round report, the review — remains the person's too). Then stop.

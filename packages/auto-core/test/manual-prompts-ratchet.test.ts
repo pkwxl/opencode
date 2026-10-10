@@ -29,7 +29,7 @@ const SRC = resolve(import.meta.dir, "..", "src")
 
 // The suite's pinned file set: a file added to prompts/ joins the ratchet
 // consciously (this test fails until it is either listed or removed).
-const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md"]
+const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md"]
 
 const text = (name: string) => readFileSync(join(PROMPTS, name), "utf8")
 const src = (name: string) => readFileSync(join(SRC, name), "utf8")
@@ -58,6 +58,15 @@ describe("manual-driver prompt ratchet", () => {
     expect(src("git.ts")).toContain("`${task.id} carryover driver-state posting`")
     expect(src("git.ts")).toContain('stage: "carryover"')
     expect(src("git.ts")).toContain("Auto-Stage: ${stage}")
+    // The phase-transfer grammar (plans/0088): the handover distill, the
+    // transition close-out and the phase-plan commits, stated by their
+    // producers in loop-phase.ts / loop-plan.ts.
+    expect(src("loop-phase.ts")).toContain("`PLAN handover ${phaseTitle(phase)}`")
+    expect(src("loop-phase.ts")).toContain('stage: "phase-handover"')
+    expect(src("loop-phase.ts")).toContain("`PLAN transition ${phaseTitle(phase)} → ${target}`")
+    expect(src("loop-phase.ts")).toContain('stage: "phase-transition"')
+    expect(src("loop-plan.ts")).toContain("`PLAN plan ${phaseTitle(phase)}`")
+    expect(src("loop-plan.ts")).toContain('stage: "phase-plan"')
   })
 
   test("the commit grammar: the master control's share commits, then the close-out's wrapup → done", () => {
@@ -170,6 +179,41 @@ describe("manual-driver prompt ratchet", () => {
     for (const name of ["run.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
       expect(text(name), name).toContain("`testByDriver`")
       expect(text(name), name).toContain("`handoverTest`")
+    }
+  })
+
+  test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
+    // The handover child mirrors the driver's handoverPhase: the distiller
+    // session's four-section handover document (templates/prompts/
+    // phase-handover.md), then completePhase (the phase todo.md → done.md
+    // rename + the phases.md tick) and the two commits — PLAN handover
+    // (stage phase-handover) and PLAN transition (stage phase-transition).
+    // The planning child mirrors the driver's phase-plan session: the task
+    // index and the taskTodoSpec documents; its output lands as the
+    // master control's PLAN plan commit (stage phase-plan), the worker
+    // itself never committing.
+    const handover = text("run-handover.md")
+    for (const literal of [
+      "PLAN handover <phase id> <phase name>",
+      "PLAN transition <phase id> <phase name> → <next target>",
+      "Auto-Task: PLAN",
+      "Auto-Stage: phase-handover",
+      "Auto-Stage: phase-transition",
+      "## Key decisions",
+      "## Constraints and pitfalls",
+      "## Required reading for the next phase",
+      "## Artifact index",
+    ]) {
+      expect(handover, "run-handover.md").toContain(literal)
+    }
+    // The task-document spec is the driver's taskTodoSpec, verbatim.
+    const plan = text("run-plan.md")
+    for (const literal of ["`# T-NNN: <task title>`", "`Phase: R-NN.P<nn>`", "`## Goal`", "`## Scope`", "`## Acceptance`", "- [ ] T-NNN <task title>", "plan-input.md"]) {
+      expect(plan, "run-plan.md").toContain(literal)
+    }
+    // The plan commit is the master control's alone.
+    for (const literal of ["PLAN plan <phase id> <phase name>", "Auto-Stage: phase-plan"]) {
+      expect(text("run.md"), "run.md").toContain(literal)
     }
   })
 
