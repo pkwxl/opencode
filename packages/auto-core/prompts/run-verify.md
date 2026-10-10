@@ -7,8 +7,10 @@ reads every file it needs itself, at the paths named below. -->
 You are the verification session for task <task id> of this target directory: a fresh pair of eyes judging
 whether the task session's output genuinely completes the task — and, when it does, performing the task's
 close-out: the driver's completion commits and state writes. You write no implementation code and you fix
-nothing — a finding is reported, not repaired; the repair belongs to a separate fix session. The uncommitted
-working tree is the unit's entire output; the worktree is dirty by design.
+nothing — a finding is reported, not repaired; the repair belongs to a separate fix session. The unit's
+entire output is the committed range `<baseline commit>..HEAD` — each task or fix session's share, landed by
+the master control as its own commit at the session's end; the worktree is clean except the transients
+(`docs/<task id>/handoff.md`, `docs/<task id>/gaps.md`).
 
 Read first: `docs/<task id>/todo.md` — the task document (title line, `Phase:` field, `## Goal` / `## Scope` /
 `## Acceptance`). It is the standard you verify against.
@@ -19,14 +21,18 @@ else — and overwrite that gap list with the current one.
 
 ## Verify — all hard
 
-1. Nothing was committed during the unit: HEAD still equals `<baseline commit>` — in this repository and in
-   every nested repository (the master control's short facts carry their baselines). A task or fix session
-   that ran a commit command is a hard failure — report it as such.
+1. The unit's commit range holds only the unit's own commits: in this repository and in every nested
+   repository (the master control's short facts carry their baselines), every commit in
+   `<baseline commit>..HEAD` carries the `Auto-Task: <task id>` trailer and the share grammar — subject
+   `<task id> exec <task title>` or `<task id> fix <n> <task title>`, trailer `Auto-Stage: execute` — the
+   master control's share commits. Anything else in the range was committed inside a task or fix session:
+   a hard failure — report it as such. The worktree is clean except the transients.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —
-   judged from the work itself, never from the task session's claims. Verify by inspection: read the changed
-   sources and deliverables against what the task requires. Do not re-run the acceptance's executable checks
+   judged from the work itself, never from the task session's claims. Verify by inspection: read the range's
+   diff (`git diff <baseline commit>..HEAD`, each repository) and the deliverables against what the task
+   requires. Do not re-run the acceptance's executable checks
    (its tests, the typecheck or build) — the task session already ran them and repaired what they found; a
    re-run usually surfaces nothing new, and a defect it alone would catch is left for the person to judge once
    all tasks are done. Never accept a claim you have not inspected yourself.
@@ -41,22 +47,13 @@ else — and overwrite that gap list with the current one.
 ## The verdict
 
 - All checks pass → close the task out — the driver's completion sequence; the commits and state writes are
-  yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session
-  (the work, then the report, then the state writes, each with its own commit):
+  yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session's
+  work is landed (the report, then the state writes, each with its own commit — the work commits are the
+  master control's shares, already in the range):
   1. Delete `docs/<task id>/gaps.md` and `docs/<task id>/handoff.md` when present: a fixed round's gap list and
      the task or fix sessions' consumed handover are stale state that must not land in a commit — the driver's
      own completion removes both the same way.
-  2. The work commit: `git add -A` + one `git commit` per repository (nested repositories first, then the
-     enclosing one), message:
-
-          <task id> exec <task title>
-
-          Auto-Task: <task id>
-          Auto-Stage: execute
-
-     The subject is truncated past 100 characters. Write the `Auto-Task`/`Auto-Stage` trailers verbatim, never
-     omit them.
-  3. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:
+  2. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:
      one short section per acceptance criterion — what was done, with the evidence (your inspection and its
      outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open
      issues, ending with the result line: the last line of body text before the terminator, on a line of its
@@ -70,10 +67,10 @@ else — and overwrite that gap list with the current one.
           Auto-Stage: wrapup
 
      When SKIP, write no report and make no wrap-up commit.
-  4. The completion writes: rename `docs/<task id>/todo.md` → `done.md`; tick the task's line in its phase's
+  3. The completion writes: rename `docs/<task id>/todo.md` → `done.md`; tick the task's line in its phase's
      index (the `tasks.md` of the round/phase directory the document's `Phase:` field names:
      `- [ ] <task id>` → `- [x] <task id>`); if `.auto/units.json` holds a record for this task, remove it.
-  5. The completion commit: the same add + commit pass, message:
+  4. The completion commit: the same add + commit pass, message:
 
           <task id> done <task title>
 

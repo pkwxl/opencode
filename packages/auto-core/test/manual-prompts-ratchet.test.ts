@@ -60,14 +60,29 @@ describe("manual-driver prompt ratchet", () => {
     expect(src("git.ts")).toContain("Auto-Stage: ${stage}")
   })
 
-  test("the close-out is the driver's sequence: exec → wrapup → done", () => {
+  test("the commit grammar: the master control's share commits, then the close-out's wrapup → done", () => {
+    // plans/0087: every task/fix session's share lands as its own commit at
+    // the session's end — the master control's write (the driver's unified
+    // commit after a session; its fix rounds land the same way, `<id> fix
+    // <n> <title>`). The verification's close-out therefore starts from a
+    // landed range: it validates the range holds only the unit's own
+    // commits, then makes the report commit (wrapup) and the state-writes
+    // commit (done) — the exec grammar lives in run.md's share-commit rule.
+    const run = text("run.md")
+    for (const literal of ["<task id> exec <task title>", "<task id> fix <round> <task title>", "Auto-Task: <task id>", "Auto-Stage: execute"]) {
+      expect(run, "run.md").toContain(literal)
+    }
     const verify = text("run-verify.md")
-    for (const literal of ["<task id> exec <task title>", "<task id> wrapup <task title>", "<task id> done <task title>", "Auto-Task: <task id>"]) {
+    for (const literal of ["<task id> wrapup <task title>", "<task id> done <task title>", "Auto-Task: <task id>"]) {
       expect(verify, literal).toContain(literal)
     }
-    const order = ["Auto-Stage: execute", "Auto-Stage: wrapup", "Auto-Stage: done"].map((stage) => verify.indexOf(stage))
+    const order = ["Auto-Stage: wrapup", "Auto-Stage: done"].map((stage) => verify.indexOf(stage))
     expect(order.every((at) => at >= 0)).toBe(true)
-    expect(order, "the completion commits appear in the driver's order").toEqual([...order].sort((a, b) => a - b))
+    expect(order, "the close-out commits appear in the driver's order").toEqual([...order].sort((a, b) => a - b))
+    // The verification names the exec grammar only to validate the range
+    // (check 1); its own commits are the wrapup and done passes alone, so
+    // no execute-stage commit block exists in its close-out.
+    expect(verify.indexOf("Auto-Stage: execute")).toBeLessThan(verify.indexOf("## The verdict"))
   })
 
   test("carryover is the self-heal string only — never the close-out", () => {

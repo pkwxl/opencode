@@ -49,15 +49,17 @@ the session with no handover document at all also means complete; write one only
 2. A decision of your own must leave a record in the relevant document or code comment: a call that should have
    been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other
    call an `AUTO-DECISION: <decision> (<reason>)` line.
-3. Do not run git commit or any commit command — a separate verification session judges this task complete and
-   performs the close-out commits; you never commit.
+3. Do not run git commit or any commit command — the master control lands each session's share as its own
+   commit when you end, and a separate verification session judges this task complete and performs the
+   close-out commits; you never commit.
 4. Every Markdown document you create (or rewrite in full) ends, once finished, with a line holding only
    `<!-- auto: eof -->` as its last line of body text (only blank lines may follow) — the handover document is
    the stated exception: its last line is the status line.
 5. Survive the harness: a single command caps around ten minutes of silence — run long builds, tests and gate
-   runs as background processes writing to a log file, and poll the log in short steps; never sit waiting on
-   a long foreground command. Checkpoint your work to disk as you go: if this session is cut off, its
-   successor continues from the tree you leave.
+   runs as background processes writing to a log file, and poll the log every few minutes (each poll is your
+   keep-alive: ten minutes of silence is the harness's kill line, however long the underlying run); never
+   sit waiting on a long foreground command. Checkpoint your work to disk as you go: if this session is cut
+   off, its successor continues from the tree you leave.
 6. Before you end, sweep every deliverable file you touched (everything outside `docs/`) for references to
    process-document paths — `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/` — and reword them to
    the bare task-id form; the verification hard-fails such references (bare task ids in comments are fine).
