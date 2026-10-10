@@ -100,7 +100,8 @@ reply a child sends you to a few lines (the companions instruct them so).
   line ("still there? poll your log in short steps — never sit waiting on a long command") over anything
   harder; a platform without messaging changes nothing — the budget wall remains the backstop.
 - The session budget turns the handover on: fill `<session budget>` in `run-task.md` / `run-fix.md` with
-  `60 minutes` unless the person directed another figure. A task or fix child that cannot finish inside it
+  `60 minutes` unless the person directed another figure (a sprint mode's runway fit counts as one). A
+  task or fix child that cannot finish inside it
   wraps up — ten minutes before the budget it stops starting new work — and hands over through
   `docs/T-NNN/handoff.md` instead of overrunning; a fresh budget rides every relaunch.
 - When the target holds nested git repositories, the baseline is multi-repo: record HEAD of this repository
@@ -254,6 +255,47 @@ no-phase mode (`phases: "m"`) the round is this one implicit phase: the same han
         Auto-Stage: phase-plan
 
      The trailers are written verbatim, never omitted. Back to the loop's step 1 on the new phase.
+
+## Run modes — window and sprint, chosen by one phrase
+
+The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
+with `sprint`); none named, this section is dormant and the run is
+unlimited. Where a mode conflicts with this file's rules, the mode wins — and its park/resume rules below
+override the boundary rule that refuses an already-begun task. Whatever you end with, your report names
+the mode line so the person's restart repeats it.
+
+- `mode: window <HH:MM–HH:MM> [tz]` (times UTC unless a zone is named): a launch window. No new child
+  session of any role may be created inside the window — check the clock before every launch. A child
+  already running when the window opens runs to its normal end; never stop it for the window. When the
+  window blocks your next launch, land the ended child's share as usual, then park: either hold this
+  session alive polling the clock every few minutes until the window closes (only sensible when the window
+  outlives the platform's own limit on this session — against a 3-hour task kill, holding through a longer
+  window is pointless), or end the session and report that the person should restart it after the window.
+- `mode: sprint <minutes>`: no launch window — a wall for the whole run, set ~15 minutes below the
+  platform's kill of this session (a 3-hour task limit → `sprint 165`). Record your start time at your
+  first action; the wall is start + <minutes>. Every launch fits the runway: fill a task or fix child's
+  `<session budget>` with the smaller of the default and the runway minus 15 minutes (wall − now − 15),
+  and launch a verification, handover or planning child only with at least 15 minutes of runway. When the
+  wall arrives — or a child overruns into the margin — land the last child's share, do not relaunch a
+  `Status: continue` handover, and Finish with the resume note. Ending properly before the wall is the
+  sprint's own completion criterion: never let the platform kill this session mid-flight.
+- `mode: pace <minutes>`: a pause between child sessions — after a child session ends and its share is
+  landed, wait <minutes> minutes before the next launch of any role (this run's first launch goes
+  immediately; a relaunch after a killed child waits too). The wait is the person's throttle against a
+  rolling usage limit (a 5-hour account cap): sized so any 5-hour window's consumption stays under it —
+  you never compute quota, the figure is the knob. Wait in short polled steps (`sleep 300` then `date`,
+  repeated): never one long silent sleep — ten minutes of silence is this session's kill line as well.
+  `pace` may ride with `sprint` (`mode: sprint 165 pace 20`): the waits count inside the wall, and a wall
+  arriving mid-wait ends the run properly instead of holding it.
+
+Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
+clean except the transients, a report of what remains. On the restart, uncommitted content means a child
+broke mid-session: identify its role from the task's last share commit (`T-NNN exec …` → the task child,
+`T-NNN fix …` → the fix child), read the `Status:` tail of `docs/T-NNN/handoff.md` and the presence of
+`gaps.md` for its state, re-derive the task's baseline as the parent of its first `T-NNN` share commit,
+and relaunch that same role with one continue line — the kill path. A cleanly parked task resumes the same
+way on its committed tree. A parked phase transfer (all tasks done, no handover yet) simply continues at
+the Phase transfer section.
 
 ## Hands off — driver-adjacent rules
 

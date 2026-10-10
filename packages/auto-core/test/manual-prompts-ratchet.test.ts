@@ -182,6 +182,27 @@ describe("manual-driver prompt ratchet", () => {
     }
   })
 
+  test("the run modes: window, sprint and pace, one phrase in the hand-over (plans/0089)", () => {
+    // Person-directed, chosen per invocation — no second file, no fill-ins
+    // in run.md: `mode: window <HH:MM–HH:MM> [tz]` parks launches inside
+    // the window (ongoing children finish); `mode: sprint <minutes>` walls
+    // the whole run below the platform's task kill (a 3-hour kill →
+    // sprint 165), shrinking child budgets to the runway so the run ends
+    // properly before the kill; `mode: pace <minutes>` pauses between
+    // child sessions — the person's throttle against a rolling 5-hour
+    // usage cap, waited in polled short steps, composable with sprint.
+    // All share the park/resume rules that
+    // override the begun-task boundary refusal, resuming off 0087's
+    // committed shares.
+    const run = text("run.md")
+    expect(run).toContain("`mode: window <HH:MM–HH:MM> [tz]`")
+    expect(run).toContain("`mode: sprint <minutes>`")
+    expect(run).toContain("`sprint 165`")
+    expect(run).toContain("`mode: pace <minutes>`")
+    expect(run).toContain("`mode: sprint 165 pace 20`")
+    expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
+  })
+
   test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
     // The handover child mirrors the driver's handoverPhase: the distiller
     // session's four-section handover document (templates/prompts/
