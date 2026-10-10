@@ -19,8 +19,9 @@ else — and overwrite that gap list with the current one.
 
 ## Verify — all hard
 
-1. Nothing was committed during the unit: HEAD still equals `<baseline commit>`. A task or fix session that ran
-   a commit command is a hard failure — report it as such.
+1. Nothing was committed during the unit: HEAD still equals `<baseline commit>` — in this repository and in
+   every nested repository (the master control's short facts carry their baselines). A task or fix session
+   that ran a commit command is a hard failure — report it as such.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —
@@ -30,7 +31,8 @@ else — and overwrite that gap list with the current one.
    re-run usually surfaces nothing new, and a defect it alone would catch is left for the person to judge once
    all tasks are done. Never accept a claim you have not inspected yourself.
 4. Every Markdown file created or modified in this unit ends with a line holding only `<!-- auto: eof -->` as
-   its last line of body text (only blank lines may follow).
+   its last line of body text (only blank lines may follow) — the handover document `docs/<task id>/handoff.md`
+   is exempt: its shape is its `Status:` last line, the driver's own handover channel shape.
 5. Process documents are not design dependencies: lines this unit added to deliverable files (every path outside
    the process documents `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/`, and outside `AGENTS.md`
    and `.opencode/`) must not reference those process paths. `AUTO-*` marker lines inside code comments are fine
@@ -41,8 +43,9 @@ else — and overwrite that gap list with the current one.
 - All checks pass → close the task out — the driver's completion sequence; the commits and state writes are
   yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session
   (the work, then the report, then the state writes, each with its own commit):
-  1. Delete `docs/<task id>/gaps.md` when present: a fixed round's gap list is stale state and must not land
-     in a commit.
+  1. Delete `docs/<task id>/gaps.md` and `docs/<task id>/handoff.md` when present: a fixed round's gap list and
+     the task or fix sessions' consumed handover are stale state that must not land in a commit — the driver's
+     own completion removes both the same way.
   2. The work commit: `git add -A` + one `git commit` per repository (nested repositories first, then the
      enclosing one), message:
 
@@ -85,8 +88,8 @@ else — and overwrite that gap list with the current one.
   list a fix session will act on — first a compact summary of what you verified as OK (so the fix session does
   not redo it), then one entry per gap: what required action is missing or wrong, where (files), and what
   exactly to do. That gap list carries no terminator — its last line of body text is simply its last entry, the
-same file shape the driver's own verification loop uses. Every other Markdown document you create ends with
-the terminator as above. Do not write report.md.
+  same file shape the driver's own verification loop uses. Every other Markdown document you create ends with
+  the terminator as above. Do not write report.md.
 
 End the session as soon as the verdict is delivered — on PASS, once the close-out above is done as well. Your
 final reply is the master control's only intake from you — keep it to a few lines around the verdict line; the
