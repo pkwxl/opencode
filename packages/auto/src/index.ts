@@ -22,6 +22,7 @@ import {
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
+import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { landUnit } from "@opencode-ai/auto-core/land"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
@@ -374,9 +375,9 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); status stays flagless.
+// agents and spends tokens); status and install-prompts stay flagless.
 const MODELS_FLAGS = new Set(["probe"])
-const FLAGLESS = command === "status" || command === "models"
+const FLAGLESS = command === "status" || command === "models" || command === "install-prompts"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skipping the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
@@ -457,7 +458,7 @@ for (const key of flags.keys()) {
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": status only accepts a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
+  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? `: ${command} only accepts a directory argument, no options` : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
 for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
@@ -2179,6 +2180,26 @@ if (command === "models") {
   process.exit(description.problems.length ? 1 : 0)
 }
 
+// install-prompts (auto-core plans/0093): resync the manual-driver prompt
+// suite into the project — every suite file copied byte-identical into
+// <dir>/prompts/ (differing content rewritten, identical files untouched),
+// files the suite does not carry reported and left alone. It requires an
+// initialized project and writes nothing a running driver reads (the
+// automated driver never reads the target's prompts/), so it takes no run
+// lock; it runs no git command — the suite is tracked content, so the person
+// reviews and commits the resync. Exit 0 on a completed resync (an
+// already-current suite included), 1 on refusal or write failure.
+if (command === "install-prompts") {
+  try {
+    const result = await installPrompts(directory)
+    for (const line of formatInstallPrompts(directory, result)) console.log(line)
+    process.exit(0)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+}
+
 console.error(`usage:
   opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>]
@@ -2190,6 +2211,7 @@ console.error(`usage:
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
+  opencode-auto install-prompts [dir]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — plan establishes them), so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree

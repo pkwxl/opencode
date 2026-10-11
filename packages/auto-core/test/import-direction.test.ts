@@ -159,6 +159,9 @@ const CLASSIFIED: Record<string, Domain> = {
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   confirm: "driver",
+  // The manual-driver prompt suite installer (plans/0093): resyncs the
+  // suite's files into a target directory; embedded copies, no rendering.
+  "install-prompts": "driver",
   // The plan-step consistency verifier (plans/0080 §5): the classifier's
   // one-shot sibling that judges each composed planning prompt against the
   // active pack's verify-plan charter — strict reply parser, fail-closed
@@ -646,6 +649,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "agents-block": "runtime",
   clean: "runtime",
   confirm: "runtime",
+  // The manual-driver prompt suite installer (plans/0093): init-time
+  // installation machinery beside config/config-fix/bundle — file copies
+  // only, reaching config for the initialized-project check.
+  "install-prompts": "runtime",
   reset: "runtime",
   // AUTO-DECISION: prompt-facts (the PromptFacts builder) sits in runtime —
   // it reads only the switches and the provider loaders (pack, template) and

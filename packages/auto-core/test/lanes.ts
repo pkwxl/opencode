@@ -129,6 +129,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/handover.test.ts",
   "test/hibernate.test.ts",
   "test/import-direction.test.ts",
+  // The prompt-suite installer (plans/0093): in-memory registry guard plus
+  // temp-directory installs (no git repository, no spawn).
+  "test/install-prompts.test.ts",
   // The bundle self-ratchet (plans/0080 §7): in-memory renders over the
   // built-in bundles' materialized files (no git repository, no spawn).
   "test/intent-guarantees.test.ts",
