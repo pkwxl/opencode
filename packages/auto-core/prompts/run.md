@@ -192,9 +192,13 @@ iteration.
    relaunch as a continuation). `Status: done`, or no handover document, → the task's sessions are finished;
    go to step 5. A handover document that exists but lacks its status line → relaunch the task child session
    once with the feedback "the handover document lacks its `Status: continue|done` last line — a driver
-   protocol string, write it verbatim"; still invalid → stop and report. More than ten task-child sessions
-   for one task (continuations included) → stop and report: the task is larger than its planning meant, or
-   the sessions are looping — the person's call.
+   protocol string, write it verbatim"; still invalid → stop and report. There is no session-number cap:
+   while each handoff makes progress — done items newly landed beyond its predecessor's, kept in mind from
+   the last relaunch — keep launching continuations, however many sessions the task takes. The stop is the
+   stalled handoff: no newly landed work, the same next steps the predecessor left. One stall → relaunch
+   the task child session with the feedback naming it ("your previous session handed over without new
+   landed work — continue the task's actual scope"); a second consecutive stall → stop and report: the
+   sessions are looping — the person's call.
 5. Launch the verification child session: `run-verify.md` with `<task id>`, `<baseline commit>` (the recorded
    HEAD), `<task title>` (from the index line) and the wrap-up line (`WRITE` or `SKIP` per the config's
    `wrapup` key) filled. The prompt's re-verification behavior keys on `docs/T-NNN/gaps.md` existing — you
@@ -213,9 +217,10 @@ iteration.
      the session reads the gap list itself), then land its share exactly as step 3 does, with the fix-round
      subject `<task id> fix <round> <task title>` (`<round>` is the fix round, 1 or 2) and the same
      trailers, check its handover exactly as step 4 does (`Status: continue` → relaunch the fix child; no
-     handover document or `Status: done` → the round's fix sessions are finished; more than three fix
-     sessions in one round → stop and report), then launch a fresh verification child session (step 5
-     again). A task gets at most two fix rounds.
+     handover document or `Status: done` → the round's fix sessions are finished; the same progress rule
+     as step 4's governs the round's fix sessions — a progressing handoff continues, a second consecutive
+     stall stops and reports), then launch a fresh verification child session (step 5 again). A task gets
+     at most two fix rounds.
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: the unit's
      range from the baseline holds only its own commits — the share commits (`T-NNN exec <task title>` /
      `T-NNN fix <n> <task title>`, each optionally ending in its share ordinal `[<k>]`, each with the
