@@ -220,6 +220,24 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("poll your log in short steps — never sit waiting on a long command")
   })
 
+  test("the phase boundary is a stop by default; `phases: all` lifts it (plans/0091)", () => {
+    // One phase per hand-over: the master control ends the run at every
+    // phase boundary — the phase closed and landed, the report naming
+    // the review it waits for (the handover document, its OPEN decisions
+    // above all, the task reports) — and the person continues by handing
+    // the file over again; the restart takes the next not-closed phase
+    // through the ordinary boundary check, the loop's step 0 planning an
+    // unplanned one. The hand-over phrase `phases: all` lifts the stop
+    // for the whole run, riding beside the mode phrases and named in the
+    // report like a mode line so the person's restart repeats it.
+    const run = text("run.md")
+    expect(run).toContain("`phases: all`")
+    expect(run).toContain("one phase per hand-over")
+    expect(run).toContain("Stop at the phase boundary — the default")
+    expect(run).toContain("only under `phases: all`")
+    expect(run).toContain("the `phases: all` phrase when it rode")
+  })
+
   test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
     // The handover child mirrors the driver's handoverPhase: the distiller
     // session's four-section handover document (templates/prompts/

@@ -20,8 +20,11 @@ list and the consumed handover, `todo.md` → `done.md`, the index tick) — and
 tells you the task is safe to advance past. When a phase's tasks are all done the suite transfers between
 phases: a handover child session (`run-handover.md`) distills the phase handover document and performs the
 phase close-out — the driver's completion writes and commits — and a planning child session (`run-plan.md`)
-writes the next phase's task index and task documents, which the master control commits; the task loop then
-continues on the new phase, until the round's phases are done. All implementation
+writes the next phase's task index and task documents, which the master control commits. The phase boundary
+is a stop by default — one phase per hand-over: the person reviews the closed phase (its handover document,
+its task reports) before the next one is planned, and hands this file over again to continue; the phrase
+`phases: all` in the hand-over line lifts the stop, and only then does the task loop continue on the new
+phase, until the round's phases are done. All implementation
 work happens in child sessions launched through the host coding agent's subagent facility; the master-control
 session itself writes no implementation code and no state writes — its one driver write is the share commit
 that lands each task/fix session's work when the session ends (the driver's own unified commit after a
@@ -151,7 +154,7 @@ State lives on disk, never in the conversation: re-read the index and the state 
 iteration.
 
 0. Confirm the current phase is planned: its directory holds a `tasks.md`. Without one the phase is
-   established but unplanned → run the planning child on it (the Phase transfer section's step 4), then
+   established but unplanned → run the planning child on it (the Phase transfer section's step 5), then
    re-read the index here.
 1. Take the first ready task `T-NNN` in index order (rules above). Nothing ready → either every task of the
    phase is done — go to the Phase transfer section — or tasks remain pending but none is ready, an
@@ -224,7 +227,10 @@ iteration.
 
 State lives on disk as everywhere else: re-read `phases.md` and the phase directory at every step. In the
 no-phase mode (`phases: "m"`) the round is this one implicit phase: the same handover and close-out, no
-`phases.md` tick (there is no index), `<next target>` is `flow complete`, and the round is done.
+`phases.md` tick (there is no index), `<next target>` is `flow complete`, and the round is done. The
+boundary is a stop: this section ends with the phase closed and landed, and the session stops there (the
+step 4 report) unless the hand-over line named `phases: all` — the phrase that carries the loop on to the
+next phase and every phase after it without the stops.
 
 1. Confirm the phase complete: every line of its `tasks.md` ticked and every task's `done.md` present (the
    unit-files-win rule; a `Closed:` field counts as done).
@@ -242,9 +248,16 @@ no-phase mode (`phases: "m"`) the round is this one implicit phase: the same han
    <phase name> → <next target>`; `git status --porcelain` lists nothing (this repository and every nested
    one). Anything missing → relaunch the handover child session once with the specific deficiency as
    feedback; still failing → stop and report.
-4. The next phase: re-read `phases.md`. No uncompleted line remains → the round is complete: Finish — the
-   round's close (the round report, the person's review) is not this suite's business. Otherwise, for the
-   next not-closed phase:
+4. Stop at the phase boundary — the default: Finish, with the report naming the phase handed over (its
+   handover and transition commits) and the review it waits for — the phase's handover document, its OPEN
+   decisions above all, and its task reports; when this was the round's last phase, say the round is
+   complete and its close (the round report, the review) is the person's. The person continues by handing
+   this file over again: the restart re-reads `phases.md`, takes the next not-closed phase exactly as
+   step 5 does, and the loop's step 0 plans a phase whose directory holds no `tasks.md`. Nothing but the
+   phrase below keeps this session going past the boundary.
+5. The next phase — only under `phases: all`: re-read `phases.md`. No uncompleted line remains → the round
+   is complete: Finish — the round's close (the round report, the person's review) is not this suite's
+   business. Otherwise, for the next not-closed phase:
    - Its directory already holds a `tasks.md` → it was planned ahead: back to the loop's step 1 on it.
    - Otherwise launch the planning child session: `run-plan.md` with `<phase id>`, `<phase name>`,
      `<phase dir>` and `<round dir>` filled. Then validate mechanically: its `tasks.md` exists and holds at
@@ -265,9 +278,12 @@ no-phase mode (`phases: "m"`) the round is this one implicit phase: the same han
 
 The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
 with `sprint`); none named, this section is dormant and the run is
-unlimited. Where a mode conflicts with this file's rules, the mode wins — and its park/resume rules below
+unlimited. The same line may carry one more phrase beside them: `phases: all`, the Phase transfer section's
+phrase that lifts the default stop at each phase boundary — an unattended run (a sprint) usually names it,
+since nobody is there to review between phases. Where a mode conflicts with this file's rules, the mode
+wins — and its park/resume rules below
 override the boundary rule that refuses an already-begun task. Whatever you end with, your report names
-the mode line so the person's restart repeats it.
+the mode line — and the `phases: all` phrase when it rode — so the person's restart repeats them.
 
 - `mode: window <HH:MM–HH:MM> [tz]` (times UTC unless a zone is named): a launch window. No new child
   session of any role may be created inside the window — check the clock before every launch. A child
@@ -329,4 +345,6 @@ wrap-up verdicts, the phases handed over and planned (their transition and plan 
 person should review (the reports, the commit list, the `AUTO-RESOLVE`/
 `AUTO-DECISION` markers; the verifications inspected the work but did not re-run the acceptance's executable
 checks — a final test pass before accepting the phase is the person's call; when the round completed, its
-close — the round report, the review — remains the person's too). Then stop.
+close — the round report, the review — remains the person's too). When you stopped at a phase boundary, say
+so and name both continuations — handing this file over again (the next phase is planned from the restart),
+or `phases: all` in the hand-over line (the rest of the round without the stops). Then stop.
