@@ -205,7 +205,9 @@ describe("manual-driver prompt ratchet", () => {
     // while ≥10 minutes remain) so the run hands off at the wall and ends
     // properly before the kill; `mode: pace <minutes>` pauses between
     // child sessions — the person's throttle against a rolling 5-hour
-    // usage cap, waited in polled short steps, composable with sprint.
+    // usage cap, waited in polled short steps, composable with window
+    // alone (`pace` never rides with `sprint`: a wall-bounded run spends
+    // its runway on work, not on waiting).
     // All share the park/resume rules that
     // override the begun-task boundary refusal, resuming off 0087's
     // committed shares.
@@ -214,7 +216,7 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("`mode: sprint <minutes>`")
     expect(run).toContain("`sprint 175`")
     expect(run).toContain("`mode: pace <minutes>`")
-    expect(run).toContain("`mode: sprint 175 pace 20`")
+    expect(run).toContain("`mode: window <HH:MM–HH:MM> [tz] pace 20`")
     expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
   })
 

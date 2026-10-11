@@ -293,7 +293,7 @@ next phase and every phase after it without the stops.
 ## Run modes — window and sprint, chosen by one phrase
 
 The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
-with `sprint`); none named, this section is dormant and the run is
+with `window`, never with `sprint`); none named, this section is dormant and the run is
 unlimited. The same line may carry one more phrase beside them: `phases: all`, the Phase transfer section's
 phrase that lifts the default stop at each phase boundary — an unattended run (a sprint) usually names it,
 since nobody is there to review between phases. Where a mode conflicts with this file's rules, the mode
@@ -326,8 +326,9 @@ the mode line — and the `phases: all` phrase when it rode — so the person's 
   rolling usage limit (a 5-hour account cap): sized so any 5-hour window's consumption stays under it —
   you never compute quota, the figure is the knob. Wait in short polled steps (`sleep 300` then `date`,
   repeated): never one long silent sleep — ten minutes of silence is this session's kill line as well.
-  `pace` may ride with `sprint` (`mode: sprint 175 pace 20`): the waits count inside the wall, and a wall
-  arriving mid-wait ends the run properly instead of holding it.
+  `pace` may ride with `window` alone (`mode: window <HH:MM–HH:MM> [tz] pace 20`), the waits falling
+  inside the window's span — never with `sprint`: a wall-bounded run spends its runway on work, not on
+  waiting.
 
 Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
 clean except the transient gap list, a report of what remains. On the restart, uncommitted content means a child
