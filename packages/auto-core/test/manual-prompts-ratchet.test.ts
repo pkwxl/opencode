@@ -83,11 +83,16 @@ describe("manual-driver prompt ratchet", () => {
     }
     // plans/0094: a share landed at a handover carries the share ordinal in
     // its subject — ` [<k>]`, one past the unit's landed shares of the same
-    // role and round, so the log distinguishes sessions without the transient
-    // handoff — and the verification's range check accepts the optional tail.
+    // role and round, so the log distinguishes sessions — and the
+    // verification's range check accepts the optional tail. The handover
+    // itself rides the share commit (committed content, a precise revert
+    // point; only the gap list stays a disk transient), its deletion a
+    // completion write in the close-out's done commit.
     for (const literal of ["<task id> exec <task title> [<k>]", "<task id> fix <round> <task title> [<k>]"]) {
       expect(run, "run.md").toContain(literal)
     }
+    expect(run, "run.md").toContain("rides the share commit")
+    expect(text("run-verify.md")).toContain("the deletion is a completion write")
     const verify = text("run-verify.md")
     expect(verify, "run-verify.md").toContain("share ordinal ` [<k>]`")
     for (const literal of ["<task id> wrapup <task title>", "<task id> done <task title>", "Auto-Task: <task id>"]) {
@@ -309,7 +314,8 @@ describe("manual-driver prompt ratchet", () => {
       expect(text(name), name).toContain("`Status: done`")
       expect(text(name), name).toContain("`<session budget>`")
     }
-    // The close-out clears both transient channels, and the master control
+    // The close-out clears both channels (the gap list from disk, the riding
+    // handover through a committed completion write), and the master control
     // carries the budget default.
     expect(text("run-verify.md")).toContain("`docs/<task id>/handoff.md`")
     expect(text("run.md")).toContain("60 minutes")

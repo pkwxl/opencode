@@ -116,7 +116,7 @@ reply a child sends you to a few lines (the companions instruct them so).
   and of each nested one, and run every HEAD check and dirty-tree check of the loop against them all.
 - After a task or fix child session you land its share yourself (the loop's step 3, the INCOMPLETE branch for
   fix children): afterwards HEAD has advanced by exactly one commit per repository that changed, and the
-  porcelain lists only the transients (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`) — anything else is
+  porcelain lists only the transient gap list (`docs/T-NNN/gaps.md`) — anything else is
   residue: stop and report. A commit command inside a child session is a hard failure — the share commits are
   yours alone, the close-out's are the verification child's. Never push, stash, reset, rebase or amend.
 - Terminator discipline, enforced by the verification child sessions and by you for the report: every Markdown
@@ -165,14 +165,17 @@ iteration.
 2. Launch the task child session: `run-task.md` with `<task id>` and `<session budget>` filled — the session
    reads `docs/T-NNN/todo.md` itself.
 3. When it ends: the session changed something — `git status --porcelain` must list something besides the
-   transients (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`; a handover document alone is not a share): a
+   session files (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`; a handover document alone is not a
+   share — it rides one, never forms one): a
    zero-write session is never completion. Zero writes → relaunch the task child session once, appending one
    line of feedback ("your previous session ended without writing anything — carry the task out"); still
    zero writes → stop and report. Otherwise land the share — the driver's unified commit after a session: the
    same add + commit pass the verification's close-out makes, one commit per repository that changed (nested
-   repositories first, then this one), with the transients unstaged back out first in this repository
-   (`git restore --staged docs/T-NNN/handoff.md docs/T-NNN/gaps.md`, whichever exist — they stay on disk,
-   never in a commit), message:
+   repositories first, then this one), with `docs/T-NNN/gaps.md` unstaged back out first in this repository
+   (`git restore --staged docs/T-NNN/gaps.md` when it exists — the gap list stays on disk, never in a
+   commit); `docs/T-NNN/handoff.md` rides the share commit — the handover state lands with the work it
+   describes, so every share commit is a precise revert point to the handoff its successor started from,
+   message:
 
         <task id> exec <task title>
 
@@ -186,7 +189,7 @@ iteration.
    round's landed fix shares); a share landed without a handover document carries no ordinal. The title is
    truncated so the subject, ordinal included, stays within 100 characters; the trailers are written
    verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
-   the porcelain lists only the transients.
+   the porcelain lists only the transient gap list.
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
    `Status: continue` → relaunch the task child session (step 2; it reads the handover itself — label the
    relaunch as a continuation). `Status: done`, or no handover document, → the task's sessions are finished;
@@ -323,7 +326,7 @@ the mode line — and the `phases: all` phrase when it rode — so the person's 
   arriving mid-wait ends the run properly instead of holding it.
 
 Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
-clean except the transients, a report of what remains. On the restart, uncommitted content means a child
+clean except the transient gap list, a report of what remains. On the restart, uncommitted content means a child
 broke mid-session: identify its role from the task's last share commit (`T-NNN exec …` → the task child,
 `T-NNN fix …` → the fix child), read the `Status:` tail of `docs/T-NNN/handoff.md` and the presence of
 `gaps.md` for its state, re-derive the task's baseline as the parent of its first `T-NNN` share commit,

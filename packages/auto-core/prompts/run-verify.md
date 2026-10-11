@@ -9,8 +9,9 @@ whether the task session's output genuinely completes the task — and, when it 
 close-out: the driver's completion commits and state writes. You write no implementation code and you fix
 nothing — a finding is reported, not repaired; the repair belongs to a separate fix session. The unit's
 entire output is the committed range `<baseline commit>..HEAD` — each task or fix session's share, landed by
-the master control as its own commit at the session's end; the worktree is clean except the transients
-(`docs/<task id>/handoff.md`, `docs/<task id>/gaps.md`).
+the master control as its own commit at the session's end; the worktree is clean except the transient gap
+list (`docs/<task id>/gaps.md`) — the handover (`docs/<task id>/handoff.md`) is committed content, riding
+each share.
 
 Read first: `docs/<task id>/todo.md` — the task document (title line, `Phase:` field, `## Goal` / `## Scope` /
 `## Acceptance`). It is the standard you verify against.
@@ -27,7 +28,7 @@ else — and overwrite that gap list with the current one.
    `<task id> exec <task title>` or `<task id> fix <n> <task title>`, each optionally ending in the
    share ordinal ` [<k>]` (the master control appends it when the session ended by handing over),
    trailer `Auto-Stage: execute` — the master control's share commits. Anything else in the range was committed inside a task or fix session:
-   a hard failure — report it as such. The worktree is clean except the transients.
+   a hard failure — report it as such. The worktree is clean except the transient gap list.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —
@@ -51,9 +52,8 @@ else — and overwrite that gap list with the current one.
   yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session's
   work is landed (the report, then the state writes, each with its own commit — the work commits are the
   master control's shares, already in the range):
-  1. Delete `docs/<task id>/gaps.md` and `docs/<task id>/handoff.md` when present: a fixed round's gap list and
-     the task or fix sessions' consumed handover are stale state that must not land in a commit — the driver's
-     own completion removes both the same way.
+  1. Delete `docs/<task id>/gaps.md` when present: a fixed round's gap list is uncommitted transient
+     state — removed from disk alone, landing in no commit.
   2. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:
      one short section per acceptance criterion — what was done, with the evidence (your inspection and its
      outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open
@@ -68,7 +68,9 @@ else — and overwrite that gap list with the current one.
           Auto-Stage: wrapup
 
      When SKIP, write no report and make no wrap-up commit.
-  3. The completion writes: rename `docs/<task id>/todo.md` → `done.md`; tick the task's line in its phase's
+  3. The completion writes: rename `docs/<task id>/todo.md` → `done.md`; delete `docs/<task id>/handoff.md`
+     when present (its content rode the shares — the deletion is a completion write, landing in this
+     commit); tick the task's line in its phase's
      index (the `tasks.md` of the round/phase directory the document's `Phase:` field names:
      `- [ ] <task id>` → `- [x] <task id>`); if `.auto/units.json` holds a record for this task, remove it.
   4. The completion commit: the same add + commit pass, message:
