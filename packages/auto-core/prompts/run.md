@@ -326,9 +326,10 @@ the mode line — and the `phases: all` phrase when it rode — so the person's 
   rolling usage limit (a 5-hour account cap): sized so any 5-hour window's consumption stays under it —
   you never compute quota, the figure is the knob. Wait in short polled steps (`sleep 300` then `date`,
   repeated): never one long silent sleep — ten minutes of silence is this session's kill line as well.
-  `pace` may ride with `window` alone (`mode: window <HH:MM–HH:MM> [tz] pace 20`), the waits falling
-  inside the window's span — never with `sprint`: a wall-bounded run spends its runway on work, not on
-  waiting.
+  `pace` may ride with `window` alone (`mode: window <HH:MM–HH:MM> [tz] pace 20`): the waits apply
+  outside the window, never inside it — inside the window launches are blocked anyway; outside it, each
+  pause between child sessions slows the burn of tokens in the working stretches. Never with `sprint`: a
+  wall-bounded run spends its runway on work, not on waiting.
 
 Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
 clean except the transient gap list, a report of what remains. On the restart, uncommitted content means a child

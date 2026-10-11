@@ -206,7 +206,9 @@ describe("manual-driver prompt ratchet", () => {
     // properly before the kill; `mode: pace <minutes>` pauses between
     // child sessions — the person's throttle against a rolling 5-hour
     // usage cap, waited in polled short steps, composable with window
-    // alone (`pace` never rides with `sprint`: a wall-bounded run spends
+    // alone: its waits apply outside the window (inside it launches are
+    // blocked anyway), slowing the token burn of the working stretches
+    // (`pace` never rides with `sprint`: a wall-bounded run spends
     // its runway on work, not on waiting).
     // All share the park/resume rules that
     // override the begun-task boundary refusal, resuming off 0087's
