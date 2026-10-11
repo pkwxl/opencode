@@ -24,8 +24,9 @@ else — and overwrite that gap list with the current one.
 1. The unit's commit range holds only the unit's own commits: in this repository and in every nested
    repository (the master control's short facts carry their baselines), every commit in
    `<baseline commit>..HEAD` carries the `Auto-Task: <task id>` trailer and the share grammar — subject
-   `<task id> exec <task title>` or `<task id> fix <n> <task title>`, trailer `Auto-Stage: execute` — the
-   master control's share commits. Anything else in the range was committed inside a task or fix session:
+   `<task id> exec <task title>` or `<task id> fix <n> <task title>`, each optionally ending in the
+   share ordinal ` [<k>]` (the master control appends it when the session ended by handing over),
+   trailer `Auto-Stage: execute` — the master control's share commits. Anything else in the range was committed inside a task or fix session:
    a hard failure — report it as such. The worktree is clean except the transients.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.

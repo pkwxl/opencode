@@ -179,9 +179,14 @@ iteration.
         Auto-Task: <task id>
         Auto-Stage: execute
 
-   The subject is truncated past 100 characters; the trailers are written verbatim, never omitted. Afterwards
-   HEAD has advanced by exactly one commit per changed repository, and the porcelain lists only the
-   transients.
+   When the session left `docs/T-NNN/handoff.md` — it ended by handing over — the subject carries the share
+   ordinal: `<task id> exec <task title> [<k>]`, `<k>` one past the count of this task's landed exec shares
+   (you count your own landings; a restarted master control derives it from the log the same way). The
+   fix-round subject carries it identically (`<task id> fix <round> <task title> [<k>]`, counting the
+   round's landed fix shares); a share landed without a handover document carries no ordinal. The title is
+   truncated so the subject, ordinal included, stays within 100 characters; the trailers are written
+   verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
+   the porcelain lists only the transients.
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
    `Status: continue` → relaunch the task child session (step 2; it reads the handover itself — label the
    relaunch as a continuation). `Status: done`, or no handover document, → the task's sessions are finished;
@@ -213,7 +218,8 @@ iteration.
      again). A task gets at most two fix rounds.
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: the unit's
      range from the baseline holds only its own commits — the share commits (`T-NNN exec <task title>` /
-     `T-NNN fix <n> <task title>`, each with the `Auto-Task: T-NNN` trailer), then the close-out's
+     `T-NNN fix <n> <task title>`, each optionally ending in its share ordinal `[<k>]`, each with the
+     `Auto-Task: T-NNN` trailer), then the close-out's
      `T-NNN wrapup <task title>` (wrap-up line `WRITE` only), then `T-NNN done <task title>`; `git status
      --porcelain` lists nothing (this repository and every nested one); `docs/T-NNN/done.md` exists (no
      `todo.md`), the index line is ticked, and `docs/T-NNN/gaps.md` and `docs/T-NNN/handoff.md` are gone.

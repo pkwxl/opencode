@@ -81,7 +81,15 @@ describe("manual-driver prompt ratchet", () => {
     for (const literal of ["<task id> exec <task title>", "<task id> fix <round> <task title>", "Auto-Task: <task id>", "Auto-Stage: execute"]) {
       expect(run, "run.md").toContain(literal)
     }
+    // plans/0094: a share landed at a handover carries the share ordinal in
+    // its subject — ` [<k>]`, one past the unit's landed shares of the same
+    // role and round, so the log distinguishes sessions without the transient
+    // handoff — and the verification's range check accepts the optional tail.
+    for (const literal of ["<task id> exec <task title> [<k>]", "<task id> fix <round> <task title> [<k>]"]) {
+      expect(run, "run.md").toContain(literal)
+    }
     const verify = text("run-verify.md")
+    expect(verify, "run-verify.md").toContain("share ordinal ` [<k>]`")
     for (const literal of ["<task id> wrapup <task title>", "<task id> done <task title>", "Auto-Task: <task id>"]) {
       expect(verify, literal).toContain(literal)
     }
