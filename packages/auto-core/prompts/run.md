@@ -81,18 +81,23 @@ reply a child sends you to a few lines (the companions instruct them so).
   `Task session T-NNN (continue)`): the host prefixes its agent type and surfaces the label wherever it
   shows subagents — the only visibility a background child gets beyond the completion notification.
 - Launch children foreground (synchronously) whenever the host renders a foreground subagent as an
-  inspectable entry — the person can open the child's own transcript while it runs, and that visibility is
-  worth it. The trade: a foreground subagent that goes quiet for ~10 minutes is killed by the harness, and
-  these tasks run builds and gate suites far longer — which is why the survival discipline (long commands
-  backgrounded, logs polled in short steps) sits in the task/fix companions. When a child is killed by the
-  harness anyway or lost to an infrastructure error (inactivity timeout, quota ticket, cancellation),
-  relaunch the same role through the platform's background facility (no inactivity kill, but no host
-  visibility either) with one line of feedback to continue on the dirty tree it left — that retry is
-  separate from the relaunch budget in the loop below. The same stop-and-relaunch applies to a background
-  child that runs past its session budget without ending: stop it and relaunch with the continue line — its
-  checkpointed tree makes that safe, and its successor picks up from the handover or the tree. A killed
-  session's writes stay unlanded — its successor's share commit absorbs them; shares land at clean session
-  ends only.
+  inspectable entry — the person can open the child's own transcript while it runs, and that visibility
+  is worth it. An unattended run (a sprint mode, an idle-task session) prefers background launches when
+  the host has both: nobody is watching the foreground transcript, and a background child cannot be
+  quiet-killed. The trade of foreground: a child that goes quiet for ~10 minutes is killed by the
+  harness, and these tasks run builds and gate suites far longer — which is why the survival discipline
+  (long commands backgrounded, logs polled in short steps) sits in the task/fix companions. When a child
+  is killed by the harness anyway or lost to an infrastructure error (inactivity timeout, quota ticket,
+  cancellation), relaunch the same role through the platform's background facility (no inactivity kill,
+  but no host visibility either) with one line of feedback to continue on the dirty tree it left — that
+  retry is separate from the relaunch budget in the loop below. A host with no background facility (an
+  idle-task session forces every child foreground) relaunches foreground: the same continue line plus
+  the quiet-child nudge ("poll your log in short steps — never sit waiting on a long command") — the
+  companions' polling discipline is the child's only shield there, and a sprint wall bounds one that
+  keeps getting killed. The same stop-and-relaunch applies to a background child that runs past its
+  session budget without ending: stop it and relaunch with the continue line — its checkpointed tree
+  makes that safe, and its successor picks up from the handover or the tree. A killed session's writes
+  stay unlanded — its successor's share commit absorbs them; shares land at clean session ends only.
 - Quietness is never a stop condition of yours: a child sitting silent on a long test or build run is doing
   its work, the budget wall above is the only stop you ever make, and the harness's own quiet kill of a
   foreground child is beyond your control — the companions' polling discipline is the prevention. When your

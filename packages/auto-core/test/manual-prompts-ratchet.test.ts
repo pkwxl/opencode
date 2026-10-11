@@ -203,6 +203,23 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
   })
 
+  test("the unattended launch policy: background-first when both exist, the forced-foreground relaunch (plans/0090)", () => {
+    // An idle-task host (sprint mode's native one) forces every child
+    // foreground and kills a session ~10 minutes silent — so the killed-
+    // child fallback ("relaunch through the background facility") loses its
+    // subject, and the foreground preference loses its reason (nobody
+    // watches the transcript). The policy: an unattended run prefers
+    // background when the host has both; a host with no background facility
+    // relaunches a killed child foreground with the continue line plus the
+    // quiet-child nudge — the companions' polling discipline stays the
+    // child's only shield, the sprint wall the bound.
+    const run = text("run.md")
+    expect(run).toContain("prefers background launches when")
+    expect(run).toContain("A host with no background facility")
+    expect(run).toContain("forces every child foreground")
+    expect(run).toContain("poll your log in short steps — never sit waiting on a long command")
+  })
+
   test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
     // The handover child mirrors the driver's handoverPhase: the distiller
     // session's four-section handover document (templates/prompts/
