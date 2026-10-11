@@ -200,7 +200,9 @@ describe("manual-driver prompt ratchet", () => {
     // in run.md: `mode: window <HH:MM–HH:MM> [tz]` parks launches inside
     // the window (ongoing children finish); `mode: sprint <minutes>` walls
     // the whole run below the platform's task kill (a 3-hour kill →
-    // sprint 165), shrinking child budgets to the runway so the run ends
+    // sprint 175, the gap to the kill itself the landing margin), child
+    // budgets the runway itself (wall − now, no second margin — relaunch
+    // while ≥10 minutes remain) so the run hands off at the wall and ends
     // properly before the kill; `mode: pace <minutes>` pauses between
     // child sessions — the person's throttle against a rolling 5-hour
     // usage cap, waited in polled short steps, composable with sprint.
@@ -210,9 +212,9 @@ describe("manual-driver prompt ratchet", () => {
     const run = text("run.md")
     expect(run).toContain("`mode: window <HH:MM–HH:MM> [tz]`")
     expect(run).toContain("`mode: sprint <minutes>`")
-    expect(run).toContain("`sprint 165`")
+    expect(run).toContain("`sprint 175`")
     expect(run).toContain("`mode: pace <minutes>`")
-    expect(run).toContain("`mode: sprint 165 pace 20`")
+    expect(run).toContain("`mode: sprint 175 pace 20`")
     expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
   })
 

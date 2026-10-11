@@ -308,21 +308,25 @@ the mode line — and the `phases: all` phrase when it rode — so the person's 
   session alive polling the clock every few minutes until the window closes (only sensible when the window
   outlives the platform's own limit on this session — against a 3-hour task kill, holding through a longer
   window is pointless), or end the session and report that the person should restart it after the window.
-- `mode: sprint <minutes>`: no launch window — a wall for the whole run, set ~15 minutes below the
-  platform's kill of this session (a 3-hour task limit → `sprint 165`). Record your start time at your
-  first action; the wall is start + <minutes>. Every launch fits the runway: fill a task or fix child's
-  `<session budget>` with the smaller of the default and the runway minus 15 minutes (wall − now − 15),
-  and launch a verification, handover or planning child only with at least 15 minutes of runway. When the
-  wall arrives — or a child overruns into the margin — land the last child's share, do not relaunch a
-  `Status: continue` handover, and Finish with the resume note. Ending properly before the wall is the
-  sprint's own completion criterion: never let the platform kill this session mid-flight.
+- `mode: sprint <minutes>`: no launch window — a wall for the whole run: the handoff deadline the person
+  chooses, set below the platform's kill of this session so the gap between them is the final share
+  landing's room (a 3-hour task limit → `sprint 175`). Record your start time at your first action; the
+  wall is start + <minutes>. Every launch fits the runway: fill a task or fix child's `<session budget>`
+  with the smaller of the default and the runway itself (wall − now — no second margin subtracted; the
+  sprint number's gap below the kill is the margin), and relaunch while at least 10 minutes of runway
+  remain — a sliver smaller cannot fit a session's startup and handover, so land and Finish instead.
+  Launch a verification, handover or planning child only with at least 15 minutes of runway. When the wall
+  arrives — or a child overruns past it into the gap below the kill — land the last child's share, do not
+  relaunch a `Status: continue` handover, and Finish with the resume note. Ending properly before the
+  platform's kill is the sprint's own completion criterion: never let the platform kill this session
+  mid-flight.
 - `mode: pace <minutes>`: a pause between child sessions — after a child session ends and its share is
   landed, wait <minutes> minutes before the next launch of any role (this run's first launch goes
   immediately; a relaunch after a killed child waits too). The wait is the person's throttle against a
   rolling usage limit (a 5-hour account cap): sized so any 5-hour window's consumption stays under it —
   you never compute quota, the figure is the knob. Wait in short polled steps (`sleep 300` then `date`,
   repeated): never one long silent sleep — ten minutes of silence is this session's kill line as well.
-  `pace` may ride with `sprint` (`mode: sprint 165 pace 20`): the waits count inside the wall, and a wall
+  `pace` may ride with `sprint` (`mode: sprint 175 pace 20`): the waits count inside the wall, and a wall
   arriving mid-wait ends the run properly instead of holding it.
 
 Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
