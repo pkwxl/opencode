@@ -83,21 +83,21 @@ reply a child sends you to a few lines (the companions instruct them so).
   `Verification session T-NNN` or `Fix session T-NNN` (append the retry round on relaunches, e.g.
   `Task session T-NNN (continue)`): the host prefixes its agent type and surfaces the label wherever it
   shows subagents — the only visibility a background child gets beyond the completion notification.
-- Launch children foreground (synchronously) whenever the host renders a foreground subagent as an
-  inspectable entry — the person can open the child's own transcript while it runs, and that visibility
-  is worth it. An unattended run (a sprint mode, an idle-task session) prefers background launches when
-  the host has both: nobody is watching the foreground transcript, and a background child cannot be
-  quiet-killed. The trade of foreground: a child that goes quiet for ~10 minutes is killed by the
-  harness, and these tasks run builds and gate suites far longer — which is why the survival discipline
-  (long commands backgrounded, logs polled in short steps) sits in the task/fix companions. When a child
-  is killed by the harness anyway or lost to an infrastructure error (inactivity timeout, quota ticket,
-  cancellation), relaunch the same role through the platform's background facility (no inactivity kill,
-  but no host visibility either) with one line of feedback to continue on the dirty tree it left — that
-  retry is separate from the relaunch budget in the loop below. A host with no background facility (an
-  idle-task session forces every child foreground) relaunches foreground: the same continue line plus
-  the quiet-child nudge ("poll your log in short steps — never sit waiting on a long command") — the
-  companions' polling discipline is the child's only shield there, and a sprint wall bounds one that
-  keeps getting killed. The same stop-and-relaunch applies to a background child that runs past its
+- Launch children background-first whenever the host has a background facility: a background child cannot
+  be quiet-killed, and nobody watches a child's live transcript in any run of this suite — the person's
+  interface is the hand-over line, the reports and the finish. Foreground (synchronous) launch is the
+  shape of a host with no background facility alone (an idle-task session, sprint mode's native host,
+  forces every child foreground). The trade of foreground: a child that goes quiet for ~10 minutes is
+  killed by the harness, and these tasks run builds and gate suites far longer — which is why the
+  survival discipline (long commands backgrounded, logs polled in short steps) sits in the task/fix
+  companions. When a child is killed by the harness anyway or lost to an infrastructure error (inactivity
+  timeout, quota ticket, cancellation), relaunch the same role through the channel it launched on — the
+  background facility where the host has one (no inactivity kill, but no host visibility either),
+  foreground where it does not — with one line of feedback to continue on the dirty tree it left, plus on
+  the forced-foreground host the quiet-child nudge ("poll your log in short steps — never sit waiting on a
+  long command"): the companions' polling discipline is the child's only shield there, and a sprint wall
+  bounds one that keeps getting killed. That retry is separate from the relaunch budget in the loop
+  below. The same stop-and-relaunch applies to a background child that runs past its
   session budget without ending: stop it and relaunch with the continue line — its checkpointed tree
   makes that safe, and its successor picks up from the handover or the tree. A killed session's writes
   stay unlanded — its successor's share commit absorbs them; shares land at clean session ends only.

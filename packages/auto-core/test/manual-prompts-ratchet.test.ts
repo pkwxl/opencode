@@ -203,19 +203,21 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
   })
 
-  test("the unattended launch policy: background-first when both exist, the forced-foreground relaunch (plans/0090)", () => {
-    // An idle-task host (sprint mode's native one) forces every child
-    // foreground and kills a session ~10 minutes silent — so the killed-
-    // child fallback ("relaunch through the background facility") loses its
-    // subject, and the foreground preference loses its reason (nobody
-    // watches the transcript). The policy: an unattended run prefers
-    // background when the host has both; a host with no background facility
-    // relaunches a killed child foreground with the continue line plus the
-    // quiet-child nudge — the companions' polling discipline stays the
-    // child's only shield, the sprint wall the bound.
+  test("the facility-keyed launch: background-first for every run, foreground only forced (plans/0092)", () => {
+    // No run of this suite is attended in the watching sense — the person
+    // hands the file over and returns for the hand-overs and reports — so
+    // 0090's attendance keying never paid its foreground preference while
+    // its cost (the ~10-minute quiet kill) was paid by every plain run,
+    // and the one case it marked for background-first (a sprint on its
+    // native idle-task host) had no background facility at all. The
+    // policy: launch background-first wherever the host has a background
+    // facility; foreground only on a host without one (the idle-task
+    // session), where a killed child relaunches foreground with the
+    // continue line plus the quiet-child nudge — the companions' polling
+    // discipline the child's only shield, the sprint wall the bound.
     const run = text("run.md")
-    expect(run).toContain("prefers background launches when")
-    expect(run).toContain("A host with no background facility")
+    expect(run).toContain("Launch children background-first")
+    expect(run).toContain("nobody watches a child's live transcript")
     expect(run).toContain("forces every child foreground")
     expect(run).toContain("poll your log in short steps — never sit waiting on a long command")
   })
