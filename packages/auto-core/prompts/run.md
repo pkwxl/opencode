@@ -193,12 +193,14 @@ iteration.
    go to step 5. A handover document that exists but lacks its status line → relaunch the task child session
    once with the feedback "the handover document lacks its `Status: continue|done` last line — a driver
    protocol string, write it verbatim"; still invalid → stop and report. There is no session-number cap:
-   while each handoff makes progress — done items newly landed beyond its predecessor's, kept in mind from
-   the last relaunch — keep launching continuations, however many sessions the task takes. The stop is the
-   stalled handoff: no newly landed work, the same next steps the predecessor left. One stall → relaunch
-   the task child session with the feedback naming it ("your previous session handed over without new
-   landed work — continue the task's actual scope"); a second consecutive stall → stop and report: the
-   sessions are looping — the person's call.
+   while each session makes progress, keep launching continuations, however many sessions the task takes.
+   Progress is newly landed work in either of its two places: source changes its share committed in the
+   nested repositories (the inner git trees — most tasks' real work lands there), or done items in its
+   handoff beyond its predecessor's (kept in mind from the last relaunch). The stop is the stalled session:
+   no source change landed in any nested repository, and its handoff names no new done item — the same
+   next steps the predecessor left. One stall → relaunch the task child session with the feedback naming it
+   ("your previous session handed over without new landed work — continue the task's actual scope"); a
+   second consecutive stall → stop and report: the sessions are looping — the person's call.
 5. Launch the verification child session: `run-verify.md` with `<task id>`, `<baseline commit>` (the recorded
    HEAD), `<task title>` (from the index line) and the wrap-up line (`WRITE` or `SKIP` per the config's
    `wrapup` key) filled. The prompt's re-verification behavior keys on `docs/T-NNN/gaps.md` existing — you
