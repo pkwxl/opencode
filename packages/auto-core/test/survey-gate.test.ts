@@ -64,7 +64,9 @@ const wrapupReport = (id: string) =>
 // planning prompts carried the approved-analysis block (plans/0085 A1: the
 // survey's planner alone).
 const turn = (dir: string, surveyDir: { path?: string }, analysisBlocks: string[] = []): TurnScript => (ctx) => {
-  if (ctx.text.includes("## Input: approved project analysis")) {
+  if (ctx.text.includes("## Input: approved project analysis") && ctx.text.includes("responsible for the whole task")) {
+    // The formulation session's own prompt alone — the wrap-up inlines the
+    // todo too and must not double-count (plans/0095).
     analysisBlocks.push(ctx.text.includes('"Survey" phase') ? "survey" : ctx.text.includes('"Implementation" phase') ? "implement" : "other")
   }
   // The wrap-up check comes first: its prompt embeds the task block too.
@@ -76,9 +78,10 @@ const turn = (dir: string, surveyDir: { path?: string }, analysisBlocks: string[
     }
     return undefined
   }
-  // The survey task's whole-session: its task block names T-001 (the done
+  // The survey task's whole-session: its task block names the planned task
+  // (T-002 since plans/0095 — T-001 is the formulation unit; the done
   // list's `- [done] T-001:` line never matches the block form).
-  if (ctx.text.includes("# T-001: task T-001\n")) {
+  if (ctx.text.includes("# T-002: task T-002\n")) {
     if (surveyDir.path !== undefined) writeFileSync(join(dir, surveyDir.path, "survey.md"), SURVEY_DOC)
     return undefined
   }

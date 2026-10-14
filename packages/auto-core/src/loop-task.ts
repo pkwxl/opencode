@@ -279,7 +279,10 @@ async function handleLaneExit(ctx: LoopCtx, phase: PhaseUnit, task: Pick<Task, "
 // out of runTaskLoop's body (S3): every line is the serial loop's own, in its
 // order; the byte-identical floor depends on it. Returns 0 = the unit closed,
 // keep scheduling; anything else = the loop's exit code.
-async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: Task): Promise<number> {
+// Exported since plans/0095: the formulation step (loop-plan's planPhase)
+// runs the phase's first task unit through this same path — the planning
+// session is an ordinary task, not a bypass.
+export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, task: Task): Promise<number> {
   const { directory, opts, server: serverHandle, repl } = ctx
   // no wait before the first task; pause between tasks only when a
   // successor exists.

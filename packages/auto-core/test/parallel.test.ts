@@ -4,10 +4,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { phaseTypeOfLetter, planDutiesPartial } from "../src/phases/registry"
+import { phaseTypeOfLetter } from "../src/phases/registry"
 import { promptFacts } from "../src/prompt-facts"
-import { renderText } from "../src/template"
-import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
+import { renderFormulationTodo } from "../src/prompt-plan"
 
 const dirs: string[] = []
 function tempDir() {
@@ -24,14 +23,13 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const planDuties = renderText(`{{> ${planDutiesPartial(phaseTypeOfLetter("m"))}}>`, {}).trimEnd()
 const phasePlan = (parallel?: "low" | "medium" | "high") =>
-  renderPhasePlan(promptFacts({ dir: factsDir }), { phase: phaseTypeOfLetter("m"), planDuties, phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
+  renderFormulationTodo(promptFacts({ dir: factsDir }), { phase: phaseTypeOfLetter("m"), phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel, numberStart: 2, charter: "" }).scope
 const implementPlan = (parallel?: "low" | "medium" | "high") =>
-  renderImplementPlan(promptFacts({ dir: factsDir }), { content: "prompt.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel })
+  renderFormulationTodo(promptFacts({ dir: factsDir }), { phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel, numberStart: 2, input: "prompt.", charter: "" }).scope
 
 describe("planning guidance block (D10/D11)", () => {
-  test("each level injects its own subsection into both planning templates; none injects nothing", () => {
+  test("each level injects its own subsection into both formulation variants; none injects nothing", () => {
     expect(phasePlan()).not.toContain("## Parallelism")
     expect(implementPlan()).not.toContain("## Parallelism")
     expect(phasePlan("low")).toContain("## Parallelism (low)")

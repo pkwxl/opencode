@@ -275,20 +275,33 @@ next phase and every phase after it without the stops.
    is complete: Finish — the round's close (the round report, the person's review) is not this suite's
    business. Otherwise, for the next not-closed phase:
    - Its directory already holds a `tasks.md` → it was planned ahead: back to the loop's step 1 on it.
-   - Otherwise launch the planning child session: `run-plan.md` with `<phase id>`, `<phase name>`,
-     `<phase dir>` and `<round dir>` filled. Then validate mechanically: its `tasks.md` exists and holds at
-     least one `- [ ] T-NNN` line; every listed `T-NNN` has its `docs/T-NNN/todo.md` (title line, `Phase:`
-     field, the three sections — the terminator its last body line, a tail check as the report's); no listed
-     `T-NNN` reuses a `docs/T-NNN/` directory that existed before this planning. Anything invalid → relaunch
-     the planning child session once with the specific deficiency as feedback; still failing → stop and
-     report. Then land the plan commit — the same add + commit pass (nested repositories first), message:
+   - Otherwise construct the formulation task — the phase's planning as its first task unit: pick the next
+     free number (the highest existing `T-NNN` + 1), write `docs/T-NNN/todo.md` (title line `# T-NNN:
+     Formulate the <phase name> tasks`, field lines `Phase: R-NN.P<nn>`, `Formulate: R-NN.P<nn>` and
+     `Depends: none`, then `## Goal` — formulate this phase's complete task plan, one sentence —, `##
+     Scope` — name the sources the plan derives from: the phase's `plan-input.md`, the previous phase's
+     handover, the brief, the phase type's duty when custom — and `## Acceptance` — every obligation those
+     sources name is covered by a planned task or explicitly deferred with the reason recorded; every
+     task's `## Acceptance` verifiable by inspection of its work; every task self-contained; decisions
+     recorded), and the index's first line `- [ ] T-NNN Formulate the <phase name> tasks`. Land the
+     construction commit — the same add + commit pass (nested repositories first), message:
 
-        PLAN plan <phase id> <phase name>
+        PLAN formulate <phase id> <phase name>
 
         Auto-Task: PLAN
-        Auto-Stage: phase-plan
+        Auto-Stage: phase-formulate
 
-     The trailers are written verbatim, never omitted. Back to the loop's step 1 on the new phase.
+     The trailers are written verbatim, never omitted. Then launch the formulation child session:
+     `run-plan.md` with `<task id>`, `<phase id>`, `<phase name>`, `<phase dir>` and `<round dir>` filled
+     — the formulation task runs like any task child; its share lands as the task grammar's own commit
+     (`<task id> exec <title>`, `Auto-Stage: execute`), and it closes out through the same verification
+     child and done state-writes as the loop's task flow. Validate mechanically: `tasks.md` lists the
+     formulation task plus at least one planned `- [ ] T-NNN` line; every listed `T-NNN` has its
+     `docs/T-NNN/todo.md` (title line, `Phase:` field, the three sections — the terminator its last body
+     line, a tail check as the report's); no listed `T-NNN` reuses a `docs/T-NNN/` directory that existed
+     before this planning. Anything invalid → relaunch the formulation child session once with the
+     specific deficiency as feedback; still failing → stop and report. Back to the loop's step 1 on the
+     new phase.
 
 ## Run modes — window and sprint, chosen by one phrase
 

@@ -1,16 +1,22 @@
-# run-plan — prompt for the phase planning child session
+# run-plan — prompt for the formulation task's child session
 
-<!-- Companion of run.md (master control). run.md's primary fills <phase id> (P<nn>-<type>), <phase name>,
-<phase dir> (docs/R-NN/P<nn>-<type>) and <round dir> (docs/R-NN), and hands this whole file to a fresh child
-session as its prompt; the session reads every file it needs itself, at the paths named below. -->
+<!-- Companion of run.md (master control). run.md's primary fills <task id> (the formulation task's T-NNN),
+<phase id> (P<nn>-<type>), <phase name>, <phase dir> (docs/R-NN/P<nn>-<type>) and <round dir> (docs/R-NN),
+and hands this whole file to a fresh child session as its prompt; the session reads every file it needs
+itself, at the paths named below. The formulation task is the phase's first task unit (the driver's
+plans/0095): its todo is the task's single input, and this child executes it like any task child — its
+share lands as the master control's `<task id> exec` commit, the worker itself never commits. -->
 
-You are the planning session for the <phase id> (<phase name>) phase of this target directory: the phase is
-established (its directory and todo.md exist — never touch them) but unplanned. You write its task index and
-its task documents; the master control commits them and the task sessions carry them out. You plan only: no
-implementation, no edits outside the documents named below.
+You are the task session for the formulation task <task id> of the <phase id> (<phase name>) phase of this
+target directory: the task's document (`docs/<task id>/todo.md`) is your single input — its `## Scope`
+names the sources the plan derives from, its `## Acceptance` states the bar the plan must meet. You write
+the phase's task index and its task documents; the master control commits them and the task sessions carry
+them out. You plan only: no implementation, no edits outside the documents named below.
 
 Read first, in this order:
 
+0. `docs/<task id>/todo.md` — the formulation task itself: the Goal, the Scope's sources and the
+   Acceptance bar. Everything below this item serves that document.
 1. `<round dir>/phases.md` — the phase index: where this phase sits in the round, what the phases before it
    were, what the phases after it are.
 2. The previous phase's handover document — the last `handover.md` inside `<round dir>/P<nn>-<type>/`

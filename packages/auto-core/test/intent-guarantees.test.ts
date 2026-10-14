@@ -25,7 +25,7 @@ import type { IntentPack } from "../src/intent/types"
 import { loadModes, type ModeSpec } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
 import { BUILTIN_PHASE_TYPES, resolvePhases, type PhaseTypeEntry } from "../src/phases/registry"
-import { planDutyText, renderPhasePlan } from "../src/prompt-plan"
+import { renderFormulationTodo } from "../src/prompt-plan"
 import { promptFacts } from "../src/prompt-facts"
 import { renderSubtask, renderWhole, renderWrapup, type PromptFacts } from "../src/prompt"
 import { taskDocPaths } from "../src/docpaths"
@@ -66,15 +66,18 @@ async function stamped(name: string): Promise<Stamped> {
 // The execution-surface shims (the prompt-family tests' fixtures and views).
 const views = promptViews(plan, task)
 const docs = taskDocPaths(task.id)
-const phasePlanOf = (b: Stamped, entry: PhaseTypeEntry, i: number) =>
-  renderPhasePlan(b.facts, {
+const phasePlanOf = (b: Stamped, entry: PhaseTypeEntry, i: number) => {
+  const todo = renderFormulationTodo(b.facts, {
     phase: entry,
-    planDuties: planDutyText(b.facts, entry),
     phaseId: `R-01.P${String(i + 1).padStart(2, "0")}`,
     taskIndex: `docs/R-01/P${String(i + 1).padStart(2, "0")}-${entry.type}/tasks.md`,
     brief: BRIEF,
     mode: b.mode,
+    numberStart: 2,
+    charter: "",
   })
+  return `${todo.goal}\n\n## Scope\n\n${todo.scope}`
+}
 
 describe("the bundle self-ratchet (plans/0080 §7)", () => {
   test("every built-in bundle's composed prompts hold its own declared asserts — phase-plan per phase, whole, subtask, wrapup — and the precedence block rides along", async () => {

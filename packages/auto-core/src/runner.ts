@@ -1,4 +1,4 @@
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
@@ -11,13 +11,14 @@ import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } f
 import { failbackApplies } from "./failback"
 import { formatTokens } from "./format"
 import { removeIfUntracked, unitBaseline, type UnitBaseline } from "./git"
+import { advanceNextTask, readNextTask, taskNumber } from "./numbering"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type UnitStop } from "./opts"
 import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
-import { begin, checklistTitle, markDone, reloadTask, type ChecklistItem, type Plan, type Task } from "./tasks"
+import { begin, checklistTitle, markDone, plannedTaskProblems, reloadTask, takenTaskIds, type ChecklistItem, type Plan, type Task } from "./tasks"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
@@ -736,6 +737,28 @@ export async function runTask(
           // nothing).
           if (opts.router?.consumeFailback()) resetRoute(chain)
         }
+      }
+      // The formulation task's mechanical collect (plans/0095 D3):
+      // plannedTaskProblems over the index the formulation session wrote —
+      // the formulation unit itself skipped per-task but present in the
+      // dependency graph (the planned tasks' default previous-sibling
+      // prerequisite is it) — before the wrap-up judges the charter. Problems
+      // block the unit (a conscious v1 simplification: the one feedback
+      // retry of the bypass era is not rebuilt; a re-run dispatches a fresh
+      // session over the surviving files). On pass, the numbering record
+      // advances to the highest listed number + 1 when it exists —
+      // construction already advanced past the formulation number, and the
+      // deterministic floor covers a missing record either way.
+      if (task.formulate !== undefined) {
+        const [round, phaseId] = plan.phase.split(".")
+        const phase = { round: round!, id: phaseId!, dir: dirname(plan.index) }
+        const n = taskNumber(task.id) ?? 1
+        const checked = await plannedTaskProblems(dir, phase, { before: await takenTaskIds(dir, phase), numberStart: n + 1, skip: new Set([task.id]) })
+        if (checked.problems.length) {
+          return { type: "blocked", question: `the formulation output is invalid: ${checked.problems.join("; ")}` }
+        }
+        if ((await readNextTask(dir)) !== undefined) await advanceNextTask(dir, checked.ids)
+        log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)`)
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
       // (--no-wrapup, default true). Since plans/0083 (D1–D5) the wrap-up

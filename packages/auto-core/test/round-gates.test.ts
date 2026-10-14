@@ -9,7 +9,7 @@ import { loadProjectConfig } from "../src/config"
 import { acceptanceMark, p1Scope, roleOf } from "../src/document/roles"
 import { clarifiedMark, completePhase, establishRound, forksWithoutRecommend, phaseGateProblems, phaseGates, readPhases, surveyForks } from "../src/phases"
 import { renderPhaseHandover } from "../src/prompt"
-import { renderPhasePlan } from "../src/prompt-plan"
+import { renderFormulationTodo } from "../src/prompt-plan"
 import { closeSection, renderRoundBrief, roundBriefText } from "../src/round-brief"
 import { roundCloseLines, roundCloseProblems } from "../src/round-close"
 import { phaseType, planDutiesPartial } from "../src/phases/registry"
@@ -371,12 +371,12 @@ describe("prompt slots (plans/0049 G3/G7)", () => {
   const duties = renderText(`{{> ${planDutiesPartial(design)}}}>`, {}).trimEnd()
 
   test("phase-plan injects the round brief with its intent rules only when there is one", () => {
-    const base = { phase: design, planDuties: duties, phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-design/tasks.md" }
-    const withBrief = renderPhasePlan(facts, { ...base, round: "## Goal\n\nPort the driver to arm64." })
+    const base = { phase: design, phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-design/tasks.md", numberStart: 2, charter: duties }
+    const withBrief = renderFormulationTodo(facts, { ...base, round: "## Goal\n\nPort the driver to arm64." }).scope
     expect(withBrief).toContain("## Input: round brief (this round's round.md)")
     expect(withBrief).toContain("Port the driver to arm64.")
     expect(withBrief).toContain("never edit round.md")
-    expect(renderPhasePlan(facts, base)).not.toContain("round brief")
+    expect(renderFormulationTodo(facts, base).scope).not.toContain("round brief")
   })
 
   test("phase-handover asks for the acceptance draft and forbids the sign-off only when the gate is on", () => {

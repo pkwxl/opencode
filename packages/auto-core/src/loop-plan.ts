@@ -14,15 +14,16 @@ import { requireArtifact } from "./artifact"
 import { openBlockage, type BlockageSite } from "./blockage-diagnose"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
+import { constructFormulation, formulationAcceptance, formulationNumber } from "./formulate"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
-import type { LoopCtx } from "./loop-task"
+import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
-import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
+import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "./prompt-plan"
 import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
@@ -35,16 +36,14 @@ import {
   doneTaskIds,
   loadPlan,
   newTaskProblems,
-  plannedTaskProblems,
   qualifiedPhase,
-  resetPlanning,
+  renderTaskTodo,
   takenTaskIds,
   taskDecl,
   taskIndexPath,
   taskStatePaths,
   type PlanPhase,
 } from "./tasks"
-import { templateRenders } from "./template"
 import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
 
 // the phase index (routing already validated it; re-read here only for the
@@ -62,12 +61,15 @@ export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(
 // branch exactly when its session would wait for the human.
 const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute", intent: ctx.opts.intent })
 
-// A phase type's duty paragraph for the planning/append prompts (E2):
-// prompt-plan's planDutyText — the type's own `## plan duties` (custom
-// types), then — the pack tier, plans/0080 §4 — the active pack's `###
-// <dutiesRef>` under `## phase duties`, then the core shared partial,
-// rendered through the active library so overlays apply.
-const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string => planDutyText(planFacts(ctx), entry)
+// A phase type's duty paragraph for the append prompt (E2): prompt-plan's
+// planDutyText — the type's own `## plan duties` (custom types), then — the
+// pack tier, plans/0080 §4 — the active pack's `### <dutiesRef>` under `##
+// phase duties`, then the core shared partial, rendered through the active
+// library so overlays apply. The ctx (plans/0095 D4) threads the two facts
+// the pack texts reference, fixing the empty-paren / dropped-conditional
+// render of the empty-ctx era.
+const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string =>
+  planDutyText(planFacts(ctx), entry, { phaseName: entry.name, ...(ctx.opts.testByDriver ? { testByDriver: true } : {}) })
 
 // The plan-step consistency gate (plans/0080 §5): before a planning or append
 // session runs, its composed prompt is judged against the active pack's
@@ -173,19 +175,19 @@ async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step:
   }
 }
 
-// the phase planning session (§E): a one-off bypass reusing the
-// requireArtifact skeleton, artifacts = this phase's task index
-// <phase-directory>/tasks.md + each task's docs/T-NNN/todo.md (M3.4,
-// plans/0047 L3); collect shape-checks under the mandatory policy
-// (plannedTaskProblems). The pseudo task PLAN enters no task chain and writes
-// no progress record.
-// m mode (ctx.manual) plans on the same step, commit stage and checks
-// (plans/0053 D12), with three differences: the prompt is implement-plan over
-// the persisted planning input, which m-mode planning requires (m mode has no
-// round brief or handovers); the routing role is implement-scan, so existing
-// routing configs stay valid; and without the numbering record the tasks are
-// numbered after the highest taken id. Returns 0 = planning complete, 1 = m
-// mode with no planning input.
+// The phase's formulation step (plans/0095 D1): construct the formulation
+// task — the phase's first task unit, its todo the single synthesized input —
+// and run it through the ordinary serial unit path (runSerialUnit: the
+// whole-task session, the mechanical collect, the wrap-up verification over
+// the charter-as-acceptance, the terminal commit). The bypass planning
+// session, the PLAN pseudo task and the phase-plan step record retired with
+// it; an interrupted formulation task resumes as any task (the recovery
+// ladder), and plan's stop condition still stops after it — the completed
+// plan is its review point. m mode plans on the same step (plans/0053 D12's
+// rule kept: a planning input is required), the formulation task of the
+// implicit P01-implement.
+// Returns 0 = the formulation task completed (the phase's tasks are written
+// and verified), 1 = m mode with no planning input, 2 = blocked.
 export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   // The phase loop routes m mode here only with an input, new or persisted;
@@ -194,13 +196,12 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     log(`⏸ nothing to plan ${phaseTitle(phase)} against: m-mode planning plans against a planning input, and ${planInputPath(phase)} is missing or empty`)
     return 1
   }
-  // auto numbering (config.autoNumber): the planning session's numbering
-  // start comes from the .auto/next-task record; a missing record is restored
-  // first (no historical evidence writes 1 directly, with evidence an AI
-  // inference session opens, see src/numbering.ts), and a blocked restore
-  // exits 2. The restore session itself produces one unified commit
-  // (stage=numbering), ahead of the planning session.
-  let numberStart: number | undefined
+  // auto numbering (config.autoNumber): the record must exist before
+  // construction allocates the formulation number; a missing record is
+  // restored first (no historical evidence writes 1 directly, with evidence
+  // an AI inference session opens, see src/numbering.ts), and a blocked
+  // restore exits 2. The restore session itself produces one unified commit
+  // (stage=numbering), ahead of construction.
   if (opts.autoNumber) {
     const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "plan-numbering" }))
     if (numbering.type === "dirty") {
@@ -212,15 +213,12 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       log(`⏸ numbering-record restore session blocked (implicit block, investigate and re-run):\n${numbering.question}`)
       return 2
     }
-    numberStart = numbering.next
   }
-  // The planning input (plans/0053 D9): a new text is persisted to the phase's
-  // plan-input.md and committed on its own before the planning unit starts;
-  // without one the step plans against the persisted file, so an interrupted
-  // or blocked step resumes with its input under plan and run alike. A
-  // different text restarts an open step in a new session: the latest input
-  // wins, and no reused session plans against a text it never saw.
-  let restart: string | undefined
+  // The planning input (plans/0053 D9), unchanged: a new text is persisted to
+  // the phase's plan-input.md and committed on its own before construction;
+  // without one the step plans against the persisted file. A changed input
+  // re-renders a different todo, which construction's rewrite-on-diff lands —
+  // the restart channel of the bypass era, folded into idempotence.
   if (ctx.input) {
     const text = ctx.input.text
     const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
@@ -236,146 +234,122 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     ctx.input = undefined
     if (saved.type === "saved") {
       log(`✓ planning input saved to ${planInputPath(phase)}`)
-      restart = "the planning input changed"
       // The admission warn (plans/0082 §10 D14b): the same charter check over
       // the person's text, warn-and-record, never refuse.
-      await admissionWarn(ctx, phase, text, ctx.manual ? `implement-plan ${qualifiedPhase(phase)}` : `phase-plan ${phaseKey(phase).id}`)
+      await admissionWarn(ctx, phase, text, `formulation ${phaseKey(phase).id}`)
     }
   }
   const input = (await readPlanInput(directory, phase))?.trim() || undefined
-  if (input && !restart) log(`ℹ planning against the persisted input ${planInputPath(phase)}`)
-  // An optional slot, not a tier-1 marker (D11): an override that predates it
-  // still loads, and would silently drop the input.
-  if (!ctx.manual && input && !templateRenders("phase-plan", "input")) {
-    log("⚠ the project's phase-plan template does not render {{input}}; the planning session will not see the input")
-  }
+  if (input) log(`ℹ planning against the persisted input ${planInputPath(phase)}`)
   // The project brief (plans/0052 D9), comments stripped: an untouched stub injects nothing.
   const brief = await projectBriefText(directory)
   const taskIndex = taskIndexPath(phase)
   const phaseId = qualifiedPhase(phase)
-  // the taken task numbers: the tasks other phases' task indexes list and
-  // the already-completed tasks (this phase's own planning leftovers do not
-  // count — an interrupted resume/feedback retry rewrites the same batch of
-  // numbers).
-  const taken = await takenTaskIds(directory, phase)
-  // The compose-and-verify loop (plans/0082 §5 D7 / §6 D9): the composed
-  // planning prompt meets the intent charter here — where the human planning
-  // input, the brief and the duties all sit in one text. Blocked (2) = the
-  // verdict or a fail-closed verifier stopped the step before any session
-  // ran; "remediate" = the interactive fast path executed an approved option
-  // inline, and the step re-composes and re-verifies from scratch (bounded
-  // at two inline remediations — the diagnosis gate's own suspension holds
-  // the third).
-  const compose = async (): Promise<{ prompt: string; blocks: BlockMapEntry[] }> => {
+  // The compose-and-verify loop (plans/0082 §5 D7 / §6 D9, retargeted by
+  // 0095 D4): the assembled formulation todo — the exact document
+  // construction is about to write — meets the intent charter here, where
+  // the human planning input, the brief and the duties all sit in one text.
+  // Blocked (2) = the verdict or a fail-closed verifier stopped the step
+  // before anything landed; "remediate" = the interactive fast path executed
+  // an approved option inline, and the step re-composes and re-verifies from
+  // scratch (bounded at two inline remediations — the diagnosis gate's own
+  // suspension holds the third).
+  const compose = async (): Promise<{ todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[] }> => {
+    const charter = formulationAcceptance(planFacts(ctx))
+    const n = await formulationNumber(directory, phase, Boolean(opts.autoNumber))
+    const facts = planFacts(ctx)
     if (ctx.manual) {
+      const todo = renderFormulationTodo(facts, {
+        phaseId,
+        taskIndex,
+        numberStart: n + 1,
+        brief,
+        input: input!,
+        inputPath: planInputPath(phase),
+        mode: opts.mode,
+        parallel: opts.parallel,
+        // The no-phase implicit round's single phase is the round's final one
+        // (plans/0081 D2): its formulation carries the report duty.
+        finalPhase: true,
+        reportFile: reportForUserPath(await currentRound(directory)),
+        charter,
+      })
       return {
-        prompt: renderImplementPlan(planFacts(ctx), {
-          file: planInputPath(phase),
-          content: input!,
-          brief,
-          phaseId,
-          taskIndex,
-          // Without the numbering record: after the highest taken id (the former
-          // init shortcut's rule, plans/0053 D12).
-          numberStart: numberStart ?? Math.max(0, ...[...taken].map((id) => taskNumber(id) ?? 0)) + 1,
-          parallel: opts.parallel,
-          // The no-phase implicit round's single phase is the round's final one
-          // (plans/0081 D2): its planner carries the report duty like any other.
-          round: await currentRound(directory),
-        }),
+        todo,
+        document: previewFormulationDocument(todo, phaseId),
         blocks: [
-          { block: "template", source: "the implement-plan template" },
+          { block: "formulation todo", source: "the deterministic assembly (plans/0095)" },
           { block: "planning input", source: input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
           { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
           { block: "task index", source: taskIndex },
         ],
       }
     }
-    return phasePlanPrompt(ctx, phase, { brief, input, taskIndex, phaseId, numberStart })
+    return formulationCompose(ctx, phase, { brief, input, taskIndex, phaseId, numberStart: n + 1, charter })
   }
-  let prompt = ""
   let verified: number | "remediate" = 0
   for (let pass = 0; ; pass++) {
     const composed = await compose()
-    prompt = composed.prompt
-    verified = await verifyPlanStep(ctx, phase, ctx.manual ? `implement-plan ${phaseId}` : `phase-plan ${phaseKey(phase).id}`, prompt, composed.blocks)
-    if (verified !== "remediate") break
+    verified = await verifyPlanStep(ctx, phase, `formulation ${phaseKey(phase).id}`, composed.document, composed.blocks)
+    if (verified !== "remediate") {
+      if (verified !== 0) return verified
+      // Construction (plans/0095 D1): land the verified document as the
+      // phase's first task unit — idempotent, so the remediate loop's final
+      // composition is the one that lands.
+      const landed = await constructFormulation(directory, phase, composed.todo, { autoNumber: opts.autoNumber })
+      if (landed.type === "dirty") {
+        log(`⏸ worktree not clean before constructing the formulation task; handle it manually (commit/clean) and re-run:`)
+        for (const file of landed.files) log(`  ${file}`)
+        return 2
+      }
+      if (landed.type === "failed") {
+        log(`⏸ ${landed.question}`)
+        return 2
+      }
+      log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
+      // The formulation task runs as the phase's first ordinary unit — the
+      // serial path by design (plans/0095 D5: a phase's only ready unit, its
+      // Touches everything, ahead of everything it plans).
+      const plan = await loadPlan(directory, phase)
+      const task = plan.tasks.find((entry) => entry.id === landed.id)
+      if (!task) {
+        log(`⏸ the constructed formulation task ${landed.id} is not listed in ${taskIndex}; investigate and re-run`)
+        return 2
+      }
+      const code = await runSerialUnit(ctx, phase, plan, task)
+      if (code !== 0) return code
+      // plan's summary lists the planned batch (the index after the
+      // formulation unit) — the formulation task itself is machinery.
+      const fresh = await loadPlan(directory, phase)
+      ctx.planned = fresh.tasks.filter((entry) => entry.formulate === undefined).map((entry) => entry.id)
+      log(`✓ phase planning complete: ${taskIndex} lists ${ctx.planned.length} task(s)`)
+      return 0
+    }
     if (pass >= 1) {
       log("⏸ the step re-blocked after two inline remediations; stopping — the diagnosis gate suspends further attempts")
       return 2
     }
   }
-  if (verified !== 0) return verified
-  let problems: string[] = []
-  log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
-  const planned = await requireArtifact(
-    serverHandle,
-    { id: "PLAN", title: `phase planning (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
-    prompt,
-    sessionOpts(ctx, { site: "phase-plan" }),
-    {
-      kind: "phase planning",
-      step: { step: "phase-plan", unit: phaseKey(phase).id },
-      restart,
-      role: ctx.manual ? "implement-scan" : undefined,
-      // Independent hidden task unit: entry clean gate + SHA baseline + close-out
-      // check (plans/0021-commit-boundary-design.md).
-      unitStart: true,
-      artifact: `a valid task index ${taskIndex} with its task documents (at least one task)`,
-      detail: "missing, no task, a non-compliant task document, or a task number reusing a taken number",
-      get requirement() {
-        return (
-          `write the task index ${taskIndex} (one line per task, \`- [ ] T-NNN <task title>\`, at least one` +
-          `${ctx.manual ? "" : "; even if you believe this phase has nothing to do, write one explanatory task"}) ` +
-          `and each task's docs/T-NNN/todo.md (title line \`# T-NNN: <task title>\`, field line \`Phase: ${phaseId}\`, ` +
-          `the three sections \`## Goal\` / \`## Scope\` / \`## Acceptance\`, last line \`<!-- auto: eof -->\`).` +
-          (problems.length ? ` Problems last time: ${problems.join("; ")}.` : "")
-        )
-      },
-      commit: { stage: "phase-plan", subject: `PLAN plan ${phaseTitle(phase)}` },
-      reset: () => resetPlanning(directory, phase),
-      collect: async () => {
-        const checked = await plannedTaskProblems(directory, phase, { before: taken, numberStart })
-        problems = checked.problems
-        return problems.length ? undefined : checked.ids
-      },
-    },
-  )
-  if (!Array.isArray(planned)) {
-    if (planned.type === "dirty") {
-      log(`⏸ worktree not clean before starting the phase planning session; handle it manually (commit/clean) and re-run:`)
-      for (const file of planned.files) log(`  ${file}`)
-    } else {
-      log(`⏸ phase planning session blocked (implicit block, investigate and re-run):\n${planned.question}`)
-    }
-    return 2
-  }
-  // auto numbering: on planning success the numbering record advances to
-  // this run's highest number + 1 (only ever increases); later phases'/rounds'
-  // planning sessions continue from the record, so numbers never repeat in
-  // the target directory.
-  if (numberStart !== undefined) {
-    const next = await advanceNextTask(directory, planned)
-    log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
-  }
-  log(`✓ phase planning complete: ${taskIndex} lists ${planned.length} task(s)`)
-  ctx.planned = planned
-  // close-out: delete this step's driver-side resume point (artifacts
-  // validated, commit and numbering advance both done). Killed before this →
-  // the record is still active, and the next run re-enters planning through
-  // openStep and reuses the session.
-  await closeStep(directory, "phase-plan", phaseKey(phase).id)
-  return 0
 }
 
-// The phased planning prompt: phase-plan over the project brief, the planning
-// input, the earlier phases' handovers, the previous round's conclusions (the
-// round's first planning session only) and the round brief.
-async function phasePlanPrompt(
+// The verify-time preview of the formulation document (plans/0095 D4): the
+// exact todo construction writes, with the placeholder id the number
+// allocation fills at landing — the charter-judging content is identical.
+function previewFormulationDocument(todo: { goal: string; scope: string; acceptance: string }, phaseId: string): string {
+  return renderTaskTodo({ id: "T-NNN", title: "Formulate the phase tasks", phase: phaseId, formulate: phaseId, decompose: "whole", depends: "none", goal: todo.goal, scope: todo.scope, acceptance: todo.acceptance })
+}
+
+// The phased formulation todo's composition state (the former
+// phasePlanPrompt's gathering, plans/0095 D1): the earlier phases'
+// handovers, the first-planning-session prior-round digest, the round brief,
+// the approved analysis (human-gated phases), the final-phase report duty
+// and the pipeline-trimming note — the same selection the retired
+// phase-plan template injected, now the renderFormulationTodo input.
+async function formulationCompose(
   ctx: LoopCtx,
   phase: PhaseUnit,
-  parts: { brief?: string; input?: string; taskIndex: string; phaseId: string; numberStart?: number },
-): Promise<{ prompt: string; blocks: BlockMapEntry[] }> {
+  parts: { brief?: string; input?: string; taskIndex: string; phaseId: string; numberStart: number; charter: string },
+): Promise<{ todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[] }> {
   const { directory, opts } = ctx
   const state = await phaseState(directory)
   // Earlier phases' handovers (injection discipline): only the distilled
@@ -387,23 +361,23 @@ async function phasePlanPrompt(
   // Extra injection for the round's first planning session: ① prior knowledge
   // (the shell's startup distillation of existing migration results,
   // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
-  // conclusions (when a previous round directory exists). Later phases follow the
-  // handover chain and get neither again.
+  // conclusions (when a previous round directory exists). Later phases follow
+  // the handover chain and get neither again.
   // "First" = no completed phase of this round has tasks (plans/0049 G4): a
   // leading task-less knowledge phase has no planning session and must not
   // swallow the digest.
   // The digest cap: above a quarter of the run's context limit (estimated by
   // the same token estimate the usage source uses), the prompt gets the index
   // form instead of the full texts — the path and size of each knowledge
-  // document and handover, the session opening what it needs — still through
-  // the prevRound slot. The sizes are booked per planning session either way,
-  // so the memory-service question has its data.
+  // document and handover, the session opening what it needs. The sizes are
+  // booked per planning session either way, so the memory-service question
+  // has its data.
   let prevRound: string | undefined
   if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
     const prior = (await priorKnowledgeDigest(directory))?.trim() || undefined
     const prev = (await prevRoundDigest(directory))?.trim() || undefined
-    const parts = [prior, prev].filter((part): part is string => part !== undefined)
-    const joined = parts.length ? parts.join("\n\n") : undefined
+    const segments = [prior, prev].filter((part): part is string => part !== undefined)
+    const joined = segments.length ? segments.join("\n\n") : undefined
     const cap = (opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 4
     const total = joined === undefined ? 0 : estimateTokens(joined)
     const capped = joined !== undefined && total > cap
@@ -425,25 +399,23 @@ async function phasePlanPrompt(
   // plans against the round's goal and criteria; an untouched stub injects nothing.
   const round = await roundBriefText(directory, state.round)
   // The approved project analysis (plans/0085 A1): the survey phase's
-  // planning session — the one that raises decisions — reads the person's
+  // formulation — the one that raises decisions — reads the person's
   // settled decisions directly, so what the analysis settles is never
-  // re-raised as a fork. Human-gated phases only; later phases follow the
-  // round brief and the handover chain. An unreleased or absent analysis
-  // injects nothing.
+  // re-raised as a fork. Human-gated phases only.
   const analysis = phase.entry.gates.includes("human") ? await analysisText(directory) : undefined
   // The round report duty (plans/0081 D2): this phase is final when it is the
-  // round's last and lays out tasks — its planner ends the index with the
+  // round's last and lays out tasks — its formulation ends the index with the
   // wrap-up task whose deliverable is docs/R-NN/report-for-user.md. A round
   // ending in a trailing task-less phase (knowledge) renders nothing here:
   // that side-channel session writes the report as its second artifact
   // (D6b, knowledge.ts).
   const last = state.phases.at(-1)
   const finalPhase = last !== undefined && last.id === phase.id && phase.entry.hasTasks
-  const prompt = renderPhasePlan(planFacts(ctx), {
+  const todo = renderFormulationTodo(planFacts(ctx), {
     phase: phase.entry,
-    planDuties: planDuties(ctx, phase.entry),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
+    numberStart: parts.numberStart,
     brief: parts.brief,
     round,
     analysis,
@@ -453,18 +425,20 @@ async function phasePlanPrompt(
     prevRound,
     mode: opts.mode,
     ...(finalPhase ? { finalPhase: true, reportFile: reportForUserPath(state.round) } : {}),
-    // No analysis/design phase delivered in this round's index → the implement
-    // phase's planning gets the pipeline-trimming note. A closed analysis/design
-    // phase (plans/0053 D16: done for scheduling, not delivered) counts as absent.
+    // No analysis/design phase delivered in this round's index → the
+    // implement phase's planning gets the pipeline-trimming note. A closed
+    // analysis/design phase (plans/0053 D16: done for scheduling, not
+    // delivered) counts as absent.
     trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
-    numberStart: parts.numberStart,
     parallel: opts.parallel,
+    testByDriver: opts.testByDriver,
+    charter: parts.charter,
   })
-  // The block map (plans/0082 \u00a72 D1): each block of this composed prompt
-  // and its source path, from the composition state itself \u2014 never a guess
-  // read back out of the rendered text.
+  // The block map (plans/0082 §2 D1): each block of the assembled todo and
+  // its source path, from the composition state itself — never a guess read
+  // back out of the rendered text.
   const blocks: BlockMapEntry[] = [
-    { block: "template", source: "the phase-plan template" },
+    { block: "formulation todo", source: "the deterministic assembly (plans/0095)" },
     { block: "phase duties", source: "the active pack's phase-duties section" },
     { block: "brief", source: parts.brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
     { block: "round brief", source: roundBriefPath(state.round) },
@@ -477,7 +451,7 @@ async function phasePlanPrompt(
     ...(prevRound !== undefined ? [{ block: "previous round digest", source: "the prior-knowledge and previous-round documents" }] : []),
     { block: "mode notes", source: "the active mode file" },
   ]
-  return { prompt, blocks }
+  return { todo, document: previewFormulationDocument(todo, parts.phaseId), blocks }
 }
 
 // Phase planning plus the plan-review pause (plans/0049 G5): at

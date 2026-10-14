@@ -345,6 +345,7 @@ const CLASSIFIED: Record<string, Domain> = {
   // The planning input plan-input.md: read, persist, commit (plans/0053 D9).
   "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
+  "formulate": "driver",
   "prompt-plan": "driver",
   // The render facts' composition helper (plans/0061 E2): the one PromptFacts
   // value builder the render callers share — the prompt globals, the library
@@ -605,6 +606,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // it reaches only the provider domains (document, phases), so it binds no
   // new driver edge.
   analysis: "pipeline",
+  "formulate": "pipeline",
   "prompt-plan": "pipeline",
   close: "pipeline",
   "task-add": "pipeline",

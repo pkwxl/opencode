@@ -65,8 +65,8 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("exactly 17 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1; a new reference needs the design document updated in step)", () => {
-    expect(consumers.length).toBe(17)
+  test("exactly 15 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1, plans/0095 retiring phase-plan and implement-plan -2; a new reference needs the design document updated in step)", () => {
+    expect(consumers.length).toBe(15)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")

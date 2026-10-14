@@ -90,13 +90,13 @@ describe("the blockage diagnosis session (plans/0082 §4-§6, the agent-fake cas
       expect(code).toBe(2)
       // The honest block line named the located input file (D2: the
       // contradictory input is the planning input itself).
-      expect(lines.some((line) => line.includes("plan verification found the implement-plan R-01.P01 prompt inconsistent"))).toBe(true)
+      expect(lines.some((line) => line.includes("plan verification found the formulation R-01.P01 prompt inconsistent"))).toBe(true)
       // The document: committed on its own (Auto-Stage: blockage), the
       // session's sections verbatim, the Decision and the protocol.
       const doc = "docs/R-01/blockage-1.md"
       expect(existsSync(join(f.dir, doc))).toBe(true)
       const text = await Bun.file(join(f.dir, doc)).text()
-      expect(text).toContain("# Blockage 1: plan-verify (implement-plan R-01.P01")
+      expect(text).toContain("# Blockage 1: plan-verify (formulation R-01.P01")
       expect(text).toContain("- Gate: plan-verify")
       expect(text).toContain("## Analysis")
       expect(text).toContain("The handover's carve-out launders a provisional default into a constraint.")
@@ -123,7 +123,7 @@ describe("the blockage diagnosis session (plans/0082 §4-§6, the agent-fake cas
       expect(code).toBe(2)
       expect(lines.some((line) => line.includes("blockage diagnosis failed closed"))).toBe(true)
       const audit = await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text()
-      expect(audit).toContain("blockage diagnosis implement-plan R-01.P01: FAILED — the session produced no parsable remediation plan")
+      expect(audit).toContain("blockage diagnosis formulation R-01.P01: FAILED — the session produced no parsable remediation plan")
       expect(existsSync(join(f.dir, "docs/R-01/blockage-1.md"))).toBe(false)
       expect((await f.git("log", "--pretty=%B", "--all")).includes("Auto-Stage: blockage")).toBe(false)
     } finally {
@@ -288,7 +288,7 @@ describe("the diagnosis caps (plans/0082 §5 D8)", () => {
     [
       `# Blockage ${seq}: plan-verify (phase-plan R-01.P01)`,
       "",
-      "- Step: implement-plan R-01.P01",
+      "- Step: formulation R-01.P01",
       "",
       "## Analysis",
       "",
@@ -309,7 +309,7 @@ describe("the diagnosis caps (plans/0082 §5 D8)", () => {
       await f.commit("the two executed blockages")
       const { code, lines } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing() })
       expect(code).toBe(2)
-      expect(lines.some((line) => line.includes("diagnosis for implement-plan R-01.P01 is suspended"))).toBe(true)
+      expect(lines.some((line) => line.includes("diagnosis for formulation R-01.P01 is suspended"))).toBe(true)
       expect(lines.some((line) => line.includes("prompt-audit.md"))).toBe(true)
       expect(f.agent.prompts.some((prompt) => prompt.text.includes("You are the blockage diagnosis session"))).toBe(false)
     } finally {

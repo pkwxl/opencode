@@ -52,12 +52,15 @@ const phase = { id: "R-03.P02" } as PhaseKey
 
 // The full execution set: the only site with control and the task-execution
 // fields (subtask pipeline, test protocol, wrap-up); idleMs and mode it
-// shares with every site since the merge.
+// shares with every site since the merge. Since plans/0095 D4 the task site
+// carries plan's stop condition as its question key too — the formulation
+// task is the only task session that ever runs under stopBefore.
 const taskSet = (c: SessionCtx): Opts => ({
   agent: c.agentName,
   dir: c.directory,
   verbose: c.opts.verbose,
   waitAnswer: c.opts.waitAnswer,
+  humanQuestions: c.opts.stopBefore === "execute",
   subtask: c.opts.subtask,
   contextLimit: c.opts.contextLimit,
   permission: c.opts.permission,
@@ -116,8 +119,15 @@ describe("sessionOpts (the eight-site field-set pin)", () => {
     expect(sessionOpts(ctx, { site: "plan-numbering" })).toStrictEqual(bypassSet(ctx))
   })
 
-  test("phase-plan site (the planning session)", () => {
-    expect(sessionOpts(ctx, { site: "phase-plan" })).toStrictEqual(bypassSet(ctx))
+  test("task site under plan's stop condition: human questions on (plans/0095 D4)", () => {
+    // The formulation task is the only task session that ever runs under
+    // stopBefore (every other execute route stops), so the bypass era's
+    // rule — plan's sessions wait for the human — carries onto the task
+    // site keyed on the stop condition alone; under run the key is absent
+    // (the byte-identical floor).
+    expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
+    const running: SessionCtx = { ...ctx, opts: { ...ctx.opts, stopBefore: undefined } }
+    expect("humanQuestions" in sessionOpts(running, { site: "task", phase })).toBe(false)
   })
 
   test("append-numbering site (the appending step's numbering restore)", () => {
@@ -149,10 +159,12 @@ describe("sessionOpts (the eight-site field-set pin)", () => {
     expect(bypass.interactive).toBeUndefined()
     expect("routing" in bypass).toBe(true)
     expect(bypass.routing).toBeUndefined()
-    // fields no bypass set carries stay absent
+    // fields no bypass set carries stay absent; the task site's question key
+    // is stop-condition-conditional (plans/0095 D4), absent under this ctx's
+    // stop only when the run has none — checked in its own test above
     expect("phase" in bypass).toBe(false)
     expect("control" in bypass).toBe(false)
-    expect("humanQuestions" in sessionOpts(ctx, { site: "task", phase })).toBe(false)
+    expect("humanQuestions" in sessionOpts(ctx, { site: "task", phase })).toBe(true)
     expect("leadSplit" in sessionOpts(ctx, { site: "task", phase })).toBe(false)
   })
 
@@ -179,7 +191,7 @@ describe("sessionOpts (the eight-site field-set pin)", () => {
     expect(task.control).toBe(ctx.control)
     expect(task.git).toBe(ctx.git)
     expect(task.phase).toBe(phase)
-    const bypass = sessionOpts(ctx, { site: "phase-plan" })
+    const bypass = sessionOpts(ctx, { site: "phase-append" })
     expect(bypass.server).toBe(ctx.server)
     expect(bypass.router).toBe(ctx.router)
     expect(bypass.git).toBe(ctx.git)

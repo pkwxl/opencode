@@ -41,7 +41,10 @@ async function seedTasks(f: LoopFixture, phase: PhaseUnit, tasks: Array<[string,
 const has = (f: LoopFixture, path: string) => existsSync(join(f.dir, path))
 const clean = async (f: LoopFixture) => expect((await f.git("status", "--porcelain")).trim()).toBe("")
 const openStepGone = (f: LoopFixture) => expect(has(f, ".auto/progress.json")).toBe(false)
-const planners = (f: LoopFixture) => f.agent.prompts.filter((p) => p.text.includes("You are the planner"))
+// The formulation session's prompt: the whole-task wrapper carrying the
+// todo (the wrap-up prompt inlines the todo too, so the wrapper's own role
+// line tells them apart).
+const planners = (f: LoopFixture) => f.agent.prompts.filter((p) => p.text.includes("single input of this formulation task") && p.text.includes("responsible for the whole task"))
 
 describe("plan's stop condition (plans/0053 D6)", () => {
   test(
@@ -55,7 +58,10 @@ describe("plan's stop condition (plans/0053 D6)", () => {
       // The planning step's outputs are on disk, committed, and its resume
       // point is closed; the loop stopped before the next phase's planning.
       expect(has(f, "docs/R-01/P01-analysis/tasks.md")).toBe(true)
-      expect(has(f, "docs/T-001/todo.md")).toBe(true)
+      // The formulation unit itself closed out (done.md); the planned batch
+      // stands pending (todo.md).
+      expect(has(f, "docs/T-001/done.md")).toBe(true)
+      expect(has(f, "docs/T-002/todo.md")).toBe(true)
       await clean(f)
       openStepGone(f)
       expect(has(f, "docs/R-01/P02-implement/tasks.md")).toBe(false)
@@ -79,7 +85,8 @@ describe("plan's stop condition (plans/0053 D6)", () => {
       expect(has(f, "docs/R-01/P01-analysis/handover.md")).toBe(true)
       expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01")
       expect(lines).toContain("✓ planned R-01.P02 implement: 1 task(s) in docs/R-01/P02-implement/tasks.md")
-      expect(f.agent.prompts.map((p) => p.text.includes("You are the handover distiller"))).toEqual([true, false])
+      expect(f.agent.prompts.filter((p) => p.text.includes("You are the handover distiller"))).toHaveLength(1)
+      expect(f.agent.prompts[0]!.text).toContain("You are the handover distiller")
       // No closed task: the distiller prompt carries no closed-tasks block.
       expect(f.agent.prompts[0]!.text).not.toContain("## Closed tasks")
       await clean(f)
@@ -193,17 +200,21 @@ describe("m-mode planning (plans/0053 D9, D12)", () => {
       expect(code).toBe(0)
       expect(lines).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
       expect(lines).toContain("✓ numbering record advanced: next available task number T-002(.auto/next-task)")
-      expect(lines).toContain("✓ planned 1 task(s) (T-001) into docs/R-01/P01-implement/tasks.md")
+      expect(lines).toContain("✓ planned 1 task(s) (T-002) into docs/R-01/P01-implement/tasks.md")
       expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("Port the retry policy.\n")
-      expect(await readNextTask(f.dir)).toBe(2)
-      expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("- [ ] T-001")
-      // Two commits after the setup: the input on its own (Auto-Stage:
-      // plan-input), then the planning unit (Auto-Stage: phase-plan).
-      const subjects = (await f.git("log", "--format=%s", "-2")).trim().split("\n")
-      expect(subjects[0]).toBe("PLAN plan P01-implement Implementation")
-      expect(subjects[1]).toBe("PLAN plan-input P01-implement Implementation")
-      const bodies = await f.git("log", "--format=%B", "-2")
-      expect(bodies).toContain("Auto-Stage: phase-plan")
+      expect(await readNextTask(f.dir)).toBe(3)
+      expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("- [ ] T-002")
+      // The commit chain after the setup (plans/0095): the input on its own
+      // (plan-input), the construction (phase-formulate), then the
+      // formulation unit's own exec / wrapup / done commits.
+      const subjects = (await f.git("log", "--format=%s", "-5")).trim().split("\n")
+      expect(subjects[0]).toBe("T-001 done Formulate the Implementation tasks")
+      expect(subjects[1]).toBe("T-001 wrapup Formulate the Implementation tasks")
+      expect(subjects[2]).toBe("T-001 exec Formulate the Implementation tasks")
+      expect(subjects[3]).toBe("PLAN formulate P01-implement Implementation")
+      expect(subjects[4]).toBe("PLAN plan-input P01-implement Implementation")
+      const bodies = await f.git("log", "--format=%B", "-5")
+      expect(bodies).toContain("Auto-Stage: phase-formulate")
       expect(bodies).toContain("Auto-Stage: plan-input")
       await clean(f)
       openStepGone(f)
@@ -221,17 +232,22 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       await f.commit("planning input")
       // ses_stale is outside the fake agent's id space, so a prompt landing on
       // a fresh session can never be confused with a reuse of the record's.
+      // A legacy phase-plan record (plans/0095 D4): it closes with its
+      // partial output cleared, and the changed input lands through the
+      // formulation path — construction rewrites the todo when it differs.
       await saveProgress(f.dir, { task: "PLAN", session: "ses_stale", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { code, lines } = await f.run({ stopBefore: "execute", planInput: { text: "new input" } })
       expect(code).toBe(0)
-      expect(lines).toContain("↻ PLAN phase planning step restarting in a new session (the planning input changed)")
+      expect(lines).toContain(
+        "↻ unclosed planning resume point (R-01.P01) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit",
+      )
       expect(lines).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
       expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("new input\n")
-      // The recorded session was never probed and never prompted; the step
-      // started afresh in a new session.
+      // The recorded session was never probed and never prompted; the phase
+      // planned afresh as its first task unit.
       expect(f.agent.argsOf("get").flat()).not.toContain("ses_stale")
       expect(f.agent.prompts.map((p) => p.session)).not.toContain("ses_stale")
-      expect(f.agent.argsOf("create")).toHaveLength(1)
+      expect(f.agent.argsOf("create")).toHaveLength(2)
       openStepGone(f)
     },
   )
@@ -250,12 +266,15 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
-      expect(lines).toContain("↻ session resume point takes precedence: the phase planning session(P01-analysis Analysis) was not closed out; re-entering that step to continue")
+      // The legacy record is superseded (plans/0095 D4): it closes, its
+      // partial output clears, and the phase plans again as its first task
+      // unit — a fresh session, not the recorded one.
+      expect(lines).toContain(
+        "↻ unclosed planning resume point (R-01.P01) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit",
+      )
       expect(lines).toContain("ℹ planning against the persisted input docs/R-01/P01-analysis/plan-input.md")
       expect(lines).toContain("✓ planned R-01.P01 analysis: 1 task(s) in docs/R-01/P01-analysis/tasks.md")
-      // The first prompt went into the recorded session; no session was created.
-      expect(f.agent.prompts[0]!.session).toBe("ses_1")
-      expect(f.agent.argsOf("create")).toEqual([])
+      expect(f.agent.argsOf("create")).toHaveLength(2)
       expect(has(f, "docs/R-01/P01-analysis/tasks.md")).toBe(true)
       openStepGone(f)
       await clean(f)
@@ -273,9 +292,8 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       await saveProgress(f.dir, { task: "PLAN", session: "ses_1", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" }, baseline: await unitBaseline(f.dir), model: IMPLIED_MODEL })
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
-      expect(lines).toContain("✓ planned 1 task(s) (T-001) into docs/R-01/P01-implement/tasks.md")
-      expect(f.agent.prompts[0]!.session).toBe("ses_1")
-      expect(f.agent.argsOf("create")).toEqual([])
+      expect(lines).toContain("✓ planned 1 task(s) (T-002) into docs/R-01/P01-implement/tasks.md")
+      expect(f.agent.argsOf("create")).toHaveLength(2)
       openStepGone(f)
     },
   )
@@ -288,8 +306,7 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain(
-        "⚠ unclosed m-mode planning resume point (R-01.P01) has no planning input (docs/R-01/P01-implement/plan-input.md) to plan against; " +
-          "closing it and continuing with the file-derived route",
+        "↻ unclosed planning resume point (R-01.P01) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit",
       )
       expect(
         lines.find((line) => line.startsWith("ℹ no tasks listed in docs/R-01/P01-implement/tasks.md yet")),

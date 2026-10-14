@@ -3336,13 +3336,13 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
     try {
       const { code, lines } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing() })
       expect(code).toBe(2)
-      expect(lines.some((line) => line.includes("plan verification found the implement-plan R-01.P01 prompt inconsistent with the intent charter"))).toBe(true)
+      expect(lines.some((line) => line.includes("plan verification found the formulation R-01.P01 prompt inconsistent with the intent charter"))).toBe(true)
       expect(lines.some((line) => line.includes("The verdict is recorded in"))).toBe(true)
       // The wall documentation: the round's prompt-audit.md carries the
       // verdict with the evidence, written before any session ran.
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toContain("# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round")
-      expect(audit).toMatch(/implement-plan R-01\.P01: INCONSISTENT — the charter's "never to be read, copied or translated" contradicts the prompt's "Copy the reference implementation's modules over verbatim/)
+      expect(audit).toMatch(/formulation R-01\.P01: INCONSISTENT — the charter's "never to be read, copied or translated" contradicts the prompt's "Copy the reference implementation's modules over verbatim/)
       // The session protocol since 0082: the admission charter check (D14b,
       // one bare call), the verifier (one bare prompt under the verifier
       // title, both texts under review inside it), then the blockage
@@ -3372,16 +3372,19 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
     try {
       const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(0)
-      expect(lines.some((line) => line.includes("✓ plan verification: the implement-plan R-01.P01 prompt is consistent with the intent charter"))).toBe(true)
-      // Order: the verifier's bare session ahead of the planning session.
+      expect(lines.some((line) => line.includes("✓ plan verification: the formulation R-01.P01 prompt is consistent with the intent charter"))).toBe(true)
+      // Order: the admission check, the verifier's bare session, then the
+      // formulation task's own session (plans/0095: the todo is its single
+      // input, judged by the verifier above).
       expect(f.agent.argsOf("create")).toContainEqual([{ title: VERIFY_TITLE }])
       expect(f.agent.prompts[0]!.bare).toBe(true)
       expect(f.agent.prompts[0]!.text).toContain(CHARTER)
-      expect(f.agent.prompts[1]!.text).toContain("You are the planner for this implementation plan")
+      expect(f.agent.prompts[1]!.text).toContain("The prompt under review (formulation R-01.P01)")
+      expect(f.agent.prompts[2]!.text).toContain("single input of this formulation task")
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
       expect(lines).toContain("✓ all tasks complete")
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/implement-plan R-01\.P01: consistent/)
+      expect(audit).toMatch(/formulation R-01\.P01: consistent/)
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }
@@ -3392,7 +3395,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
     try {
       const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(2)
-      expect(lines.some((line) => line.includes("plan verification could not judge the implement-plan R-01.P01 prompt"))).toBe(true)
+      expect(lines.some((line) => line.includes("plan verification could not judge the formulation R-01.P01 prompt"))).toBe(true)
       expect(lines.some((line) => line.includes("fail-closed"))).toBe(true)
       // One retry, then the block: two verifier sessions (the admission
       // charter check ahead of them, the blockage diagnosis twice after —
@@ -3407,7 +3410,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(f.agent.prompts).toHaveLength(5)
       for (const prompt of f.agent.prompts.slice(0, 3)) expect(prompt.bare).toBe(true)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/implement-plan R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
+      expect(audit).toMatch(/formulation R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
       expect(audit).toContain("(after one retry — fail-closed, plans/0080 §5)")
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
     } finally {
@@ -3439,7 +3442,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
     // The turn: the wrap-up of T-001 concludes FAIL, the append session
     // appends one repair task, everything else takes the artifact turns.
     const repairTurn = (dir: string): TurnScript => {
-      const base = verdictTurn(undefined, new Set(["T-001"]))(dir)
+      const base = verdictTurn(undefined, new Set(["T-002"]))(dir)
       return (ctx) => {
         if (ctx.text.includes("## Input: the task index as it stands")) {
           const phaseDir = promptPhaseDir(ctx.text)
@@ -3467,7 +3470,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       const input = await Bun.file(join(f.dir, "docs", "R-01", "P01-implement", "plan-input.md")).text()
       expect(input).toContain("Repair discipline (the project's intent declares it):")
       expect(input).toContain("CUSTOM-REPAIR-BOUNDARY")
-      expect(existsSync(join(f.dir, "docs", "T-002", "done.md"))).toBe(true)
+      expect(existsSync(join(f.dir, "docs", "T-003", "done.md"))).toBe(true)
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }

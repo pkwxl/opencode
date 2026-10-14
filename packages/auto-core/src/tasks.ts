@@ -95,6 +95,12 @@ export type Task = {
   // written and dropped with the split point.
   // AUTO-DECISION: the lead's figure is recorded rather than read back from the lead's session (an agent with no readable history — claude — cannot report an ended session's size, so only the first stream, still on the lead's chain, forked and every later stream, or any stream after a resume, started cold; a history read still comes first, so an agent that has one behaves as before)
   leadUsed?: number
+  // The formulation marker (plans/0095 D1): the driver-written `Formulate:`
+  // field's value — the qualified id of the phase this task formulates (the
+  // phase's planning as its first task unit). Honored only where the value
+  // equals the owning index's phase; a hand-written look-alike behaves as a
+  // normal task.
+  formulate?: string
   // The task's own content: todo.md (done.md once complete) without its title
   // line, field block and terminator.
   body: string
@@ -280,6 +286,7 @@ export function renderTaskTodo(input: {
   id: string
   title: string
   phase?: string
+  formulate?: string
   decompose?: string
   depends?: string
   touches?: string
@@ -290,6 +297,7 @@ export function renderTaskTodo(input: {
   return [
     `# ${input.id}: ${input.title}`,
     ...(input.phase ? [`Phase: ${input.phase}`] : []),
+    ...(input.formulate !== undefined ? [`Formulate: ${input.formulate}`] : []),
     ...(input.decompose !== undefined ? [`Decompose: ${input.decompose}`] : []),
     ...(input.depends !== undefined ? [`Depends: ${input.depends}`] : []),
     ...(input.touches !== undefined ? [`Touches: ${input.touches}`] : []),
@@ -487,6 +495,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       ...(split !== undefined ? { split } : {}),
       ...(leadUsed !== undefined ? { leadUsed } : {}),
       body: taskBody(doc),
+      ...(unit.fields.formulate !== undefined ? { formulate: unit.fields.formulate } : {}),
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
       ...(unit.touches !== undefined ? { touches: unit.touches } : {}),
@@ -758,10 +767,14 @@ export async function taskDirs(dir: string): Promise<string[]> {
 // checks (newTaskProblems), then the dependency graph of the listed tasks
 // (unitProblems; the completed tasks of earlier phases may be named). Problem
 // lines name concrete paths and feed the retry feedback.
+// skip (plans/0095 D3): ids exempt from the per-task checks but present in
+// the graph — the formulation unit itself, pre-existing by construction (its
+// decl still resolves, so the planned tasks' default previous-sibling
+// dependency on it checks like any other).
 export async function plannedTaskProblems(
   dir: string,
   phase: PlanPhase,
-  opts: { before: ReadonlySet<string>; numberStart?: number },
+  opts: { before: ReadonlySet<string>; numberStart?: number; skip?: ReadonlySet<string> },
 ): Promise<{ problems: string[]; ids: string[] }> {
   const index = taskIndexPath(phase)
   const text = await Bun.file(join(dir, index)).text().catch(() => undefined)
@@ -772,6 +785,10 @@ export async function plannedTaskProblems(
   if (!ids.length) problems.push(`${index} lists no task (lines \`- [ ] T-NNN <title>\`)`)
   const decls: UnitDecl[] = []
   for (const id of ids) {
+    if (opts.skip?.has(id)) {
+      decls.push(taskDecl(id, await Bun.file(join(dir, taskStatePaths(id).pending)).text().catch(() => "")))
+      continue
+    }
     const checked = await newTaskProblems(dir, phase, id, opts)
     problems.push(...checked.problems)
     if (checked.decl) decls.push(checked.decl)

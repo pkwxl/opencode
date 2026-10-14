@@ -274,7 +274,7 @@ describe("the io/Interactive seam: askHuman's wait routes to the injected implem
       // The planning step itself completed and the run stopped at plan's own
       // boundary (m mode's summary line), exactly as without the seam.
       expect(lines).toContain("✓ phase planning complete: docs/R-01/P01-implement/tasks.md lists 1 task(s)")
-      expect(lines).toContain("✓ planned 1 task(s) (T-001) into docs/R-01/P01-implement/tasks.md")
+      expect(lines).toContain("✓ planned 1 task(s) (T-002) into docs/R-01/P01-implement/tasks.md")
       expect(existsSync(join(dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
       expect(io.closes()).toBe(1)
     } finally {

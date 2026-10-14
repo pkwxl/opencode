@@ -1,20 +1,20 @@
-// Planning-session prompts: phased planning (renderPhasePlan), m-mode
-// planning (renderImplementPlan) and append planning (renderPhaseAppend),
-// the first two rendered by planPhase (src/loop-plan.ts, plans/0053 D12) and
-// the third by appendPlan (D23–D27, the wiring half landed with the template).
-// Moved out of src/prompt.ts (plans/0053 A2) so the P3 planning additions do
-// not grow that file; the copy stays in templates/prompts/phase-plan.md,
-// implement-plan.md and phase-append.md, and rendering goes through
+// Planning-side prompts: the formulation task's single-input todo
+// (renderFormulationTodo, plans/0095 — phased and m-mode planning unified as
+// the phase's first task unit) and append planning (renderPhaseAppend, the
+// --append half, plans/0053 D23–D27, unchanged by 0095). The former planning
+// templates (phase-plan.md / implement-plan.md) retired with their renderers:
+// the composed block stack became the formulation todo's Scope, assembled
+// here as data. Rendering of the surviving prompt surfaces goes through
 // prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
 // Off the driver with E2 (plans/0061 §6.3): the phase entry and the duty
 // paragraph arrive as data (the caller renders the registry's duty text),
 // and every render takes the PromptFacts value the caller built.
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase } from "./intent/load"
+import { guaranteeViolation, parseGuaranteeAsserts, PromptGuaranteeError } from "./intent/guarantees"
 import type { ParallelLevel } from "./intent/types"
-import { reportForUserPath } from "./docpaths"
 import { intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
-import { renderText } from "./template"
+import { renderText, type Ctx } from "./template"
 
 // The phase-plan duty paragraph's resolution (plans/0080 §4): the custom
 // type's own `## plan duties` first, then — the new tier — the active pack's
@@ -25,9 +25,13 @@ import { renderText } from "./template"
 // domain). Only builtin types ever reach the pack tier — a custom type file
 // always carries its own plan duties — so this is what lets a bundle re-voice
 // the builtin design/implement/test duties without touching core partials.
-export function planDutyText(facts: PromptFacts, entry: PhaseEntry): string {
+// The ctx (plans/0095 D4): the planning renders used to pass an empty one,
+// which rendered a pack's `{{phaseName}}` as empty parens and silently
+// dropped its `{{#if testByDriver}}` line; callers now thread the two facts
+// the pack texts reference, and the empty default keeps older callers whole.
+export function planDutyText(facts: PromptFacts, entry: PhaseEntry, ctx: Ctx = {}): string {
   const own = entry.planDuties ?? dutiesForPhase(facts.pack, entry.dutiesRef)
-  return renderText(own ?? `{{> plan-duties-${entry.dutiesRef}}}`, {}).trimEnd()
+  return renderText(own ?? `{{> plan-duties-${entry.dutiesRef}}}`, ctx).trimEnd()
 }
 
 // The repair round's discipline (plans/0080 §6): the active pack's `##
@@ -46,148 +50,6 @@ export function repairDutiesText(facts: PromptFacts): string | undefined {
 // absent (the zero-intent floor keeps the input byte-identical).
 export function withIntentParagraph(text: string | undefined): string {
   return text === undefined ? "" : `\n\nRepair discipline (the project's intent declares it):\n${text}`
-}
-
-// Phase planning session (design doc plans/0006-phases-design.md §E): a
-// one-shot bypass session whose artifacts = this phase's task index
-// taskIndex (<phase directory>/tasks.md) + each task's docs/T-NNN/todo.md
-// (M3.4, plans/0047 L3; phaseId is the phase qualified id, written into
-// the task document's `Phase:` field). brief is the .opencode/auto/brief.md
-// text verbatim (may be empty; the template carries a not-provided notice
-// block); handovers is the pre-joined string of every prior phase's
-// handover.md (assembled on the driver side; injection discipline: only
-// distillation artifacts are injected, never the prior phases' raw docs/).
-// prevRound is an excerpt of the previous round's migration conclusion
-// (plans/0006-phases-design.md §M, assembled on the loop side: archive
-// index / final handover / migration knowledge), injected only into the
-// first planning session of a continued round (once the new round's round
-// directory is established).
-// The migration source and target are intent and reach planning through the
-// brief (plans/0052 D2); there are no separate parameters.
-// planDuties is the phase type's duty paragraph, pre-rendered by the caller
-// (E2): a custom type's own `## plan duties`, else the type's shared
-// partial (`plan-duties-<dutiesRef>`), rendered through the active library
-// so overlays apply.
-// trimmedPhases takes effect only for the m phase (passed by the loop when
-// the effective phases were trimmed via --phases and include no standalone
-// a/d phases; the template injects the "flow trimming" note — the survey
-// and design phases are folded into the first batch of tasks, and the
-// bottom-line safeguards are not skipped).
-// numberStart is the numbering start under auto numbering
-// (config.autoNumber): the .auto/next-task recorded value, which the loop
-// ensures is in place via ensureNumbering before the planning session;
-// defaults when disabled — numbering starts from T-001.
-export function renderPhasePlan(facts: PromptFacts, input: {
-  phase: PhaseEntry
-  planDuties: string
-  phaseId: string
-  taskIndex: string
-  brief?: string
-  // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
-  round?: string
-  // The approved project analysis docs/analysis.md, comments stripped
-  // (plans/0085 A1): passed only for human-gated (survey) phases — the
-  // person's settled decisions, rendered so the survey records settled
-  // lines instead of re-raising settled questions as forks.
-  analysis?: string
-  // The phase's planning input (plans/0053 D11): the text of its plan-input.md
-  // and that file's path; absent = no input block.
-  input?: string
-  inputPath?: string
-  handovers?: string
-  prevRound?: string
-  mode?: ModeSpec
-  trimmedPhases?: boolean
-  numberStart?: number
-  // config.parallel (MP.1): absent = none, nothing injected.
-  parallel?: ParallelLevel
-  // The round report duty (plans/0081 D2): finalPhase is true when this
-  // phase is the round's last task-bearing one — the template then renders
-  // the report-duty partial beside the phase duties (end the task list with
-  // one wrap-up task whose deliverable is the round report), and reportFile
-  // names the round's report path. A round ending in a trailing task-less
-  // phase (knowledge) passes neither: that side-channel session writes the
-  // report as its second artifact (D6b).
-  finalPhase?: boolean
-  reportFile?: string
-}): string {
-  const type = input.phase
-  return renderPrompt(facts, "phase-plan", {
-    phase: phaseTag(type),
-    phaseName: type.name,
-    phaseId: input.phaseId,
-    taskIndex: input.taskIndex,
-    // The intent's declared authority order (`## guarantees` / `###
-    // precedence`, plans/0080 §2): the planning prompt is exactly where the
-    // human planning input meets the intent charter, so the block stating
-    // which side wins belongs here first. Absent section ⇒ the template's
-    // block disappears (zero-intent floor).
-    precedence: intentText(facts, "guarantees", "precedence", {}),
-    brief: input.brief?.trim() || undefined,
-    round: input.round?.trim() || undefined,
-    analysis: input.analysis?.trim() || undefined,
-    // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
-    roundRules: input.round?.trim() ? intentText(facts, "acceptance", "round-brief", {}) : undefined,
-    input: input.input?.trim() || undefined,
-    inputPath: input.inputPath,
-    handovers: input.handovers?.trim() || undefined,
-    prevRound: input.prevRound?.trim() || undefined,
-    modeName: input.mode?.name,
-    modeInit: input.mode && modeText(input.mode.init),
-    trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
-    numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
-    planDuties: input.planDuties,
-    finalPhase: input.finalPhase || undefined,
-    reportFile: input.finalPhase ? input.reportFile : undefined,
-    ...parallelismVars(facts, input.parallel),
-  })
-}
-
-// Planning parallelism guidance (MP.1, plans/0046 D10/D11): the level's
-// `## parallelism` intent subsection — prompt.ts's shared parallelismVars
-// (since plans/0068 S5 the decompose family and the whole-task split clause
-// inject the same subsection). At none, or when the pack lacks the
-// subsection, both keys are undefined and the template's block renders nothing.
-
-// m-mode planning (phases = "m", plans/0053 D12; formerly the init shortcut
-// --implement-file/--implement-prompt): a one-shot bypass session whose
-// artifacts = the single-phase P01-implement's task index + each task's
-// documents, reusing the same task-unit format conventions as
-// renderPhasePlan but without the phased-flow notions of phase / round /
-// handover. numberStart is the numbering start (the value before
-// three-digit zero padding; default 1). The input is one of two: with
-// file given, content is presented as the "plan file" (the source file's
-// full text; path for the prompt to reference), otherwise as the
-// "implementation prompt" (content = the prompt text verbatim).planPhase always passes the
-// phase's persisted planning input as the file (plan-input.md, D11), so the
-// prompt branch is unused by the core. brief is the .opencode/auto/brief.md
-// text verbatim (may be empty; it lets the planning session sense the
-// project intent).
-export function renderImplementPlan(facts: PromptFacts, input: {
-  file?: string
-  content: string
-  brief?: string
-  phaseId: string
-  taskIndex: string
-  numberStart?: number
-  parallel?: ParallelLevel
-  // The round's number (plans/0081 D2): the no-phase implicit round's single
-  // phase is final, so its planner carries the report duty like any other —
-  // the round's report path is derived from it. Absent = no report duty.
-  round?: number
-}): string {
-  return renderPrompt(facts, "implement-plan", {
-    phaseId: input.phaseId,
-    taskIndex: input.taskIndex,
-    numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
-    fromFile: input.file !== undefined,
-    filePath: input.file,
-    content: input.content,
-    brief: input.brief?.trim() || undefined,
-    finalPhase: input.round !== undefined || undefined,
-    reportFile: input.round !== undefined ? reportForUserPath(input.round) : undefined,
-    ...parallelismVars(facts, input.parallel),
-  })
 }
 
 // The task fields the append prompt's existing-task lines read (the task
@@ -214,9 +76,9 @@ export function existingTaskList(tasks: readonly ExistingTask[]): string {
 // Append planning (plans/0053 D23/D27): the planner that adds tasks to a
 // phase whose index already lists some, rendered from the shared
 // phase-append template by both modes. Phased sessions pass the phase entry
-// (the phase naming) and the pre-rendered duty paragraph (as renderPhasePlan's
-// planDuties; an m-mode session passes neither — as implement-plan, it has no
-// duties, round or handovers — so the template drops those blocks).
+// (the phase naming) and the pre-rendered duty paragraph (as renderPhasePlan
+// formerly did; an m-mode session passes neither — as implement-plan, it has
+// no duties, round or handovers — so the template drops those blocks).
 // input/inputPath are required (append always plans against a planning
 // input: --append without input is a usage error, D23), and existingTasks is
 // the pre-joined line list of the index as it stands (existingTaskList).
@@ -231,7 +93,7 @@ export function existingTaskList(tasks: readonly ExistingTask[]): string {
 // fallback branch would name T-001 under an index that already lists it).
 // The rejected alternative was two separate templates per mode, which D27
 // rules out; per-block negative fallbacks were dropped because m mode must
-// render the shared blocks' absence silently, as implement-plan does.
+// render the shared blocks' absence silently, as implement-plan did.
 export function renderPhaseAppend(facts: PromptFacts, input: {
   phase?: PhaseEntry
   planDuties?: string
@@ -254,9 +116,9 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     phaseName: type?.name,
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
-    // The precedence block, same subsection as renderPhasePlan: an append
-    // plans against a human input too (plan --append, or a repair round's
-    // evidence), so the authority order rides along.
+    // The precedence block, same subsection as the formulation todo: an
+    // append plans against a human input too (plan --append, or a repair
+    // round's evidence), so the authority order rides along.
     precedence: intentText(facts, "guarantees", "precedence", {}),
     numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
     input: input.input.trim(),
@@ -270,4 +132,258 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     planDuties: input.planDuties,
     ...parallelismVars(facts, input.parallel),
   })
+}
+
+// The formulation task's single-input todo (plans/0095 D1): the deterministic
+// assembly of exactly the blocks the retired phase-plan / implement-plan
+// templates stacked, as the task document's three sections. The Scope is the
+// whole composed planning brief — project brief, round brief + round rules,
+// approved analysis (human-gated phases), planning input, mode preamble,
+// precedence, prior-phase handovers, prior-round conclusions, phase duties +
+// artifact conventions + report duty, parallelism — followed by the
+// task-writing protocol skeleton moved verbatim from phase-plan.md; the
+// formulation session (an ordinary whole-task session) reads this document
+// as its only planning input, the wrapper adds the execution protocol.
+// m mode (no phase entry) renders the slimmer framing: no
+// round/analysis/handover/prevRound blocks, the input presented as the plan
+// file, and the report duty always (the implicit round's single phase is
+// final — plans/0053 D12's rule carried over). numberStart is the first
+// number the session's own tasks may take (the formulation number + 1).
+// charter is the Acceptance text (formulate.ts formulationAcceptance): the
+// generic plan-quality core plus the pack's verify-plan when declared — the
+// wrap-up session judges it by inspection of the unit's commit range.
+export function renderFormulationTodo(facts: PromptFacts, input: {
+  // Absent in m mode (the implicit P01-implement still formulates, without
+  // the phased-flow blocks).
+  phase?: PhaseEntry
+  phaseId: string
+  taskIndex: string
+  numberStart: number
+  brief?: string
+  round?: string
+  analysis?: string
+  input?: string
+  inputPath?: string
+  handovers?: string
+  prevRound?: string
+  mode?: ModeSpec
+  trimmedPhases?: boolean
+  parallel?: ParallelLevel
+  finalPhase?: boolean
+  reportFile?: string
+  testByDriver?: boolean
+  charter: string
+}): { goal: string; scope: string; acceptance: string } {
+  const manual = input.phase === undefined
+  // The input blocks' blank-normalization (the retired renderer's caller-side
+  // trims, folded in): a blank text renders nothing.
+  const briefText = input.brief?.trim() || undefined
+  const analysisText = input.analysis?.trim() || undefined
+  const inputText = input.input?.trim() || undefined
+  const parts: string[] = []
+  parts.push(
+    "This document is the single input of this formulation task: the DRIVER assembled everything below from the project's committed sources when it created the task, and nothing else is injected into your session. Plan from these sources — the repository and the project's artifacts, never invention; where two of them disagree, the authority order (when present below) says which wins.",
+  )
+  if (briefText !== undefined) {
+    parts.push(["## Input: project intent (.opencode/auto/brief.md)", "", briefText, ""].join("\n"))
+  } else if (!manual) {
+    parts.push(
+      [
+        "## Input: project intent",
+        "",
+        "Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The survey phase of a re-work",
+        "round will propose one — seed it optionally with `init --brief <one line>` (what the project is, where the",
+        "reference lives, where the deliverable goes), or name the reference in this round's planning input.",
+        "",
+      ].join("\n"),
+    )
+  }
+  if (input.round) {
+    const rules = intentText(facts, "acceptance", "round-brief", {})
+    parts.push(
+      ["## Input: round brief (this round's round.md)", "", "The human's statement of what this round is for. Plan this phase's tasks toward its goal and criteria.", "", input.round.trim(), ...(rules ? ["", rules.trim()] : []), ""].join("\n"),
+    )
+  }
+  if (analysisText !== undefined) {
+    parts.push(
+      [
+        "## Input: approved project analysis (docs/analysis.md)",
+        "",
+        "The person's approved pre-round decisions — the goals, the constraints, the roadmap of rounds. What this analysis",
+        "settles is settled: carry its decisions forward, never re-raise them as open questions; a decision its goals,",
+        "constraints or roadmap implies is decided the same way, with the derivation recorded.",
+        "",
+        analysisText,
+        "",
+      ].join("\n"),
+    )
+  }
+  if (inputText !== undefined) {
+    parts.push(
+      manual
+        ? ["## Input: plan file (" + (input.inputPath ?? "plan-input.md") + ")", "", inputText, ""].join("\n")
+        : [
+            `## Input: planning input (${input.inputPath ?? "plan-input.md"})`,
+            "",
+            "The person who started this planning step asked for the following. Plan this phase's tasks to cover it, within",
+            "the phase duties below.",
+            "",
+            inputText,
+            "",
+          ].join("\n"),
+    )
+  }
+  if (input.mode) {
+    parts.push(["## Input: scenario-mode preamble (" + input.mode.name + ")", "", modeText(input.mode.init).trim(), ""].join("\n"))
+  }
+  const precedence = intentText(facts, "guarantees", "precedence", {})
+  if (precedence) {
+    parts.push(
+      [
+        "## Authority order (intent guarantees)",
+        "",
+        "Where any part of this document — the planning input, the round brief, the project brief, the phase duties — conflicts with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order text.",
+        "",
+        precedence.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  if (input.handovers) {
+    parts.push(
+      [
+        "## Input: prior-phase handovers",
+        "",
+        "The handover-distillation documents of each prior phase (at this round's phase directories'",
+        "P<nn>-<type>/handover.md, a permanent path) — the sole channel of cross-phase memory, replacing the prior",
+        "phases' raw docs/ (do not read those when planning; pull detail via each handover's artifact index):",
+        "",
+        input.handovers.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  if (input.prevRound) {
+    parts.push(
+      [
+        "## Input: prior-round conclusions (continuation round)",
+        "",
+        "This project has already run a full phased round of work, and this is a continuation round: build on the existing",
+        "results to bring them into fuller agreement with what the project is for — prioritise gaps and misses left over",
+        "from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows",
+        "(each prior phase's task index tasks.md lives inside its own phase directory under the prior round's docs/R-NN/,",
+        "a permanent path; pull detail via the index as needed):",
+        "",
+        input.prevRound.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  if (!manual) {
+    const duties = planDutyText(facts, input.phase!, { phaseName: input.phase!.name, ...(input.testByDriver ? { testByDriver: true } : {}) })
+    parts.push(
+      [
+        "## Phase duties and artifact conventions",
+        "",
+        "Document placement is anchored to tasks: each task's document artifacts go into its task directory docs/T-NNN/",
+        "(subtask artifacts included, at docs/T-NNN/S<two-digit index>/index.md); once a path is created it is permanent and",
+        "does not move with the phase/round.",
+        "",
+        duties,
+        "",
+        ...(input.finalPhase ? [renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim(), ""] : []),
+        ...(input.trimmedPhases && input.phase?.type === "implement"
+          ? [
+              "Pipeline-trimming note: this round's pipeline was trimmed via --phases with no separate analysis/design phase — fold",
+              "the necessary survey and design points into this phase's first batch of tasks. The baseline-safety-net items (the",
+              "before baseline, the guard/flip/exclude/per-batch-update checklist, AUTO-TODO reconciliation, tallies, etc.) must not",
+              "be dropped because of pipeline trimming.",
+              "",
+            ]
+          : []),
+      ].join("\n"),
+    )
+  }
+  // m mode's report duty (the implicit round's single phase is final,
+  // plans/0053 D12's rule carried over): no duties section to sit beside, so
+  // it renders as its own block ahead of the protocol.
+  if (manual && input.finalPhase) {
+    parts.push(renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim() + "\n")
+  }
+  const { parallel, parallelRules } = parallelismVars(facts, input.parallel)
+  if (parallelRules) {
+    parts.push(
+      [
+        `## Parallelism (${parallel})`,
+        "",
+        "A task whose dependencies are done runs side by side with any other task whose `Touches:` paths it does not",
+        "overlap — plan for that as follows:",
+        "",
+        parallelRules.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  const numberStart = String(input.numberStart).padStart(3, "0")
+  parts.push(
+    [
+      "## What this task writes (the DRIVER's format protocol)",
+      "",
+      "1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content;",
+      "2. Write all of this phase's tasks as task units in execution order — one task document per task, plus one line in",
+      "   this phase's task index:",
+      "   - Task document docs/T-NNN/todo.md (one directory per task), format:",
+      "",
+      "# T-NNN: <task title>",
+      `Phase: ${input.phaseId}`,
+      "",
+      "## Goal",
+      "<goal: what this task delivers>",
+      "",
+      "## Scope",
+      "<scope: modules/files involved, key constraints and necessary context — self-contained, executable from this and docs/ alone>",
+      "",
+      "## Acceptance",
+      "<acceptance: what counts as done>",
+      "",
+      "<!-- auto: eof -->",
+      "",
+      `   - Task index ${input.taskIndex}, one line per task in execution order:`,
+      "",
+      "- [ ] T-NNN <task title>",
+      "",
+      "   The title line, the `Phase:` field line, the three section headings, the index line and the closing terminator are",
+      "   parsed by the DRIVER — write them verbatim as above, do not translate or rephrase them;",
+      `   ${renderText("{{> task-depends}}", {}).trim().replaceAll("\n", "\n   ")}`,
+      `   ${renderText("{{> task-decompose}}", {}).trim().replaceAll("\n", "\n   ")}`,
+      `3. Task numbers increment continuously from T-${numberStart} (auto-numbering: numbers never repeat within the target directory; earlier numbers are already taken by historical tasks and must not be reused);`,
+      "   each task is one independently deliverable outcome; do not hand-write subtask checklist items",
+      "   (whether and how a task is split is decided at execution time);",
+      "4. End the session immediately once planning is done and the task index and all task documents are written.",
+      "",
+      "## Constraints",
+      "",
+      `1. This session writes only the task index ${input.taskIndex} and each task's docs/T-NNN/todo.md — never done.md;`,
+      "   every other file, and every state file, is outside this session's write scope.",
+      "2. The task index must have at least one task: even if you conclude this phase has nothing to do, write one",
+      "   explanatory task and state the reason in its task document; producing no valid task causes a blocked shutdown.",
+      "",
+      renderText("{{> doc-layout}}", {}).trim(),
+    ].join("\n"),
+  )
+  const scope = parts.join("\n").replaceAll(/\n{3,}/g, "\n\n").trim()
+  // The guarantees gate, renderPrompt's contract carried onto the todo
+  // assembly (plans/0095 D4): the retired phase-plan template's asserts keep
+  // their meaning — the assembled Scope is the planning prompt now — keyed
+  // by the same template name and phase tag, so a pack's pinned literals
+  // hold exactly as before.
+  const asserts = parseGuaranteeAsserts(facts.pack)
+  if (asserts !== undefined) {
+    const violation = guaranteeViolation(facts.pack, asserts, "phase-plan", input.phase ? phaseTag(input.phase) : undefined, scope)
+    if (violation !== undefined) throw new PromptGuaranteeError(violation)
+  }
+  const goal = manual
+    ? `Formulate the implementation work's complete task plan — the task index ${input.taskIndex} plus every task's document docs/T-NNN/todo.md — as a verifiable path to what it must deliver; the Acceptance below states the bar the plan must meet.`
+    : `Formulate the "${input.phase!.name}" phase's complete task plan — the task index ${input.taskIndex} plus every task's document docs/T-NNN/todo.md — as a verifiable path to what this phase must deliver; the Acceptance below states the bar the plan must meet.`
+  return { goal, scope, acceptance: input.charter }
 }

@@ -39,7 +39,9 @@ import {
   renderWrapup,
   type ScriptRun,
 } from "../src/prompt"
-import { renderImplementPlan, renderPhaseAppend, renderPhasePlan, existingTaskList } from "../src/prompt-plan"
+import { renderFormulationTodo, renderPhaseAppend, existingTaskList } from "../src/prompt-plan"
+import { formulationAcceptance } from "../src/formulate"
+import { renderTaskTodo } from "../src/tasks"
 import { promptFacts } from "../src/prompt-facts"
 import { promptViews } from "../src/tasks"
 import { taskDocPaths } from "../src/docpaths"
@@ -232,34 +234,71 @@ describe("golden render snapshots", () => {
   })
 
   test("phase-loop family (planning/handover/knowledge)", () => {
+    // The formulation todo (plans/0095): the phase's planning as its first
+    // task unit — one golden per phase letter, pinned through the full
+    // taskTodoSpec document the construction writes.
+    const formulationDocument = (entry: ReturnType<typeof phaseTypeOfLetter>, todo: { goal: string; scope: string; acceptance: string }, phaseId: string) =>
+      renderTaskTodo({ id: "T-005", title: `Formulate the ${entry.name} tasks`, phase: phaseId, formulate: phaseId, decompose: "whole", depends: "none", goal: todo.goal, scope: todo.scope, acceptance: todo.acceptance })
     for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
+      const entry = phaseTypeOfLetter(phase)
       golden(
-        `phase-plan-${phase}`,
-        renderPhasePlan(facts, {
-          phase: phaseTypeOfLetter(phase),
-          planDuties: duties(phase),
-          brief: "Project intent (fixed input).",
-          handovers: "Prior phase handover (fixed input).",
-          mode: migrate,
-          phaseId: "R-01.P02",
-          taskIndex: `docs/R-01/P02-${phaseTypeOfLetter(phase).type}/tasks.md`,
-          ...(phase === "m" ? { trimmedPhases: true, numberStart: 5 } : {}),
-        }),
+        `formulation-todo-${phase}`,
+        formulationDocument(
+          entry,
+          renderFormulationTodo(facts, {
+            phase: entry,
+            brief: "Project intent (fixed input).",
+            handovers: "Prior phase handover (fixed input).",
+            mode: migrate,
+            phaseId: "R-01.P02",
+            taskIndex: `docs/R-01/P02-${entry.type}/tasks.md`,
+            numberStart: 6,
+            ...(phase === "m" ? { trimmedPhases: true } : {}),
+            charter: formulationAcceptance(facts),
+          }),
+          "R-01.P02",
+        ),
       )
     }
     // MP.1: one render above parallel none (the level block); every golden
     // above renders at none and stays byte-identical.
     golden(
-      "phase-plan-m-parallel-high",
-      renderPhasePlan(facts, {
-        phase: phaseTypeOfLetter("m"),
-        planDuties: duties("m"),
-        brief: "Project intent (fixed input).",
-        mode: migrate,
-        phaseId: "R-01.P02",
-        taskIndex: "docs/R-01/P02-implement/tasks.md",
-        parallel: "high",
-      }),
+      "formulation-todo-m-parallel-high",
+      formulationDocument(
+        phaseTypeOfLetter("m"),
+        renderFormulationTodo(facts, {
+          phase: phaseTypeOfLetter("m"),
+          brief: "Project intent (fixed input).",
+          mode: migrate,
+          parallel: "high",
+          phaseId: "R-01.P02",
+          taskIndex: "docs/R-01/P02-implement/tasks.md",
+          numberStart: 6,
+          charter: formulationAcceptance(facts),
+        }),
+        "R-01.P02",
+      ),
+    )
+    // m mode (plans/0095 D1): no phase entry — the plan-file input framing,
+    // the report duty always (the implicit round's single phase is final).
+    golden(
+      "formulation-todo-manual",
+      formulationDocument(
+        phaseTypeOfLetter("m"),
+        renderFormulationTodo(facts, {
+          brief: "Project intent (fixed input).",
+          input: "Full implementation prompt (fixed input).",
+          inputPath: "docs/R-01/P01-implement/plan-input.md",
+          mode: migrate,
+          phaseId: "R-01.P01",
+          taskIndex: "docs/R-01/P01-implement/tasks.md",
+          numberStart: 2,
+          finalPhase: true,
+          reportFile: "docs/R-01/report-for-user.md",
+          charter: formulationAcceptance(facts),
+        }),
+        "R-01.P01",
+      ),
     )
     golden(
       "phase-handover",
@@ -321,13 +360,7 @@ describe("golden render snapshots", () => {
     )
   })
 
-  test("bypass family (plan generation/number recovery/handover steer/stuck loop/dryrun)", () => {
-    golden("implement-plan", renderImplementPlan(facts, { content: "Full implementation prompt (fixed input).", brief: "Project intent.", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md" }))
-    golden(
-      "implement-plan-parallel-medium",
-      renderImplementPlan(facts, { content: "Full implementation prompt (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel: "medium" }),
-    )
-    golden("implement-plan-file", renderImplementPlan(facts, { file: "spec.md", content: "Full plan file (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
+  test("bypass family (number recovery/handover steer/stuck loop/dryrun)", () => {
     golden("number-recovery", renderNumberRecovery(facts, { floor: 7 }))
     golden("handoff-steer", renderHandoffSteer(facts, docs))
     golden("usage-note-info", renderUsageNoteInfo(facts, docs))

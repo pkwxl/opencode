@@ -87,14 +87,15 @@ describe("shared partial parsing", () => {
     expect(text).not.toContain("phases.md")
     // No template variables: templates without taskId (phase-plan and friends) can reference it too
     expect(text).not.toMatch(/\{\{|\}\}/)
-    // Referencing renders: decompose (the task-document writer) and phase-plan (the planner without taskId) both carry the section
+    // Referencing renders: decompose (the task-document writer) carries the
+    // section; the planner's copy rides the formulation todo's Scope (the
+    // phase-plan template retired with plans/0095), pinned by the todo golden
     expect(renderTemplate("decompose", { taskId: "T-001", taskBlock: "x" })).toContain("Document placement rules")
-    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "analysis" })).toContain("Document placement rules")
   })
 })
 
 describe("built-in template registry", () => {
-  test("all 37 templates present (34 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; fix see 0083 D4; the 0082 trio see §3-§5)", () => {
+  test("all 35 templates present (32 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; fix see 0083 D4; the 0082 trio see §3-§5; phase-plan and implement-plan retired by plans/0095)", () => {
     expect(promptTemplateNames()).toEqual([
       "_mode-brief",
       "_partials",
@@ -114,12 +115,10 @@ describe("built-in template registry", () => {
       "fanout",
       "fix",
       "handoff-steer",
-      "implement-plan",
       "knowledge",
       "number-recovery",
       "phase-append",
       "phase-handover",
-      "phase-plan",
       "plan-verify",
       "prior-knowledge",
       "split-rejected",
@@ -557,9 +556,9 @@ describe("optional slots (templateRenders, plans/0053 D11)", () => {
     "## Acceptance",
   ].join("\n")
 
-  test("the built-in phase-plan renders {{input}}", () => {
-    expect(templateRenders("phase-plan", "input")).toBe(true)
-    expect(templateRenders("phase-plan", "noSuchSlot")).toBe(false)
+  test("the built-in phase-append renders {{input}} (the planner's own slot retired with the phase-plan template, plans/0095)", () => {
+    expect(templateRenders("phase-append", "input")).toBe(true)
+    expect(templateRenders("phase-append", "noSuchSlot")).toBe(false)
   })
 
   test("an override without the slot still loads (not a tier-1 marker) and reports it missing", () => {
@@ -567,9 +566,11 @@ describe("optional slots (templateRenders, plans/0053 D11)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "phase-plan.md"), OLD_PHASE_PLAN)
+      // whole carries no tier-1 markers: an override dropping its optional
+      // {{adaptive}} slot loads, and templateRenders reports the loss.
+      writeFileSync(join(overlay, "whole.md"), "Whole-task wrapper without the adaptive clause.\n\n<!-- auto: eof -->\n")
       usePromptLibrary(dir)
-      expect(templateRenders("phase-plan", "input")).toBe(false)
+      expect(templateRenders("whole", "adaptive")).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

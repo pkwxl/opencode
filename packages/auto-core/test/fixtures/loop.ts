@@ -91,16 +91,30 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
   // artifact) — exactly the fail-closed case; the diagnosis suites script a
   // real plan through diagnosisTurn.
   if (ctx.text.includes("You are the blockage diagnosis session")) return undefined
+  // The wrap-up verification session (plans/0083, every task unit since
+  // plans/0095 — the formulation task included): a passing report in the
+  // evidence form, the result line verbatim.
+  if (ctx.text.includes("you are this task's verification session")) {
+    const id = /docs\/(T-\d{3})\/report\.md/.exec(ctx.text)?.[1]
+    if (id) {
+      writeFileSync(
+        join(dir, "docs", id, "report.md"),
+        [`# Report (${id})`, "", "- every acceptance criterion: met (the fake agent inspected the unit's work).", "", "## Overall conclusion", "", "Done.", "", "Result: PASS", "", EOF_MARK, ""].join("\n"),
+      )
+    }
+    return undefined
+  }
   // The handover prompt opens with "You are the handover distiller"; the
-  // planning prompts (phase-plan and implement-plan alike) carry the phase's
-  // task index path. A plan prompt also injects earlier phases' handover
-  // texts, so the distiller marker is checked first.
+  // formulation session's prompt (the whole-task wrapper around the todo)
+  // carries the phase's task index path in the todo's protocol section. A
+  // plan prompt also injects earlier phases' handover texts, so the
+  // distiller marker is checked first.
   if (ctx.text.includes("You are the handover distiller")) {
     const m = new RegExp(`(${PHASE_DIR})/handover\\.md`).exec(ctx.text)
     if (m) {
-      mkdirSync(join(dir, m[1]), { recursive: true })
+      mkdirSync(join(dir, m[1]!), { recursive: true })
       writeFileSync(
-        join(dir, m[1], "handover.md"),
+        join(dir, m[1]!, "handover.md"),
         [
           `# Handover (${m[1]})`,
           "",
@@ -126,12 +140,18 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
     return undefined
   }
   const index = new RegExp(`(${PHASE_DIR})/tasks\\.md`).exec(ctx.text)
-  if (index) {
+  if (index && !ctx.text.includes(APPEND_MARK)) {
     const phaseDir = index[1]!
     const task = padTask(nextTaskNumber(dir))
     mkdirSync(join(dir, "docs", task), { recursive: true })
-    writeFileSync(join(dir, phaseDir, "tasks.md"), renderTaskIndex(phaseDirId(phaseDir), [{ id: task, title: `task ${task}` }]))
     writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
+    // plans/0095: the formulation task's line is already the index's first
+    // line (the driver's construction commit) — the planned tasks append
+    // after it, the index itself is never rewritten.
+    const file = join(dir, phaseDir, "tasks.md")
+    const current = existsSync(file) ? readFileSync(file, "utf8") : renderTaskIndex(phaseDirId(phaseDir), [])
+    const line = `- [ ] ${task} task ${task}`
+    writeFileSync(file, current.endsWith("\n") ? `${current}${line}\n` : `${current}\n${line}\n`)
   }
   return undefined
 }

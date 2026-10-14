@@ -158,52 +158,52 @@ const has = (f: LoopFixture, path: string) => existsSync(join(f.dir, path))
 
 describe("repair (task level, m mode)", () => {
   test("a FAIL verdict with budget: the loop exhausts, the failed task is closed with the round recorded, the appended task re-verifies, the run completes", async () => {
-    const f = await fixture("m", repairTurns(new Set(["T-001"])))
+    const f = await fixture("m", repairTurns(new Set(["T-002"])))
     const { code, lines } = await f.run({ repair: 1, planInput: { text: "migrate the widget" } })
     expect(code).toBe(0)
     // The verification loop ran first (plans/0083): two fix rounds, each
     // committed with the `T-001 fix <round>` subject and stage execute.
     const subjects = await f.git("log", "--format=%s")
-    expect(subjects.split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
+    expect(subjects.split("\n").filter((line) => line.startsWith("T-002 fix "))).toHaveLength(2)
     // Then the repair round: close (the Closed: field names it), append, re-run.
     expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
-    const closed = await Bun.file(join(f.dir, "docs/T-001/done.md")).text()
+    const closed = await Bun.file(join(f.dir, "docs/T-002/done.md")).text()
     expect(closed).toContain("Closed: repair round 1: the task report concluded Result: FAIL")
-    expect(has(f, "docs/T-002/done.md")).toBe(true)
-    expect((await Bun.file(join(f.dir, "docs/T-002/report.md")).text())).toContain("Result: PASS")
-    expect(await f.git("log", "--format=%s")).toContain("T-001 close")
+    expect(has(f, "docs/T-003/done.md")).toBe(true)
+    expect((await Bun.file(join(f.dir, "docs/T-003/report.md")).text())).toContain("Result: PASS")
+    expect(await f.git("log", "--format=%s")).toContain("T-002 close")
     expect(lines).toContain("✓ all tasks complete")
     // The tree is clean: the close and append commits settled everything.
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
   test("no budget: the FAIL blocks once the fix loop is spent (exit 2, the task pending, the rounds named, the human's ways listed)", async () => {
-    const f = await fixture("m", repairTurns(new Set(["T-001"])))
+    const f = await fixture("m", repairTurns(new Set(["T-002"])))
     const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
     expect(code).toBe(2)
     // The block message names the verdict and the rounds spent (plans/0083 D5).
-    expect(lines.some((line) => line.includes("the verification of T-001 concluded Result: FAIL"))).toBe(true)
+    expect(lines.some((line) => line.includes("the verification of T-002 concluded Result: FAIL"))).toBe(true)
     expect(lines.some((line) => line.includes("2 fix rounds already ran (the budget is 2)"))).toBe(true)
-    expect(lines.some((line) => line.includes("docs/T-001/gaps.md"))).toBe(true)
+    expect(lines.some((line) => line.includes("docs/T-002/gaps.md"))).toBe(true)
     expect(lines.some((line) => line.includes("repair round"))).toBe(false)
     // Both fix rounds ran before the block (the loop precedes the ladder).
-    expect((await f.git("log", "--format=%s")).split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
+    expect((await f.git("log", "--format=%s")).split("\n").filter((line) => line.startsWith("T-002 fix "))).toHaveLength(2)
     // Not closed, not done: the state files stay pending for the human.
-    expect(has(f, "docs/T-001/todo.md")).toBe(true)
-    expect(has(f, "docs/T-001/done.md")).toBe(false)
-    expect(has(f, "docs/T-002")).toBe(false)
+    expect(has(f, "docs/T-002/todo.md")).toBe(true)
+    expect(has(f, "docs/T-002/done.md")).toBe(false)
+    expect(has(f, "docs/T-003")).toBe(false)
   })
 
   test("an exhausted budget blocks: the second FAIL has no round left", async () => {
-    const f = await fixture("m", repairTurns(new Set(["T-001", "T-002"])))
+    const f = await fixture("m", repairTurns(new Set(["T-002", "T-003"])))
     const { code, lines } = await f.run({ repair: 1, planInput: { text: "migrate the widget" } })
     expect(code).toBe(2)
     // The first FAIL consumed the round (T-001 closed, T-002 appended); the
     // second FAIL (T-002's own verification) blocks — the budget is spent.
     expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
-    expect(await Bun.file(join(f.dir, "docs/T-001/done.md")).text()).toContain("Closed: repair round 1")
-    expect(has(f, "docs/T-002/todo.md")).toBe(true)
-    expect(lines.some((line) => line.includes("the verification of T-002 concluded Result: FAIL"))).toBe(true)
+    expect(await Bun.file(join(f.dir, "docs/T-002/done.md")).text()).toContain("Closed: repair round 1")
+    expect(has(f, "docs/T-003/todo.md")).toBe(true)
+    expect(lines.some((line) => line.includes("the verification of T-003 concluded Result: FAIL"))).toBe(true)
   })
 })
 

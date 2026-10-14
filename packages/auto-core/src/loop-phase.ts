@@ -12,6 +12,7 @@ import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECT
 import { reportForUserPath } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
+import { isFormulation } from "./formulate"
 import { banner, log } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
@@ -46,7 +47,7 @@ import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
-import { loadPlan } from "./tasks"
+import { loadPlan, resetPlanning } from "./tasks"
 
 // phase handover (§F, docs never move): ① the distillation session (the AI's
 // only duty, a one-off bypass) produces the permanent handover document
@@ -528,27 +529,31 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       const owner = state.phases.find((unit) => phaseKey(unit).id === open.unit)
       if (owner && state.done.has(owner.id)) {
         await closeStep(directory, open.step, open.unit)
+      } else if (open.step === "phase-plan") {
+        // The retired planning step (plans/0095 D4): a record a release
+        // before the formulation task left. Its session is superseded — the
+        // phase plans again as its first task unit — so the record closes
+        // and the partial planning output clears (resetPlanning, kept as
+        // this legacy migration helper); file routing then finds the empty
+        // index and the formulation step takes over.
+        log(`↻ unclosed planning resume point (${open.unit}) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit`)
+        await closeStep(directory, open.step, open.unit)
+        if (owner) await resetPlanning(directory, owner)
       } else if (
         ctx.manual &&
-        (open.step === "phase-plan" || open.step === "phase-append") &&
+        open.step === "phase-append" &&
         open.unit === phaseKey(route.phase).id &&
         !ctx.input &&
         !(await readPlanInput(directory, route.phase))?.trim()
       ) {
         log(
-          `⚠ unclosed m-mode ${open.step === "phase-plan" ? "planning" : "appending"} resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
+          `⚠ unclosed m-mode appending resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
             `closing it and continuing with the file-derived route`,
         )
         await closeStep(directory, open.step, open.unit)
       } else if (open.unit === phaseKey(route.phase).id) {
-        const stepName = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+        const stepName = open.step === "phase-append" ? "task appending" : "phase handover"
         log(`↻ session resume point takes precedence: the ${stepName} session(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`)
-        if (open.step === "phase-plan") {
-          banner(`${phaseTitle(route.phase)} phase planning`)
-          const code = await planWithStep(ctx, route.phase)
-          if (code !== 0 || opts.stopBefore === "execute") return code
-          continue
-        }
         if (open.step === "phase-append") {
           banner(`${phaseTitle(route.phase)} task append`)
           const code = await appendWithStep(ctx, route.phase)
@@ -593,9 +598,11 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     // manual mode (no phases): with no task to run it wraps up — an empty
     // task index prompts a fill-in, all tasks complete prints the
     // round-complete line; both exit 0 with the phase left incomplete. A
-    // planning input handed to this run (ctx.input) is the exception: m mode
-    // then plans on planPhase like a phase (plans/0053 D12).
-    if (ctx.manual && route.type !== "execute" && !(route.type === "plan" && ctx.input)) {
+    // planning input this run was handed (ctx.input), or one the phase
+    // already holds persisted, is the exception: m mode then plans as a
+    // phase does (plans/0053 D12 — the persisted-input half is plans/0095's
+    // routing unification; before it only an open step reached the planner).
+    if (ctx.manual && route.type !== "execute" && !(route.type === "plan" && (ctx.input || (await readPlanInput(directory, route.phase))?.trim()))) {
       if (route.type === "plan") {
         for (const line of emptyIndexNotice(directory, route.plan.index)) log(line)
         return 0
@@ -677,7 +684,16 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // plan's stop condition (plans/0053 D6, D7): an execute route this run
       // did not plan (planning stops the run itself), e.g. a next phase whose
       // tasks were listed by hand. An input left over is plan's usage error.
+      // The one exception (plans/0095 D4): a phase whose remaining work is
+      // only its formulation task is still planning — plan finishes what it
+      // started (an interrupted formulation runs to completion here, the
+      // task-pipeline re-entry of the former openStep precedence).
       if (opts.stopBefore === "execute") {
+        const remaining = route.plan.tasks.filter((task) => task.status !== "done")
+        if (remaining.length && remaining.every((task) => isFormulation(task, route.phase))) {
+          banner(`${phaseTitle(route.phase)} phase planning`)
+          return await planWithStep(ctx, route.phase)
+        }
         for (const line of executeNotice(directory, route, ctx.manual)) log(line)
         return ctx.input ? 1 : 0
       }

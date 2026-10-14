@@ -315,17 +315,18 @@ export type SessionCtx = {
 }
 
 // Which loop session is asking for its options: one id per call site the
-// builder serves (phase-plan / phase-append are those sessions' resume-point
-// step names; plan-numbering / append-numbering are the numbering-record
-// restore sessions planning and appending open). The task variant carries its
-// phase as the caller-computed PhaseKey — computing it here would need the
-// phases value graph, which opts must not pull under every importer — and,
-// since plans/0068 S5, the stream ordinal of a stream lane unit (the task
-// pipeline runs exactly that checklist item).
+// builder serves (phase-append is that session's resume-point step name;
+// plan-numbering / append-numbering are the numbering-record restore sessions
+// construction and appending open; the phase-plan site retired with the
+// bypass planning session — plans/0095, the formulation task runs under the
+// task site). The task variant carries its phase as the caller-computed
+// PhaseKey — computing it here would need the phases value graph, which opts
+// must not pull under every importer — and, since plans/0068 S5, the stream
+// ordinal of a stream lane unit (the task pipeline runs exactly that
+// checklist item).
 export type SessionSite =
   | { site: "task"; phase: PhaseKey; stream?: number }
   | { site: "plan-numbering" }
-  | { site: "phase-plan" }
   | { site: "append-numbering" }
   | { site: "phase-append" }
   | { site: "handover" }
@@ -386,6 +387,12 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       git: ctx.git,
       // present only when the fleet cannot fork
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
+      // plan's stop condition makes its sessions' questions the human's
+      // (plans/0095 D4: the formulation task is the only task session that
+      // ever runs under stopBefore — every other execute route stops — so
+      // the bypass era's rule carries onto the task site with the same
+      // key: absent under run, the byte-identical floor)
+      ...(ctx.opts.stopBefore === "execute" ? { humanQuestions: true } : {}),
       // present only under real width (the level beside it)
       ...(width && ctx.opts.parallel !== undefined ? { parallel: ctx.opts.parallel } : {}),
       // present only inside a lane worker

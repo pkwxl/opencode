@@ -46,7 +46,6 @@ import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
-import tplImplementPlan from "../templates/prompts/implement-plan.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
@@ -54,7 +53,6 @@ import tplPartials from "../templates/prompts/_partials.md" with { type: "file" 
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
 import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
-import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
 import tplPriorKnowledge from "../templates/prompts/prior-knowledge.md" with { type: "file" }
 import tplSplitRejected from "../templates/prompts/split-rejected.md" with { type: "file" }
 import tplStepUp from "../templates/prompts/step-up.md" with { type: "file" }
@@ -107,7 +105,6 @@ const embedded: Record<string, string> = {
   // listed gaps out, under the pack's repair discipline.
   fix: tplFix,
   "handoff-steer": tplHandoffSteer,
-  "implement-plan": tplImplementPlan,
   knowledge: tplKnowledge,
   // The core-owned operating-mode brief (plans/0082 §3 D3): registered data,
   // rendered as pre-built text the way intent-pack sections are, injected at
@@ -117,7 +114,6 @@ const embedded: Record<string, string> = {
   "plan-verify": tplPlanVerify,
   "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
-  "phase-plan": tplPhasePlan,
   "prior-knowledge": tplPriorKnowledge,
   "split-rejected": tplSplitRejected,
   "step-up": tplStepUp,
@@ -158,7 +154,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // and the task block are the session's whole assignment — an override
   // dropping either sends the fix at nothing.
   fix: ["{{taskBlock}}", "{{gapsFile}}"],
-  "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "number-recovery": [".auto/next-task"],
   // The plan-step consistency verifier (plans/0080 §5): the driver parses the
   // reply's `Consistent:` line verbatim, and an override must still show the
@@ -172,7 +167,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // Literal copies of document/roles HANDOVER_SECTIONS / PRIOR_KB_DONE (template
   // is intent-domain with frozen imports; test/template.test.ts pins the match).
   "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],
-  "phase-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "prior-knowledge": ["DONE", "{{file}}"],
   // The failure-message classifier (plans/0055 §7.1): the driver parses the
   // reply's one JSON line by these two keys, and an override must still show

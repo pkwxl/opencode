@@ -58,15 +58,16 @@ describe("manual-driver prompt ratchet", () => {
     expect(src("git.ts")).toContain("`${task.id} carryover driver-state posting`")
     expect(src("git.ts")).toContain('stage: "carryover"')
     expect(src("git.ts")).toContain("Auto-Stage: ${stage}")
-    // The phase-transfer grammar (plans/0088): the handover distill, the
-    // transition close-out and the phase-plan commits, stated by their
-    // producers in loop-phase.ts / loop-plan.ts.
+    // The phase-transfer grammar (plans/0088, amended by plans/0095): the
+    // handover distill, the transition close-out and the formulation
+    // construction commits, stated by their producers in loop-phase.ts /
+    // formulate.ts.
     expect(src("loop-phase.ts")).toContain("`PLAN handover ${phaseTitle(phase)}`")
     expect(src("loop-phase.ts")).toContain('stage: "phase-handover"')
     expect(src("loop-phase.ts")).toContain("`PLAN transition ${phaseTitle(phase)} → ${target}`")
     expect(src("loop-phase.ts")).toContain('stage: "phase-transition"')
-    expect(src("loop-plan.ts")).toContain("`PLAN plan ${phaseTitle(phase)}`")
-    expect(src("loop-plan.ts")).toContain('stage: "phase-plan"')
+    expect(src("formulate.ts")).toContain("`PLAN formulate ${phaseText(phase)}`")
+    expect(src("formulate.ts")).toContain('stage: "phase-formulate"')
   })
 
   test("the commit grammar: the master control's share commits, then the close-out's wrapup → done", () => {
@@ -288,8 +289,9 @@ describe("manual-driver prompt ratchet", () => {
     for (const literal of ["`# T-NNN: <task title>`", "`Phase: R-NN.P<nn>`", "`## Goal`", "`## Scope`", "`## Acceptance`", "- [ ] T-NNN <task title>", "plan-input.md"]) {
       expect(plan, "run-plan.md").toContain(literal)
     }
-    // The plan commit is the master control's alone.
-    for (const literal of ["PLAN plan <phase id> <phase name>", "Auto-Stage: phase-plan"]) {
+    // The formulation construction commit is the master control's alone
+    // (plans/0095); the child's own share lands as the task grammar's exec.
+    for (const literal of ["PLAN formulate <phase id> <phase name>", "Auto-Stage: phase-formulate", "`<task id> exec <title>`"]) {
       expect(text("run.md"), "run.md").toContain(literal)
     }
   })

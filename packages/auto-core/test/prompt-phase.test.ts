@@ -7,7 +7,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
-import { existingTaskList, planDutyText, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "../src/prompt-plan"
+import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
+import { formulationAcceptance } from "../src/formulate"
 import { promptFacts } from "../src/prompt-facts"
 import { usePromptLibrary, renderText } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
@@ -21,26 +22,29 @@ import { phaseTypeOfLetter as L, planDutiesPartial, type PhaseTypeEntry } from "
 const facts = promptFacts()
 const duties = (entry: PhaseTypeEntry) => renderText(entry.planDuties ?? `{{> ${planDutiesPartial(entry)}}}`, {}).trimEnd()
 
-// The unit coordinates every planning render needs (M3.4); tests vary the rest.
-const phasePlan = (input: Omit<Parameters<typeof renderPhasePlan>[1], "phaseId" | "taskIndex" | "planDuties"> & { phase: PhaseTypeEntry }) =>
-  renderPhasePlan(facts, { phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", planDuties: duties(input.phase), ...input })
-const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[1], "phaseId" | "taskIndex">) =>
-  renderImplementPlan(facts, { phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", ...input })
+// The unit coordinates every planning render needs (M3.4); tests vary the
+// rest. The formulation todo's Scope is the planning prompt since plans/0095
+// (the charter rides the real generic core — the Acceptance section).
+const documentOf = (todo: { goal: string; scope: string; acceptance: string }) => `${todo.goal}\n\n${todo.scope}\n\n## Acceptance\n\n${todo.acceptance}`
+const phasePlan = (input: Omit<Parameters<typeof renderFormulationTodo>[1], "phaseId" | "taskIndex" | "charter" | "numberStart"> & { phase: PhaseTypeEntry; numberStart?: number }) =>
+  documentOf(renderFormulationTodo(facts, { phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", charter: formulationAcceptance(facts), ...input, numberStart: input.numberStart ?? 1 }))
+const implementPlan = (input: Omit<Parameters<typeof renderFormulationTodo>[1], "phaseId" | "taskIndex" | "charter" | "numberStart"> & { numberStart?: number }) =>
+  documentOf(renderFormulationTodo(facts, { phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", charter: formulationAcceptance(facts), ...input, numberStart: input.numberStart ?? 1 }))
 
-describe("renderPhasePlan (phase planning session, section E)", () => {
+describe("renderFormulationTodo, phased (the formulation task's single input, plans/0095 D1)", () => {
   test("injects brief / the mode preamble and the task-unit format protocol; writes only the task index and task documents", () => {
     const text = phasePlan({
       phase: L("a"),
       brief: "migrate legacy to bun",
       mode: migrate,
     })
-    expect(text).toContain("\"Analysis\" phase (a)")
+    expect(text).toContain("Formulate the \"Analysis\" phase's complete task plan")
     expect(text).toContain("migrate legacy to bun")
     expect(text).toContain("scenario-mode preamble (migrate)")
-    // a-phase duties (task-anchored document placement) and the first-batch survey requirements
+    // a-phase duties (the pack tier voices them; the ctx resolves {{phaseName}})
     expect(text).toContain("Document placement is anchored to tasks")
-    expect(text).toContain("behaviour baseline")
-    expect(text).toContain("first batch of tasks")
+    expect(text).toContain("Splitting and artifact criteria for this phase (Analysis)")
+    expect(text).toContain("Split by problem/open question/subsystem/risk surface")
     // Task-unit format protocol (protocol-sensitive markers, M3.4): task-document title line, Phase field, three sections and index lines
     for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P02", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
       expect(text).toContain(marker)
@@ -66,12 +70,11 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     expect(missing).toContain("Not provided (no project brief yet")
     expect(missing).toContain("init --brief <one line>")
     expect(missing).not.toContain("ask a human")
-    expect(missing).toContain("module design")
-    expect(missing).not.toContain("behaviour baseline")
-    expect(phasePlan({ phase: L("m") })).toContain("Complete the implementation work")
-    expect(phasePlan({ phase: L("t") })).toContain("cover the delivered work")
-    expect(phasePlan({ phase: L("v") })).toContain("overall acceptance")
-    expect(phasePlan({ phase: L("k") })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
+    expect(missing).toContain("Split by design concern")
+    expect(phasePlan({ phase: L("m") })).toContain("Vertical thin slices first")
+    expect(phasePlan({ phase: L("t") })).toContain("Split by test surface / scenario family")
+    expect(phasePlan({ phase: L("v") })).toContain("Split by acceptance dimension")
+    expect(phasePlan({ phase: L("k") })).toContain("Split by knowledge artifact")
   })
 
   test("planning input (plans/0053 D11): its block follows the round brief and precedes the mode preamble; absent or blank, nothing renders", () => {
@@ -151,21 +154,18 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
     expect(bare).toContain("Not provided (no project brief yet")
   })
 
-  test("no verify field or acceptance-execution-right wording (verify retired, m phase)", () => {
+  test("no retired flag wording (verify retired, m phase)", () => {
     const text = phasePlan({ phase: L("m") })
-    expect(text).not.toContain("verify")
+    expect(text).not.toContain("--verify")
     expect(text).not.toContain("验收")
   })
 
-  test("numberStart two states: the auto-numbering start is injected / the default starts from T-001", () => {
+  test("numberStart: the formulation number + 1 the construction passes renders padded", () => {
     const text = phasePlan({ phase: L("m"), numberStart: 4 })
     expect(text).toContain("Task numbers increment continuously from T-004")
     expect(text).toContain("must not be reused")
-    expect(text).not.toContain("Task numbers increment continuously from T-001")
-    // Auto numbering off (default): the historical wording stays
-    const bare = phasePlan({ phase: L("m") })
-    expect(bare).toContain("Task numbers increment continuously from T-001")
-    expect(bare).not.toContain("must not reuse")
+    // The helper's default (a fresh project's first formulation): T-001
+    expect(phasePlan({ phase: L("m") })).toContain("Task numbers increment continuously from T-001")
   })
 
   test("representative parameter combinations render with no leftover template tags", () => {
@@ -182,7 +182,7 @@ describe("renderPhasePlan (phase planning session, section E)", () => {
   test("custom type (M3.6): the file's plan duties and display name replace the builtin duty paragraph", () => {
     const custom = parsePhaseTypeFile("security-review", "# Security review\n\n## plan duties\n\nPlan one review task per trust boundary.\n")
     const text = phasePlan({ phase: custom })
-    expect(text).toContain("\"Security review\" phase (security-review)")
+    expect(text).toContain("Formulate the \"Security review\" phase's complete task plan")
     expect(text).toContain("Plan one review task per trust boundary.")
     expect(text).not.toContain("code migration and rework")
     expect(text).not.toMatch(/\{\{|\}\}/)
@@ -214,17 +214,17 @@ describe("renderPhasePlan finalPhase (the round report duty, plans/0081 D2/D3)",
       expect(text, marker).not.toContain(marker)
     }
   })
-  test("the m-mode implement plan carries the duty (the implicit round's single phase is final)", () => {
-    const text = implementPlan({ content: "the input", round: 1 })
+  test("the m-mode formulation carries the duty (the implicit round's single phase is final)", () => {
+    const text = implementPlan({ input: "the input", finalPhase: true, reportFile: "docs/R-01/report-for-user.md" })
     for (const marker of charter) expect(text, marker).toContain(marker)
-    expect(implementPlan({ content: "the input" })).not.toContain("Round user report")
+    expect(implementPlan({ input: "the input" })).not.toContain("Round user report")
   })
 })
 
-describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
-  test("file given: rendered as the \"plan file\", injecting the path and full text; the task format protocol and authorization wording match phase-plan", () => {
+describe("renderFormulationTodo, m mode (the implicit P01-implement, plans/0095 D1)", () => {
+  test("the input renders as the \"plan file\", injecting the path and full text; the task format protocol matches the phased variant", () => {
     // planPhase passes the phase's persisted planning input as the file (D11).
-    const text = implementPlan({ file: "docs/R-01/P01-implement/plan-input.md", content: "Do A first, then B" })
+    const text = implementPlan({ input: "Do A first, then B", inputPath: "docs/R-01/P01-implement/plan-input.md" })
     expect(text).toContain("## Input: plan file (docs/R-01/P01-implement/plan-input.md)")
     expect(text).toContain("Do A first, then B")
     expect(text).not.toContain("## Input: implementation prompt")
@@ -232,7 +232,6 @@ describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
     expect(text).toContain("Phase: R-01.P01")
     expect(text).toContain("docs/R-01/P01-implement/tasks.md")
     expect(text).toContain("Task numbers increment continuously from T-001")
-    expect(text).not.toContain("- verify:")
     expect(text).not.toContain("PLAN.md")
     // 0072 U-B/T-131: the chmod / commit restatements folded out of the
     // planner prompts (the contract and the block own them)
@@ -241,31 +240,32 @@ describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
     expect(text).toContain("AUTO-DECISION")
   })
 
-  test("file not given: the same content renders as the \"implementation prompt\"", () => {
-    const text = implementPlan({ content: "implement a login page" })
-    expect(text).toContain("## Input: implementation prompt")
+  test("m mode renders no phased-flow blocks (no round brief, no handovers, no duties section)", () => {
+    const text = implementPlan({ input: "implement a login page" })
     expect(text).toContain("implement a login page")
-    expect(text).not.toContain("## Input: plan file")
+    expect(text).not.toContain("## Phase duties and artifact conventions")
+    expect(text).not.toContain("prior-phase handovers")
+    expect(text).not.toContain("## Input: round brief")
   })
 
   test("brief two states: given, the project-intent paragraph is injected; missing/blank, the whole block disappears", () => {
-    const withBrief = implementPlan({ content: "x", brief: "migrate legacy to bun" })
+    const withBrief = implementPlan({ input: "x", brief: "migrate legacy to bun" })
     expect(withBrief).toContain("## Input: project intent (.opencode/auto/brief.md)")
     expect(withBrief).toContain("migrate legacy to bun")
-    expect(implementPlan({ content: "x" })).not.toContain("## Input: project intent")
-    expect(implementPlan({ content: "x", brief: "   " })).not.toContain("## Input: project intent")
+    expect(implementPlan({ input: "x" })).not.toContain("## Input: project intent")
+    expect(implementPlan({ input: "x", brief: "   " })).not.toContain("## Input: project intent")
   })
 
-  test("no verify field or acceptance-execution-right wording (verify retired)", () => {
-    const text = implementPlan({ content: "x" })
-    expect(text).not.toContain("verify")
+  test("no retired flag wording (verify retired)", () => {
+    const text = implementPlan({ input: "x" })
+    expect(text).not.toContain("--verify")
     expect(text).not.toContain("验收")
   })
 
   test("representative parameter combinations render with no leftover template tags", () => {
     for (const text of [
-      implementPlan({ content: "the prompt" }),
-      implementPlan({ file: "docs/rough.md", content: "the full plan text", brief: "intent" }),
+      implementPlan({ input: "the prompt" }),
+      implementPlan({ input: "the full plan text", inputPath: "docs/rough.md", brief: "intent" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -574,10 +574,10 @@ describe("renderPriorKnowledge (prior knowledge extraction session)", () => {
 // three-state pattern the other intent injections follow: the built-in
 // bundle's pack injects it, a project overlay replaces it, an absent
 // subsection drops the block cleanly (byte-identical floor).
-describe("the precedence block on renderPhasePlan (plans/0080 §3)", () => {
+describe("the precedence block on the formulation todo (plans/0080 §3)", () => {
   // The shipped cleanroom bundle's pack is the built-in that carries one.
   const planOver = (facts = promptFacts()) =>
-    renderPhasePlan(facts, { phase: L("m"), planDuties: planDutyText(facts, L("m")), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md" })
+    renderFormulationTodo(facts, { phase: L("m"), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", numberStart: 1, charter: formulationAcceptance(facts) }).scope
 
   test("the built-in bundle pack injects the block; a project overlay replaces it; an absent subsection drops it byte-identically", async () => {
     // State 1 — the built-in injects: materialize the cleanroom bundle as a
@@ -669,11 +669,11 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
       expect(planDutyText(facts, L("m"))).toContain("Complete the implementation work")
       expect(planDutyText(facts, L("a"))).toContain("behaviour baseline")
     })
-    // The same resolution drives renderPhasePlan's planDuties slot (the
+    // The same resolution drives the formulation todo's duties block (the
     // loop-plan helper is this very function): the pack tier voices the
     // implement duties inside the composed planning prompt.
     withPack("# default\n\n## phase duties\n\n### m Implementation\n\nPACK-M-DUTIES implement to parity.\n", (facts) => {
-      const text = renderPhasePlan(facts, { phase: L("m"), planDuties: planDutyText(facts, L("m")), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md" })
+      const text = renderFormulationTodo(facts, { phase: L("m"), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", numberStart: 1, charter: formulationAcceptance(facts) }).scope
       expect(text).toContain("PACK-M-DUTIES implement to parity.")
       expect(text).not.toContain("Complete the implementation work")
     })

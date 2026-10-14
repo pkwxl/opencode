@@ -157,6 +157,15 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     if (target.status === "done") {
       return refused([target.closed !== undefined ? `${id} is already closed: ${target.closed}` : `${id} is already done`])
     }
+    // The formulation task (plans/0095 D4): closing it would close the
+    // phase's planning surface while leaving the phase itself open — the
+    // phase-level close is that lever (force-close the phase to skip
+    // planning, or let the formulation task run / block normally).
+    if (target.formulate !== undefined) {
+      return refused([
+        `${id} is the formulation task of ${target.formulate} — the phase's planning itself; close the phase instead (${target.formulate}) to skip planning, or let the task run`,
+      ])
+    }
     const set = taskClosingSet(owner.plan, id, opts)
     if (!("tasks" in set)) return set
     closingTasks = set.tasks

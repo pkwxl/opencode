@@ -239,7 +239,11 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     routing: ["phase-plan", "implement-scan"],
     // implement-plan = the m-mode variant against the planning input;
     // phase-append = the append variant.
-    templates: ["phase-plan", "phase-append", "implement-plan"],
+    // plans/0095: the planning templates retired — the formulation task's
+    // session runs under the whole-task role; phase-append remains this
+    // role's one template (the m-mode implement-plan variant retired with
+    // the unified formulation todo).
+    templates: ["phase-append"],
     tier: "deep",
     usage: { handover: false, testHandover: false, forkGuard: false, splitGuard: false },
     collect: "index-docs",
