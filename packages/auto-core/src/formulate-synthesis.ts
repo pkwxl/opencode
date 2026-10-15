@@ -21,7 +21,6 @@
 // round's obligations under the charter; the charter carries the standing
 // bar.
 import { classifierEntry, oneShot } from "./classify"
-import type { AgentClient } from "./agent/types"
 import type { ModelEntry } from "./models-schema"
 import { candidateList } from "./model-route"
 import { usableAt } from "./model-window"
