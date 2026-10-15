@@ -152,6 +152,28 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
     const current = existsSync(file) ? readFileSync(file, "utf8") : renderTaskIndex(phaseDirId(phaseDir), [])
     const line = `- [ ] ${task} task ${task}`
     writeFileSync(file, current.endsWith("\n") ? `${current}${line}\n` : `${current}\n${line}\n`)
+    // plans/0097 D7: a synthesized formulation prompt carries an obligations
+    // ledger — the fake planner writes the coverage map beside its task,
+    // every ledger row mapped to the one task it wrote (O rows) or recorded
+    // (C rows), the totality check's happy path.
+    const ledgerAt = ctx.text.indexOf("## Obligations ledger")
+    if (ledgerAt >= 0) {
+      const ownId = /# (T-\d+): Formulate /.exec(ctx.text)?.[1]
+      if (ownId) {
+        const section = ctx.text.slice(ledgerAt)
+        const rows = [...section.matchAll(/^- ((?:O|C)-\d+) \|/gm)].map((m) => m[1]!)
+        mkdirSync(join(dir, "docs", ownId), { recursive: true })
+        writeFileSync(
+          join(dir, "docs", ownId, "coverage.md"),
+          [
+            `# Coverage (${ownId})`,
+            "",
+            ...rows.map((row) => (row.startsWith("O-") ? `- ${row} -> ${task} (the fake agent's planned task)` : `- ${row} -> conflict-recorded (the fake agent's plan records it)`)),
+            "",
+          ].join("\n"),
+        )
+      }
+    }
   }
   return undefined
 }

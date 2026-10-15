@@ -18,6 +18,10 @@ import { saveProgress, recallProgress } from "../src/resume"
 import { runTask } from "../src/runner"
 import { renderTaskTodo, setSplit } from "../src/tasks"
 import { runWrapup } from "../src/wrapup"
+import { renderWrapup } from "../src/prompt"
+import { promptFacts } from "../src/prompt-facts"
+import { promptViews } from "../src/tasks"
+import { taskDocPaths } from "../src/docpaths"
 import { establishRound } from "../src/phases"
 import { loopFixture, artifactTurns, type LoopFixture } from "./fixtures/loop"
 import { reloadUnits, seedUnits } from "./fixtures/units"
@@ -71,6 +75,33 @@ const gapListText = (id: string, reason = "the acceptance gap stands") =>
 // A PASS evidence report (the report shape gate's own fixture).
 const filler = "Verification evidence line. ".repeat(20)
 const passReport = `# Report\n\n${filler}\n\nResult: PASS\n\n${EOF_MARK}\n`
+
+describe("the per-row wrap-up of a ledger-bearing formulation task (0097 D8)", () => {
+  const views = promptViews({ dir: "/repo", phase: "R-01.P01", index: "docs/R-01/P01-implement/tasks.md", tasks: [], closed: new Map() }, {
+    id: "T-001",
+    title: "Formulate the Implementation tasks",
+    status: "pending",
+    attempts: 0,
+    body: ["## Goal", "", "G.", "", "## Scope", "", "Frame.", "", "## Obligations ledger", "", '- O-01 | round.md | "cover the parser errors" | the tests exercise them', "", "## Acceptance", "", "A."].join("\n"),
+    formulate: "R-01.P01",
+  })
+  const ledger = ["- O-01 | round.md | \"cover the parser errors\" | the tests exercise them"].join("\n")
+
+  test("with a ledger: the framing, the rows and the row-named gap form ride the prompt", () => {
+    const text = renderWrapup(promptFacts(), views.plan, views.task, taskDocPaths("T-001"), { ledger })
+    expect(text).toContain("judge it row by row")
+    expect(text).toContain("The obligations ledger under judgment:")
+    expect(text).toContain(ledger)
+    expect(text).toContain("docs/T-001/coverage.md")
+    expect(text).toContain("a gap against the ledger names its row")
+  })
+
+  test("without a ledger: the holistic judgment word-for-word, none of the framing", () => {
+    const plain = renderWrapup(promptFacts(), views.plan, views.task, taskDocPaths("T-001"), {})
+    expect(plain).not.toContain("row by row")
+    expect(plain).not.toContain("obligations ledger under judgment")
+  })
+})
 
 describe("the verification loop (0083 D1–D7)", () => {
   // The loop fixture's turn script: the whole-task session writes source,

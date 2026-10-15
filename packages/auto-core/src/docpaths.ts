@@ -28,7 +28,7 @@ import { basename, dirname, join } from "node:path"
 // closeUnit) and carrying no eof terminator — the role exists so the path
 // never doubles as the handoff channel the driver parses a `Status:` line
 // out of.
-export type TaskRole = "context" | "shared" | "subtasks" | "report" | "gaps" | "handoff" | "testhandoff"
+export type TaskRole = "context" | "shared" | "subtasks" | "report" | "gaps" | "handoff" | "testhandoff" | "coverage"
 
 // Subtask numbers zero-padded to two digits (S2 → S02), three digits carry
 // over naturally (matching the existing padStart(2,"0") convention).

@@ -112,6 +112,14 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // src/analysis.ts, not by a terminator — like the round brief, it is a
   // preparation document the human reviews and commits.
   analysisDoc: { eofScan: false, process: true },
+  // The obligation ledger's coverage map (plans/0097 D7): docs/T-NNN/
+  // coverage.md of a ledger-bearing formulation task, written by the
+  // formulation session — strict rows mapping every ledger row to its task
+  // (or deferral/conflict record), totality-checked by the driver in the
+  // formulation collect. A committed evidence document like the artifacts
+  // (the eof terminator applies), with driver-parsed rows like the blockage
+  // document's marks.
+  coverage: { eofScan: true, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -174,6 +182,11 @@ const GAPS_DOC = /^docs\/T-\d+\/gaps\.md$/
 // only; an analysis.md inside a task or phase directory stays an artifact.
 const ANALYSIS_DOC_RE = /^docs\/analysis\.md$/
 
+// The obligation ledger's coverage map (plans/0097 D7): docs/T-NNN/
+// coverage.md — task-level only, checked before PROCESS_DOCS so it
+// classifies as its own role rather than a plain task artifact.
+const COVERAGE_DOC = /^docs\/T-\d+\/coverage\.md$/
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -200,6 +213,7 @@ export function roleOf(rel: string): DocumentRole {
   if (BLOCKAGE_DOC.test(path)) return "blockage"
   if (GAPS_DOC.test(path)) return "gaps"
   if (ANALYSIS_DOC_RE.test(path)) return "analysisDoc"
+  if (COVERAGE_DOC.test(path)) return "coverage"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

@@ -630,12 +630,17 @@ export function renderFanout(
 // items (which session-identified proxy calls also belong in the section) from
 // `## governance` / `### wrapup-audit`. The driver-listed items and their
 // "every one must appear" demand stay core: they are the persistent audit trail.
-export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { solo?: boolean; resolves?: ResolveEntry[]; commitRange?: string } = {}): string {
+// ledger (plans/0097 D8): the obligations-ledger section text of a
+// ledger-bearing formulation task — present, the wrap-up judges the plan row
+// by row (the per-row framing) and every gap entry names its row; absent, the
+// holistic judgment word-for-word.
+export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { solo?: boolean; resolves?: ResolveEntry[]; commitRange?: string; ledger?: string } = {}): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "wrapup", {
     ...ctx,
     solo: Boolean(opts.solo),
     resolveList: resolveList(opts.resolves),
+    ledger: opts.ledger,
     reportForm: intentText(facts, "artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
     auditScope: intentText(facts, "governance", "wrapup-audit", ctx),
     // Result-line discipline (plans/0044 §3.1): when to write the line and what

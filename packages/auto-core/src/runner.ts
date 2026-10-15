@@ -4,6 +4,7 @@ import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSe
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
+import { coverageProblems, ledgerOf } from "./formulate-synthesis"
 import type { DecomposeMode } from "./document/unit"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
@@ -764,11 +765,19 @@ export async function runTask(
         const phase = { round: round!, id: phaseId!, dir: dirname(plan.index) }
         const n = taskNumber(task.id) ?? 1
         const checked = await plannedTaskProblems(dir, phase, { before: await takenTaskIds(dir, phase), numberStart: n + 1, skip: new Set([task.id]) })
-        if (checked.problems.length) {
-          return { type: "blocked", question: `the formulation output is invalid: ${checked.problems.join("; ")}` }
+        // The coverage-map totality check (plans/0097 D7): beside the index
+        // collect, the ledger's rows against the coverage map the session
+        // wrote — every row exactly once, mapped ids listed, deferrals with
+        // reasons. A floor todo (no ledger section) checks nothing, the
+        // byte-identical Stage-1 collect.
+        const ledger = ledgerOf(task.body)
+        const coverage = ledger !== undefined ? await coverageProblems(ledger, await Bun.file(join(dir, taskDoc(task.id, "coverage"))).text().catch(() => ""), checked.ids) : []
+        const problems = [...checked.problems, ...coverage]
+        if (problems.length) {
+          return { type: "blocked", question: `the formulation output is invalid: ${problems.join("; ")}` }
         }
         if ((await readNextTask(dir)) !== undefined) await advanceNextTask(dir, checked.ids)
-        log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)`)
+        log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)${ledger !== undefined ? `, the coverage map holds all ${ledger.rows.length} ledger row(s)` : ""}`)
         // Plan-time inversion detection (plans/0096 D6): a soft warn beside
         // the accepted collect — a task's Scope referencing a consumable of
         // a task that depends on it is an inversion the planner is invited

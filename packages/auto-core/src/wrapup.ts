@@ -45,6 +45,7 @@ import { parseResult, type ReportResult } from "./document/roles"
 import type { UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
+import { ledgerSection } from "./formulate-synthesis"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, Outcome, UnitStop } from "./opts"
 import { codeWork } from "./phases/registry"
@@ -131,6 +132,10 @@ async function verifySession(
   nameSubject(chain, subject)
   const resolves = await wrapupResolves(dir, task.id)
   const views = promptViews(plan, task)
+  // The per-row framing's input (plans/0097 D8): a formulation task whose
+  // Scope carries an obligations ledger is judged row by row; every other
+  // task (and a floor formulation) keeps the holistic charter word-for-word.
+  const ledger = task.formulate !== undefined ? ledgerSection(task.body) : undefined
   let feedback = ""
   // When the shape re-prompt goes out through a fork of the session that just
   // ended (2026-09-18 revision), the next turn carries only the feedback — the
@@ -145,7 +150,7 @@ async function verifySession(
       task,
       brief
         ? feedback.trimStart()
-        : renderWrapup(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, solo: input.solo, resolves, commitRange: input.commitRange }) + feedback,
+        : renderWrapup(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, solo: input.solo, resolves, commitRange: input.commitRange, ...(ledger !== undefined ? { ledger } : {}) }) + feedback,
       opts,
       chain,
     )

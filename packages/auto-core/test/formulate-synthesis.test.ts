@@ -16,7 +16,9 @@ import { establishRound } from "../src/phases"
 import {
   LEDGER_FRAME_SOURCE,
   LEDGER_HEADING,
+  coverageProblems,
   floorDigest,
+  parseCoverage,
   ledgerOf,
   ledgerSection,
   parseLedger,
@@ -34,7 +36,7 @@ import { clampSwitches } from "../src/switches"
 import { services } from "../src/services"
 import type { RoutingFacts } from "../src/routing"
 import { ev, type TurnScript } from "./fixtures/agent"
-import { SYNTHESIS_MARK, artifactTurns, loopFixture, synthesisTurn, type LoopFixture } from "./fixtures/loop"
+import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, promptPhaseDir, synthesisTurn, type LoopFixture } from "./fixtures/loop"
 
 // —— the pure half ——
 
@@ -126,6 +128,36 @@ describe("the mechanical validation (0097 D4)", () => {
     // A type with no artifacts, no verdict gate and no final phase seeds nothing.
     expect(seededLedgerRows(phaseTypeOfLetter("m"), false)).toEqual([])
     expect(protocolFrameText(phaseTypeOfLetter("m"), false)).toBe("")
+  })
+})
+
+describe("the coverage map and its totality check (0097 D7)", () => {
+  const ledger = parseLedger(['- O-01 | round.md | "error semantics preserved" | t', '- C-01 | a.md vs b.md | "q" / "q" | r'].join("\n"), { O: 1, C: 1 })
+
+  test("parseCoverage: the three row forms, with notes; malformed lines named", () => {
+    const text = ["# Coverage (T-001)", "", "- O-01 -> T-012 (the parser error-path suite)", "- O-02 -> deferred(blocked on the fixture infra gap, reason in T-018)", "- C-01 -> conflict-recorded(T-018 records the deviation)", "junk line"].join("\n")
+    const { rows, problems } = parseCoverage(text)
+    expect(rows).toEqual([
+      { row: "O-01", target: "T-012", note: "the parser error-path suite" },
+      { row: "O-02", target: "deferred", note: "blocked on the fixture infra gap, reason in T-018" },
+      { row: "C-01", target: "conflict-recorded", note: "T-018 records the deviation" },
+    ])
+    expect(problems.some((problem) => problem.includes("does not parse"))).toBe(true)
+  })
+
+  test("coverageProblems: totality — every row exactly once, mapped ids listed, deferrals reasoned", () => {
+    // The happy path: both rows mapped, the id listed.
+    expect(coverageProblems(ledger, "- O-01 -> T-002 (covers it)\n- C-01 -> conflict-recorded (recorded)", ["T-001", "T-002"])).toEqual([])
+    // Missing map, duplicate mapping, unknown target, bare deferral.
+    expect(coverageProblems(ledger, "", ["T-001"]).some((p) => p.includes("the coverage map is missing or empty"))).toBe(true)
+    const problems = coverageProblems(ledger, "- O-01 -> T-009 (x)\n- O-01 -> T-009 (x)\n- C-01 -> deferred()", ["T-001"])
+    expect(problems.some((p) => p.includes("row O-01 is mapped 2 times"))).toBe(true)
+    expect(problems.some((p) => p.includes("maps O-01 to T-009, which the task index does not list"))).toBe(true)
+    expect(problems.some((p) => p.includes("the deferral of C-01 carries no reason"))).toBe(true)
+    // An unmapped row is named by its id.
+    expect(coverageProblems(ledger, "- O-01 -> T-002 (x)", ["T-001", "T-002"]).some((p) => p.includes("ledger row C-01 is not mapped"))).toBe(true)
+    // A row id the ledger does not carry is named.
+    expect(coverageProblems(ledger, "- O-01 -> T-002 (x)\n- C-01 -> conflict-recorded (x)\n- C-09 -> T-002 (x)", ["T-001", "T-002"]).some((p) => p.includes("maps C-09, which the ledger does not carry"))).toBe(true)
   })
 })
 
@@ -297,6 +329,15 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01 synthesis: charters \[verify-plan\] on a — the sources demand a specification-only reimplementation — source health: \.opencode\/auto\/brief\.md absent/)
       expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
+      // D8: the wrap-up of the ledger-bearing formulation task judges row by
+      // row — the framing and the ledger rows ride its prompt, the coverage
+      // line names the map.
+      const wrapup = f.agent.prompts.find((prompt) => prompt.text.includes("only performs the wrap-up") && prompt.text.includes("single input of this formulation task"))
+      expect(wrapup).toBeDefined()
+      expect(wrapup!.text).toContain("judge it row by row")
+      expect(wrapup!.text).toContain("The obligations ledger under judgment:")
+      expect(wrapup!.text).toContain("- O-02 | docs/R-01/P01-implement/plan-input.md |")
+      expect(wrapup!.text).toContain("docs/T-001/coverage.md")
       expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
       // The synthesized document is committed: the phase-formulate commit
       // carries it (the audit's prompt-audit commit ahead of it).
@@ -410,6 +451,31 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(createTitles(f).filter((title) => title === SYNTH_TITLE)).toHaveLength(constructorsBefore)
       expect(second.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
       expect(await unitDoc(f.dir, "T-001")).toBe(todo)
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the formulation collect totality-checks the coverage map: a missing map blocks the unit, the wrap-up never runs (0097 D7)", async () => {
+    // The constructor succeeds, the planner writes the index but no coverage
+    // map (a planning turn without the fixture's coverage branch): the
+    // collect names the demand and blocks — a named problem, never a silent
+    // pass.
+    const planNoCoverage = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes("What this task writes (the DRIVER's format protocol)")) {
+        const phaseDir = promptPhaseDir(ctx.text)
+        if (phaseDir) appendOneTask(dir, phaseDir)
+        return undefined
+      }
+      return artifactTurns(dir)(ctx)
+    }
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? planNoCoverage(dir)(ctx))
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      expect(code).toBe(2)
+      expect(lines.some((line) => line.includes("the formulation output is invalid") && line.includes("the coverage map is missing or empty"))).toBe(true)
+      // The wrap-up never dispatched: the collect blocked first.
+      expect(createTitles(f).some((title) => title!.includes("wrapup"))).toBe(false)
     } finally {
       await rmSync(f.dir, { recursive: true, force: true })
     }

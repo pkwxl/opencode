@@ -88,8 +88,10 @@ export function renderLedger(rows: readonly LedgerRow[]): string {
 // per kind. `from` pins the first id of each kind (the landed ledger always
 // opens at O-01/C-01); omitted, the first row of each kind sets its baseline
 // and only the sequence holds (a constructor session's rows continue past
-// the seeded ones, after any verbatim echo of them). Non-row lines are named
-// problems (blank lines and # comments allowed around rows).
+// the seeded ones, after any verbatim echo of them). Only `- `-prefixed
+// lines are rows — the landed section carries the DRIVER's prose (the intro
+// and boundaries paragraphs) around them; a `- ` line that does not parse is
+// a named problem.
 export function parseLedger(body: string, from?: { O: number; C: number }): { rows: LedgerRow[]; problems: string[] } {
   const rows: LedgerRow[] = []
   const problems: string[] = []
@@ -97,7 +99,7 @@ export function parseLedger(body: string, from?: { O: number; C: number }): { ro
   const last: Record<"O" | "C", number | undefined> = { O: from?.O ? from.O - 1 : undefined, C: from?.C ? from.C - 1 : undefined }
   body.split("\n").forEach((raw, i) => {
     const line = raw.trim()
-    if (!line || line.startsWith("#")) return
+    if (!line || line.startsWith("#") || !line.startsWith("- ")) return
     const o = O_ROW.exec(line)
     const c = !o ? C_ROW.exec(line) : undefined
     const match = o ?? c
@@ -512,6 +514,80 @@ async function fidelityPass(
     return { kind: "fail", evidence: verdict.evidence ?? "a demand of the sources is dropped or weakened (the check named no span)" }
   }
   return { kind: "skipped", reason: `${lastReason} (after one retry — the mechanical anchoring still holds; only the relevance judgment is absent)` }
+}
+
+// —— the coverage map (D7) ——
+//
+// The formulation session's closing write when its Scope carries a ledger:
+// docs/T-NNN/coverage.md (the coverage document role), strict rows mapping
+// every ledger row exactly once —
+//
+//   - O-01 -> T-012 (the parser error-path suite)
+//   - O-02 -> deferred(this round defers DO-3 verification: blocked on the fixture infra gap)
+//   - C-01 -> conflict-recorded(T-018's document records the deviation per the authority order)
+//
+// The driver checks totality mechanically inside the formulation collect:
+// every ledger row appears exactly once, every referenced task id exists in
+// the index, deferral rows carry a reason. Missing rows are named problems —
+// the unit blocks with the row list (a re-run dispatches a fresh session
+// over the surviving files).
+
+export type CoverageRow = { row: string; target: string; note: string }
+
+const COVERAGE_ROW = /^- ((?:O|C)-\d+) -> (T-\d+|deferred|conflict-recorded)(?: ?\((.*)\))?$/
+
+export function parseCoverage(text: string): { rows: CoverageRow[]; problems: string[] } {
+  const rows: CoverageRow[] = []
+  const problems: string[] = []
+  text.split("\n").forEach((raw, i) => {
+    const line = raw.trim()
+    if (!line || line.startsWith("#")) return
+    const match = COVERAGE_ROW.exec(line)
+    if (!match) {
+      problems.push(`coverage line ${i + 1} does not parse (\`- <row id> -> T-NNN (<note>)\` or \`-> deferred(<reason>)\` / \`-> conflict-recorded(<note>)\`): ${line.slice(0, 120)}`)
+      return
+    }
+    rows.push({ row: match[1]!, target: match[2]!, note: match[3] ?? "" })
+  })
+  return { rows, problems }
+}
+
+// The totality check (D7): the ledger rows against the coverage map's rows,
+// the mapped ids against the index. Empty problems = accepted.
+export function coverageProblems(
+  ledger: { rows: readonly LedgerRow[]; problems: readonly string[] },
+  coverageText: string,
+  indexIds: readonly string[],
+): string[] {
+  const problems = [...ledger.problems.map((problem) => `the obligations ledger: ${problem}`)]
+  if (!coverageText.trim()) {
+    return [...problems, "the Scope carries an obligations ledger but the coverage map is missing or empty — map every row"]
+  }
+  const parsed = parseCoverage(coverageText)
+  problems.push(...parsed.problems)
+  const ledgerIds = new Set(ledger.rows.map(ledgerRowId))
+  const known = new Set(indexIds)
+  const seen = new Map<string, number>()
+  parsed.rows.forEach((cover, i) => {
+    if (!ledgerIds.has(cover.row)) {
+      problems.push(`coverage line ${i + 1} maps ${cover.row}, which the ledger does not carry`)
+      return
+    }
+    seen.set(cover.row, (seen.get(cover.row) ?? 0) + 1)
+    if (cover.target === "deferred") {
+      if (!cover.note.trim()) problems.push(`coverage line ${i + 1}: the deferral of ${cover.row} carries no reason`)
+    } else if (cover.target !== "conflict-recorded") {
+      if (!known.has(cover.target)) {
+        problems.push(`coverage line ${i + 1} maps ${cover.row} to ${cover.target}, which the task index does not list`)
+      }
+    }
+  })
+  for (const id of ledgerIds) {
+    const times = seen.get(id) ?? 0
+    if (times === 0) problems.push(`ledger row ${id} is not mapped — every row appears in the coverage map exactly once`)
+    else if (times > 1) problems.push(`ledger row ${id} is mapped ${times} times — every row appears exactly once`)
+  }
+  return problems
 }
 
 // —— the floor digest (D6) ——
