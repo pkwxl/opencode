@@ -23,10 +23,31 @@ already did.
    add to the content of docs/ but not modify existing documents (if a modification is unavoidable, annotate it
    AUTO-DECISION and record it in the relevant document).
 2. When the task's work is code, run it as two phases and hand over at the boundary between them: implement
-   first (design and code complete, self-checked), then test. In the testing phase, hand over between test
-   types whenever the remaining test work is long (numerous or slow suites) — each type the acceptance names
-   (unit, integration, end-to-end, …) is a natural boundary; the handover records which types are done and
-   which remain.
+   first (design and code complete, self-checked), then test. In the testing phase, run the suites as
+   parallel background processes you launch and judge yourself — never serially when they are independent,
+   never a child session per suite:
+   - Plan the lanes first into `docs/T-NNN/testplan.md`: per suite its exact command through the project's
+     own runner (the plan derives from the project's actual suites — nothing hardcoded), its log path
+     under `/tmp/opencode/`, the verdict line its log carries, the code surfaces it exercises, and its cost
+     class — the minutes-scale cheap lanes (lint, format, env canary) versus the one expensive anchor (a
+     full gate). Re-use, don't re-run: a lane already green in `docs/T-NNN/testhands/` whose surfaces no
+     later fix touched carries its verdict forward.
+   - Cheap-first: launch the cheap lanes together, and launch an anchor only once they are green — an
+     anchor started beside a cheap lane that vetoes it is a doomed long run, pure waste.
+   - Launch each lane as a background process writing its log (append the exit code:
+     `…; echo LANE_RC=$? >> <log>`); poll every few minutes — each poll is your keep-alive — and read
+     verdicts from the log tails mechanically.
+   - On a failure: read its failure region yourself, diagnose, and fix it while the other lanes keep
+     running; kill any running lane whose surfaces the fix touches; then re-run narrowly — only the lanes
+     whose surfaces intersect the fix — and re-green the cheap tier before any anchor re-launch. Two
+     consecutive cycles that close nothing on the same finding → stop retrying: record it in the handover
+     and end.
+   - Write each lane's receipt to `docs/T-NNN/testhands/<lane id>.md`: the lane line, the tree HEADs,
+     start and end times, the verdict, and for a failure the bounded evidence (the ends of the failure
+     region plus the log path); it ends with the terminator line. The acceptance anchor's green receipt
+     is the evidence the verification session checks.
+   - Never end a session with a lane process in flight: hand over at lane-set boundaries only, every
+     process exited or deliberately killed with its log state recorded in the handover.
 3. Watch your budget: it is `<session budget>` for this session (track elapsed time as you work — a `date`
    call whenever you poll a log is enough). Ten minutes before it, stop starting new work: finish the step in
    flight, write the handover document, and end. A session that needs more time hands over — never overrun the
@@ -37,8 +58,16 @@ already did.
 ## The handover document
 
 `docs/<task id>/handoff.md`, yours to write and overwrite: what is done and where, the next steps for your
-successor, and — inside a testing phase — the remaining test types. Its last line of body text is the status
-line, verbatim: `Status: continue` when work remains, `Status: done` when the task's scope is complete. It is
+successor, and — inside a testing phase — the remaining lanes (the receipts already green in
+`docs/T-NNN/testhands/`, the lanes still open). Its last line of body text is the status line, verbatim:
+`Status: continue` when work remains, `Status: done` when the task's scope is complete, and
+`Status: park <blocker task id>` when your remaining scope is blocked on another task's work — the blocker
+named on the status line itself, a dependency inversion: park only after verifying the block at
+code/document level and recording its evidence in the handoff, only when everything of your scope that other
+tasks consume (findings ledgers, artifacts, receipts) is complete and landed — a park releases your
+successors and your blocker, so it is honest only with the consumables done — and only with the exact resume
+steps your successor runs once the blocker closes recorded in the handoff. Never loop `Status: continue`
+handovers against a block only another task can lift: park instead. It is
 the one Markdown document that takes no `<!-- auto: eof -->` terminator — the status line is its shape. Ending
 the session with no handover document at all also means complete; write one only to continue.
 

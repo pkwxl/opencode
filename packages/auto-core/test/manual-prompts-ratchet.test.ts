@@ -322,6 +322,15 @@ describe("manual-driver prompt ratchet", () => {
       expect(text(name), name).toContain("`Status: done`")
       expect(text(name), name).toContain("`<session budget>`")
     }
+    // plans/0096 D2 widens the task child's status grammar to the
+    // three-word form — the park line names its blocker on the line
+    // itself ("pending" was ruled out: it already means todo.md-present
+    // in the readiness vocabulary). The fix child keeps the two-word
+    // grammar; the master control reads the same line (the loop's step 4
+    // and the readiness rules) and its missing-status feedback carries
+    // the widened grammar (pinned in the 0096 test below).
+    expect(text("run-task.md"), "run-task.md").toContain("`Status: park <blocker task id>`")
+    expect(text("run.md")).toContain("`Status: park <blocker task id>`")
     // The close-out clears both channels (the gap list from disk, the riding
     // handover through a committed completion write), and the master control
     // carries the budget default.
@@ -335,5 +344,60 @@ describe("manual-driver prompt ratchet", () => {
       expect(text(name), name).not.toContain("handoff.md")
       expect(text(name), name).not.toContain("`Status: continue`")
     }
+  })
+
+  test("the test lanes and the dependency park (plans/0096)", () => {
+    // D1: the testing phase runs the project's suites as parallel lanes —
+    // background processes the task session itself launches and judges,
+    // planned per project into docs/T-NNN/testplan.md (each suite's exact
+    // command through the project's own runner — the plan derives from the
+    // project's actual suites, nothing hardcoded —, its log path, its
+    // verdict line, the code surfaces it exercises, its cost class),
+    // launched cheap-first with the one expensive anchor held back until
+    // the cheap tier greens, carried forward while no later fix touches a
+    // lane's surfaces, receipted in docs/T-NNN/testhands/<lane id>.md (the
+    // acceptance anchor's green receipt the evidence the verification
+    // session checks), and handed over at lane-set boundaries only —
+    // 0086's per-test-type boundary retired into it. Lanes are processes
+    // inside the task session, not child sessions: the one-at-a-time rule
+    // over child sessions stands.
+    // D2: the dependency park — the handover's status line gains
+    // `Status: park <blocker task id>`, the blocker named on the
+    // machine-parsed line itself ("pending" ruled out: it already means
+    // todo.md-present in the readiness vocabulary). The master control
+    // validates the blocker, lands the parked handoff as its own park
+    // commit (`<task id> park <task title>`, `Auto-Stage: park`, the
+    // blocker's `Depends:` amendment riding it — the park is not a share,
+    // the ordinal counts shares alone), counts the parked task done for
+    // its successors, and flips the line back to `Status: continue` at
+    // the pick after the blocker closes. The verification's check 1
+    // accepts the task's own park commits (protocol state) and other
+    // tasks' commits that landed between its shares while it sat in the
+    // park.
+    const run = text("run.md")
+    const task = text("run-task.md")
+    const verify = text("run-verify.md")
+    // D1: the lane protocol's paths (both files name them) and the
+    // lanes-are-processes sentence on the one-at-a-time rule.
+    for (const doc of [run, task]) {
+      expect(doc).toContain("`docs/T-NNN/testplan.md`")
+      expect(doc).toContain("`docs/T-NNN/testhands/`")
+    }
+    expect(run).toContain("parallel lanes are processes, not child sessions")
+    // D2: the park grammar — the worker's status line (pinned again in the
+    // widened status-grammar check above) and the master control's widened
+    // missing-status feedback.
+    expect(task).toContain("`Status: park <blocker task id>`")
+    expect(run).toContain("`Status: continue|done|park <task id>`")
+    // The park commit's grammar, stated by both driver-role files.
+    for (const doc of [run, verify]) {
+      expect(doc).toContain("<task id> park <task title>")
+      expect(doc).toContain("Auto-Stage: park")
+    }
+    // The verification's widened range shapes: the park commits are
+    // protocol state outside check 3's diff, the other tasks' commits out
+    // of unit entirely.
+    expect(verify).toContain("excluded from check 3's diff")
+    expect(verify).toContain("while it sat in the park")
   })
 })

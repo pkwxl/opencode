@@ -78,7 +78,9 @@ reply a child sends you to a few lines (the companions instruct them so).
   session's prompt. Never quote
   a file's content into a prompt: everything a child needs (its task document, the gap list, source, docs/) it
   reads itself, at the paths the prompt names. Your prompts carry pointers, not contents.
-- Child sessions run one at a time, never in parallel, always in this same directory.
+- Writing child sessions (task, fix, verification, handover, formulation) run one at a time, never in
+  parallel, always in this same directory. A task's test suites run as background processes inside its task
+  session (run-task.md's testing phase) — parallel lanes are processes, not child sessions.
 - Label every child launch in the host's subagent facility with the pattern `Task session T-NNN`,
   `Verification session T-NNN` or `Fix session T-NNN` (append the retry round on relaunches, e.g.
   `Task session T-NNN (continue)`): the host prefixes its agent type and surfaces the label wherever it
@@ -134,17 +136,27 @@ reply a child sends you to a few lines (the companions instruct them so).
 - Unit files win over the index tick: a task with `docs/T-NNN/todo.md` is pending, with `done.md` is done
   (exactly one of the two — neither or both is an inconsistent index, stop and report). A task is ready when its
   `Depends:` (the field lines in its document; without the field the task before it in the index; `Depends:
-  none` = no prerequisite) are all done, counting ids outside this index (earlier phases) as done.
+  none` = no prerequisite) are all done, counting ids outside this index (earlier phases) as done. A parked
+  task — one whose handoff's status line reads `Status: park <blocker task id>` (the loop's step 4) — counts
+  as done for its successors' readiness, explicit `Depends:` entries and the index-order default alike: its
+  consumable work is landed, only its blocked tail waits. A parked task is itself ready again only once its
+  blocker has closed (`done.md` present); at that pick flip its handoff's status line
+  `Status: park <blocker task id>` → `Status: continue` before launching — the flip rides the resumed
+  task's next share.
 - Boundary check — the loop runs only from a clean seam, mirroring `opencode-auto run`'s start. Both halves must
   hold for the first ready task you take:
   - The previous task is complete: the index task right before it (none if this is the phase's first task) has
-    its `done.md` — finished, or person-closed (`Closed:` field), both count — and its work is committed (the
-    clean-worktree preflight already covers the commit half). A predecessor still pending or half-done → stop and
-    report; forcing past it would build on unlanded work.
+    its `done.md` — finished, person-closed (`Closed:` field) or parked (`Status: park <blocker task id>`, its
+    landed work the seam), all count — and its work is committed (the clean-worktree preflight already covers
+    the commit half). A predecessor still pending or half-done → stop and report; forcing past it would build
+    on unlanded work.
   - The next task has not started: its `todo.md` exists, no `done.md`, and none of its execution artifacts exist
     yet — no `docs/T-NNN/subtasks.md`, no `docs/T-NNN/S<nn>/` state files, no `docs/T-NNN/handoff.md`, no
-    `docs/T-NNN/gaps.md`, no `docs/T-NNN/report.md`. Any of those present means the task already began (an
-    interrupted run's state): stop and report — resuming it is a driver run's business, not this file's.
+    `docs/T-NNN/gaps.md`, no `docs/T-NNN/report.md`, no `docs/T-NNN/testplan.md`, no `docs/T-NNN/testhands/`
+    receipts. Any of those present means the task already began — a parked or interrupted run's state: resume
+    it through the park-and-resume rules (the Run modes section's closing paragraph — every run carries them,
+    mode or none); a begun task those rules cannot place (no commit and no handoff to name the role, a tree
+    state their paths do not describe) stops and reports.
 - The task document is `docs/T-NNN/todo.md` (title line, `Phase: R-NN.P<nn>` field, `## Goal` / `## Scope` /
   `## Acceptance`).
 
@@ -193,17 +205,41 @@ iteration.
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
    `Status: continue` → relaunch the task child session (step 2; it reads the handover itself — label the
    relaunch as a continuation). `Status: done`, or no handover document, → the task's sessions are finished;
-   go to step 5. A handover document that exists but lacks its status line → relaunch the task child session
-   once with the feedback "the handover document lacks its `Status: continue|done` last line — a driver
-   protocol string, write it verbatim"; still invalid → stop and report. There is no session-number cap:
-   while each session makes progress, keep launching continuations, however many sessions the task takes.
+   go to step 5. A `Status: park <blocker task id>` line → the dependency-inversion park: the task's
+   own-scope work is landed, its remaining tail is blocked on another task's work, and the handoff names the
+   blocking task with the block's evidence and the resume steps. Validate first: the blocker exists in this
+   phase's index and is not itself parked — a park naming a blocker that does not exist, or a mutual park (A
+   parked on B while B is parked on A), → stop and report: the person's call. Then land the park — the
+   master control's writes, under this mechanism alone: the parked handoff as its own park commit (the same
+   add + commit pass and gap-list exclusion as step 3), message:
+
+        <task id> park <task title>
+
+        Auto-Task: <task id>
+        Auto-Stage: park
+
+   and the blocker's `Depends:` field amended by removing the parked task's id when the field lists it —
+   the cycle's explicit edge, a one-line edit riding the park commit. The park commit is not a share: the
+   share ordinal counts shares of one role, and the park is its own stage — no interference. A
+   `Status: continue` handoff whose content names just such a verified external block may be parked the
+   same way — flip its line to `Status: park <blocker task id>` first, the flip riding the park commit.
+   Then back to step 1: the park releases the parked task's successors exactly as done does (the readiness
+   rule above), and the task resumes on its own — once its blocker closes, the readiness pick reaches it
+   by index order and its handoff's line flips back to `Status: continue` (the readiness rule's flip,
+   riding the resumed task's next share). A handover document that exists but lacks its status line →
+   relaunch the task child session once with the feedback "the handover document lacks its
+   `Status: continue|done|park <task id>` last line — a driver protocol string, write it verbatim"; still
+   invalid → stop and report. There is no session-number cap: while each session makes progress, keep
+   launching continuations, however many sessions the task takes.
    Progress is newly landed work in either of its two places: source changes its share committed in the
    nested repositories (the inner git trees — most tasks' real work lands there), or done items in its
    handoff beyond its predecessor's (kept in mind from the last relaunch). The stop is the stalled session:
    no source change landed in any nested repository, and its handoff names no new done item — the same
-   next steps the predecessor left. One stall → relaunch the task child session with the feedback naming it
-   ("your previous session handed over without new landed work — continue the task's actual scope"); a
-   second consecutive stall → stop and report: the sessions are looping — the person's call.
+   next steps the predecessor left (a handoff naming a block only another task can lift is the park's
+   trigger — park it rather than count a stall). One stall → relaunch the task child session with the
+   feedback naming it ("your previous session handed over without new landed work — continue the task's
+   actual scope"); a second consecutive stall → stop and report: the sessions are looping — the person's
+   call.
 5. Launch the verification child session: `run-verify.md` with `<task id>`, `<baseline commit>` (the recorded
    HEAD), `<task title>` (from the index line) and the wrap-up line (`WRITE` or `SKIP` per the config's
    `wrapup` key) filled. The prompt's re-verification behavior keys on `docs/T-NNN/gaps.md` existing — you
@@ -229,7 +265,9 @@ iteration.
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: the unit's
      range from the baseline holds only its own commits — the share commits (`T-NNN exec <task title>` /
      `T-NNN fix <n> <task title>`, each optionally ending in its share ordinal `[<k>]`, each with the
-     `Auto-Task: T-NNN` trailer), then the close-out's
+     `Auto-Task: T-NNN` trailer), optionally this task's own park commits (`T-NNN park <task title>`,
+     `Auto-Stage: park`), and — when the task sat in the park — other tasks' own commits (their
+     `Auto-Task:` trailers) that landed between its shares, then the close-out's
      `T-NNN wrapup <task title>` (wrap-up line `WRITE` only), then `T-NNN done <task title>`; `git status
      --porcelain` lists nothing (this repository and every nested one); `docs/T-NNN/done.md` exists (no
      `todo.md`), the index line is ticked, and `docs/T-NNN/gaps.md` and `docs/T-NNN/handoff.md` are gone.
@@ -306,12 +344,14 @@ next phase and every phase after it without the stops.
 ## Run modes — window and sprint, chosen by one phrase
 
 The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
-with `window`, never with `sprint`); none named, this section is dormant and the run is
-unlimited. The same line may carry one more phrase beside them: `phases: all`, the Phase transfer section's
-phrase that lifts the default stop at each phase boundary — an unattended run (a sprint) usually names it,
+with `window`, never with `sprint`); none named, the run is
+unlimited — no window, no wall, no pause: it goes on until its tasks and phases are done or this file's
+own rules stop it. The same line may carry one more phrase beside them: `phases: all`, the Phase
+transfer section's phrase that lifts the default stop at each phase boundary — an unattended run (a
+sprint) usually names it,
 since nobody is there to review between phases. Where a mode conflicts with this file's rules, the mode
-wins — and its park/resume rules below
-override the boundary rule that refuses an already-begun task. Whatever you end with, your report names
+wins. The park/resume rules at this section's end are every run's, a mode named or none — they govern an
+already-begun task wherever the boundary check meets one. Whatever you end with, your report names
 the mode line — and the `phases: all` phrase when it rode — so the person's restart repeats them.
 
 - `mode: window <HH:MM–HH:MM> [tz]` (times UTC unless a zone is named): a launch window. No new child
@@ -344,14 +384,19 @@ the mode line — and the `phases: all` phrase when it rode — so the person's 
   pause between child sessions slows the burn of tokens in the working stretches. Never with `sprint`: a
   wall-bounded run spends its runway on work, not on waiting.
 
-Park and resume (both modes): a parked run sits at a legal boundary — the last share committed, the tree
-clean except the transient gap list, a report of what remains. On the restart, uncommitted content means a child
-broke mid-session: identify its role from the task's last share commit (`T-NNN exec …` → the task child,
-`T-NNN fix …` → the fix child), read the `Status:` tail of `docs/T-NNN/handoff.md` and the presence of
-`gaps.md` for its state, re-derive the task's baseline as the parent of its first `T-NNN` share commit,
-and relaunch that same role with one continue line — the kill path. A cleanly parked task resumes the same
-way on its committed tree. A parked phase transfer (all tasks done, no handover yet) simply continues at
-the Phase transfer section.
+Park and resume (every run, mode or none): a parked run sits at a legal boundary — the last share
+committed, the tree clean except the transient gap list, a report of what remains. On the restart,
+uncommitted content means a child broke mid-session: identify its role from the task's last share commit
+(`T-NNN exec …` → the task child, `T-NNN fix …` → the fix child), read the `Status:` tail of
+`docs/T-NNN/handoff.md` and the presence of `gaps.md` for its state,
+re-derive the task's baseline as the parent of its first `T-NNN` share commit, and relaunch that same
+role with one continue line — the kill path. A cleanly parked task resumes the same way on its committed
+tree — with one override: a task whose
+lane table (`docs/T-NNN/testplan.md`) names suites without green receipts in `docs/T-NNN/testhands/` is
+mid-testing-phase, and the task child is the role to relaunch whatever the last commit says — save for a
+parked task: the dependency-inversion park outranks the lane override, its open lanes being exactly the
+blocked tail; it resumes only after its named blocker closes. A parked phase transfer (all tasks done, no
+handover yet) simply continues at the Phase transfer section.
 
 ## Hands off — driver-adjacent rules
 

@@ -27,8 +27,14 @@ else — and overwrite that gap list with the current one.
    `<baseline commit>..HEAD` carries the `Auto-Task: <task id>` trailer and the share grammar — subject
    `<task id> exec <task title>` or `<task id> fix <n> <task title>`, each optionally ending in the
    share ordinal ` [<k>]` (the master control appends it when the session ended by handing over),
-   trailer `Auto-Stage: execute` — the master control's share commits. Anything else in the range was committed inside a task or fix session:
-   a hard failure — report it as such. The worktree is clean except the transient gap list.
+   trailer `Auto-Stage: execute` — the master control's share commits. Two more commit shapes belong to
+   the range legitimately: the task's own park commits — subject `<task id> park <task title>`, trailers
+   `Auto-Task: <task id>` and `Auto-Stage: park`, the master control's landing when the task parked on
+   another task's work — whose content (the parked handoff, the blocker's `Depends:` amendment) is
+   protocol state, excluded from check 3's diff; and other tasks' own commits (an `Auto-Task:` trailer
+   naming another task id) that landed between this task's shares while it sat in the park — out of
+   unit, excluded from every check. Anything else in the range was committed inside a task or fix
+   session: a hard failure — report it as such. The worktree is clean except the transient gap list.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —
