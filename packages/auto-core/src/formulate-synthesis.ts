@@ -20,7 +20,8 @@
 // stays the formulation session's own first duty. The ledger carries this
 // round's obligations under the charter; the charter carries the standing
 // bar.
-import { oneShot } from "./classify"
+import { classifierEntry, oneShot } from "./classify"
+import type { AgentClient } from "./agent/types"
 import type { ModelEntry } from "./models-schema"
 import { candidateList } from "./model-route"
 import { usableAt } from "./model-window"
@@ -326,10 +327,11 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     ...(input.phaseKey !== undefined && resolvedVerifyPlan(input.facts.pack, input.phaseKey).phase !== undefined ? [`verify-plan-${input.phaseKey}`] : []),
   ]
   const seeded = seededLedgerRows(input.entry, input.finalPhase, input.reportFile)
-  const fallback = (reason: string): SynthesisOutcome => ({
+  let lastFidelityAudit: string | undefined
+  const fallback = (reason: string, ...before: readonly string[]): SynthesisOutcome => ({
     kind: "fallback",
     reason,
-    audit: [`- ${stamp()} formulation ${input.phaseStep} synthesis: FALLBACK — ${reason}`],
+    audit: [...before, `- ${stamp()} formulation ${input.phaseStep} synthesis: FALLBACK — ${reason}`],
   })
   const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.phaseKey))
   if (charter === undefined) return { kind: "off", reason: "no resolved plan charter — the deterministic floor" }
@@ -401,7 +403,23 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
       feedback = validation.join("; ")
       continue
     }
-    log(`✓ formulation synthesis: the constructor ${pick.name} re-voiced ${input.sources.length} source(s) into the brief and ${own.length} ledger row(s) beside the ${seeded.length} seeded protocol row(s)`)
+    // The fidelity pass (D5): the relevance judgment over the mechanically
+    // valid reply — a fail's evidence is this loop's feedback (the constructor
+    // retry re-voices under it), past the retry the D4 ladder. A skipped
+    // check is loud (its audit line) and proceeds.
+    const fidelity = await fidelityPass(input.pool, input.routing, input.facts, { sources: input.sources, brief: parsed.parsed.brief, rows: composed })
+    const fidelityAudit =
+      fidelity.kind === "pass"
+        ? `- ${stamp()} formulation ${input.phaseStep} fidelity: pass`
+        : fidelity.kind === "skipped"
+          ? `- ${stamp()} formulation ${input.phaseStep} fidelity: SKIPPED — ${fidelity.reason}`
+          : `- ${stamp()} formulation ${input.phaseStep} fidelity: FAIL — ${fidelity.evidence}`
+    if (fidelity.kind === "fail") {
+      feedback = `the fidelity check failed: ${fidelity.evidence} — re-voice so every real demand of the sources becomes an honest row`
+      lastFidelityAudit = fidelityAudit
+      continue
+    }
+    log(`✓ formulation synthesis: the constructor ${pick.name} re-voiced ${input.sources.length} source(s) into the brief and ${own.length} ledger row(s) beside the ${seeded.length} seeded protocol row(s)${fidelity.kind === "pass" ? ", the fidelity pass judging nothing dropped or weakened" : ""}`)
     return {
       kind: "ok",
       brief: parsed.parsed.brief,
@@ -409,10 +427,91 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
       rationale: parsed.parsed.rationale,
       audit: [
         `- ${stamp()} formulation ${input.phaseStep} synthesis: charters [${charterKeys.join(", ")}] on ${pick.name} — ${parsed.parsed.rationale}${input.missing.length ? ` — source health: ${input.missing.join(", ")} absent` : ""}`,
+        fidelityAudit,
       ],
     }
   }
-  return fallback(`${feedback} (after one retry — the floor carries the charter on the Acceptance, the verifier and the wrap-up)`)
+  return fallback(
+    `${feedback} (after one retry — the floor carries the charter on the Acceptance, the verifier and the wrap-up)`,
+    ...(lastFidelityAudit ? [lastFidelityAudit] : []),
+  )
+}
+
+// —— the fidelity pass (D5) ——
+//
+// A second cheap one-shot (the verifyPlanPrompt shape: the registry's
+// classifier entry, tools denied, strict last-line verdict, one retry for a
+// parsable line): given the sources and the constructor's brief + ledger as
+// data, judge that nothing load-bearing was dropped, nothing invented, no
+// obligation weakened. Anchoring is already mechanical (D4.2), so this is
+// the relevance judgment — did any real demand of the sources fail to become
+// a row? The evidence of a fail becomes the constructor retry's feedback;
+// past that, the D4 ladder (fallback to the floor). A check that cannot run
+// (no classifier entry) or cannot answer (unparsable after its retry) is a
+// loud skip — recorded, never silent, never a block: the mechanical
+// anchoring still holds, only the relevance judgment is absent.
+
+const FIDELITY_TITLE = "auto: formulation fidelity check"
+const FIDELITY_TIMEOUT_MS = 120_000
+
+// The strict reply parser (the parseVerifyReply discipline): the last line
+// that parses wins. `Fidelity: pass` | `Fidelity: fail — <evidence>`.
+export function parseFidelityReply(text: string): { pass: boolean; evidence?: string } | undefined {
+  for (const raw of text.split("\n").reverse()) {
+    const line = raw.trim().replace(/^`+|`+$/g, "")
+    const match = /^Fidelity:\s*(pass|fail)\b\s*(.*)$/i.exec(line)
+    if (!match) continue
+    const pass = match[1]!.toLowerCase() === "pass"
+    const rest = match[2]!.replace(/^[—–-]\s*/, "").trim()
+    return { pass, ...(!pass && rest ? { evidence: rest } : {}) }
+  }
+  return undefined
+}
+
+export type FidelityOutcome =
+  | { kind: "pass" }
+  | { kind: "fail"; evidence: string }
+  | { kind: "skipped"; reason: string }
+
+// One fidelity check over the constructor's output, on the registry's
+// classifier entry (the verifyPlanPrompt precedent — a cheap judge, not a
+// second planner): no usable entry is a loud skip, never a block.
+async function fidelityPass(
+  pool: AgentPool,
+  routing: RoutingFacts,
+  facts: PromptFacts,
+  input: { sources: readonly LedgerSource[]; brief: string; rows: readonly LedgerRow[] },
+): Promise<FidelityOutcome> {
+  const pick = classifierEntry(routing.router, routing.registry, routing.agentFilter, routing.clock.now())
+  if (pick === undefined) {
+    return { kind: "skipped", reason: "no usable classifier entry — the relevance judgment cannot run (the mechanical anchoring still holds)" }
+  }
+  const client = await pool.client(pick.entry.agent)
+  const text = renderPrompt(facts, "formulate-fidelity", {
+    sources: input.sources.map((source) => `### ${source.name}\n\n${source.text}`).join("\n\n"),
+    brief: input.brief,
+    ledger: renderLedger(input.rows),
+  })
+  let lastReason = "the fidelity check produced no answer"
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const outcome = await oneShot(client, pick.entry, text, FIDELITY_TIMEOUT_MS, FIDELITY_TITLE)
+    if (outcome.kind === "timeout") {
+      lastReason = `the fidelity check gave no verdict within ${Math.round(FIDELITY_TIMEOUT_MS / 1000)} s`
+      continue
+    }
+    if (outcome.kind === "failed") {
+      lastReason = `the fidelity check failed: ${outcome.error.message ?? "session error"}`
+      continue
+    }
+    const verdict = parseFidelityReply(outcome.text)
+    if (verdict === undefined) {
+      lastReason = `the fidelity check replied without a parsable Fidelity line; its last words: ${outcome.text.trim().split("\n").slice(-3).join(" ⏎ ").slice(0, 400)}`
+      continue
+    }
+    if (verdict.pass) return { kind: "pass" }
+    return { kind: "fail", evidence: verdict.evidence ?? "a demand of the sources is dropped or weakened (the check named no span)" }
+  }
+  return { kind: "skipped", reason: `${lastReason} (after one retry — the mechanical anchoring still holds; only the relevance judgment is absent)` }
 }
 
 // —— the floor digest (D6) ——

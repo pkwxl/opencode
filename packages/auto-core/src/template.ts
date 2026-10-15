@@ -45,6 +45,7 @@ import tplDigestIndex from "../templates/prompts/digest-index.md" with { type: "
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
+import tplFormulateFidelity from "../templates/prompts/formulate-fidelity.md" with { type: "file" }
 import tplFormulateSynthesize from "../templates/prompts/formulate-synthesize.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
@@ -110,6 +111,10 @@ const embedded: Record<string, string> = {
   // evidential sources in, the Sources brief + obligation ledger out between
   // strict delimiters.
   "formulate-synthesize": tplFormulateSynthesize,
+  // Its fidelity pass (plans/0097 D5): the sources + the session's brief and
+  // ledger as data, one strict `Fidelity:` verdict — the relevance judgment
+  // the mechanical anchoring cannot make.
+  "formulate-fidelity": tplFormulateFidelity,
   "handoff-steer": tplHandoffSteer,
   knowledge: tplKnowledge,
   // The core-owned operating-mode brief (plans/0082 §3 D3): registered data,
@@ -175,6 +180,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // override must still show the charters and the sources — a brief and
   // ledger synthesized against nothing.
   "formulate-synthesize": ["SOURCES-BRIEF", "LEDGER", "Rationale:", "{{charters}}", "{{sources}}"],
+  // The fidelity pass (plans/0097 D5): the driver parses the reply's
+  // `Fidelity:` line verbatim, and an override must still show the sources
+  // and the brief + ledger under review — a verdict judged against nothing.
+  "formulate-fidelity": ["Fidelity:", "{{sources}}", "{{brief}}", "{{ledger}}"],
   // The append planner (plans/0053 D27): the phase-plan task-document skeleton
   // plus the slots an override must keep rendering — the index path, the
   // existing-task list and the planning input.

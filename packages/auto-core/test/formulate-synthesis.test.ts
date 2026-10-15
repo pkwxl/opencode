@@ -206,7 +206,16 @@ const CHARTER_PACK = [
 ].join("\n")
 const INPUT = "Reimplement the widget from the specification alone."
 const SYNTH_TITLE = "auto: formulation synthesis"
+const FIDELITY_TITLE = "auto: formulation fidelity check"
 const VERIFY_MARK = "You read one prompt that a planning step"
+const FIDELITY_MARK = "You judge the fidelity of one synthesis"
+
+// The fidelity check's scripted verdict (D5): pass by default; the fail-path
+// test scripts its own.
+const fidelityTurn = (verdict: string): TurnScript => (ctx) => {
+  if (!ctx.text.includes(FIDELITY_MARK)) return undefined
+  return [ev.text(ctx.session, `fid_${ctx.n}`, verdict), ev.idle(ctx.session)]
+}
 
 // The formulation unit's document text, whatever its state file is (a
 // completed unit's todo.md was renamed to done.md).
@@ -241,8 +250,8 @@ const createTitles = (f: LoopFixture): string[] =>
 
 // A fixture like the verifier suite's: m mode, a charter pack committed ahead
 // of the round, the plan input persisted, routing with a planning-route entry.
-async function synthesisFixture(turn: (dir: string) => TurnScript): Promise<LoopFixture> {
-  const f = await loopFixture("m", (dir): { turn: TurnScript } => ({ turn: (ctx) => verifyYes(ctx) ?? turn(dir)(ctx) }))
+async function synthesisFixture(turn: (dir: string) => TurnScript, fidelity = "Fidelity: pass"): Promise<LoopFixture> {
+  const f = await loopFixture("m", (dir): { turn: TurnScript } => ({ turn: (ctx) => verifyYes(ctx) ?? fidelityTurn(fidelity)(ctx) ?? turn(dir)(ctx) }))
   await mkdirSync(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
   await writeFileSync(join(f.dir, ".opencode", "auto", "intents", "verify.md"), CHARTER_PACK)
   await establishRound(f.dir, { phases: "m" })
@@ -276,9 +285,10 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
     try {
       const { code, lines } = await f.run({ intent: "verify", routing: routing() })
       expect(code).toBe(0)
-      // The composed chain: constructor (chartres audit) → verifier →
+      // The composed chain: constructor → fidelity check → verifier →
       // formulation session; the todo on disk carries the frame + brief +
-      // ledger, and the audit names the charters and the rationale.
+      // ledger, and the audit names the charters, the rationale and the
+      // fidelity verdict.
       const todo = await unitDoc(f.dir, "T-001")
       expect(todo).toContain("## Sources brief (constructor session, under the charter)")
       expect(todo).toContain(LEDGER_HEADING)
@@ -286,6 +296,7 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(todo).toContain(`- O-02 | docs/R-01/P01-implement/plan-input.md | "${INPUT}" |`)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01 synthesis: charters \[verify-plan\] on a — the sources demand a specification-only reimplementation — source health: \.opencode\/auto\/brief\.md absent/)
+      expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
       expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
       // The synthesized document is committed: the phase-formulate commit
       // carries it (the audit's prompt-audit commit ahead of it).
@@ -311,6 +322,29 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(todo).toContain("## Input: plan file (docs/R-01/P01-implement/plan-input.md)")
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01 synthesis: FALLBACK — [^]*\(after one retry/)
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a fidelity fail retries the constructor once with the evidence, then the ladder: FAIL audit line, the floor", async () => {
+    // The constructor's replies are mechanically valid, the fidelity check
+    // keeps failing on the same dropped demand: one constructor retry under
+    // the evidence, then the floor with the fidelity FAIL recorded ahead of
+    // the FALLBACK line.
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!, "Fidelity: fail — the fixture-format constraint the round brief names is dropped")
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      expect(code).toBe(0)
+      // The constructor ran its two attempts (the fidelity evidence feeding
+      // the second), the fidelity check judged both, then the floor.
+      expect(createTitles(f).filter((title) => title === SYNTH_TITLE)).toHaveLength(2)
+      expect(createTitles(f).filter((title) => title === FIDELITY_TITLE)).toHaveLength(2)
+      expect(lines.some((line) => line.includes("formulation synthesis fell back to the Stage-1 deterministic floor: the fidelity check failed"))).toBe(true)
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
+      expect(audit).toMatch(/formulation R-01\.P01 fidelity: FAIL — the fixture-format constraint the round brief names is dropped/)
+      expect(audit.indexOf("fidelity: FAIL")).toBeLessThan(audit.indexOf("synthesis: FALLBACK"))
+      expect(await unitDoc(f.dir, "T-001")).not.toContain(LEDGER_HEADING)
     } finally {
       await rmSync(f.dir, { recursive: true, force: true })
     }

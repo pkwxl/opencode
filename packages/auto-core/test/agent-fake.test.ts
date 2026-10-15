@@ -3329,15 +3329,21 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
   }
 
   // Since plans/0097 the charter pack's formulation runs the constructor
-  // session ahead of the verifier (compose → verify): its scripted reply —
-  // one obligation row quoting the plan file, m mode's only source here (the
-  // brief is absent — a source-health finding), continuing past the seeded
-  // report-duty row O-01.
+  // session and its fidelity check ahead of the verifier (compose → verify):
+  // the constructor's scripted reply — one obligation row quoting the plan
+  // file, m mode's only source here (the brief is absent — a source-health
+  // finding), continuing past the seeded report-duty row O-01 — and the
+  // fidelity check's pass verdict.
   const SYNTH_TITLE = "auto: formulation synthesis"
+  const FIDELITY_MARK = "You judge the fidelity of one synthesis"
   const withConstructor = (input: string, verdict: string | undefined): ((dir: string) => TurnScript) => (dir: string): TurnScript => (ctx) =>
     synthesisTurn("The widget is reimplemented from the specification alone.", [
       `- O-02 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
-    ])(ctx) ?? verdictTurn(verdict)(dir)(ctx)
+    ])(ctx) ??
+    (ctx.text.includes(FIDELITY_MARK)
+      ? [ev.text(ctx.session, `fid_${ctx.n}`, "Fidelity: pass"), ev.idle(ctx.session)]
+      : undefined) ??
+    verdictTurn(verdict)(dir)(ctx)
 
   test("a contradictory planning input: `Consistent: no` blocks the step (exit 2), the audit records the verdict, and no planning session runs", async () => {
     const f = await verifierFixture(
@@ -3367,18 +3373,21 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(f.agent.argsOf("create")).toEqual([
         [{ title: "auto: charter check" }],
         [{ title: SYNTH_TITLE }],
+        [{ title: "auto: formulation fidelity check" }],
         [{ title: VERIFY_TITLE }],
         [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
         [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
       ])
-      expect(f.agent.prompts).toHaveLength(5)
+      expect(f.agent.prompts).toHaveLength(6)
       expect(f.agent.prompts[0]!.bare).toBe(true)
       expect("agent" in f.agent.prompts[0]!).toBe(false)
       expect(f.agent.prompts[1]!.bare).toBe(true)
       expect(f.agent.prompts[1]!.text).toContain(SYNTHESIS_MARK)
       expect(f.agent.prompts[2]!.bare).toBe(true)
-      expect(f.agent.prompts[2]!.text).toContain(CHARTER)
-      expect(f.agent.prompts[2]!.text).toContain(CONTRARY_INPUT)
+      expect(f.agent.prompts[2]!.text).toContain(FIDELITY_MARK)
+      expect(f.agent.prompts[3]!.bare).toBe(true)
+      expect(f.agent.prompts[3]!.text).toContain(CHARTER)
+      expect(f.agent.prompts[3]!.text).toContain(CONTRARY_INPUT)
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
       expect(lines.some((line) => line.includes("starting the phase planning session"))).toBe(false)
     } finally {
@@ -3400,19 +3409,22 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(f.agent.prompts[0]!.bare).toBe(true)
       expect(f.agent.prompts[1]!.text).toContain(SYNTHESIS_MARK)
       expect(f.agent.prompts[2]!.bare).toBe(true)
-      expect(f.agent.prompts[2]!.text).toContain(CHARTER)
-      expect(f.agent.prompts[2]!.text).toContain("The prompt under review (formulation R-01.P01)")
-      expect(f.agent.prompts[3]!.text).toContain("single input of this formulation task")
+      expect(f.agent.prompts[2]!.text).toContain(FIDELITY_MARK)
+      expect(f.agent.prompts[3]!.bare).toBe(true)
+      expect(f.agent.prompts[3]!.text).toContain(CHARTER)
+      expect(f.agent.prompts[3]!.text).toContain("The prompt under review (formulation R-01.P01)")
+      expect(f.agent.prompts[4]!.text).toContain("single input of this formulation task")
       // The synthesized todo's shape (0097 D3): the Sources brief and the
       // obligations ledger ride the formulation session's single input.
-      expect(f.agent.prompts[3]!.text).toContain("## Sources brief (constructor session, under the charter)")
-      expect(f.agent.prompts[3]!.text).toContain("## Obligations ledger")
-      expect(f.agent.prompts[3]!.text).toContain('- O-02 | docs/R-01/P01-implement/plan-input.md | "Reimplement the widget from the specification alone."')
+      expect(f.agent.prompts[4]!.text).toContain("## Sources brief (constructor session, under the charter)")
+      expect(f.agent.prompts[4]!.text).toContain("## Obligations ledger")
+      expect(f.agent.prompts[4]!.text).toContain('- O-02 | docs/R-01/P01-implement/plan-input.md | "Reimplement the widget from the specification alone."')
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
       expect(lines).toContain("✓ all tasks complete")
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01: consistent/)
       expect(audit).toMatch(/formulation R-01\.P01 synthesis: charters \[verify-plan\]/)
+      expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }
@@ -3432,13 +3444,14 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(f.agent.argsOf("create")).toEqual([
         [{ title: "auto: charter check" }],
         [{ title: SYNTH_TITLE }],
+        [{ title: "auto: formulation fidelity check" }],
         [{ title: VERIFY_TITLE }],
         [{ title: VERIFY_TITLE }],
         [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
         [{ title: "[auto] PLAN blockage diagnosis (plan-verify)" }],
       ])
-      expect(f.agent.prompts).toHaveLength(6)
-      for (const prompt of f.agent.prompts.slice(0, 4)) expect(prompt.bare).toBe(true)
+      expect(f.agent.prompts).toHaveLength(7)
+      for (const prompt of f.agent.prompts.slice(0, 5)) expect(prompt.bare).toBe(true)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
       expect(audit).toContain("(after one retry — fail-closed, plans/0080 §5)")
