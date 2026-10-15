@@ -14,11 +14,14 @@ import { requireArtifact } from "./artifact"
 import { openBlockage, type BlockageSite } from "./blockage-diagnose"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
-import { constructFormulation, formulationAcceptance, formulationNumber } from "./formulate"
+import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, type LedgerSource } from "./formulate-synthesis"
+import { constructFormulation, formulationAcceptance, formulationNumber, formulationState } from "./formulate"
+import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
+import { REQUIRED_TYPE, phaseType } from "./phases/registry"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
@@ -38,11 +41,13 @@ import {
   loadPlan,
   newTaskProblems,
   qualifiedPhase,
+  recordSynthDigest,
   renderTaskTodo,
   takenTaskIds,
   taskDecl,
   taskIndexPath,
   taskStatePaths,
+  unitSynthDigest,
   type PlanPhase,
 } from "./tasks"
 import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
@@ -251,6 +256,12 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   const brief = await projectBriefText(directory)
   const taskIndex = taskIndexPath(phase)
   const phaseId = qualifiedPhase(phase)
+  // The phase's composition state (plans/0097 D3): the phased gathering —
+  // handovers (per document, for the synthesis source list), the
+  // first-planning-session digest block, the round brief, the approved
+  // analysis, the final-phase report duty — read once; both the floor and
+  // the synthesis compose from the same parts. m mode has none of it.
+  const parts = ctx.manual ? undefined : await formulationParts(ctx, phase)
   // The compose-and-verify loop (plans/0082 §5 D7 / §6 D9, retargeted by
   // 0095 D4): the assembled formulation todo — the exact document
   // construction is about to write — meets the intent charter here, where
@@ -260,66 +271,211 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // an approved option inline, and the step re-composes and re-verifies from
   // scratch (bounded at two inline remediations — the diagnosis gate's own
   // suspension holds the third).
-  const compose = async (): Promise<{ todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[] }> => {
+  // Since plans/0097 the compose step is the synthesis pipeline's home: a
+  // resolved charter (D1) and the switch on run the constructor session over
+  // the evidential sources (D3), validate mechanically (D4) and land either
+  // the synthesized Scope (frame + Sources brief + obligations ledger) or —
+  // loudly, audit first — the Stage-1 deterministic floor. Idempotence (D6)
+  // keys on the floor assembly's digest: a pending formulation whose
+  // recorded digest still matches keeps its landed todo (no churn from
+  // constructor nondeterminism); a changed floor re-runs the pipeline.
+  const compose = async (): Promise<
+    { todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[]; audit: string[]; digest: string; landed: boolean; id?: string }
+  > => {
     const charter = formulationAcceptance(planFacts(ctx), charterPhaseKey(ctx, phase))
     const n = await formulationNumber(directory, phase, Boolean(opts.autoNumber))
     const facts = planFacts(ctx)
-    if (ctx.manual) {
-      const todo = renderFormulationTodo(facts, {
-        phaseId,
-        taskIndex,
-        numberStart: n + 1,
-        brief,
-        input: input!,
-        inputPath: planInputPath(phase),
-        mode: opts.mode,
-        parallel: opts.parallel,
-        // The no-phase implicit round's single phase is the round's final one
-        // (plans/0081 D2): its formulation carries the report duty.
-        finalPhase: true,
-        reportFile: reportForUserPath(await currentRound(directory)),
-        charter,
-      })
+    const baseInput = ctx.manual
+      ? {
+          phaseId,
+          taskIndex,
+          numberStart: n + 1,
+          brief,
+          input: input!,
+          inputPath: planInputPath(phase),
+          mode: opts.mode,
+          parallel: opts.parallel,
+          // The no-phase implicit round's single phase is the round's final one
+          // (plans/0081 D2): its formulation carries the report duty.
+          finalPhase: true as const,
+          reportFile: reportForUserPath(await currentRound(directory)),
+          charter,
+        }
+      : {
+          phase: phase.entry,
+          phaseId,
+          taskIndex,
+          numberStart: n + 1,
+          brief,
+          round: parts!.round,
+          analysis: parts!.analysis,
+          input,
+          inputPath: planInputPath(phase),
+          handovers: parts!.handovers,
+          prevRound: parts!.prevRound,
+          mode: opts.mode,
+          ...(parts!.finalPhase ? { finalPhase: true as const, reportFile: parts!.reportFile } : {}),
+          // No analysis/design phase delivered in this round's index → the
+          // implement phase's planning gets the pipeline-trimming note.
+          trimmedPhases: parts!.trimmedPhases,
+          parallel: opts.parallel,
+          testByDriver: opts.testByDriver,
+          charter,
+        }
+    // The floor always composes first: it is the digest's input, the
+    // fallback, and (charter-less) the whole story. Its guarantee gate
+    // throws here — a floor that violates the pack's asserts is a human
+    // problem (exit 2 at the run boundary), exactly as before 0097.
+    const floorTodo = renderFormulationTodo(facts, baseInput)
+    const floorDocument = previewFormulationDocument(floorTodo, phaseId)
+    const digest = floorDigest(floorDocument)
+    const state = await formulationState(directory, phase)
+    if (state.type === "pending" && !state.inProgress && (await unitSynthDigest(directory, state.id)) === digest) {
+      const landedText = await Bun.file(join(directory, taskStatePaths(state.id).pending)).text()
       return {
-        todo,
-        document: previewFormulationDocument(todo, phaseId),
-        blocks: [
-          { block: "formulation todo", source: "the deterministic assembly (plans/0095)" },
-          { block: "planning input", source: input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
-          { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
-          { block: "task index", source: taskIndex },
-        ],
+        todo: floorTodo,
+        document: landedText,
+        blocks: [{ block: "formulation todo", source: "the landed synthesis (floor assembly unchanged, plans/0097 D6)" }],
+        audit: [],
+        digest,
+        landed: true,
+        id: state.id,
       }
     }
-    return formulationCompose(ctx, phase, { brief, input, taskIndex, phaseId, numberStart: n + 1, charter })
+    const phaseKeyOf = charterPhaseKey(ctx, phase)
+    const resolved = resolvedVerifyPlan(facts.pack, phaseKeyOf)
+    if (verifyPlanCharterText(resolved) === undefined) {
+      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
+    }
+    // The synthesis source list (D3's evidential sources) and its health
+    // findings (the crux: a missing must-exist source is named, never
+    // silent). The frame blocks (planning input, mode, precedence, duties)
+    // are never sources — the brief re-voices evidence, not protocol.
+    const sources: LedgerSource[] = []
+    const missing: string[] = []
+    if (brief) sources.push({ name: BRIEF_FILE, text: brief })
+    else missing.push(BRIEF_FILE)
+    if (ctx.manual) {
+      sources.push({ name: planInputPath(phase), text: input! })
+    } else {
+      if (parts!.round) sources.push({ name: roundBriefPath(parts!.state.round), text: parts!.round })
+      else missing.push(roundBriefPath(parts!.state.round))
+      if (parts!.analysis !== undefined) sources.push({ name: ANALYSIS_DOC, text: parts!.analysis })
+      else if (phase.entry.gates.includes("human")) missing.push(ANALYSIS_DOC)
+      if (input) sources.push({ name: planInputPath(phase), text: input })
+      for (const handover of parts!.handoverDocs) sources.push({ name: handover.path, text: handover.text })
+      missing.push(...parts!.missingHandovers)
+      if (parts!.prevRound) sources.push({ name: "prior-round digest", text: parts!.prevRound })
+      else if (parts!.prevRoundExpected) missing.push("prior-round digest")
+    }
+    const entry = ctx.manual ? phaseType(REQUIRED_TYPE)! : phase.entry
+    const finalPhase = ctx.manual || parts!.finalPhase
+    const reportFile = ctx.manual ? reportForUserPath(await currentRound(directory)) : parts!.reportFile
+    const outcome = await synthesizeFormulation({
+      pool: ctx.server,
+      routing: ctx.routing,
+      facts,
+      phaseKey: phaseKeyOf,
+      entry,
+      phaseStep: phaseKey(phase).id,
+      finalPhase,
+      ...(reportFile !== undefined ? { reportFile } : {}),
+      sources,
+      missing,
+      duties: ctx.manual ? "" : planDuties(ctx, phase.entry),
+      // The composed-Scope guarantee check (D4.3): an assert miss over the
+      // synthesized document is a retry cause, never exit 2 — the validator
+      // renders the candidate and reports the violation back to the session.
+      validate: (candidateBrief, rows) => {
+        try {
+          renderFormulationTodo(facts, {
+            ...baseInput,
+            synthesis: {
+              brief: candidateBrief,
+              ledger: renderLedger(rows),
+              ...(missing.length ? { missing } : {}),
+              protocol: protocolFrameText(entry, finalPhase, reportFile),
+            },
+          })
+          return []
+        } catch (error) {
+          if (error instanceof PromptGuaranteeError) return [error.message]
+          throw error
+        }
+      },
+    })
+    if (outcome.kind === "off") {
+      log(`ℹ formulation synthesis off: ${outcome.reason}`)
+      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
+    }
+    if (outcome.kind === "fallback") {
+      log(`⚠ formulation synthesis fell back to the Stage-1 deterministic floor: ${outcome.reason} (the round report's needs-attention section carries it)`)
+      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: outcome.audit, digest, landed: false }
+    }
+    const todo = renderFormulationTodo(facts, {
+      ...baseInput,
+      synthesis: {
+        brief: outcome.brief,
+        ledger: renderLedger(outcome.rows),
+        ...(missing.length ? { missing } : {}),
+        protocol: protocolFrameText(entry, finalPhase, reportFile),
+      },
+    })
+    return {
+      todo,
+      document: previewFormulationDocument(todo, phaseId),
+      blocks: [
+        { block: "formulation todo (synthesized)", source: "the driver frame + the constructor session's brief and ledger (plans/0097)" },
+        { block: "sources brief", source: "the constructor session, under the charter" },
+        { block: "obligations ledger", source: "the DRIVER's seeded protocol rows + the constructor session's rows" },
+        ...floorBlocks(phase, input, brief, taskIndex, parts),
+      ],
+      audit: outcome.audit,
+      digest,
+      landed: false,
+    }
   }
   let verified: number | "remediate" = 0
   for (let pass = 0; ; pass++) {
     const composed = await compose()
+    // The synthesis audit entries (D6): committed pre-construction (stage
+    // prompt-audit), the same wall-document discipline the verifier's
+    // verdict gets — what the constructor claimed, and every fallback.
+    if (composed.audit.length && !(await recordSynthesisAudit(ctx, phase, composed.audit))) return 2
     verified = await verifyPlanStep(ctx, phase, `formulation ${phaseKey(phase).id}`, composed.document, composed.blocks)
     if (verified !== "remediate") {
       if (verified !== 0) return verified
       // Construction (plans/0095 D1): land the verified document as the
       // phase's first task unit — idempotent, so the remediate loop's final
-      // composition is the one that lands.
-      const landed = await constructFormulation(directory, phase, composed.todo, { autoNumber: opts.autoNumber })
-      if (landed.type === "dirty") {
-        log(`⏸ worktree not clean before constructing the formulation task; handle it manually (commit/clean) and re-run:`)
-        for (const file of landed.files) log(`  ${file}`)
-        return 2
+      // composition is the one that lands. The digest-hit re-entry (D6)
+      // skips construction: the landed todo stands, byte for byte, and its
+      // recorded digest already matches.
+      let id: string
+      if (composed.landed && composed.id !== undefined) {
+        id = composed.id
+        log(`✓ the landed formulation todo of ${id} stands — the floor assembly is unchanged (plans/0097 D6)`)
+      } else {
+        const landed = await constructFormulation(directory, phase, composed.todo, { autoNumber: opts.autoNumber })
+        if (landed.type === "dirty") {
+          log(`⏸ worktree not clean before constructing the formulation task; handle it manually (commit/clean) and re-run:`)
+          for (const file of landed.files) log(`  ${file}`)
+          return 2
+        }
+        if (landed.type === "failed") {
+          log(`⏸ ${landed.question}`)
+          return 2
+        }
+        await recordSynthDigest(directory, landed.id, composed.digest)
+        id = landed.id
+        log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
       }
-      if (landed.type === "failed") {
-        log(`⏸ ${landed.question}`)
-        return 2
-      }
-      log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
       // The formulation task runs as the phase's first ordinary unit — the
       // serial path by design (plans/0095 D5: a phase's only ready unit, its
       // Touches everything, ahead of everything it plans).
       const plan = await loadPlan(directory, phase)
-      const task = plan.tasks.find((entry) => entry.id === landed.id)
+      const task = plan.tasks.find((entry) => entry.id === id)
       if (!task) {
-        log(`⏸ the constructed formulation task ${landed.id} is not listed in ${taskIndex}; investigate and re-run`)
+        log(`⏸ the constructed formulation task ${id} is not listed in ${taskIndex}; investigate and re-run`)
         return 2
       }
       const code = await runSerialUnit(ctx, phase, plan, task)
@@ -345,17 +501,30 @@ function previewFormulationDocument(todo: { goal: string; scope: string; accepta
   return renderTaskTodo({ id: "T-NNN", title: "Formulate the phase tasks", phase: phaseId, formulate: phaseId, decompose: "whole", depends: "none", goal: todo.goal, scope: todo.scope, acceptance: todo.acceptance })
 }
 
-// The phased formulation todo's composition state (the former
-// phasePlanPrompt's gathering, plans/0095 D1): the earlier phases'
-// handovers, the first-planning-session prior-round digest, the round brief,
-// the approved analysis (human-gated phases), the final-phase report duty
-// and the pipeline-trimming note — the same selection the retired
-// phase-plan template injected, now the renderFormulationTodo input.
-async function formulationCompose(
-  ctx: LoopCtx,
-  phase: PhaseUnit,
-  parts: { brief?: string; input?: string; taskIndex: string; phaseId: string; numberStart: number; charter: string },
-): Promise<{ todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[] }> {
+// The phased formulation's composition state (the former phasePlanPrompt's
+// gathering, plans/0095 D1; split from the render by plans/0097 D3 so the
+// synthesis pipeline reads the same parts as the floor): the earlier phases'
+// handovers (the joined text for the floor, per document for the synthesis
+// source list), the first-planning-session prior-round digest, the round
+// brief, the approved analysis (human-gated phases), the final-phase report
+// duty and the pipeline-trimming note. The per-source health findings (the
+// missing handover documents, the expected-but-absent digest) ride along —
+// the crux's "never silence" rule.
+export type FormulationParts = {
+  state: PhaseState
+  handovers: string
+  handoverDocs: { path: string; text: string }[]
+  missingHandovers: string[]
+  prevRound: string | undefined
+  prevRoundExpected: boolean
+  round: string | undefined
+  analysis: string | undefined
+  finalPhase: boolean
+  reportFile: string | undefined
+  trimmedPhases: boolean
+}
+
+async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<FormulationParts> {
   const { directory, opts } = ctx
   const state = await phaseState(directory)
   // Earlier phases' handovers (injection discipline): only the distilled
@@ -364,6 +533,17 @@ async function formulationCompose(
   // is the permanent P<nn>-<type>/handover.md in the phase directory, and a phase
   // without one is listed as "(no handover document)".
   const handovers = await earlierHandovers(directory, phase, state)
+  const earlier = state.phases
+    .slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
+    .filter((unit) => state.done.has(unit.id))
+  const handoverDocs: { path: string; text: string }[] = []
+  const missingHandovers: string[] = []
+  for (const unit of earlier) {
+    const path = phaseHandoverDoc(unit)
+    const text = await Bun.file(join(directory, path)).text().catch(() => undefined)
+    if (text?.trim()) handoverDocs.push({ path, text })
+    else missingHandovers.push(path)
+  }
   // Extra injection for the round's first planning session: ① prior knowledge
   // (the shell's startup distillation of existing migration results,
   // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
@@ -379,9 +559,11 @@ async function formulationCompose(
   // booked per planning session either way, so the memory-service question
   // has its data.
   let prevRound: string | undefined
+  let prevRoundExpected = false
   if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
     const prior = (await priorKnowledgeDigest(directory))?.trim() || undefined
     const prev = (await prevRoundDigest(directory))?.trim() || undefined
+    prevRoundExpected = state.round > 1 && prev === undefined
     const segments = [prior, prev].filter((part): part is string => part !== undefined)
     const joined = segments.length ? segments.join("\n\n") : undefined
     const cap = (opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 4
@@ -417,47 +599,66 @@ async function formulationCompose(
   // (D6b, knowledge.ts).
   const last = state.phases.at(-1)
   const finalPhase = last !== undefined && last.id === phase.id && phase.entry.hasTasks
-  const todo = renderFormulationTodo(planFacts(ctx), {
-    phase: phase.entry,
-    phaseId: parts.phaseId,
-    taskIndex: parts.taskIndex,
-    numberStart: parts.numberStart,
-    brief: parts.brief,
+  return {
+    state,
+    handovers,
+    handoverDocs,
+    missingHandovers,
+    prevRound,
+    prevRoundExpected,
     round,
     analysis,
-    input: parts.input,
-    inputPath: planInputPath(phase),
-    handovers,
-    prevRound,
-    mode: opts.mode,
-    ...(finalPhase ? { finalPhase: true, reportFile: reportForUserPath(state.round) } : {}),
+    finalPhase,
+    reportFile: finalPhase ? reportForUserPath(state.round) : undefined,
     // No analysis/design phase delivered in this round's index → the
     // implement phase's planning gets the pipeline-trimming note. A closed
     // analysis/design phase (plans/0053 D16: done for scheduling, not
     // delivered) counts as absent.
     trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
-    parallel: opts.parallel,
-    testByDriver: opts.testByDriver,
-    charter: parts.charter,
-  })
-  // The block map (plans/0082 §2 D1): each block of the assembled todo and
-  // its source path, from the composition state itself — never a guess read
-  // back out of the rendered text.
-  const blocks: BlockMapEntry[] = [
+  }
+}
+
+// The floor's block map (plans/0082 §2 D1): each block of the assembled todo
+// and its source path, from the composition state itself — never a guess
+// read back out of the rendered text. The synthesized shape prepends its own
+// blocks ahead of these.
+function floorBlocks(phase: PhaseUnit, input: string | undefined, brief: string | undefined, taskIndex: string, parts: FormulationParts | undefined): BlockMapEntry[] {
+  const manual = parts === undefined
+  return [
     { block: "formulation todo", source: "the deterministic assembly (plans/0095)" },
-    { block: "phase duties", source: "the active pack's phase-duties section" },
-    { block: "brief", source: parts.brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
-    { block: "round brief", source: roundBriefPath(state.round) },
-    ...(analysis !== undefined ? [{ block: "analysis", source: ANALYSIS_DOC }] : []),
-    { block: "planning input", source: parts.input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
-    ...state.phases
-      .slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
-      .filter((unit) => state.done.has(unit.id))
-      .map((unit) => ({ block: "handover", source: phaseHandoverDoc(unit) })),
-    ...(prevRound !== undefined ? [{ block: "previous round digest", source: "the prior-knowledge and previous-round documents" }] : []),
+    ...(manual ? [] : [{ block: "phase duties", source: "the active pack's phase-duties section" }]),
+    { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
+    ...(manual
+      ? []
+      : [
+          { block: "round brief", source: roundBriefPath(parts!.state.round) },
+          ...(parts!.analysis !== undefined ? [{ block: "analysis", source: ANALYSIS_DOC }] : []),
+          ...parts!.handoverDocs.map((doc) => ({ block: "handover", source: doc.path })),
+          ...(parts!.prevRound !== undefined ? [{ block: "previous round digest", source: "the prior-knowledge and previous-round documents" }] : []),
+        ]),
+    { block: "planning input", source: input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
+    { block: "task index", source: taskIndex },
     { block: "mode notes", source: "the active mode file" },
   ]
-  return { todo, document: previewFormulationDocument(todo, parts.phaseId), blocks }
+}
+
+// The synthesis audit entries' write (plans/0097 D6): appended to the round's
+// prompt-audit.md and committed on its own ahead of construction (stage
+// prompt-audit, the verifier's discipline — the record survives a session
+// that never runs, and the planning unit's clean gate finds a committed
+// tree). false = the commit failed; the caller blocks (the entry clean gate
+// would refuse the uncommitted wall document anyway).
+async function recordSynthesisAudit(ctx: LoopCtx, phase: PhaseUnit, lines: readonly string[]): Promise<boolean> {
+  const audit = join(dirname(phase.dir), "prompt-audit.md")
+  const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
+  await Bun.write(
+    join(ctx.directory, audit),
+    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${lines.join("\n")}\n`,
+  )
+  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `formulation synthesis (${phaseKey(phase).id})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit synthesis ${phaseKey(phase).id}` })
+  if (settled.ok) return true
+  log(`⏸ synthesis-audit commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The record is kept in the worktree; commit manually and re-run`)
+  return false
 }
 
 // Phase planning plus the plan-review pause (plans/0049 G5): at

@@ -350,6 +350,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
   "formulate": "driver",
   "prompt-plan": "driver",
+  // The formulation synthesis module (plans/0097): the ledger grammar,
+  // the mechanical validation and the constructor one-shot — beside its
+  // orchestration home loop-plan, above the prompt/render domains it reads.
+  "formulate-synthesis": "driver",
   // The render facts' composition helper (plans/0061 E2): the one PromptFacts
   // value builder the render callers share — the prompt globals, the library
   // handle, the switch-derived ask tier and the implement-entry fallback.
@@ -610,6 +614,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // new driver edge.
   analysis: "pipeline",
   "formulate": "pipeline",
+  "formulate-synthesis": "pipeline",
   "prompt-plan": "pipeline",
   close: "pipeline",
   "task-add": "pipeline",

@@ -352,6 +352,13 @@ type Runtime = {
   // sits in the park. Cleared when the released task is dispatched; markDone
   // and forgetUnits drop the whole entry as ever.
   parked?: string
+  // The formulation floor-assembly digest (plans/0097 D6): what the
+  // deterministic Stage-1 assembly hashed when the formulation unit was last
+  // constructed. Idempotence is keyed on it, never on model output — a
+  // pending unit whose recorded digest equals the freshly composed floor
+  // keeps its landed todo (no churn from constructor nondeterminism); a
+  // changed digest re-constructs through the full pipeline.
+  synthDigest?: string
 }
 type Units = { tasks: Record<string, Runtime> }
 
@@ -731,6 +738,29 @@ export async function setSplit(dir: string, id: string, split: UnitBaseline | un
 export async function runtimeSplit(dir: string, id: string): Promise<UnitBaseline | undefined> {
   const units = await readUnits(dir)
   return parseSplitPoint(units.tasks[id]?.split)
+}
+
+// —— Formulation idempotence (plans/0097 D6) ——
+// The floor-assembly digest: recorded when a formulation unit is constructed,
+// compared at re-entry. Pending + digest unchanged → the landed todo stands
+// (no churn from constructor nondeterminism); changed → re-construct through
+// the full pipeline.
+
+// Reads a task's recorded floor-assembly digest, if any.
+export async function unitSynthDigest(dir: string, id: string): Promise<string | undefined> {
+  const units = await readUnits(dir)
+  const value = units.tasks[id]?.synthDigest
+  return typeof value === "string" && value !== "" ? value : undefined
+}
+
+// Records (or, with undefined, drops) a task's floor-assembly digest.
+export async function recordSynthDigest(dir: string, id: string, digest: string | undefined): Promise<void> {
+  await updateTask(dir, id, (entry) => {
+    const next = { ...entry }
+    if (digest === undefined) delete next.synthDigest
+    else next.synthDigest = digest
+    return next
+  })
 }
 
 // —— The dependency park (plans/0096 D7) ——

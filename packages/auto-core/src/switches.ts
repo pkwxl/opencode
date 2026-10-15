@@ -62,6 +62,14 @@ export const SWITCH_ENV = {
   // the park line reads as the invalid-handoff case it always was before the
   // mechanism, and every other status value is unaffected.
   park: "OPENCODE_AUTO_PARK",
+  // Formulation synthesis (plans/0097 D6): where the pack declares a plan
+  // charter for a phase, the constructor session re-voices the evidential
+  // sources under the charter and derives the obligation ledger the plan is
+  // totality-checked against. off is the emergency exit returning the
+  // deterministic Stage-1 floor even for charter packs — the charter still
+  // rides the Acceptance and the verifier; the switch can only remove the
+  // enhancement, never a check (the OPENCODE_AUTO_PLAN_VERIFY precedent).
+  synthesis: "OPENCODE_AUTO_SYNTHESIS",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -353,6 +361,13 @@ export type Switches = {
   // removes the whole machinery — the park line is then the invalid-handoff
   // case; it never adds anything.
   park: boolean
+  // Formulation synthesis (default on, plans/0097): where the resolved plan
+  // charter of a formulation is non-empty, the constructor session and the
+  // obligation ledger machinery run ahead of the formulation task. off forces
+  // the deterministic Stage-1 floor even for charter packs — it only removes
+  // the enhancement, never the charter itself (which keeps riding the
+  // Acceptance and the verifier).
+  synthesis: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -383,6 +398,7 @@ const SWITCH_DEFAULTS: Switches = {
   remediate: true,
   analysis: true,
   park: true,
+  synthesis: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -605,6 +621,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     remediate: onOff(SWITCH_ENV.remediate, env[SWITCH_ENV.remediate], SWITCH_DEFAULTS.remediate),
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
+    synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -648,6 +665,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.remediate === SWITCH_DEFAULTS.remediate ? undefined : `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
+    switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -677,6 +695,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
+    `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
   ].join(", ")
 }
 

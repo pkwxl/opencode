@@ -41,6 +41,8 @@ document must be):
    goal, the rounds, the cost, the acceptance — never the technique alone); open questions and the safe defaults currently in force; the round's
    AUTO-RESOLVE proxy decisions with enough context to confirm or overturn each; FAIL verdicts and what they mean;
    environment gaps; recorded deviations and assumption notes; mid-round decisions that belong in the project brief (the next survey folds them in);
+   formulation synthesis fallbacks recorded in this round's docs/R-NN/prompt-audit.md (`synthesis: FALLBACK` lines — a phase that
+   planned on the deterministic floor although its pack declared a charter, each with its reason);
 4. Where to look deeper: an artifact index (spec-notes, verdicts, notable task reports), one line each — the report
    links, it never copies at length.
 

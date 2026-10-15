@@ -45,6 +45,7 @@ import tplDigestIndex from "../templates/prompts/digest-index.md" with { type: "
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
+import tplFormulateSynthesize from "../templates/prompts/formulate-synthesize.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
@@ -101,10 +102,14 @@ const embedded: Record<string, string> = {
   "digest-index": tplDigestIndex,
   dryrun: tplDryrun,
   fanout: tplFanout,
-  // The verification loop's fix session (plans/0083 D4): run-fix.md as
-  // driver machinery — the gap list + the task document in, exactly the
-  // listed gaps out, under the pack's repair discipline.
+  // The verification loop's fix session (plans/0083 D4): run-fix.md as driver
+  // machinery — the gap list + the task document in, exactly the listed gaps
+  // out, under the pack's repair discipline.
   fix: tplFix,
+  // The formulation synthesis constructor session (plans/0097 D3): the
+  // evidential sources in, the Sources brief + obligation ledger out between
+  // strict delimiters.
+  "formulate-synthesize": tplFormulateSynthesize,
   "handoff-steer": tplHandoffSteer,
   knowledge: tplKnowledge,
   // The core-owned operating-mode brief (plans/0082 §3 D3): registered data,
@@ -165,6 +170,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // charter and the prompt under review — a verdict without both is a check
   // of nothing.
   "plan-verify": ["Consistent:", "{{charter}}", "{{prompt}}"],
+  // The formulation synthesis constructor (plans/0097 D3): the driver parses
+  // the reply's delimiters and closing Rationale line verbatim, and an
+  // override must still show the charters and the sources — a brief and
+  // ledger synthesized against nothing.
+  "formulate-synthesize": ["SOURCES-BRIEF", "LEDGER", "Rationale:", "{{charters}}", "{{sources}}"],
   // The append planner (plans/0053 D27): the phase-plan task-document skeleton
   // plus the slots an override must keep rendering — the index path, the
   // existing-task list and the planning input.

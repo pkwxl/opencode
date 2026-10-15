@@ -150,8 +150,21 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
 // final — plans/0053 D12's rule carried over). numberStart is the first
 // number the session's own tasks may take (the formulation number + 1).
 // charter is the Acceptance text (formulate.ts formulationAcceptance): the
-// generic plan-quality core plus the pack's verify-plan when declared — the
+// generic plan-quality core plus the resolved charters when declared — the
 // wrap-up session judges it by inspection of the unit's commit range.
+//
+// The synthesis shape (plans/0097 D3): when `synthesis` is present — the
+// constructor session ran under a declared charter and passed the mechanical
+// validation — the evidential source blocks (project brief, round brief,
+// analysis, handovers, prevRound) are replaced by the session's Sources
+// brief and the obligation ledger (seeded rows + session rows, pre-rendered
+// by formulate-synthesis), while every protocol-bearing block (planning
+// input, mode preamble, authority order, duties + report duty + protocol
+// line, parallelism, the format skeleton, the Constraints) stays
+// driver-owned and verbatim — which is also where the assert literals live,
+// so the guarantee gate keeps holding by construction. The caller catches
+// the gate's throw for this shape and treats it as a retry cause (D4.3),
+// never exit 2.
 export function renderFormulationTodo(facts: PromptFacts, input: {
   // Absent in m mode (the implicit P01-implement still formulates, without
   // the phased-flow blocks).
@@ -173,8 +186,16 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   reportFile?: string
   testByDriver?: boolean
   charter: string
+  // The synthesis payload (plans/0097 D3): brief = the constructor's
+  // re-voiced sources, ledger = the pre-rendered rows (seeded + session),
+  // missing = the expected-but-absent source names (the source-health note),
+  // protocol = the pre-rendered protocol line (formulate-synthesis
+  // protocolFrameText — the seeded rows' quotes locate in it; the caller
+  // holds the registry entry this layer does not).
+  synthesis?: { brief: string; ledger: string; missing?: string[]; protocol?: string }
 }): { goal: string; scope: string; acceptance: string } {
   const manual = input.phase === undefined
+  const synth = input.synthesis
   // The input blocks' blank-normalization (the retired renderer's caller-side
   // trims, folded in): a blank text renders nothing.
   const briefText = input.brief?.trim() || undefined
@@ -182,41 +203,51 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   const inputText = input.input?.trim() || undefined
   const parts: string[] = []
   parts.push(
-    "This document is the single input of this formulation task: the DRIVER assembled everything below from the project's committed sources when it created the task, and nothing else is injected into your session. Plan from these sources — the repository and the project's artifacts, never invention; where two of them disagree, the authority order (when present below) says which wins.",
+    synth
+      ? [
+          "This document is the single input of this formulation task: the DRIVER assembled the frame below from the project's committed",
+          "sources, and the constructor session — run under the project's intent charter — re-voiced the evidential sources into the Sources",
+          "brief and the obligations ledger that follow. Plan from the brief, the ledger, the planning input and the repository; the sources",
+          "stay the authority beneath the brief. Where two of them disagree, the authority order (when present below) says which wins, and a",
+          "conflict row of the ledger records what the plan must carry — never a silent resolution.",
+        ].join("\n")
+      : "This document is the single input of this formulation task: the DRIVER assembled everything below from the project's committed sources when it created the task, and nothing else is injected into your session. Plan from these sources — the repository and the project's artifacts, never invention; where two of them disagree, the authority order (when present below) says which wins.",
   )
-  if (briefText !== undefined) {
-    parts.push(["## Input: project intent (.opencode/auto/brief.md)", "", briefText, ""].join("\n"))
-  } else if (!manual) {
-    parts.push(
-      [
-        "## Input: project intent",
-        "",
-        "Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The survey phase of a re-work",
-        "round will propose one — seed it optionally with `init --brief <one line>` (what the project is, where the",
-        "reference lives, where the deliverable goes), or name the reference in this round's planning input.",
-        "",
-      ].join("\n"),
-    )
-  }
-  if (input.round) {
-    const rules = intentText(facts, "acceptance", "round-brief", {})
-    parts.push(
-      ["## Input: round brief (this round's round.md)", "", "The human's statement of what this round is for. Plan this phase's tasks toward its goal and criteria.", "", input.round.trim(), ...(rules ? ["", rules.trim()] : []), ""].join("\n"),
-    )
-  }
-  if (analysisText !== undefined) {
-    parts.push(
-      [
-        "## Input: approved project analysis (docs/analysis.md)",
-        "",
-        "The person's approved pre-round decisions — the goals, the constraints, the roadmap of rounds. What this analysis",
-        "settles is settled: carry its decisions forward, never re-raise them as open questions; a decision its goals,",
-        "constraints or roadmap implies is decided the same way, with the derivation recorded.",
-        "",
-        analysisText,
-        "",
-      ].join("\n"),
-    )
+  if (synth === undefined) {
+    if (briefText !== undefined) {
+      parts.push(["## Input: project intent (.opencode/auto/brief.md)", "", briefText, ""].join("\n"))
+    } else if (!manual) {
+      parts.push(
+        [
+          "## Input: project intent",
+          "",
+          "Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The survey phase of a re-work",
+          "round will propose one — seed it optionally with `init --brief <one line>` (what the project is, where the",
+          "reference lives, where the deliverable goes), or name the reference in this round's planning input.",
+          "",
+        ].join("\n"),
+      )
+    }
+    if (input.round) {
+      const rules = intentText(facts, "acceptance", "round-brief", {})
+      parts.push(
+        ["## Input: round brief (this round's round.md)", "", "The human's statement of what this round is for. Plan this phase's tasks toward its goal and criteria.", "", input.round.trim(), ...(rules ? ["", rules.trim()] : []), ""].join("\n"),
+      )
+    }
+    if (analysisText !== undefined) {
+      parts.push(
+        [
+          "## Input: approved project analysis (docs/analysis.md)",
+          "",
+          "The person's approved pre-round decisions — the goals, the constraints, the roadmap of rounds. What this analysis",
+          "settles is settled: carry its decisions forward, never re-raise them as open questions; a decision its goals,",
+          "constraints or roadmap implies is decided the same way, with the derivation recorded.",
+          "",
+          analysisText,
+          "",
+        ].join("\n"),
+      )
+    }
   }
   if (inputText !== undefined) {
     parts.push(
@@ -242,42 +273,72 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
       [
         "## Authority order (intent guarantees)",
         "",
-        "Where any part of this document — the planning input, the round brief, the project brief, the phase duties — conflicts with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order text.",
+        "Where any part of this document — the planning input, the sources brief, the ledger, the phase duties — conflicts with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order text.",
         "",
         precedence.trim(),
         "",
       ].join("\n"),
     )
   }
-  if (input.handovers) {
+  if (synth !== undefined) {
     parts.push(
       [
-        "## Input: prior-phase handovers",
+        "## Sources brief (constructor session, under the charter)",
         "",
-        "The handover-distillation documents of each prior phase (at this round's phase directories'",
-        "P<nn>-<type>/handover.md, a permanent path) — the sole channel of cross-phase memory, replacing the prior",
-        "phases' raw docs/ (do not read those when planning; pull detail via each handover's artifact index):",
+        ...(synth.missing?.length
+          ? [`Source health: the following expected sources are absent — ${synth.missing.join(", ")} — plan for their absence, never inventing their content.`, ""]
+          : []),
+        "The constructor session re-voiced the evidential sources (project brief, round brief, analysis, prior-phase handovers,",
+        "prior-round conclusions — whichever this formulation had) organized as the charter directs, quoting load-bearing lines.",
         "",
-        input.handovers.trim(),
+        synth.brief.trim(),
+        "",
+        "## Obligations ledger",
+        "",
+        "The enumerated, quoted list of what the sources demand of this plan. Every row is an obligation a planned task covers or",
+        "explicitly defers (reason recorded in that task's document), or a conflict the plan records per the authority order — the",
+        "wrap-up verification judges this plan row by row, and the coverage map maps every row to its task.",
+        "",
+        synth.ledger.trim(),
+        "",
+        "Boundaries: the ledger enumerates what the sources name — it cannot invent requirements, and nothing here widens the",
+        "project's charter. The repository survey remains this session's own first duty (protocol item 1 below). The seeded",
+        "protocol rows (source `phase duties`) are the DRIVER's own; this round's obligations are the ledger's, the standing bar",
+        "is the charter's.",
         "",
       ].join("\n"),
     )
-  }
-  if (input.prevRound) {
-    parts.push(
-      [
-        "## Input: prior-round conclusions (continuation round)",
-        "",
-        "This project has already run a full phased round of work, and this is a continuation round: build on the existing",
-        "results to bring them into fuller agreement with what the project is for — prioritise gaps and misses left over",
-        "from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows",
-        "(each prior phase's task index tasks.md lives inside its own phase directory under the prior round's docs/R-NN/,",
-        "a permanent path; pull detail via the index as needed):",
-        "",
-        input.prevRound.trim(),
-        "",
-      ].join("\n"),
-    )
+  } else {
+    if (input.handovers) {
+      parts.push(
+        [
+          "## Input: prior-phase handovers",
+          "",
+          "The handover-distillation documents of each prior phase (at this round's phase directories'",
+          "P<nn>-<type>/handover.md, a permanent path) — the sole channel of cross-phase memory, replacing the prior",
+          "phases' raw docs/ (do not read those when planning; pull detail via each handover's artifact index):",
+          "",
+          input.handovers.trim(),
+          "",
+        ].join("\n"),
+      )
+    }
+    if (input.prevRound) {
+      parts.push(
+        [
+          "## Input: prior-round conclusions (continuation round)",
+          "",
+          "This project has already run a full phased round of work, and this is a continuation round: build on the existing",
+          "results to bring them into fuller agreement with what the project is for — prioritise gaps and misses left over",
+          "from the prior round, do not redo finished work. An excerpt of the prior round's conclusions follows",
+          "(each prior phase's task index tasks.md lives inside its own phase directory under the prior round's docs/R-NN/,",
+          "a permanent path; pull detail via the index as needed):",
+          "",
+          input.prevRound.trim(),
+          "",
+        ].join("\n"),
+      )
+    }
   }
   if (!manual) {
     const duties = planDutyText(facts, input.phase!, { phaseName: input.phase!.name, ...(input.testByDriver ? { testByDriver: true } : {}) })
@@ -290,6 +351,7 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
         "does not move with the phase/round.",
         "",
         duties,
+        ...(synth?.protocol ? ["", `Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.`] : []),
         "",
         ...(input.finalPhase ? [renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim(), ""] : []),
         ...(input.trimmedPhases && input.phase?.type === "implement"
@@ -306,8 +368,11 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   }
   // m mode's report duty (the implicit round's single phase is final,
   // plans/0053 D12's rule carried over): no duties section to sit beside, so
-  // it renders as its own block ahead of the protocol.
+  // it renders as its own block ahead of the protocol. The synthesis shape's
+  // protocol line (the caller's — the implicit implement entry's seeded
+  // rows) rides ahead of it.
   if (manual && input.finalPhase) {
+    if (synth?.protocol) parts.push(`Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.\n`)
     parts.push(renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim() + "\n")
   }
   const { parallel, parallelRules } = parallelismVars(facts, input.parallel)

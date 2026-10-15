@@ -41,6 +41,7 @@ import {
 } from "../src/prompt"
 import { renderFormulationTodo, renderPhaseAppend, existingTaskList } from "../src/prompt-plan"
 import { formulationAcceptance } from "../src/formulate"
+import { protocolFrameText, renderLedger, seededLedgerRows } from "../src/formulate-synthesis"
 import { renderTaskTodo } from "../src/tasks"
 import { promptFacts } from "../src/prompt-facts"
 import { promptViews } from "../src/tasks"
@@ -324,6 +325,39 @@ describe("golden render snapshots", () => {
           charter: formulationAcceptance(facts),
         }),
         "R-01.P01",
+      ),
+    )
+    // The synthesis shape (plans/0097 D3): the same t-phase frame with the
+    // evidential blocks replaced by a fixed Sources brief and obligation
+    // ledger (the DRIVER's seeded protocol rows + one session row), the
+    // protocol line the caller renders — the frame blocks stay verbatim.
+    const tEntry = phaseTypeOfLetter("t")
+    golden(
+      "formulation-todo-t-synthesis",
+      formulationDocument(
+        tEntry,
+        renderFormulationTodo(facts, {
+          phase: tEntry,
+          brief: "Project intent (fixed input).",
+          handovers: "Prior phase handover (fixed input).",
+          round: "Round brief (fixed input).",
+          mode: migrate,
+          phaseId: "R-01.P02",
+          taskIndex: "docs/R-01/P02-test/tasks.md",
+          numberStart: 6,
+          charter: formulationAcceptance(facts),
+          synthesis: {
+            brief: "The round brief demands the parser error paths covered with recorded evidence; the handover carries the design's error-semantics objective forward.",
+            ledger: renderLedger([
+              ...seededLedgerRows(tEntry, false),
+              { kind: "O", n: 3, source: "docs/R-01/round.md", quotes: ["error semantics preserved for the parser"], text: "the plan's tests exercise parser error paths and record observed evidence" },
+              { kind: "C", n: 1, source: "docs/R-01/P01-implement/plan-input.md vs docs/R-01/round.md", quotes: ["rewrite the config layer wholesale", "error semantics preserved for the parser"], text: "round.md wins (authority order); the plan records the deviation, never silent" },
+            ]),
+            missing: ["docs/analysis.md"],
+            protocol: protocolFrameText(tEntry, false),
+          },
+        }),
+        "R-01.P02",
       ),
     )
     golden(

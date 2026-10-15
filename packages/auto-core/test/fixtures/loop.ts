@@ -29,7 +29,7 @@ import type { Interactive } from "../../src/interactive"
 import { services } from "../../src/services"
 import { readPhases, type PhaseUnit } from "../../src/phases"
 import { renderTaskIndex } from "../../src/tasks"
-import { fakeAgent, type FakeAgent, type FakeAgentOptions, type TurnContext, type TurnScript } from "./agent"
+import { fakeAgent, ev, type FakeAgent, type FakeAgentOptions, type TurnContext, type TurnScript } from "./agent"
 import { freshRepo, git } from "./runner"
 
 const PHASE_DIR = "docs/R-\\d+/P\\d{2,}-[a-z][a-z0-9-]*"
@@ -179,6 +179,26 @@ export const diagnosisTurn = (dir: string, plan?: (file: string) => string | und
     }
   }
   return undefined
+}
+
+// —— Synthesis turns (plans/0097 D3, the agent-fake cases) ——
+
+// The constructor prompt's opening marker (templates/prompts/formulate-synthesize.md).
+export const SYNTHESIS_MARK = "You are the constructor session"
+
+// One constructor turn: the strict reply shape — the brief between its
+// delimiters, the ledger rows (raw lines, crafted by the test against the
+// sources it knows the prompt carries) between theirs, the closing Rationale
+// line. Compose with the other turns (`synthesisTurn(brief, rows)(ctx) ??
+// verdictTurn(...)(ctx)`); returning undefined lets the next script (or the
+// default turn — whose "done: …" reply fails the parse twice and lands the
+// documented fallback) take the session.
+export const synthesisTurn = (brief: string, rows: readonly string[], rationale = "the sources demand a specification-only reimplementation"): TurnScript => (ctx: TurnContext) => {
+  if (!ctx.text.includes(SYNTHESIS_MARK)) return undefined
+  return [
+    ev.text(ctx.session, `syn_${ctx.n}`, ["<<<SOURCES-BRIEF", brief, "SOURCES-BRIEF>>>", "<<<LEDGER", ...rows, "LEDGER>>>", `Rationale: ${rationale}`].join("\n")),
+    ev.idle(ctx.session),
+  ]
 }
 
 // —— Append turns (plans/0053 §8, B6) ——

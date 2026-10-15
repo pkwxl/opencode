@@ -130,6 +130,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/exit.test.ts",
   "test/failback.test.ts",
   "test/formulate.test.ts",
+  "test/formulate-synthesis.test.ts",
   "test/golden.test.ts",
   "test/handover.test.ts",
   "test/hibernate.test.ts",
