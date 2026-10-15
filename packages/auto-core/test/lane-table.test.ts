@@ -6,17 +6,22 @@
 // extensions (the carry-forward intersection, exclusivity serialization, the
 // anchor pre-gate) land in this file beside these cases.
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadIntents, parseIntentFile, resolveIntent } from "../src/intent/load"
-import { parseTestLanes, testLanesProblem } from "../src/intent/test-lanes"
+import { acceptanceSection, anchorLaneOf, laneTouches, parseLaneReceipt, parseTestLanes, testLanesProblem, type TestLane } from "../src/intent/test-lanes"
 import { DEFAULT_INTENT } from "../src/intent/types"
 import { taskDocPaths } from "../src/docpaths"
+import { EOF_MARK } from "../src/doccheck"
+import { laneReceiptDoc } from "../src/docpaths"
+import { rangeChangedFiles } from "../src/git"
 import { promptFacts } from "../src/prompt-facts"
 import { renderFanout, renderSubtask, renderWhole, renderWrapup, type PromptFacts } from "../src/prompt"
+import { laneBatches, runTestLanes } from "../src/script"
 import { promptViews } from "../src/tasks"
 import { plan, task } from "./fixtures/prompt"
+import { freshRepo, git } from "./fixtures/runner"
 
 // A pack whose `## quality` carries only the lane table — enough for the
 // parse; the render cases below splice the section into the real built-in
@@ -195,6 +200,332 @@ describe("session-side rendering (plans/0096 D4 — no driver machinery)", () =>
       expect(text).not.toContain("Test lanes")
       expect(text).not.toContain("testplan.md")
       expect(text).not.toContain("testhands")
+    }
+  })
+})
+
+// —— Stage 3, the driver's half (plans/0096 D5) ——
+
+// A receipt as the driver writes it (script.ts writeLaneReceipt): the three
+// machine fields plus the times, the log path, the terminator.
+const receipt = (over: Record<string, string> = {}) =>
+  [
+    "# Lane lint",
+    "",
+    `Lane: ${over.lane ?? "lint"}`,
+    `Heads: ${over.heads ?? ".=abc1234"}`,
+    "Start: 2026-10-15T10:00:00.000Z",
+    `End: ${over.end ?? "2026-10-15T10:03:12.123Z"}`,
+    `Verdict: ${over.verdict ?? "green"}`,
+    ...(over.carried ? [`Carried: ${over.carried}`] : []),
+    ...(over.carried ? [] : [`Log: ${over.log ?? "/tmp/opencode/T-001-lint-1.log"}`]),
+    "",
+    ...(over.verdict === "red" ? ["```", "the failure region's ends", "```", ""] : []),
+    EOF_MARK,
+    "",
+  ].join("\n")
+
+describe("the receipt parse (parseLaneReceipt — the driver reads its own receipts and the sessions' alike)", () => {
+  test("parses the three machine fields; heads split per repository", () => {
+    expect(parseLaneReceipt(receipt())).toEqual({
+      lane: "lint",
+      heads: [{ root: ".", sha: "abc1234" }],
+      verdict: "green",
+      end: "2026-10-15T10:03:12.123Z",
+    })
+    const nested = parseLaneReceipt(receipt({ heads: ".=abc1234; sub/deep=def9" }))
+    expect(nested?.heads).toEqual([
+      { root: ".", sha: "abc1234" },
+      { root: "sub/deep", sha: "def9" },
+    ])
+  })
+
+  test("a red receipt parses red; an empty Heads value parses headless (carry refuses it later)", () => {
+    expect(parseLaneReceipt(receipt({ verdict: "red" }))?.verdict).toBe("red")
+    expect(parseLaneReceipt(receipt({ heads: "" }))?.heads).toEqual([])
+  })
+
+  test("unparsable receipts are absent: a lane without a readable green receipt re-runs", () => {
+    expect(parseLaneReceipt("prose the session wrote with no fields\n")).toBeUndefined()
+    expect(parseLaneReceipt(receipt({ verdict: "yellow" }))).toBeUndefined()
+    expect(parseLaneReceipt(receipt({ heads: "no-sha-here" }))).toBeUndefined()
+    expect(parseLaneReceipt("Lane: lint\nHeads: .=abc1234\nVerdict: green")).toEqual({
+      lane: "lint",
+      heads: [{ root: ".", sha: "abc1234" }],
+      verdict: "green",
+    })
+  })
+})
+
+describe("carry-forward's intersection (laneTouches — the Touches discipline)", () => {
+  test("a directory surface contains every path inside it; file surfaces match themselves only", () => {
+    expect(laneTouches(["src/"], ["src/a.ts", "README.md"])).toBe(true)
+    expect(laneTouches(["src/"], ["test/a.ts"])).toBe(false)
+    expect(laneTouches(["src/dma/"], ["src/dma/x/y.c"])).toBe(true)
+    expect(laneTouches(["src/dma/"], ["src/other/x.c"])).toBe(false)
+    expect(laneTouches(["src/a.ts"], ["src/a.ts"])).toBe(true)
+    expect(laneTouches(["src/a.ts"], ["src/b.ts"])).toBe(false)
+    expect(laneTouches(["src/"], [])).toBe(false)
+  })
+})
+
+describe("the anchor resolution (acceptanceSection / anchorLaneOf — the smallest honest rule)", () => {
+  const lanes: TestLane[] = [
+    { name: "lint", command: "make lint", cost: "cheap", surfaces: ["src/"], exclusive: false },
+    { name: "gate", command: "./gate.sh", cost: "anchor", surfaces: ["src/"], exclusive: true },
+  ]
+  const body = (acceptance: string) => ["## Goal", "", "g", "", "## Scope", "", "s", "", "## Acceptance", "", acceptance, ""].join("\n")
+
+  test("the section the acceptance names is extracted to the next heading", () => {
+    expect(acceptanceSection(body("The gate lane is green."))).toBe("The gate lane is green.")
+    expect(acceptanceSection(`${body("The gate lane is green.")}## After\nmore\n`)).toBe("The gate lane is green.")
+    expect(acceptanceSection("## Goal\n\ng\n\n## Scope\n\ns\n")).toBe("")
+  })
+
+  test("exactly one name in the acceptance resolves the anchor — a cheap row named wins over the cost fallback", () => {
+    expect(anchorLaneOf("The gate lane is green over the migrated widget.", lanes)).toBe(lanes[1])
+    expect(anchorLaneOf("The lint lane and the gate lane must both pass.", lanes)).toBeUndefined()
+    // Word boundaries: a longer word embedding the name does not name it, so
+    // the fallback decides (exactly one anchor-cost row → it).
+    expect(anchorLaneOf("the relint step is green", lanes)).toBe(lanes[1])
+  })
+
+  test("no name falls back to the table's anchor-cost rows when exactly one exists, else no pre-gate", () => {
+    expect(anchorLaneOf("The acceptance criteria pass.", lanes)).toBe(lanes[1])
+    const two: TestLane[] = [lanes[0]!, lanes[1]!, { name: "gate2", command: "./gate2.sh", cost: "anchor", surfaces: ["src/"], exclusive: false }]
+    expect(anchorLaneOf("The acceptance criteria pass.", two)).toBeUndefined()
+    const cheapOnly: TestLane[] = [lanes[0]!]
+    expect(anchorLaneOf("The acceptance criteria pass.", cheapOnly)).toBeUndefined()
+  })
+})
+
+describe("exclusivity serialization (laneBatches — the set's schedule)", () => {
+  const lane = (name: string, exclusive: boolean): TestLane => ({ name, command: name, cost: "cheap", surfaces: ["src/"], exclusive })
+
+  test("the non-exclusive lanes share one concurrent batch, each exclusive lane then runs alone in table order", () => {
+    expect(laneBatches([lane("x", true), lane("y", false), lane("z", false)])).toEqual([
+      [lane("y", false), lane("z", false)],
+      [lane("x", true)],
+    ])
+    expect(laneBatches([lane("a", true), lane("b", true)])).toEqual([[lane("a", true)], [lane("b", true)]])
+    expect(laneBatches([lane("y", false)])).toEqual([[lane("y", false)]])
+    expect(laneBatches([])).toEqual([])
+  })
+})
+
+describe("runTestLanes (the driver-run lane set over real repositories)", () => {
+  // Lane factories over a marker file outside the repository (the tree stays
+  // exactly what the receipts' recorded HEADs vouch for) and a private log
+  // directory (production writes /tmp/opencode; tests stay self-contained).
+  const markers = () => {
+    const scratch = mkdtempSync(join(tmpdir(), "auto-lane-marks-"))
+    return { scratch, file: join(scratch, "marks.txt") }
+  }
+  const lane = (over: Partial<TestLane> & { name: string }): TestLane => ({
+    command: `echo ${over.name} >> <mark>`,
+    cost: "cheap",
+    surfaces: ["src/"],
+    exclusive: false,
+    ...over,
+  })
+  const withMark = (lanes: TestLane[], file: string): TestLane[] => lanes.map((l) => ({ ...l, command: l.command.replace("<mark>", file) }))
+  const marks = async (file: string) => (await Bun.file(file).text().catch(() => "")).split("\n").filter(Boolean)
+  const clean = (paths: string[]) => {
+    for (const path of paths) rmSync(path, { recursive: true, force: true })
+  }
+
+  test("cheap lanes run as parallel processes, the anchor once they green; receipts land and parse back", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const lanes = withMark([lane({ name: "lint" }), lane({ name: "fmt" }), lane({ name: "gate", cost: "anchor" })], file)
+      const result = await runTestLanes(dir, "T-001", lanes, { logDir })
+      expect(result.violation).toBeUndefined()
+      expect(result.runs.map((run) => [run.lane, run.verdict])).toEqual([
+        ["lint", "green"],
+        ["fmt", "green"],
+        ["gate", "green"],
+      ])
+      // The anchor launched only once the cheap tier greened: its marker
+      // follows both cheap markers.
+      const seen = await marks(file)
+      expect(seen.filter((m) => m === "lint" || m === "fmt")).toHaveLength(2)
+      expect(seen.indexOf("gate")).toBe(2)
+      // Receipts: the partial's format, the recorded HEADs at the frozen
+      // tree, the terminator — and parseLaneReceipt reads them back.
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      for (const name of ["lint", "fmt", "gate"]) {
+        const text = await Bun.file(join(dir, laneReceiptDoc("T-001", name))).text()
+        expect(text.trimEnd().endsWith(EOF_MARK)).toBe(true)
+        const parsed = parseLaneReceipt(text)
+        expect(parsed?.lane).toBe(name)
+        expect(parsed?.verdict).toBe("green")
+        expect(parsed?.heads).toEqual([{ root: ".", sha: head }])
+        expect(parsed?.end).toBeTruthy()
+      }
+      expect(result.runs.every((run) => run.log.startsWith(logDir))).toBe(true)
+    } finally {
+      clean([dir, scratch, logDir])
+    }
+  })
+
+  test("carry-forward over the recorded HEADs: a surface intersect re-runs, an untouched lane carries — across tasks", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true })
+      mkdirSync(join(dir, "include"), { recursive: true })
+      writeFileSync(join(dir, "src", "a.ts"), "// a\n")
+      writeFileSync(join(dir, "include", "i.h"), "// i\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const table = () => withMark([lane({ name: "lint", surfaces: ["src/"] }), lane({ name: "hdr", surfaces: ["include/"] })], file)
+      // T-001 establishes the green receipts; committing them advances HEAD
+      // (the receipts' recorded tree is the pre-run one).
+      const first = await runTestLanes(dir, "T-001", table(), { logDir })
+      expect(first.runs.every((run) => run.verdict === "green" && !run.carried)).toBe(true)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-001 receipts")
+      // T-002: the include/ tree moved — lint carries from T-001's receipt
+      // (no launch), hdr re-runs.
+      writeFileSync(join(dir, "include", "i.h"), "// i changed\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "header change")
+      const second = await runTestLanes(dir, "T-002", table(), { logDir })
+      expect(second.runs.find((run) => run.lane === "lint")).toMatchObject({ verdict: "green", carried: laneReceiptDoc("T-001", "lint") })
+      expect(second.runs.find((run) => run.lane === "hdr")?.carried).toBeUndefined()
+      // The carry receipt records the current tree and names its source.
+      const carryText = await Bun.file(join(dir, laneReceiptDoc("T-002", "lint"))).text()
+      expect(carryText).toContain(`Carried: ${laneReceiptDoc("T-001", "lint")}`)
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      expect(parseLaneReceipt(carryText)?.heads).toEqual([{ root: ".", sha: head }])
+      // T-003: the src/ tree moved — lint re-runs; hdr carries from its
+      // newest green receipt (T-002's own run).
+      writeFileSync(join(dir, "src", "a.ts"), "// a changed\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "source change")
+      const third = await runTestLanes(dir, "T-003", table(), { logDir })
+      expect(third.runs.find((run) => run.lane === "lint")?.carried).toBeUndefined()
+      expect(third.runs.find((run) => run.lane === "hdr")?.carried).toBe(laneReceiptDoc("T-002", "hdr"))
+      const seen = await marks(file)
+      expect(seen.filter((m) => m === "lint")).toHaveLength(2)
+      expect(seen.filter((m) => m === "hdr")).toHaveLength(2)
+    } finally {
+      clean([dir, scratch, logDir])
+    }
+  })
+
+  test("a red cheap lane withholds the anchor (cheap-first); its red receipt carries the bounded evidence", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const lanes = [
+        { name: "lint", command: "echo 'the widget fails lint' >&2; exit 2", cost: "cheap" as const, surfaces: ["src/"], exclusive: false },
+        lane({ name: "gate", cost: "anchor" }),
+      ]
+      const result = await runTestLanes(dir, "T-001", withMark(lanes, file), { logDir })
+      expect(result.runs).toHaveLength(1)
+      expect(result.runs[0]).toMatchObject({ lane: "lint", verdict: "red", code: 2 })
+      // The anchor never launched: no marker, no receipt.
+      expect(await marks(file)).toEqual([])
+      expect(existsSync(join(dir, laneReceiptDoc("T-001", "gate")))).toBe(false)
+      const text = await Bun.file(join(dir, laneReceiptDoc("T-001", "lint"))).text()
+      expect(parseLaneReceipt(text)?.verdict).toBe("red")
+      expect(text).toContain("the widget fails lint")
+      expect(text).toContain("Log: ")
+      expect(text.trimEnd().endsWith(EOF_MARK)).toBe(true)
+    } finally {
+      clean([dir, scratch, logDir])
+    }
+  })
+
+  test("an exclusive lane runs alone: it launches only after the whole shared batch exited", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      await git(dir, "commit", "--allow-empty", "-qm", "init")
+      const lanes = withMark(
+        [
+          { name: "wide", command: `echo wide-start >> ${file}; sleep 0.2; echo wide-end >> ${file}`, cost: "cheap" as const, surfaces: ["src/"], exclusive: false },
+          lane({ name: "solo", exclusive: true }),
+        ],
+        file,
+      )
+      const result = await runTestLanes(dir, "T-001", lanes, { logDir })
+      expect(result.runs.every((run) => run.verdict === "green")).toBe(true)
+      // The schedule's visible effect: the shared batch's end marker precedes
+      // the exclusive lane's — nothing else in flight while it runs.
+      const seen = await marks(file)
+      expect(seen[seen.length - 1]).toBe("solo")
+      expect(seen.indexOf("wide-end")).toBeLessThan(seen.indexOf("solo"))
+    } finally {
+      clean([dir, scratch, logDir])
+    }
+  })
+
+  test("the set-level stash guard: tracked mutations restored after every lane exited, a moved HEAD reported", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const mutate: TestLane[] = [{ name: "mut", command: "echo broken >> src.ts", cost: "cheap", surfaces: ["src/"], exclusive: false }]
+      const restored = await runTestLanes(dir, "T-001", mutate, { logDir })
+      expect(restored.violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
+      // A lane that moves HEAD: the corrupted-baseline family, no auto-undo.
+      const commit: TestLane[] = [{ name: "sneaky", command: "git commit --allow-empty -qm sneaky", cost: "cheap", surfaces: ["src/"], exclusive: false }]
+      const moved = await runTestLanes(dir, "T-001", commit, { logDir })
+      expect(moved.violation?.kind).toBe("head")
+    } finally {
+      clean([dir, logDir])
+    }
+  })
+
+  test("the watchdog kills a silent lane as red (the runScript discipline over the set)", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    try {
+      await git(dir, "commit", "--allow-empty", "-qm", "init")
+      const hang: TestLane[] = [{ name: "hang", command: "sleep 5", cost: "cheap", surfaces: ["src/"], exclusive: false }]
+      const result = await runTestLanes(dir, "T-001", hang, { logDir, idleMs: 150, pollMs: 30 })
+      expect(result.runs[0]).toMatchObject({ lane: "hang", verdict: "red", code: 124, timedOut: true, timeoutReason: "idle" })
+      const text = await Bun.file(join(dir, laneReceiptDoc("T-001", "hang"))).text()
+      expect(text).toContain("killed by the watchdog")
+    } finally {
+      clean([dir, logDir])
+    }
+  })
+})
+
+describe("rangeChangedFiles (the recorded-HEADs diff carry reads)", () => {
+  test("empty heads are unreadable (a headless receipt never carries); an unknown sha is unreadable too", async () => {
+    const dir = await freshRepo()
+    try {
+      writeFileSync(join(dir, "a.ts"), "a\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      expect(await rangeChangedFiles(dir, [])).toBeUndefined()
+      expect(await rangeChangedFiles(dir, [{ root: ".", sha: "deadbee" }])).toBeUndefined()
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      expect(await rangeChangedFiles(dir, [{ root: ".", sha: head }])).toEqual([])
+      writeFileSync(join(dir, "b.ts"), "b\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "b")
+      expect(await rangeChangedFiles(dir, [{ root: ".", sha: head }])).toEqual(["b.ts"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

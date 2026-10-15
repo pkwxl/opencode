@@ -105,6 +105,14 @@ export function subtaskOutputFile(task: { id: string }, index: number): string {
   return subtaskDoc(task.id, index, "index")
 }
 
+// A test lane's receipt (relative to the target directory):
+// docs/T-003/testhands/lint.md (plans/0096 D3/D5). The lane id doubles as the
+// file name (the table's grammar keeps it filename-safe), free content inside
+// the task family — no role of its own by design (roles.ts's boundary note).
+export function laneReceiptDoc(id: string, lane: string): string {
+  return join(taskDir(id), "testhands", `${lane}.md`)
+}
+
 // The prompt layer's document-path view of one task (E2, plans/0061 §6.3):
 // every layout path the task-family prompt templates reference, precomputed
 // here — the prompt renderers construct no paths themselves. The shape is

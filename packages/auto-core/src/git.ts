@@ -1,5 +1,5 @@
 import { readdir, realpath, rm } from "node:fs/promises"
-import { join, relative, sep } from "node:path"
+import { join, relative, resolve, sep } from "node:path"
 import type { AddedLine } from "./document/types"
 import { log } from "./log"
 import type { PhaseKey } from "./phases/registry"
@@ -1377,6 +1377,33 @@ async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   const diff = await git(root, ["diff", "--name-only", "-z", "--ignore-submodules=all", "HEAD", "--", "."]).catch(() => undefined)
   if (!diff || diff.code !== 0) return []
   return diff.out.split("\0").filter(Boolean).map((path) => relative(phys, join(toplevel, path)))
+}
+
+// The paths changed between each repository's recorded sha and HEAD
+// (committed-only, `git diff --name-only <sha>..HEAD`) — the test-lane
+// carry-forward's range (plans/0096 D5): the recorded-HEADs diff is what
+// makes cross-task carry sound, a receipt from an earlier task carrying over
+// exactly when nothing its surfaces touch changed since its tree. heads are
+// the receipt's recorded tree HEADs (target-relative root names, "." = the
+// target directory itself); paths come back target-directory-relative like
+// every other listing here. undefined = the range is unreadable somewhere
+// (an unknown sha, a vanished root, an empty heads list): the caller must
+// treat that as "everything changed" and re-run — carry is the optimization,
+// never a guess.
+export async function rangeChangedFiles(dir: string, heads: readonly { root: string; sha: string }[]): Promise<string[] | undefined> {
+  if (!heads.length) return undefined
+  const phys = await physicalDir(dir)
+  const files = new Set<string>()
+  for (const { root, sha } of heads) {
+    const abs = resolve(dir, root)
+    const top = await git(abs, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+    const toplevel = top?.code === 0 ? top.out.trim() : ""
+    if (!toplevel) return undefined
+    const diff = await git(abs, ["diff", "--name-only", "-z", "--ignore-submodules=all", `${sha}..HEAD`, "--", "."]).catch(() => undefined)
+    if (!diff || diff.code !== 0) return undefined
+    for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
+  }
+  return [...files]
 }
 
 

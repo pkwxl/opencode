@@ -8,7 +8,10 @@
 // gap list docs/T-NNN/gaps.md (the `gaps` document role — transient like
 // handoff.md, deleted at closeout and by closeUnit, overwritten wholesale by
 // every re-verification: the earlier gaps being closed exempts nothing
-// else). A bounded fix loop follows: at most FIX_ROUNDS fix sessions, each
+// else). Since plans/0096 D5 every round opens with the driver-run lane gate
+// (below): the pack's lane table runs as parallel driver processes and the
+// anchor pre-gate decides whether the verify session dispatches at all. A
+// bounded fix loop follows: at most FIX_ROUNDS fix sessions, each
 // closing exactly the listed gaps under the pack's repair discipline and
 // committed with stage `execute` (subject `<id> fix <round> <title>`), each
 // followed by a re-verification from scratch; past the budget today's ladder
@@ -41,13 +44,16 @@ import { taskDoc, taskDocPaths } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
 import type { UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
+import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, Outcome, UnitStop } from "./opts"
+import { codeWork } from "./phases/registry"
 import { promptViews, bookAttempt, type Plan, type Task } from "./tasks"
 import { renderFix, renderWrapup } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import type { Phase } from "./resume"
 import { runExecSession } from "./exec-session"
+import { runTestLanes, type LaneRun } from "./script"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
 import { shellProfile } from "./shell"
@@ -245,19 +251,121 @@ async function runFixRound(
   return undefined
 }
 
+// —— The driver-run lane gate (plans/0096 D5) ——
+//
+// The 0083 channel's parallel half, run at the top of every verification
+// round: after the task's execution sessions ended and their shares committed
+// (the tree frozen), the pack's lane table runs as the driver's own parallel
+// processes (runTestLanes — cheap lanes concurrently, the anchor once they
+// green, exclusive lanes alone, the set-level stash guard, receipts as
+// committed evidence). The anchor pre-gate then decides the round's entry:
+// the resolved anchor row's receipt must be green at the current tree — a red
+// anchor goes straight into the fix loop with synthesized gaps instead of a
+// verify session that would FAIL on the same finding. The receipts are on
+// disk either way; the wrap-up charter (Stage 2's clause) lets the verify
+// session judge them by inspection.
+
+// One gate verdict: off = the channel or the table is inactive (the
+// byte-identical floor, no lane launched); green = the verify session may be
+// dispatched; red = the fix loop opens over the driver-synthesized gap list
+// (runs feeds its verified-OK summary, gaps carries the ready bullet lines,
+// reason the one-sentence verdict the Result: FAIL line closes with); stop =
+// a moved HEAD, the corrupted-baseline family — no verification over a
+// corrupted baseline.
+type LaneGate = { kind: "off" } | { kind: "green" } | { kind: "red"; reason: string; gaps: string[]; runs: LaneRun[] } | { kind: "stop"; stop: UnitStop }
+
+async function laneGate(dir: string, task: Task, opts: Opts): Promise<LaneGate> {
+  // The channel's derived condition, the same line runExecSession gates on
+  // (plans/0083 D9): the config flag AND the phase type's codeWork (a
+  // phase-less opts resolves onto implement, so bare runs keep the raw-flag
+  // behavior); dryrun launches nothing. Without a pack table (Stage 2's
+  // zero-intent floor) today's serial tmp/test.sh protocol is the whole
+  // channel, byte-for-byte.
+  if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) return { kind: "off" }
+  const lanes = parseTestLanes(promptFacts(opts).pack)
+  if (!lanes) return { kind: "off" }
+  const anchor = anchorLaneOf(acceptanceSection(task.body), lanes)
+  const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs })
+  if (set.violation?.kind === "head") {
+    return {
+      kind: "stop",
+      stop: {
+        type: "blocked",
+        question:
+          `a driver-run test lane ran a git state command and moved HEAD (${set.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}); ` +
+          `no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`,
+      },
+    }
+  }
+  if (!anchor) {
+    // No resolvable anchor is no pre-gate: the set ran for evidence (the
+    // committed receipts), and the verify session judges them by inspection —
+    // an ambiguous anchor never gates mechanically.
+    return { kind: "green" }
+  }
+  const own = set.runs.find((run) => run.lane === anchor.name)
+  if (own?.verdict === "green") return { kind: "green" }
+  // The red side: the anchor itself ran red, or it was withheld — the cheap
+  // tier ran red, so it never launched and its receipt does not carry — in
+  // which case the red cheap lanes' evidence stands in (the anchor produced
+  // none of its own).
+  const reds = set.runs.filter((run) => run.verdict === "red")
+  const gaps = (own ? [own] : []).concat(reds.filter((run) => run.lane !== anchor.name)).map(laneGap)
+  if (!own) gaps.push(`The anchor lane \`${anchor.name}\` never ran: the cheap tier must green first — re-green it and the anchor launches.`)
+  const reason = own
+    ? `the anchor lane ${anchor.name} is red${own.timedOut ? " (watchdog timeout)" : own.code ? ` (LANE_RC=${own.code})` : ""}`
+    : `the anchor lane ${anchor.name} was withheld: the cheap tier ran red (${reds.map((run) => run.lane).join(", ")})`
+  return { kind: "red", reason, gaps, runs: set.runs }
+}
+
+// One red lane's entry for the synthesized gap list: the finding plus its
+// bounded evidence, the same shape a verify session's FAIL writes.
+function laneGap(run: LaneRun): string {
+  const head = `- Lane \`${run.lane}\` red${run.timedOut ? " — killed by the watchdog" : run.code ? ` — LANE_RC=${run.code}` : ""}${run.log ? `, log ${run.log}` : ""}:`
+  return [head, ...(run.evidence?.length ? run.evidence : ["(the log is empty)"])].map((line, i) => (i === 0 ? line : `    ${line}`)).join("\n")
+}
+
+// The driver-synthesized gap list (D5: "synthesize the gap list the fix
+// session closes; reuse the existing gaps.md flow") — the 0083 D3 form: the
+// verified-OK summary, one entry per gap, the closing Result: FAIL line, no
+// terminator (transient like every gap list, overwritten by each round).
+function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: string; gaps: string[] }): string {
+  const green = runs.filter((run) => run.verdict === "green")
+  return [
+    `# Gaps (${task.id})`,
+    "",
+    "## Verified OK",
+    "",
+    green.length
+      ? `- Driver-run test lanes green at this tree: ${green.map((run) => run.lane).join(", ")} (receipts under docs/${task.id}/testhands/).`
+      : "- The driver-run lane set produced no green lanes at this tree.",
+    "",
+    "## Gaps",
+    "",
+    ...gate.gaps,
+    "",
+    `Result: FAIL ${gate.reason}`,
+    "",
+  ].join("\n")
+}
+
 // Runs the task's verification loop (0083 D1–D5) and closes it out: verify
 // session → PASS → wrapup commit → done; FAIL → gap list → fix round →
 // re-verify from scratch → …; FIX_ROUNDS spent and still FAIL → today's
 // blocked path with the repair fact, the message naming the rounds spent.
-// round is the fix rounds this task has already spent (resume, D7: a round
-// counts once it opens, so a resumed run never re-runs a spent round);
-// persist advances the progress record's wrapup stage; baseline is the unit's
-// start SHA baseline (the charter's commit range). label is the unit name
-// used when a commit fails; solo is the off/auto/ondemand whole-task mode,
-// every mode but the true pipeline (the report is an output summary rather
-// than an index). undefined = verification passed; the only non-blocked
-// other exit never happens (the loop's blocked carries the repair fact for
-// the --repair ladder, an Outcome field).
+// Since plans/0096 D5 every round opens with the lane gate above: a red gate
+// substitutes the driver-synthesized gap list for the verify session's
+// (committed with the same wrapup stage) and enters the same fix loop;
+// carry-forward makes the post-fix re-run narrow. round is the fix rounds
+// this task has already spent (resume, D7: a round counts once it opens, so a
+// resumed run never re-runs a spent round); persist advances the progress
+// record's wrapup stage; baseline is the unit's start SHA baseline (the
+// charter's commit range). label is the unit name used when a commit fails;
+// solo is the off/auto/ondemand whole-task mode, every mode but the true
+// pipeline (the report is an output summary rather than an index).
+// undefined = verification passed; the only non-blocked other exit never
+// happens (the loop's blocked carries the repair fact for the --repair
+// ladder, an Outcome field).
 export async function runWrapup(
   client: ClientSource,
   plan: Plan,
@@ -267,23 +375,47 @@ export async function runWrapup(
   input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline },
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
+  const git = gitOf(opts)
   const commitRange = commitRangeText(dir, input.baseline ?? [])
   for (let round = input.round ?? 0; ; ) {
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
-    const outcome = await verifySession(client, plan, task, opts, chain, { solo: input.solo, label: input.label, commitRange })
-    if (outcome.kind === "pass") return undefined
-    if (outcome.kind === "stop") return outcome.stop
+    const gate = await laneGate(dir, task, opts)
+    if (gate.kind === "stop") return gate.stop
+    let reason: string
+    if (gate.kind === "red") {
+      // The anchor pre-gate's red side (D5): no verify session dispatches
+      // over a tree whose declared gate is red — the driver writes the
+      // synthesized gap list, commits it with the wrap-up stage (the receipts
+      // land through the same session close-out commit, like a verify FAIL's
+      // gap list) and the fix round below closes it.
+      const subject = `${task.id} wrapup ${task.title}`
+      nameSubject(chain, subject)
+      await Bun.write(join(dir, taskDoc(task.id, "gaps")), laneGapList(task, gate.runs, gate))
+      const committed = await git.afterSession(dir, opts, task, { stage: "wrapup", subject })
+      if (committed.type === "failed") return commitBlocked(`${task.id} ${input.label}`, committed)
+      reason = gate.reason
+    } else {
+      const outcome = await verifySession(client, plan, task, opts, chain, { solo: input.solo, label: input.label, commitRange })
+      if (outcome.kind === "pass") return undefined
+      if (outcome.kind === "stop") return outcome.stop
+      reason = outcome.reason
+    }
     if (round >= FIX_ROUNDS) {
       // The budget is spent: today's ladder verbatim (plans/0079 §4) — the
       // repair fact carries the verdict to a `--repair` round, else the block
-      // waits for the person; the message names the rounds spent (D5).
+      // waits for the person; the message names the rounds spent (D5) and its
+      // source (a red lane gate or the verification itself).
       const { bin } = shellProfile()
+      const lead =
+        gate.kind === "red"
+          ? `the driver-run test lanes of ${task.id} concluded red${reason ? ` (${reason})` : ""}`
+          : `the verification of ${task.id} concluded Result: FAIL${reason ? ` (${reason})` : ""}`
       return {
         type: "blocked",
-        repair: { reason: outcome.reason },
+        repair: { reason },
         question:
-          `the verification of ${task.id} concluded Result: FAIL${outcome.reason ? ` (${outcome.reason})` : ""} and ${round} fix round${round === 1 ? "" : "s"} already ran (the budget is ${FIX_ROUNDS}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
+          `${lead} and ${round} fix round${round === 1 ? "" : "s"} already ran (the budget is ${FIX_ROUNDS}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
           `The work and the gap list are committed; accept the result with ${bin} close ${task.id} --reason <text>; ` +
           `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
           `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
@@ -294,7 +426,8 @@ export async function runWrapup(
     const stopped = await runFixRound(client, plan, task, opts, chain, round)
     if (stopped) return stopped
     // Re-verification runs from scratch (D3/D4): the next loop iteration
-    // re-reads everything and overwrites the gap list wholesale.
+    // re-runs the lane gate (carry-forward keeps it narrow) and re-reads
+    // everything, overwriting the gap list wholesale.
   }
 }
 
