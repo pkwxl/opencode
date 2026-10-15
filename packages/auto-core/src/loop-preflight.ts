@@ -285,6 +285,10 @@ export async function preflight(
   // switches accept: OPENCODE_AUTO_MODEL values may be internal names and
   // OPENCODE_AUTO_MODEL_FALLBACK is a usage error (plans/0055 §9 R7).
   let registry: ModelRegistry | undefined
+  // The project's custom phase type ids, filled inside the load block below
+  // and read by the guarantees grammar check after it (the per-phase charter
+  // keys' suffix vocabulary, plans/0097 D1).
+  let customTypes: string[] = []
   // The prompt globals load and validate inside the block below (E2): the
   // render facts are built per render call by the callers
   // (src/prompt-facts.ts); preflight builds one itself so an invalid intent
@@ -299,6 +303,7 @@ export async function preflight(
     renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore === "execute", intent: opts.intent })
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
+    customTypes = custom
     const types = loaded.map((entry) => entry.type)
     registry = await loadRunRegistry(directory, types)
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
@@ -323,11 +328,13 @@ export async function preflight(
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
   }
-  // The guarantees contract's grammar (plans/0080 §2): a pack that declares
-  // `### asserts` with malformed lines fails here as a usage error, ahead of
-  // any render — the same load-style strictness the pack file itself gets.
+  // The guarantees contract's grammar (plans/0080 §2; the per-phase charter
+  // family's key grammar, plans/0097 D1): a pack that declares `### asserts`
+  // with malformed lines, or a `### verify-plan-<key>` whose suffix names no
+  // phase, fails here as a usage error, ahead of any render — the same
+  // load-style strictness the pack file itself gets.
   {
-    const problem = guaranteesProblem(renderFacts!.pack)
+    const problem = guaranteesProblem(renderFacts!.pack, customTypes)
     if (problem !== undefined) {
       log(problem)
       return { exit: 1 }

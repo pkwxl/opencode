@@ -23,6 +23,7 @@
 // The token cost of the two calls is not booked to a stats bucket in v1 (one
 // cheap call per planning step; noted in plans/0080 §5's explicitly-not).
 import { classifierEntry, oneShot } from "./classify"
+import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { packSubsection } from "./intent/load"
 import type { PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
@@ -68,14 +69,20 @@ export function parseVerifyReply(text: string): { consistent: boolean; evidence?
 // entry's agent resolves its host through it); routing carries the registry
 // and the router the entry selection reads; step names the planning step in
 // the prompt and the audit record (e.g. "phase-plan R-01.P02-implement").
+// phase is the formulation's phase key (plans/0097 D1: a builtin letter or a
+// custom type id — the phaseTag vocabulary); absent in m mode, where the
+// pack-global charter alone resolves. Activation: the resolved charter
+// (global + phase) — a pack declaring only `verify-plan-t` verifies test
+// phases and never the others.
 export async function verifyPlanPrompt(input: {
   pool: AgentPool
   routing: RoutingFacts | undefined
   facts: PromptFacts
   step: string
   prompt: string
+  phase?: string
 }): Promise<PlanVerifyOutcome> {
-  const charter = packSubsection(input.facts.pack, "guarantees", "verify-plan")
+  const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.phase))
   if (charter === undefined) return { kind: "inactive" }
   if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is switched off (the render gate and the precedence blocks still hold)` }
   if (input.routing === undefined) {
@@ -177,6 +184,9 @@ export async function checkTextAgainstCharter(input: {
   text: string
 }): Promise<CharterCheck> {
   const facts = promptFacts({ dir: input.dir, intent: input.intent })
+  // The record-time check judges AUTO-RESOLVE defaults against the standing
+  // bar — the pack-global charter alone, never the per-phase refinements
+  // (plans/0097 D1: those bind a phase's plans, not every recorded default).
   const charter = packSubsection(facts.pack, "guarantees", "verify-plan")
   if (charter === undefined) return { kind: "skipped", reason: "the active pack declares no verify-plan charter" }
   if (input.routing === undefined || input.server === undefined) return { kind: "skipped", reason: "no model registry routing — no classifier entry to run the check on" }

@@ -152,3 +152,36 @@ internal design is free. Legacy debt is removed deliberately, never preserved fo
 sake, and every removal is justified in the task documents. Tests prove named behaviors
 against the behavior baseline; the acceptance verdict judges external parity plus the
 debt-removal accounting, and follows the findings.
+
+### verify-plan-t
+
+The test plan must establish a verifiable path to the round's coverage targets, the
+validation of the applicable design objectives, and an honest quality assessment of the
+round's delivered work. Independently inspect the round's requirements, analysis and
+design artifacts, the implementation changes, the behavior baseline the analysis phase
+distilled (the reference observed), existing tests and project tooling, and derive the
+plan's scope, coverage strategy, behavioral assertions, risk-based cases and acceptance
+criteria from these — never invent them. The plan is actionable, never a category
+enumeration: every test task derives implementation-specific detail — the named
+behaviors, the fixtures, the evidence each check records — from the repository and the
+artifacts. Explicitly address:
+
+- **Coverage** — how required line/branch coverage is measured, how gaps are identified,
+  and which tests close them;
+- **Design verification** — how each applicable design objective and core behavioral
+  requirement maps to implementation areas, test cases, assertions and verifiable
+  evidence;
+- **Parity** — how the plan exposes behavioral divergence from the baseline: boundary
+  defects, failure-handling errors, resource lifecycle issues;
+- **Debt-removal accounting** — tests prove each deliberate removal changed nothing
+  observable: public interfaces, effects, state and error semantics;
+- **Evidence and limitations** — actual results distinguished from assumptions; uncovered
+  code, unverified requirements, environmental constraints and unresolved discrepancies
+  reported openly.
+
+Adaptive test planning: when a check fails — investigate the failure's origin before
+changing anything; decide the fix's scope against the round's objectives; fix in scope
+without weakening assertions or acceptance criteria; add regression coverage for every
+fix; record deferred issues with their rationale. Critical failures and unresolved
+mandatory requirements are never reported as passed; the final assessment distinguishes
+verified, failed, blocked and deferred.

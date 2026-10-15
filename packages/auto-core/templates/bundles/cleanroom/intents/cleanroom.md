@@ -179,3 +179,39 @@ structural resemblance to the reference implementation beyond those contracts is
 defect, not a goal. Where the specification is silent, the minimal behavior consistent
 with the public interfaces is chosen and the assumption is recorded; the audit phase
 judges compliance and independence, and its verdict follows the findings.
+
+### verify-plan-t
+
+The test plan must establish a verifiable path to the round's coverage targets, the
+validation of the applicable design objectives, and an honest quality assessment of the
+round's delivered work. Independently inspect the round's requirements, analysis and
+design artifacts, the implementation changes, the specification notes the spec-read
+phase distilled, existing tests and project tooling, and derive the plan's scope,
+coverage strategy, behavioral assertions, risk-based cases and acceptance criteria from
+these — never invent them. The plan is actionable, never a category enumeration: every
+test task derives implementation-specific detail — the named behaviors, the fixtures,
+the evidence each check records — from the repository and the artifacts. Explicitly
+address:
+
+- **Coverage** — how required line/branch coverage is measured, how gaps are identified,
+  and which tests close them;
+- **Design verification** — how each applicable design objective and core behavioral
+  requirement maps to implementation areas, test cases, assertions and verifiable
+  evidence;
+- **Conformance** — how the plan exposes divergence from the specification: boundary
+  defects, failure-handling errors, resource lifecycle issues; independence defects
+  (structural cloning of the reference implementation) are findings the plan must be
+  able to surface;
+- **Evidence and limitations** — actual results distinguished from assumptions; uncovered
+  code, unverified requirements, environmental constraints and unresolved discrepancies
+  reported openly.
+
+The two-room wall restated for planning: no test task reads, searches or reconstructs
+the reference implementation or its quarantined paths; the specification notes are the
+test plan's only authority about the reference. Adaptive test planning: when a check
+fails — investigate the failure's origin before changing anything; decide the fix's
+scope against the round's objectives; fix in scope without weakening assertions or
+acceptance criteria; add regression coverage for every fix; record deferred issues with
+their rationale. Critical failures and unresolved mandatory requirements are never
+reported as passed; the final assessment distinguishes verified, failed, blocked and
+deferred.

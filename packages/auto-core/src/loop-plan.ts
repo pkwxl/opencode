@@ -25,6 +25,7 @@ import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "./prompt-plan"
 import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
+import { phaseTag } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
@@ -85,8 +86,13 @@ const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string =>
 // writes the blockage document the person answers with one `Choice:` line.
 // "remediate" = the interactive fast path executed an approved option inline
 // (D9): the caller re-composes and re-verifies from scratch (D7).
+// The phase key of a formulation's charter resolution (plans/0097 D1): the
+// phaseTag vocabulary — a builtin letter or a custom type id. m mode passes
+// none (the pack-global charter alone resolves, D10).
+const charterPhaseKey = (ctx: LoopCtx, phase: PhaseUnit): string | undefined => (ctx.manual ? undefined : phaseTag(phase.entry))
+
 async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prompt: string, blocks: readonly BlockMapEntry[]): Promise<number | "remediate"> {
-  const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt })
+  const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt, phase: charterPhaseKey(ctx, phase) })
   if (outcome.kind === "inactive") return 0
   const audit = join(dirname(phase.dir), "prompt-audit.md")
   const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
@@ -255,7 +261,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // scratch (bounded at two inline remediations — the diagnosis gate's own
   // suspension holds the third).
   const compose = async (): Promise<{ todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[] }> => {
-    const charter = formulationAcceptance(planFacts(ctx))
+    const charter = formulationAcceptance(planFacts(ctx), charterPhaseKey(ctx, phase))
     const n = await formulationNumber(directory, phase, Boolean(opts.autoNumber))
     const facts = planFacts(ctx)
     if (ctx.manual) {

@@ -11,7 +11,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { beginUnit, commitTree } from "./git"
-import { packSubsection } from "./intent/load"
+import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { log } from "./log"
 import { advanceNextTask, NEXT_TASK_FILE, readNextTask, taskNumber, taskNumberFloor } from "./numbering"
 import { phaseLabel, phaseName, type PhaseUnit } from "./phases"
@@ -147,11 +147,15 @@ export async function constructFormulation(
   return { type: fresh ? "constructed" : "current", id, numberStart: n + 1 }
 }
 
-// The charter-as-acceptance (plans/0095 D2): the generic plan-quality core
-// every formulation task is verified against, plus — when the active pack
-// declares `## guarantees` / `### verify-plan` — that charter verbatim (zero
-// new intent schema: the bundle charters become the acceptance source). The
-// wrap-up session judges these by inspection of the unit's commit range.
+// The charter-as-acceptance (plans/0095 D2, phase-aware since 0097 D1): the
+// generic plan-quality core every formulation task is verified against, plus
+// — when the active pack's `## guarantees` declares charters for this
+// formulation — the resolved charter verbatim under its lead-in: the
+// pack-global `### verify-plan` first, then the phase's own
+// `### verify-plan-<phaseKey>` when declared (the key is the phaseTag
+// vocabulary — a builtin letter or a custom type id; m mode passes none and
+// gets the pack-global charter alone, plans/0097 D10). The wrap-up session
+// judges these by inspection of the unit's commit range.
 const FORMULATION_CHARTER = [
   "- every obligation the Scope's inputs name — the planning input's asks, the round brief's goals, the phase duties, and what the prior phases' handovers mark as required reading or as open — is covered by some planned task's scope, or explicitly deferred with the reason recorded in that task's document;",
   "- every planned task's `## Acceptance` states criteria a later session can verify by inspecting the work (named evidence, observable outcomes, the executable checks that apply), never a bare \"done\";",
@@ -161,9 +165,10 @@ const FORMULATION_CHARTER = [
   "- the task index and task documents follow the driver's format protocol exactly (the protocol strings parse, or the phase blocks).",
 ].join("\n")
 
-export function formulationAcceptance(facts: PromptFacts): string {
-  const charter = packSubsection(facts.pack, "guarantees", "verify-plan")
+export function formulationAcceptance(facts: PromptFacts, phaseKey?: string): string {
+  const resolved = resolvedVerifyPlan(facts.pack, phaseKey)
+  const charter = verifyPlanCharterText(resolved)
   return charter
-    ? `${FORMULATION_CHARTER}\n\nThe project's intent charter binds this plan in addition:\n\n${charter.trim()}`
+    ? `${FORMULATION_CHARTER}\n\nThe project's intent charter binds this plan in addition:\n\n${charter}`
     : FORMULATION_CHARTER
 }

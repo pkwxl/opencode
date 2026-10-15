@@ -8,7 +8,11 @@
 //                   exit);
 //   ### verify-plan  the charter paragraph the plan-step verifier session
 //                   judges the composed planning prompt against; its presence
-//                   is what activates the verifier (src/prompt-verify.ts).
+//                   is what activates the verifier (src/prompt-verify.ts);
+//   ### verify-plan-<phaseKey>
+//                   the per-phase refinement (plans/0097 D1) — the resolved
+//                   charter (global + phase) is what activates the verifier
+//                   and the formulation synthesis for that phase.
 // This module is the pure half: parse the assert lines, evaluate them against
 // a rendered prompt, and name the violation. The throwing/catching halves
 // live at the render exit (prompt.ts) and the run boundary (loop.ts).
@@ -35,6 +39,7 @@
 // asserts is exactly the drift the gate exists to catch (ratchet semantics —
 // the shipped bundles' self-ratchet test renders their prompts through their
 // own asserts).
+import { PHASE_LETTERS } from "../phases/registry"
 import type { IntentPack } from "./types"
 import { packSubsection } from "./load"
 
@@ -96,16 +101,78 @@ function parseLiterals(packName: string, body: string): string[] {
   return literals
 }
 
+// —— the per-phase charter channel (plans/0097 D1) ——
+//
+// `## guarantees` keeps its three pack-global subsections and gains an
+// optional per-phase family: `### verify-plan-<phaseKey>`, keyed like the
+// assert qualifier's vocabulary (a builtin type's preset letter or a
+// declared custom type id). The pack-global charter binds every phase; a
+// phase key refines it for that phase's formulations. The activation rule:
+// the plan verifier (and the synthesis path, D3) activate iff the *resolved*
+// charter for that formulation is non-empty — a pack declaring only
+// `verify-plan-t` gets charter semantics for test phases and the pure
+// Stage-1 floor everywhere else.
+
+// The resolved charters of one formulation. phaseKey rides along so the
+// composer can name the key the phase charter came from.
+export type ResolvedVerifyPlan = { global?: string; phase?: string; phaseKey?: string }
+
+export function resolvedVerifyPlan(pack: IntentPack, phaseKey?: string): ResolvedVerifyPlan {
+  const global = packSubsection(pack, "guarantees", "verify-plan")
+  const phase = phaseKey === undefined ? undefined : packSubsection(pack, "guarantees", `verify-plan-${phaseKey}`)
+  return {
+    ...(global !== undefined ? { global } : {}),
+    ...(phase !== undefined ? { phase, phaseKey } : {}),
+  }
+}
+
+// The composed charter text of a resolution: the global charter, then — when
+// present — the phase charter under a lead-in naming its key. undefined when
+// neither is declared (the zero-intent floor: no verifier, no synthesis).
+export function verifyPlanCharterText(resolved: ResolvedVerifyPlan): string | undefined {
+  if (resolved.global === undefined && resolved.phase === undefined) return undefined
+  const parts: string[] = []
+  if (resolved.global !== undefined) parts.push(resolved.global.trim())
+  if (resolved.phase !== undefined) {
+    parts.push(`The phase's own plan charter (verify-plan-${resolved.phaseKey}), refining the above for this phase's plans:\n\n${resolved.phase.trim()}`)
+  }
+  return parts.join("\n\n")
+}
+
+// The `### verify-plan-<suffix>` keys a pack declares (preflight validation
+// and the audit's charter list read them).
+export function verifyPlanKeys(pack: IntentPack): string[] {
+  const keys: string[] = []
+  for (const line of (pack.guarantees ?? "").split("\n")) {
+    const heading = /^###\s+(verify-plan-\S+?)(?:\s.*)?$/.exec(line.trim())
+    if (heading && !keys.includes(heading[1]!)) keys.push(heading[1]!)
+  }
+  return keys
+}
+
 // Preflight-side validation (loop-preflight.ts): the first problem with a
 // pack's declared guarantees, undefined when clean. Parsing the asserts is
-// the whole check — precedence/verify-plan are prose, nothing to validate.
-export function guaranteesProblem(pack: IntentPack): string | undefined {
+// half the check; the other half is the per-phase charter family's key
+// grammar — every `verify-plan-*` suffix must be a builtin phase letter or a
+// declared custom phase type id (the phaseTag vocabulary), so a typo'd key is
+// a strict usage error naming the pack (parsed-strictly culture; other
+// unknown `###` keys under `## guarantees` keep today's tolerance).
+// customTypes is the project's declared custom phase type ids; precedence and
+// verify-plan bodies stay prose, nothing else to validate.
+export function guaranteesProblem(pack: IntentPack, customTypes: readonly string[] = []): string | undefined {
   try {
     parseGuaranteeAsserts(pack)
-    return undefined
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
+  const known = [...PHASE_LETTERS, ...customTypes]
+  for (const key of verifyPlanKeys(pack)) {
+    const suffix = key.slice("verify-plan-".length)
+    if (!known.includes(suffix)) {
+      return `intent pack "${pack.name}" declares "### ${key}" — the suffix must be a builtin phase letter (${PHASE_LETTERS.join("|")}) or a declared custom phase type id${customTypes.length ? ` (known: ${customTypes.join(", ")})` : ""}`
+    }
+  }
+  return undefined
 }
 
 // The render gate (plans/0080 §3): evaluate a pack's asserts against one

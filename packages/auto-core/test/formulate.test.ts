@@ -53,6 +53,56 @@ describe("the charter-as-acceptance (plans/0095 D2)", () => {
     expect(text).toContain("CHARTER-SENTENCE the plan must serve.")
     expect(text.indexOf("verify by inspecting the work")).toBeLessThan(text.indexOf("CHARTER-SENTENCE"))
   })
+
+  // The per-phase charter channel (plans/0097 D1): the resolved charter —
+  // global + the phase key's own refinement — rides the acceptance.
+  test("a phase's own verify-plan-<key> charter refines the global one (0097 D1)", async () => {
+    const overlay = join(dir, ".opencode", "auto", "intents")
+    mkdirSync(overlay, { recursive: true })
+    writeFileSync(
+      join(overlay, "default.md"),
+      [
+        "# default",
+        "",
+        "## guarantees",
+        "",
+        "### verify-plan",
+        "",
+        "GLOBAL-CHARTER-SENTENCE.",
+        "",
+        "### verify-plan-t",
+        "",
+        "TEST-CHARTER-SENTENCE the test plan must establish.",
+        "",
+      ].join("\n"),
+    )
+    const facts = promptFacts({ dir })
+    // No phase key: the global charter alone (m mode's resolution, D10).
+    const manual = formulationAcceptance(facts)
+    expect(manual).toContain("GLOBAL-CHARTER-SENTENCE.")
+    expect(manual).not.toContain("TEST-CHARTER-SENTENCE")
+    // The test phase's key resolves both, global first under its lead-in.
+    const test = formulationAcceptance(facts, "t")
+    expect(test).toContain("GLOBAL-CHARTER-SENTENCE.")
+    expect(test).toContain("The phase's own plan charter (verify-plan-t)")
+    expect(test).toContain("TEST-CHARTER-SENTENCE the test plan must establish.")
+    expect(test.indexOf("GLOBAL-CHARTER-SENTENCE.")).toBeLessThan(test.indexOf("TEST-CHARTER-SENTENCE"))
+    // A key the pack does not declare keeps the global-only acceptance —
+    // a pack declaring only verify-plan-t is floor everywhere else.
+    const other = formulationAcceptance(facts, "m")
+    expect(other).toContain("GLOBAL-CHARTER-SENTENCE.")
+    expect(other).not.toContain("TEST-CHARTER-SENTENCE")
+    // A pack declaring only the phase charter: the phase resolves it, every
+    // other phase (and m mode) keeps the bare generic core.
+    writeFileSync(
+      join(overlay, "default.md"),
+      "# default\n\n## guarantees\n\n### verify-plan-t\n\nTEST-CHARTER-SENTENCE only.\n",
+    )
+    const fresh = promptFacts({ dir })
+    expect(formulationAcceptance(fresh, "t")).toContain("TEST-CHARTER-SENTENCE only.")
+    expect(formulationAcceptance(fresh, "m")).not.toContain("TEST-CHARTER-SENTENCE")
+    expect(formulationAcceptance(fresh)).not.toContain("The project's intent charter binds")
+  })
 })
 
 describe("the formulation state (plans/0095 D1/D4)", () => {

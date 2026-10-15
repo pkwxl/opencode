@@ -15,12 +15,13 @@
 // "Result: PASS"). The ratchet also proves itself non-vacuous: every
 // (template, phase) pair the bundle declares asserts over is rendered here.
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
-import { guaranteeViolation, parseGuaranteeAsserts } from "../src/intent/guarantees"
-import { loadIntents, packSubsection } from "../src/intent/load"
+import { guaranteesProblem, guaranteeViolation, parseGuaranteeAsserts, resolvedVerifyPlan, verifyPlanCharterText } from "../src/intent/guarantees"
+import { loadIntents, packSubsection, parseIntentFile } from "../src/intent/load"
 import type { IntentPack } from "../src/intent/types"
 import { loadModes, type ModeSpec } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
@@ -174,3 +175,66 @@ function modeAnchor(name: string): string {
   const anchors: Record<string, string> = { cleanroom: "Clean-room boundary", faithful: "Faithful parity rule", "faithful-lean": "Lean boundary" }
   return anchors[name]!
 }
+
+// —— the per-phase charter channel (plans/0097 D1) ——
+
+// A pack fixture from raw text (the loader's own parser, so the grammar the
+// preflight checks is the grammar the loader accepts).
+const packOf = (text: string): IntentPack => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-keys-"))
+  try {
+    writeFileSync(join(dir, "pack.md"), text)
+    return parseIntentFile("pack", readFileSync(join(dir, "pack.md"), "utf8"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+describe("the per-phase charter channel (plans/0097 D1)", () => {
+  test("key validation: a verify-plan-* suffix must be a builtin letter or a declared custom type id", () => {
+    const base = (key: string) => `# pack\n\n## guarantees\n\n### ${key}\n\nCharter text.\n`
+    // A builtin letter passes; a custom id passes when declared.
+    expect(guaranteesProblem(packOf(base("verify-plan-t")))).toBeUndefined()
+    expect(guaranteesProblem(packOf(base("verify-plan-spec-read")), ["spec-read"])).toBeUndefined()
+    // A typo, and a builtin type id (the vocabulary is letters for builtins,
+    // ids for custom types — the phaseTag range), are strict failures naming
+    // the pack and the key.
+    expect(guaranteesProblem(packOf(base("verify-plan-tests")))).toContain('intent pack "pack" declares "### verify-plan-tests"')
+    expect(guaranteesProblem(packOf(base("verify-plan-implement")))).toContain('declares "### verify-plan-implement"')
+    // A custom id the project does not declare fails naming the known ids.
+    expect(guaranteesProblem(packOf(base("verify-plan-spec-read")), ["audit"])).toContain("known: audit")
+    // The pack-global charter and the assert lines stay valid as before.
+    expect(guaranteesProblem(packOf("# pack\n\n## guarantees\n\n### verify-plan\n\nCharter.\n"))).toBeUndefined()
+  })
+
+  test("resolution: resolvedVerifyPlan returns both charters with the key; verifyPlanCharterText composes them", () => {
+    const pack = packOf(
+      ["# pack", "", "## guarantees", "", "### verify-plan", "", "Global bar.", "", "### verify-plan-t", "", "Test bar.", ""].join("\n"),
+    )
+    expect(resolvedVerifyPlan(pack, "t")).toEqual({ global: "Global bar.", phase: "Test bar.", phaseKey: "t" })
+    expect(resolvedVerifyPlan(pack)).toEqual({ global: "Global bar." })
+    expect(resolvedVerifyPlan(pack, "m")).toEqual({ global: "Global bar." })
+    const only = packOf("# pack\n\n## guarantees\n\n### verify-plan-t\n\nTest bar.\n")
+    expect(resolvedVerifyPlan(only, "t")).toEqual({ phase: "Test bar.", phaseKey: "t" })
+    expect(verifyPlanCharterText(resolvedVerifyPlan(only, "t"))).toContain("verify-plan-t")
+    expect(verifyPlanCharterText(resolvedVerifyPlan(only, "m"))).toBeUndefined()
+  })
+
+  test("the shipped bundles declare a valid verify-plan-t (D9: the raw material fitted per axis)", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const b = await stamped(name)
+      try {
+        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type))).toBeUndefined()
+        const resolved = resolvedVerifyPlan(b.pack, "t")
+        expect(resolved.global).toBeDefined()
+        expect(resolved.phase).toBeDefined()
+        // De-migrationed wording: the shared spine's non-negotiables.
+        expect(resolved.phase).toContain("never invent them")
+        expect(resolved.phase).toContain("Adaptive test planning")
+        expect(resolved.phase).not.toContain("migration")
+      } finally {
+        rmSync(b.dir, { recursive: true, force: true })
+      }
+    }
+  })
+})
