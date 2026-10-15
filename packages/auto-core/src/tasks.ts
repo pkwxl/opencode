@@ -31,7 +31,7 @@ import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import type { UnitBaseline } from "./git"
-import { checkArtifactSpecs, taskTodoSpec } from "./document/spec"
+import { checkArtifactSpecs, taskArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
 import { emitStatus } from "./run-status"
 import type { PlanView, TaskView } from "./prompt"
@@ -101,6 +101,13 @@ export type Task = {
   // equals the owning index's phase; a hand-written look-alike behaves as a
   // normal task.
   formulate?: string
+  // The dependency park (plans/0096 D7): the blocker task id this task
+  // parked on — runtime state (.auto/units.json), never a document. Set when
+  // the whole-task session ends through `Status: park <blocker id>` and its
+  // honesty gate passed; cleared when the released task is dispatched again.
+  // A parked task counts as done for its successors while the blocker is
+  // undone and is not selectable itself (withParked).
+  parked?: string
   // The task's own content: todo.md (done.md once complete) without its title
   // line, field block and terminator.
   body: string
@@ -341,6 +348,10 @@ type Runtime = {
   // at every dispatch, so there is no duplicate field.
   worktree?: string
   pid?: number
+  // The dependency park's blocker id (plans/0096 D7): present while the task
+  // sits in the park. Cleared when the released task is dispatched; markDone
+  // and forgetUnits drop the whole entry as ever.
+  parked?: string
 }
 type Units = { tasks: Record<string, Runtime> }
 
@@ -374,6 +385,12 @@ function parseSplitPoint(raw: unknown): UnitBaseline | undefined {
 function parseLeadUsed(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : undefined
 }
+
+// A runtime entry's parked blocker, sanitized like every other runtime
+// read: a non-empty string or nothing (a hand-edited file degrades to "not
+// parked", never poisoning the loader).
+const parkedOf = (entry: Runtime): string | undefined =>
+  typeof entry.parked === "string" && entry.parked !== "" ? entry.parked : undefined
 
 // One agent's fork base of the persisted record (plans/0055 §8.4): under a
 // registry the record is a map from agent profile to base and only the
@@ -459,7 +476,17 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
     docs.set(entry.id, await Bun.file(join(dir, scan.done.has(entry.id) ? paths.complete : paths.pending)).text().catch(() => ""))
   }
   const decls = parsed.entries.map((entry) => taskDecl(entry.id, docs.get(entry.id)!))
-  const graph = unitProblems("task", decls, { external: await doneTaskIds(dir) })
+  // The runtime park records join the graph check (plans/0096 D7): a park
+  // naming a nonexistent id is a collect problem like a bad `Depends:`. A
+  // done task's stale record reads as none — the entry is dead state
+  // (markDone drops it; a hand-restored file degrades to "not parked").
+  const parked = new Map<string, string>()
+  for (const [id, entry] of Object.entries(units.tasks)) {
+    const blocker = parkedOf(entry)
+    if (blocker !== undefined && !scan.done.has(id)) parked.set(id, blocker)
+  }
+  const externalDone = await doneTaskIds(dir)
+  const graph = unitProblems("task", decls, { external: externalDone, parked })
   if (graph.length) {
     // AUTO-DECISION: the wrapper says "grammar problems" (was "dependency
     // problems") because unitProblems validates more than the graph since
@@ -496,6 +523,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       ...(leadUsed !== undefined ? { leadUsed } : {}),
       body: taskBody(doc),
       ...(unit.fields.formulate !== undefined ? { formulate: unit.fields.formulate } : {}),
+      ...(parkedOf(runtime) !== undefined && !done ? { parked: parkedOf(runtime)! } : {}),
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
       ...(unit.touches !== undefined ? { touches: unit.touches } : {}),
@@ -559,17 +587,53 @@ export function promptViews(plan: Plan, task: Task): { plan: PlanView; task: Tas
   return { plan: { tasks: plan.tasks.map(view), closed: plan.closed }, task: view(task) }
 }
 
+// The park composition of the effective done set (plans/0096 D7): a parked
+// unit counts as done for its successors while its blocker is undone — its
+// landed consumables are what the successors wait on, the park's honesty
+// gate is exactly their being complete — and being in the done set is also
+// what keeps the parked unit itself out of the pick. The blocker's state is
+// read against the raw done set (not this composition): a released parked
+// unit — its blocker's done.md is in — leaves the set and selects again,
+// and a chain of parks releases link by link as each blocker truly closes
+// (the unit waits on its blocker's completion, not its release). Mutual
+// parks never leave the set, which is what strands them for
+// strandedParks to block on.
+export function withParked(tasks: readonly Task[], done: ReadonlySet<string>): Set<string> {
+  const out = new Set(done)
+  for (const task of tasks) {
+    if (task.parked === undefined || done.has(task.id) || done.has(task.parked)) continue
+    out.add(task.id)
+  }
+  return out
+}
+
+// The tasks still held by an unlifted park after the pick found nothing
+// ready (plans/0096 D7): with a checked graph these are exactly the mutual
+// parks — any other blocker is either done (which would have released its
+// parked unit into the pick) or runnable (which the pick would have taken).
+// The loops block (exit 2) naming them, the person's call.
+export function strandedParks(plan: Plan): Task[] {
+  const own = new Set(plan.tasks.map((task) => task.id))
+  const done = new Set(plan.tasks.filter((task) => task.status === "done").map((task) => task.id))
+  for (const task of plan.tasks) {
+    if (Array.isArray(task.depends)) for (const dep of task.depends) if (!own.has(dep)) done.add(dep)
+  }
+  return plan.tasks.filter((task) => task.parked !== undefined && !done.has(task.id) && !done.has(task.parked))
+}
+
 // The next task to run: the first one in index order that is not done and
 // whose prerequisites are done (nextReady). A prerequisite outside this index
 // passed loadPlan's check only as a completed task, so it counts as done.
-// Blocked tasks are candidates like pending ones (resumed directly).
+// Blocked tasks are candidates like pending ones (resumed directly); a
+// parked task counts as done while its blocker is undone (withParked) and
+// selects again once the blocker closed.
 export function next(plan: Plan): Task | undefined {
   const own = new Set(plan.tasks.map((task) => task.id))
   const done = new Set(plan.tasks.filter((task) => task.status === "done").map((task) => task.id))
   for (const task of plan.tasks) {
     if (Array.isArray(task.depends)) for (const dep of task.depends) if (!own.has(dep)) done.add(dep)
   }
-  const id = nextReady(plan.tasks.map(declOf), done)
+  const id = nextReady(plan.tasks.map(declOf), withParked(plan.tasks, done))
   return plan.tasks.find((task) => task.id === id)
 }
 
@@ -667,6 +731,35 @@ export async function setSplit(dir: string, id: string, split: UnitBaseline | un
 export async function runtimeSplit(dir: string, id: string): Promise<UnitBaseline | undefined> {
   const units = await readUnits(dir)
   return parseSplitPoint(units.tasks[id]?.split)
+}
+
+// —— The dependency park (plans/0096 D7) ——
+
+// Records the park (the blocker id) or clears it (undefined — the released
+// task's dispatch). A parked unit executes nowhere, so the write drops an
+// in_progress mark with it; attempts and every other field survive, and
+// markDone/forgetUnits drop the whole entry as ever.
+export async function setParked(dir: string, id: string, blocker: string | undefined): Promise<void> {
+  let from: Status = "pending"
+  await updateTask(dir, id, (entry) => {
+    from = entry.status ?? "pending"
+    const next = { ...entry }
+    if (blocker === undefined) delete next.parked
+    else {
+      next.parked = blocker
+      delete next.status
+    }
+    return next
+  })
+  if (blocker !== undefined) emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "pending" })
+}
+
+// Reads a unit's parked record without loading a plan (the lane report's
+// writer reads it from the lane worktree's own registry, like runtimeSplit).
+export async function runtimeParked(dir: string, id: string): Promise<string | undefined> {
+  const units = await readUnits(dir)
+  const parked = units.tasks[id]?.parked
+  return typeof parked === "string" && parked !== "" ? parked : undefined
 }
 
 // —— Lane scheduling fields (plans/0068 §6.2 S1, D6; 0051 D3 built at last) ——
@@ -837,6 +930,62 @@ export async function newTaskProblems(
   const phaseField = parseUnitDoc(doc).fields.phase
   if (phaseField !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
   return { problems, decl: taskDecl(id, doc) }
+}
+
+// Plan-time inversion detection (plans/0096 D6): the soft warns the
+// formulation collect logs when a task's `## Scope` references a consumable
+// (an `Artifacts:` path) of another task that depends on it — the graph
+// orders the producer after the consumer, so the consumer could only ever
+// get its input mid-flight by parking. A warn, never a block: discovery
+// mid-flight is sometimes genuine new knowledge; the planner is invited to
+// reorder, merge, or split before the inversion can ever run.
+export async function inversionWarnings(dir: string, phase: PlanPhase): Promise<string[]> {
+  const text = await Bun.file(join(dir, taskIndexPath(phase))).text().catch(() => undefined)
+  if (text === undefined) return []
+  const entries = parseIndex(text, "task").entries
+  if (entries.length < 2) return []
+  type Scoped = { id: string; depends?: string[] | "none"; artifacts: string[]; scope: string }
+  const scoped: Scoped[] = []
+  for (const entry of entries) {
+    const doc = await Bun.file(join(dir, taskStatePaths(entry.id).pending)).text().catch(() => "")
+    const unit = parseUnitDoc(doc)
+    scoped.push({ id: entry.id, depends: unit.depends, artifacts: taskArtifactSpecs(doc).map((spec) => spec.path), scope: scopeSection(taskBody(doc)) })
+  }
+  const deps = resolveDepends(scoped.map(({ id, depends }) => ({ id, ...(depends !== undefined ? { depends } : {}) })))
+  const warns: string[] = []
+  for (const consumer of scoped) {
+    for (const producer of scoped) {
+      if (producer.id === consumer.id || !producer.artifacts.length) continue
+      if (!(deps.get(producer.id) ?? []).includes(consumer.id)) continue
+      for (const path of producer.artifacts) {
+        if (consumer.scope.includes(path)) {
+          warns.push(
+            `${consumer.id}'s ## Scope references ${path}, an artifact of ${producer.id}, which depends on ${consumer.id} — a dependency inversion; reorder, merge, or split the tasks so the producer runs first`,
+          )
+          break
+        }
+      }
+    }
+  }
+  return warns
+}
+
+// The `## Scope` section of a task body (inversionWarnings' scan surface):
+// the lines between the `## Scope` heading and the next heading, the whole
+// body when the heading is absent (a malformed document is the load
+// collect's problem, not the warn's).
+function scopeSection(body: string): string {
+  const lines = body.split("\n")
+  const start = lines.findIndex((line) => line.trim() === "## Scope")
+  if (start < 0) return body
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i]!.trim())) {
+      end = i
+      break
+    }
+  }
+  return lines.slice(start + 1, end).join("\n")
 }
 
 // Task ids already taken when a phase is planned: those listed in any other

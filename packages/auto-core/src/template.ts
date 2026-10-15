@@ -49,6 +49,7 @@ import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type:
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
+import tplParkRelease from "../templates/prompts/park-release.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
 import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
@@ -111,6 +112,10 @@ const embedded: Record<string, string> = {
   // diagnosis time only — never a persisted copy in the target.
   "_mode-brief": tplModeBrief,
   "number-recovery": tplNumberRecovery,
+  // The dependency park's release note (plans/0096 D7): the resumed task's
+  // first dispatch carries it — the blocker's id, how it ended and the
+  // re-merge surface (the blocker's changed paths ∩ the task's Touches:).
+  "park-release": tplParkRelease,
   "plan-verify": tplPlanVerify,
   "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
@@ -203,6 +208,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // dropping gaps.md converts every FAIL verdict into a hidden blockage (the
   // shape gate re-prompts for a file the session was never told to write).
   wrapup: ["Result: PASS", "Result: FAIL", "gaps.md"],
+  // The dependency park's release note (plans/0096 D7): the blocker id and
+  // the handover path are the note's whole content — an override dropping
+  // either steers a resumption at nothing.
+  "park-release": ["{{blocker}}", "{{handoffFile}}"],
 }
 // (decompose family: the checklist format plus the context.md / todo.md
 // artifact paths are what the driver validates the session output against —

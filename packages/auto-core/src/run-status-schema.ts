@@ -103,8 +103,10 @@ export type UnitStatus = (typeof UNIT_STATUSES)[number]
 // words, carried by the task and subtask brackets. `unit-done` since
 // plans/0068 S5: a stream lane or a lead that stopped at its taken split
 // closed its lane unit without completing the task (the bracket's task goes
-// on in other lanes).
-export const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty"] as const
+// on in other lanes). `parked` since plans/0096 D7: the whole-task session
+// parked on another task's work — the unit waits for its blocker, the run
+// keeps scheduling around it.
+export const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "parked"] as const
 
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 

@@ -784,11 +784,16 @@ describe("renderWrapup", () => {
 })
 
 describe("renderWhole", () => {
-  test("off mode: one session completes the whole task, without the handover clause", () => {
+  test("off mode: one session completes the whole task, without the handover clause — but with the park paragraph (plans/0096 D7: the park covers off mode's whole-task sessions)", () => {
     const text = wholeOf(plan, task)
     expect(text).toContain("You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks")
     expect(text).toContain("T-002: implement the migration")
-    expect(text).not.toContain("handoff.md")
+    // The park paragraph is the handoff channel off mode does carry (a park
+    // is a blockage signal, not context management); the context-budget
+    // protocol and its continue/done handover grammar stay absent.
+    expect(text).toContain("Dependency park:")
+    expect(text).toContain("Status: park <blocker task id>")
+    expect(text).not.toContain("Context-budget protocol")
     expect(text).not.toContain("git commit all uncommitted changes")
   })
 

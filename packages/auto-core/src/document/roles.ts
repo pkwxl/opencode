@@ -288,6 +288,22 @@ export function handoffStatus(text: string): HandoffStatus | undefined {
   return m[1]!.toLowerCase() === "continue" ? "continue" : "done"
 }
 
+// The dependency-park directive (plans/0096 D7): the handoff status line's
+// third value, `Status: park <blocker task id>` — the blocker named on the
+// machine-parsed line itself (the 2026-10-14 ruling: "pending" already means
+// todo.md-present in the readiness vocabulary). Whole-task sessions only: the
+// caller must read this BEFORE handoffStatus, else the park line is an
+// unrecognized status line (execute.ts's invalid-handoff feedback) — exactly
+// the kill switch's off behavior, and the standing behavior of every scope
+// the park does not widen (streams, the subtask pipeline). The last such line
+// wins, whole-line anchored and case-insensitive like handoffStatus, and the
+// id must be a task id (T-NNN); a malformed line is no directive (the
+// invalid-handoff path judges it).
+export function parkDirective(text: string): string | undefined {
+  const m = [...text.matchAll(/^[ \t]*Status[:：][ \t]*park[ \t]+(T-\d{3,})[ \t]*$/gim)].at(-1)
+  return m?.[1]
+}
+
 // The four mandatory sections of a phase handover (F.1 protocol): shared by
 // the distillation session's collect check and the prompt template's tier-1
 // markers (phase-handover.md inlines the same headings). Driver protocol

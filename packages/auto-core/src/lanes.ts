@@ -48,7 +48,7 @@ import { statsLaneUsage, type LaneUsageDetail } from "./stats"
 import { splitTaken } from "./split"
 import { taskDoc } from "./docpaths"
 import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
-import { begin, checklistTitle, clearLane, laneRecords, setLane, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, type Plan, type PlanPhase, type Task } from "./tasks"
+import { begin, checklistTitle, clearLane, laneRecords, setLane, setParked, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, withParked, type Plan, type PlanPhase, type Task } from "./tasks"
 
 // —— Activation and policy (D10, D21) ——
 
@@ -118,10 +118,11 @@ const segments = (path: string): string[] => path.split(/[\\/]+/).filter((part) 
 
 // Whether two repository-relative paths overlap: the shorter one's segments
 // are a prefix of the other's (a directory contains every path inside it;
-// equal paths overlap; an empty path is everything). This is the module's
-// only path relationship — disjointness is the admission rule, containment
-// the nested-root test.
-function pathsOverlap(a: string, b: string): boolean {
+// equal paths overlap; an empty path is everything). The module's central
+// path relationship — disjointness is the admission rule, containment the
+// nested-root test and the park release note's re-merge surface (exported
+// for src/execute.ts, plans/0096 D7).
+export function pathsOverlap(a: string, b: string): boolean {
   const sa = segments(a)
   const sb = segments(b)
   for (let i = 0; i < Math.min(sa.length, sb.length); i++) if (sa[i] !== sb[i]) return false
@@ -155,7 +156,9 @@ const declWithTouches = (task: Task): UnitDecl => ({
 //      statuses (the scheduler's view may be fresher than a reloaded plan;
 //      the state files are the fact). Dependencies outside the index count
 //      as done exactly as in next(): loadPlan admits an external id only as
-//      a completed task;
+//      a completed task; since plans/0096 D7 a parked unit counts as done
+//      for its successors while its blocker is undone (withParked), so it
+//      waits instead of dispatching against its own block;
 //   2. it is executing nowhere — no live lane of its own, and no in_progress
 //      entry in the registry (a lane, or D4's serial degrade in the main
 //      tree);
@@ -183,6 +186,7 @@ export function readyUnits(
   for (const task of plan.tasks) {
     if (Array.isArray(task.depends)) for (const dep of task.depends) if (!own.has(dep)) done.add(dep)
   }
+  const effective = withParked(plan.tasks, done)
   const busy = new Set(inFlight.keys())
   for (const [id, entry] of runtime) if (entry.status === "in_progress") busy.add(id)
   const free = Math.max(0, slots - inFlight.size)
@@ -190,8 +194,8 @@ export function readyUnits(
   const out: Task[] = []
   for (const task of plan.tasks) {
     if (out.length >= free) break
-    if (done.has(task.id) || busy.has(task.id)) continue
-    if (!(deps.get(task.id) ?? []).every((dep) => done.has(dep))) continue
+    if (effective.has(task.id) || busy.has(task.id)) continue
+    if (!(deps.get(task.id) ?? []).every((dep) => effective.has(dep))) continue
     if (!disjointFromAll(task.touches, [...[...inFlight.values()].map((lane) => lane.touches), ...out.map((admitted) => admitted.touches)])) continue
     out.push(task)
   }
@@ -277,6 +281,13 @@ export type LaneReport = {
   // beside D8's registered names (the §8 registration list's own grammar,
   // appended there with this stage); absent on a report an older shape wrote.
   detail?: LaneUsageDetail
+  // The dependency park (plans/0096 D7): the blocker id the lane's unit
+  // parked on — the record the worktree's own registry wrote at the park
+  // commit, re-persisted by the parent at landing exactly like `split`
+  // (the worktree's .auto/ dies at teardown, the report is what survives).
+  // A parked lane is a clean landing (ok, no verdict): the unit waits, the
+  // scheduler keeps dispatching around it.
+  parked?: string
 }
 
 const plainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -390,6 +401,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
   if (!stringList(raw.commits) || !stringList(raw.models)) return undefined
   if (raw.result !== undefined && raw.result !== "PASS" && raw.result !== "FAIL") return undefined
   if (raw.blocked !== undefined && typeof raw.blocked !== "string") return undefined
+  if (raw.parked !== undefined && typeof raw.parked !== "string") return undefined
   // A split that is present but malformed rejects the report (the registry
   // parsers' strictness at a protocol boundary the parent acts on), rather
   // than dropping the field and landing a lead whose streams no one schedules.
@@ -407,6 +419,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
     models: raw.models,
     ...(raw.result !== undefined ? { result: raw.result } : {}),
     ...(raw.blocked !== undefined ? { blocked: raw.blocked } : {}),
+    ...(raw.parked !== undefined ? { parked: raw.parked } : {}),
     ...(split !== undefined ? { split } : {}),
     ...(detail !== undefined ? { detail } : {}),
   }
@@ -906,9 +919,15 @@ export async function landLane(
   // stream-unit expansion), the stream dispatches' seeds and the next run's
   // recovery read the split point (Runtime.split, the field the serial path
   // already writes). The baseline's roots named the lead worktree; the main
-  // tree's paths replace them.
+  // tree's paths replace them. The dependency park travels the same way
+  // (plans/0096 D7): the parked record the lane's park commit wrote is
+  // re-persisted here, so the readiness composition of the next pass sees
+  // the unit as done-for-successors and not selectable.
   if (report.split !== undefined) {
     await setSplit(dir, task.id, reRootSplit(report.split.baseline, worktree, dir))
+  }
+  if (report.parked !== undefined) {
+    await setParked(dir, task.id, report.parked)
   }
   // ④ the runtime fields and the report's usage.
   await clearLane(dir, task.id)

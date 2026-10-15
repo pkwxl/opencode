@@ -22,6 +22,7 @@
 import { join } from "node:path"
 import { docShapeProblems } from "../doccheck"
 import { subtaskDoc, taskDoc } from "../docpaths"
+import { parseUnitDoc } from "./unit"
 import type { ArtifactSpec } from "./types"
 
 // —— 1. `Artifacts:` declaration parsing (session-boundary-hardening §4.3 D4) ——
@@ -113,6 +114,19 @@ function addSections(item: ArtifactSpec | undefined, text: string) {
 // a vacuous completion gate; concrete files are the honest declaration.
 export function directoryArtifactSpecs(text: string): ArtifactSpec[] {
   return declaredArtifacts(text).filter((spec) => spec.path.endsWith("/"))
+}
+
+// A task document's `Artifacts:` field (plans/0096 D6): the whole-task
+// consumables declaration — the plan-quality charter encourages it for a task
+// whose output other tasks consume, and the dependency park's honesty gate
+// checks every declared path is on disk through the same generic checker as a
+// subtask's declaration. The field-block value rides declaredArtifacts'
+// parser by re-prefixing the token; a task declaring nothing produces zero
+// specs and parks on the prose gate alone (the session's own claim, inspected
+// at wrap-up as any claim is).
+export function taskArtifactSpecs(doc: string): ArtifactSpec[] {
+  const value = parseUnitDoc(doc).fields.artifacts
+  return value ? declaredArtifacts(`Artifacts: ${value}`) : []
 }
 
 // —— 2. Merged decompose session artifact table (plans/0030 D3, M1.4) ——

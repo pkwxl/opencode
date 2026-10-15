@@ -1406,6 +1406,41 @@ export async function rangeChangedFiles(dir: string, heads: readonly { root: str
   return [...files]
 }
 
+// The changed paths of one task's own commits (plans/0096 D7, the release
+// note's re-merge surface): every commit whose message carries the task's
+// `Auto-Task: <id>` trailer line — the same unit marker the close-out check
+// and the suite's range grammar read — contributes its diff (a merge against
+// its first parent, so a landed lane's merge names the branch's files; the
+// runtime's landing merges carry the trailer like every driver commit).
+// Paths come back target-directory-relative; an unreadable repository
+// contributes nothing (the surface is advisory steer, never a gate).
+export async function taskChangedPaths(dir: string, taskId: string): Promise<string[]> {
+  const phys = await physicalDir(dir)
+  const files = new Set<string>()
+  const trailer = `Auto-Task: ${taskId}`
+  for (const root of await repoRoots(dir)) {
+    const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
+    if (!log || log.code !== 0) continue
+    // -z separates commits with NUL (not whitespace — trim keeps it), so
+    // every entry after the first carries a leading \0 that would break the
+    // sha's diff-tree call below; strip them before splitting the record.
+    const shas = log.out
+      .split("\x1e")
+      .map((entry) => entry.replaceAll("\0", ""))
+      .map((entry) => entry.split("\x1f"))
+      .filter(([sha, body]) => Boolean(sha?.trim()) && (body ?? "").split("\n").some((line) => line.trim() === trailer))
+      .map(([sha]) => sha!.trim())
+    for (const sha of shas) {
+      const tree = await git(root, ["diff-tree", "--no-commit-id", "--name-only", "-z", "-r", "-m", "--first-parent", "--ignore-submodules=all", sha]).catch(() => undefined)
+      if (!tree || tree.code !== 0) continue
+      const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+      const toplevel = top?.code === 0 ? top.out.trim() : ""
+      if (!toplevel) continue
+      for (const path of tree.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
+    }
+  }
+  return [...files].sort()
+}
 
 // Scene restoration of handover documents (test-handover interruption
 // recovery F3): the list of files that are committed and tracked yet deleted

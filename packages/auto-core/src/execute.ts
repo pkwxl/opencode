@@ -21,17 +21,17 @@ import { anchorBaseline, coldStart, consumeNote, nameSubject, resetRoute } from 
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
-import { eofScanExempt, handoffStatus } from "./document/roles"
-import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec } from "./document/spec"
+import { eofScanExempt, handoffStatus, parkDirective } from "./document/roles"
+import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec, taskArtifactSpecs } from "./document/spec"
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { formatTokens } from "./format"
-import { headText, removeIfUntracked, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { headText, removeIfUntracked, taskChangedPaths, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
+import { pathsOverlap } from "./lanes"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
-import { checklistTitle, forkBaseFor, promptViews, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
-import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole } from "./prompt"
+import { renderDecompose, renderFanout, renderParkRelease, renderSplitRejected, renderSubtask, renderWhole, type TaskDocs } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { emitStatus } from "./run-status"
@@ -44,6 +44,21 @@ import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain, type Steer } from "./testrun"
 import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
 import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import {
+  checklistTitle,
+  forkBaseFor,
+  promptViews,
+  readChecklist,
+  reloadTask,
+  setForkBase,
+  setParked,
+  setSplit,
+  subtasks,
+  taskStatePaths,
+  tickSubtask,
+  type Plan,
+  type Task,
+} from "./tasks"
 
 // —— The ondemand-handover engine (D4, plans/0069 §2.2: one engine for
 // executeWhole and runSubtask's streams) ——
@@ -185,6 +200,70 @@ async function handoverVerdict(
   }
 }
 
+// —— The dependency park (plans/0096 D6/D7; whole-task scopes only) ——
+
+// The park's validity over one fresh `Status: park <blocker id>` directive:
+// the blocker must be a live member of this phase's index (an id outside it
+// is a planning failure — readiness counts external ids done, so the park
+// could never hold), and every `Artifacts:` entry the task declares must be
+// on disk (the spec-driven check; a task declaring nothing parks on the
+// prose gate — the session's own claim, inspected at wrap-up as any claim
+// is). `known` on the foreign verdict says whether the named id is a task
+// of this target directory at all (a cross-phase done task) or nothing.
+type ParkCheck = { type: "ok" } | { type: "invalid"; problems: string[] } | { type: "foreign"; known: boolean }
+
+async function parkCheck(planDir: string, plan: Plan, task: Task, blocker: string): Promise<ParkCheck> {
+  const target = plan.tasks.find((entry) => entry.id === blocker)
+  if (target === undefined) {
+    const paths = taskStatePaths(blocker)
+    const known = (await Bun.file(join(planDir, paths.pending)).exists()) || (await Bun.file(join(planDir, paths.complete)).exists())
+    return { type: "foreign", known }
+  }
+  const problems: string[] = []
+  if (blocker === task.id) problems.push("a task cannot park on itself")
+  if (target.status === "done") problems.push(`${blocker} is already closed — do not park on it; continue this task or surface the gap`)
+  const specs = taskArtifactSpecs(await Bun.file(join(planDir, taskStatePaths(task.id).pending)).text().catch(() => ""))
+  if (specs.length) {
+    const checked = await checkArtifactSpecs(specs, { dir: planDir, policy: "declared" })
+    problems.push(...checked.problems)
+  }
+  return problems.length ? { type: "invalid", problems } : { type: "ok" }
+}
+
+// The invalid-park feedback (the one relaunch with feedback, the
+// invalid-handoff path's shape): names the failing honesty gates and the
+// three honest exits.
+function parkFeedback(task: Task, file: string, problems: string[]): string {
+  return (
+    `\n\nThe last time you ended the session, its handover document parked this task (${file} ending \`Status: park <blocker task id>\`), but the park did not pass its checks:\n` +
+    `${problems.map((problem) => `- ${problem}`).join("\n")}\n` +
+    `A park is honest only with everything of this task's scope that other tasks consume (its declared artifacts, its findings) complete and landed. ` +
+    `Land the missing artifacts, or continue the task: end with \`Status: done\` when complete, \`Status: continue\` to hand over, or the park line again once the artifacts are on disk — the status line is a driver protocol string, written verbatim.`
+  )
+}
+
+// The release note (D7): the resumed task's first dispatch carries the
+// blocker's id, how it ended (a `Closed:` record — person-closed or a
+// --repair FAIL-closure — names its reason; anything else completed), and
+// the re-merge surface — the blocker's changed paths ∩ this task's
+// `Touches:` (everything it changed when the task declares nothing): the
+// files the successor must re-read first, since they moved under a task
+// planned before the blocker existed. The successor judges whether the
+// consumable it waited for exists; it may park again or surface gaps.
+async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: string, plan: Plan, task: Task, docs: TaskDocs): Promise<string> {
+  const blocker = task.parked!
+  const closed = plan.closed.get(blocker)
+  const changed = await taskChangedPaths(dir, blocker)
+  const surface = (task.touches?.length ? changed.filter((path) => task.touches!.some((touch) => pathsOverlap(touch, path))) : changed).slice(0, 15)
+  return renderParkRelease(facts, {
+    blocker,
+    ended: closed !== undefined ? `closed without completing (${closed})` : "completed",
+    files: surface,
+    handoffFile: docs.handoff,
+    more: Math.max(0, changed.length - surface.length),
+  })
+}
+
 // The execution stage for off/auto/ondemand: off finishes the whole task in
 // one session; ondemand and auto's lead (`ondemand` is true for both), when a
 // live session's context reaches 2x --context-limit, the driver steers in the
@@ -220,7 +299,7 @@ export async function executeWhole(
   chain: SessionChain,
   ondemand: boolean,
   lead = false,
-): Promise<UnitStop | undefined> {
+): Promise<UnitStop | { type: "parked"; blocker: string } | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
   // The run's git service (git-ops.ts gitOf, the seam's one resolution
@@ -325,14 +404,28 @@ export async function executeWhole(
   // execution stage already finished; skip the whole-task session.
   // Status=continue → open a new session on the continuation prompt to continue
   // from the handover (reusing the old session would only hit the cap again at
-  // once).
-  const priorText = ondemand ? await readHandoff() : ""
+  // once). The text is read in every mode (also off): a task released from a
+  // park carries its committed park handover, and the park check's freshness
+  // rule must see it as the dispatch's seed — a session that ends without
+  // rewriting it is a natural finish, not a second park.
+  const priorText = await readHandoff()
   const prior = ondemand ? handoffStatus(priorText) : undefined
   if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
     return undefined
   }
   let continuation = prior === "continue"
+  // The release note (plans/0096 D7): the pick selected this task with its
+  // parked record still set — the blocker closed (its done.md is in place,
+  // however it ended). The note rides the first dispatch and the record
+  // clears; an interruption after this point re-runs the task as the
+  // ordinary pending unit it then is — the same work, one lost steer.
+  let release = ""
+  if (task.parked !== undefined) {
+    release = await parkReleaseNote(promptFacts(opts), dir, plan, task, taskDocPaths(task.id))
+    await setParked(planDir, task.id, undefined)
+    log(`↻ ${task.id} released from its park on ${task.parked} (the blocker closed); resuming with the release note`)
+  }
   // The rejected split's note goes alone into a fork of the lead (it holds the
   // task and all its work); forked marks that dispatch.
   let forked = false
@@ -344,6 +437,10 @@ export async function executeWhole(
   // re-seeds consumed too — a document the lead left is not this round's
   // signal).
   const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
+  // The park's one relaunch with feedback (plans/0096 D6): an invalid park
+  // gets the same single retry the invalid handover does; a second failure
+  // is a hidden blockage.
+  let parkRetried = false
   // Strict-resume rollback redo (tightened in 3.3 R3): one invalid handover
   // document (including a test-handover write-check failure) rolls back to the
   // unit baseline and cold-starts a redo of the unit, with no retry with
@@ -378,11 +475,12 @@ export async function executeWhole(
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel }) + feedback,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel }) + feedback + release,
       opts,
       chain,
       steer,
     )
+    release = ""
     if (result.type === "blocked") {
       // Test-handover write-check failure (strict resume): roll back and
       // cold-start the redo, once only.
@@ -414,6 +512,62 @@ export async function executeWhole(
     // the unified commit below.
     if (opts.testByDriver) {
       await removeHandoffChain(planDir, taskDoc(task.id, "testhandoff"))
+    }
+    // The dependency park (plans/0096 D7), read before the split guard and
+    // the handover engine so the park line never reaches their unrecognized-
+    // line feedback — with OPENCODE_AUTO_PARK=off it deliberately does (the
+    // emergency-exit reading: the park line is the invalid-handoff case).
+    // Whole-task scopes only — runSubtask's streams keep continue|done and
+    // their park lines hit the engine's feedback there. The off mode reads
+    // the directive too (a park is a blockage signal, not context
+    // management); a document the dispatch was seeded with (a stale park
+    // line the session did not rewrite) is not this round's signal.
+    const parkDoc = await readHandoff()
+    const directive = autoSwitches().park ? parkDirective(parkDoc) : undefined
+    if (directive !== undefined && parkDoc !== handover.consumed) {
+      const check = await parkCheck(planDir, plan, task, directive)
+      if (check.type === "foreign") {
+        // A cross-phase block is a planning failure (readiness counts
+        // external ids done, so the park could never hold): stop and report
+        // — the thrown error exits 1, the phase-index drift's own grammar
+        // (plans/0053 D34).
+        throw new Error(
+          `${task.id} parked on ${directive}, which is ${check.known ? "a task outside this phase's index" : "not a task of this target directory"}: ids outside the index count done at the pick, so the park could never hold — a cross-phase block is a planning failure. ` +
+            `Reorder the phase's tasks (or split them) so ${directive} runs before ${task.id}, and re-run; the session's work is in the worktree`,
+        )
+      }
+      if (check.type === "invalid") {
+        if (parkRetried) {
+          return {
+            type: "blocked",
+            question:
+              `session ended with a park directive that failed its checks twice (${check.problems.join("; ")}; hidden blockage). ` +
+              `Check ${handoffFile(task)} and the task's artifacts, then re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
+          }
+        }
+        parkRetried = true
+        feedback = parkFeedback(task, handoffFile(task), check.problems)
+        log(`↻ ${task.id} the session's park on ${directive} failed its checks (${check.problems.join("; ")}); retrying once with feedback`)
+        continue
+      }
+      // A parked lead's unjudged split goes the way a blocked lead's does:
+      // judging needs a session that continues, which a parked one cannot.
+      const left = await unjudged()
+      if (left.length) {
+        await dropSplit(left.length)
+        log(`↻ ${task.id} the session parked before ${subtasksRel} was judged; the unjudged split was removed`)
+      }
+      await setParked(planDir, task.id, directive)
+      // The park commit: the session's unified commit under the park's own
+      // grammar — `<id> park <title>`, Auto-Stage: park — the handoff and
+      // the landed consumables riding it (legitimate protocol state inside
+      // the unit's close-out range; the wrap-up's range description names
+      // the shape).
+      const committed = await git.afterSession(dir, opts, task, { stage: "park", subject: `${task.id} park ${task.title}` })
+      if (committed.type === "failed") return commitBlocked(`${task.id} park`, committed)
+      log(`⏸ ${task.id} parked on ${directive}: its landed consumables release its successors; it resumes when ${directive} closes (the block and resume steps: ${handoffFile(task)})`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "parked", detail: `parked on ${directive}` })
+      return { type: "parked", blocker: directive }
     }
     // The lead's split is judged before the commit, so the commit holds its
     // outcome: the lead's work with the checklist and the scope files when

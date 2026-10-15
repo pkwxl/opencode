@@ -28,7 +28,7 @@ import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
 import { flushStats, statsClassifyUsage, statsTotals } from "./stats"
 import { freezeSwitches } from "./switches"
-import { loadPlan, readChecklist, runtimeSplit, taskStatePaths } from "./tasks"
+import { loadPlan, readChecklist, runtimeParked, runtimeSplit, taskStatePaths } from "./tasks"
 import { parseUnitDoc } from "./document/unit"
 import { peekProgress } from "./resume"
 import { emitStatus, endRunStatus, startRunStatus } from "./run-status"
@@ -443,6 +443,10 @@ async function laneReportOf(
   const doc = await Bun.file(join(directory, paths.complete)).text().catch(() => Bun.file(join(directory, paths.pending)).text().catch(() => ""))
   const split = await runtimeSplit(directory, unit)
   const items = split ? await readChecklist(directory, unit) : []
+  // The dependency park (plans/0096 D7): a lane whose unit parked exits
+  // cleanly with the parked record in its worktree's registry — the report
+  // carries it to the parent, which re-persists it at landing.
+  const parked = await runtimeParked(directory, unit)
   return {
     unit,
     phase: parseUnitDoc(doc).fields.phase ?? "",
@@ -455,6 +459,7 @@ async function laneReportOf(
     commits: await commitsSince(directory, base),
     agent: progress?.agent ?? opts.agent ?? "opencode",
     models: bucket?.models ? Object.keys(bucket.models) : [],
+    ...(parked !== undefined ? { parked } : {}),
     ...(split !== undefined && items.length ? { split: { items: items.length, baseline: split } } : {}),
     ...(bucket !== undefined
       ? {

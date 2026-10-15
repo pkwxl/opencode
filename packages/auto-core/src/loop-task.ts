@@ -30,7 +30,7 @@ import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, formatDuration, log } from "./log"
 import { sessionOpts } from "./opts"
-import { block, loadPlan, next, requireTask, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
+import { block, loadPlan, next, requireTask, strandedParks, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
 import { phaseKey, routePhase, type PhaseUnit } from "./phases"
 import {
   conflictRepair,
@@ -156,6 +156,12 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     const plan = await loadPlan(directory, phase)
     const task = next(plan)
     if (!task) {
+      const stranded = strandedParks(plan)
+      if (stranded.length) {
+        log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
+        emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
+        return 2
+      }
       log("✓ all tasks complete")
       return 0
     }
@@ -334,6 +340,18 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
     return 2
   }
+  if (outcome.type === "parked") {
+    // The dependency park (plans/0096 D7): the park commit landed inside
+    // the pipeline (stage park, the handoff riding it) and the parked
+    // record is written — the unit counts as done for its successors, and
+    // the loop returns to the pick. No wrapup (a parked task never reaches
+    // it), no close-out, no terminal commit: the task is not complete, it
+    // waits. The bracket's task-end event was already emitted by the
+    // pipeline; the boundary hooks run at the next unit as usual.
+    log(`⏸ ${task.id} parked on ${outcome.blocker} — its landed consumables release its successors; scheduling continues around it`)
+    ctx.ran++
+    return 0
+  }
   if (outcome.type === "blocked") {
     // The repair round (plans/0079 §4): a FAIL verdict with budget left
     // automates the person's documented rework path — closeUnit the failed
@@ -506,6 +524,12 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     const plan = await loadPlan(directory, phase)
     const task = next(plan)
     if (!task) {
+      const stranded = strandedParks(plan)
+      if (stranded.length) {
+        log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
+        emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
+        return 2
+      }
       log("✓ all tasks complete")
       return 0
     }
@@ -732,6 +756,12 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     if (completed) {
       log(`✓ ${task.id} done (lane landed: ${report.sessions} session(s))`)
       emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+    } else if (report.parked !== undefined) {
+      // The dependency park (plans/0096 D7): the lane's unit parked — the
+      // landing carried the parked record into the registry, and the
+      // scheduler keeps dispatching around the waiting unit.
+      log(`✓ ${task.id} landed (parked on ${report.parked}; it resumes when ${report.parked} closes — ${report.sessions} session(s))`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "parked", detail: `parked on ${report.parked}` })
     } else {
       log(`✓ ${task.id} landed (lane unit closed; the task continues in its other lanes — ${report.sessions} session(s))`)
       emitStatus({ type: "task-end", task: task.id, outcome: "unit-done" })
@@ -783,6 +813,12 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       const plan = await loadPlan(directory, phase)
       const task = next(plan)
       if (!task) {
+        const stranded = strandedParks(plan)
+        if (stranded.length) {
+          log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
+          emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
+          return 2
+        }
         log("✓ all tasks complete")
         return 0
       }
@@ -953,6 +989,17 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     for (const file of outcome.files) log(`  ${file}`)
     emitStatus({ type: "task-end", task: unit, outcome: "dirty", detail: outcome.files.join("; ") })
     return 2
+  }
+  if (outcome.type === "parked") {
+    // The dependency park (plans/0096 D7): the park commit landed inside
+    // this worktree and its registry holds the parked record — the report
+    // (written at this exit) carries it to the parent, which re-persists it
+    // at landing. The lane ends cleanly like any landed unit; the branch
+    // and worktree hold the landed prefix exactly as an interrupted lane's,
+    // and the resumed lane may hit 0068's merge-repair path at its next
+    // landing — the correct one when both tasks touched the same files.
+    log(`✓ ${unit} parked on ${outcome.blocker} — the lane's committed work lands and the task waits`)
+    return 0
   }
   if (outcome.type === "blocked" || outcome.type === "incomplete") {
     const reason = outcome.type === "blocked" ? outcome.question : outcome.reason

@@ -54,13 +54,18 @@ export type ClientSource = AgentClient | ServerControl
 // its taken split (the streams run as lanes of their own) or one stream of a
 // split: the unit's work is committed and the lane exits cleanly, and the
 // task continues in other lanes; only the lane entry produces it (a serial
-// caller never sees it).
+// caller never sees it). parked (plans/0096 D7) = the whole-task session
+// ended through `Status: park <blocker id>`: the park commit landed and the
+// parked record is written, the loop returns to the pick without wrapup or
+// close-out, and the unit counts as done for its successors until the
+// blocker closes.
 export type Outcome =
   | { type: "completed" }
   | { type: "unit-done" }
   | { type: "blocked"; question: string; repair?: { reason?: string } }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
+  | { type: "parked"; blocker: string }
 
 // Unit stop exits (blocked = status recorded in .auto/units.json + a sweeping
 // commit of the interrupted state; dirty = no write and no sweep, re-run after

@@ -55,6 +55,13 @@ export const SWITCH_ENV = {
   // establishment — the escape hatch for scripted flows and the rare person
   // who already knows the round they want.
   analysis: "OPENCODE_AUTO_ANALYSIS",
+  // The dependency park (plans/0096 D7): the whole-task session's third
+  // handoff status line `Status: park <blocker task id>` and the runtime
+  // machinery behind it (the parked record, the park commit, the
+  // effective-done readiness, the release note). off is the emergency exit —
+  // the park line reads as the invalid-handoff case it always was before the
+  // mechanism, and every other status value is unaffected.
+  park: "OPENCODE_AUTO_PARK",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -339,6 +346,13 @@ export type Switches = {
   // establishing R-01. off is the direct-establishment escape hatch; it only
   // removes the route, never adds one.
   analysis: boolean
+  // The dependency park (default on, plans/0096 D7): a whole-task session
+  // whose remaining scope is blocked on another task's work ends through
+  // `Status: park <blocker task id>`, the driver lands the park commit and
+  // counts the unit done for its successors until the blocker closes. off
+  // removes the whole machinery — the park line is then the invalid-handoff
+  // case; it never adds anything.
+  park: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -368,6 +382,7 @@ const SWITCH_DEFAULTS: Switches = {
   planVerify: true,
   remediate: true,
   analysis: true,
+  park: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -589,6 +604,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     planVerify: onOff(SWITCH_ENV.planVerify, env[SWITCH_ENV.planVerify], SWITCH_DEFAULTS.planVerify),
     remediate: onOff(SWITCH_ENV.remediate, env[SWITCH_ENV.remediate], SWITCH_DEFAULTS.remediate),
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
+    park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -631,6 +647,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.planVerify === SWITCH_DEFAULTS.planVerify ? undefined : `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
     switches.remediate === SWITCH_DEFAULTS.remediate ? undefined : `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
+    switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -659,6 +676,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
     `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
+    `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
   ].join(", ")
 }
 

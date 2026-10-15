@@ -18,7 +18,7 @@ import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type Unit
 import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
-import { begin, checklistTitle, markDone, plannedTaskProblems, reloadTask, takenTaskIds, type ChecklistItem, type Plan, type Task } from "./tasks"
+import { begin, checklistTitle, inversionWarnings, markDone, plannedTaskProblems, reloadTask, takenTaskIds, type ChecklistItem, type Plan, type Task } from "./tasks"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
@@ -404,6 +404,16 @@ export async function runTask(
     await forgetProgress(dir)
     return outcome
   }
+  if (outcome.type === "parked") {
+    // The dependency park (plans/0096 D7): the park commit landed and the
+    // parked record is written — no wrapup, no close-out. The progress
+    // record is finalized like a blocked unit's (the next run re-enters
+    // through the phase marker; the parked handoff is committed state), and
+    // the session title carries the park's own label.
+    await renameSession(await clientOf(client, chain.agent), chain, `${task.id} park ${task.title}`)
+    await persistStage(chain.phase ?? (mode === "true" ? { kind: "decompose" } : { kind: "whole" }))
+    return outcome
+  }
   // On a non-completed outcome (blocked / revert to pending) the current
   // progress is finalized (the reason is in the run log; the phase stays in
   // the progress record, and the next run builds the resume prompt from it).
@@ -759,6 +769,12 @@ export async function runTask(
         }
         if ((await readNextTask(dir)) !== undefined) await advanceNextTask(dir, checked.ids)
         log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)`)
+        // Plan-time inversion detection (plans/0096 D6): a soft warn beside
+        // the accepted collect — a task's Scope referencing a consumable of
+        // a task that depends on it is an inversion the planner is invited
+        // to fix before it can ever run; never a block (discovery mid-flight
+        // is sometimes genuine new knowledge).
+        for (const warn of await inversionWarnings(dir, phase)) log(`⚠ ${warn}`)
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
       // (--no-wrapup, default true). Since plans/0083 (D1–D5) the wrap-up

@@ -911,6 +911,26 @@ export function renderSplitRejected(facts: PromptFacts, docs: TaskDocs, reason: 
   return renderPrompt(facts, "split-rejected", { reason, subtasksFile: docs.subtasks, fresh })
 }
 
+// The dependency park's release note (plans/0096 D7): the resumed task's
+// first dispatch carries it after the blocker closed — the blocker's id, how
+// it ended (a `Closed:` record names its reason; anything else completed)
+// and the re-merge surface (the blocker's changed paths ∩ the task's
+// `Touches:`), the files the successor must re-read first. A template like
+// split-rejected for the same reason: session-facing copy the prompt library
+// may override.
+export function renderParkRelease(
+  facts: PromptFacts,
+  input: { blocker: string; ended: string; files: readonly string[]; handoffFile: string; more: number },
+): string {
+  return renderPrompt(facts, "park-release", {
+    blocker: input.blocker,
+    ended: input.ended,
+    handoffFile: input.handoffFile,
+    ...(input.files.length ? { files: `\n${input.files.map((file) => `- ${file}`).join("\n")}` } : {}),
+    more: input.more > 0 ? String(input.more) : undefined,
+  })
+}
+
 // --dryrun: the permission-preflight session; its report goes to
 // .auto/dryrun.md.
 export function renderDryrun(facts: PromptFacts): string {

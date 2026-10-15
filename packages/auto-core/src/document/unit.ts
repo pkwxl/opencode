@@ -263,9 +263,16 @@ export function resolveDepends(units: readonly UnitDecl[]): Map<string, string[]
 
 // All problems of one index's units (G4; takes over 0046 D4). `external`: ids
 // that exist outside this index and may be named (e.g. tasks of earlier
-// phases). Overlapping `Touches` is not a problem — it only means two units
-// will not run side by side.
-export function unitProblems(level: UnitLevel, units: readonly UnitDecl[], opts: { external?: ReadonlySet<string> } = {}): string[] {
+// phases). `parked`: the runtime park records (id → blocker, plans/0096 D7)
+// validated as part of the graph — a park naming a nonexistent id is a
+// collect problem, caught wherever the graph is checked (loadPlan, the
+// planning/decompose collects). Overlapping `Touches` is not a problem — it
+// only means two units will not run side by side.
+export function unitProblems(
+  level: UnitLevel,
+  units: readonly UnitDecl[],
+  opts: { external?: ReadonlySet<string>; parked?: ReadonlyMap<string, string> } = {},
+): string[] {
   const problems: string[] = []
   const ids = new Set<string>()
   for (const unit of units) {
@@ -273,6 +280,11 @@ export function unitProblems(level: UnitLevel, units: readonly UnitDecl[], opts:
     ids.add(unit.id)
   }
   const known = (id: string) => ids.has(id) || (opts.external?.has(id) ?? false)
+  for (const [unit, blocker] of opts.parked ?? []) {
+    if (blocker === unit) problems.push(`${unit} parks on itself`)
+    else if (!isUnitId(level, blocker)) problems.push(`${unit} parks on "${blocker}", which is not a ${level} id (${ID_SHAPES[level].label})`)
+    else if (!known(blocker)) problems.push(`${unit} parks on unknown ${blocker}`)
+  }
   for (const unit of units) {
     if (Array.isArray(unit.depends)) {
       if (unit.depends.length === 0) problems.push(`${unit.id} has an empty Depends value (write \`Depends: none\` for no prerequisite)`)

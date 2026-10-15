@@ -1,0 +1,4 @@
+Release note — this task parked on {{blocker}}: a predecessor session verified at code/document level that the remaining scope was blocked on that task's work, and recorded the block and the exact resume steps in {{handoffFile}}. Read that handover first and resume from its recorded steps. The blocker has since ended: {{blocker}} {{ended}}. Judge for yourself whether the consumable this task waited for actually exists, then continue the remaining scope: if further scope is blocked on another task's work, park again on that task (`Status: park <task id>` in the handover); if the consumable is missing or wrong, surface the gap (the report, or a gaps entry) instead of redoing the blocker's work.{{#if files}}
+
+The blocker's work moved files this task also touches — re-read these first, they changed under a plan written before the blocker's work existed:
+{{files}}{{#if more}} … and {{more}} more{{/if}}{{/if}}
