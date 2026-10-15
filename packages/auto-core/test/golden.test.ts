@@ -12,7 +12,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { renderAgentContract } from "../src/config-fix"
 import { renderDigestIndex } from "../src/knowledge"
-import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
+import { loadIntents, packSubsection, parseIntentFile, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { planOf } from "./fixtures/units"
 import {
@@ -107,6 +107,23 @@ const stuck = (level: number): StuckHit => ({ kind: "repeat", tool: "bash", coun
 // Common switch combination for task-level renders: covers the
 // testByDriver/handoverTest conditional blocks and mode injection.
 const execOpts = { testByDriver: true, handoverTest: true, mode: migrate }
+
+// The test-lane table pack (plans/0096 D3/D4): the built-in default pack with
+// a project `### test-lanes` section spliced into `## quality` — the golden
+// family's stand-in for a project overlay declaring its suites. Renders with
+// these facts carry the lane protocol beside the self-checks; every golden
+// without them renders the built-in pack (no section) and stays
+// byte-identical — the zero-intent floor.
+const laneFacts: typeof facts = {
+  ...facts,
+  pack: parseIntentFile(
+    "default",
+    readFileSync(join(import.meta.dir, "..", "templates", "intents", "default.md"), "utf8").replace(
+      "\n## phase duties",
+      "\n### test-lanes\n\nlint:\nCommand: make lint\nCost: cheap\nSurfaces: src/, test/\nExclusive: no\n\ngate:\nCommand: ./scripts/gate.sh full\nCost: anchor\nSurfaces: src/, include/\nExclusive: yes\n\n## phase duties",
+    ),
+  ),
+}
 
 describe("golden render snapshots", () => {
   test("fork-base session", () => {
@@ -209,7 +226,16 @@ describe("golden render snapshots", () => {
     // D18 (plans/0068 S5): the split clause under a parallel level — the
     // lead arranges its streams for the width they will actually get.
     golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true, parallel: "medium" }))
+    // The lane table in play (plans/0096 D4): the protocol block beside the
+    // self-check constraint, with the channel clause under the driver channel
+    // and without it — the two renders differ by exactly that clause.
+    golden("whole-testlanes", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, ondemand: true, budget: true, testByDriver: true }))
+    golden("whole-testlanes-plain", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, ondemand: true, budget: true }))
+    golden("subtask-testlanes", renderSubtask(laneFacts, views.plan, views.task, docs, "write the execution logic", { ...execOpts, index: 2 }))
     golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
+    // The wrap-up charter's receipts clause under the same table (0083's
+    // inspection principle extended to lane receipts).
+    golden("wrapup-testlanes", renderWrapup(laneFacts, views.plan, views.task, docs, { mode: migrate, resolves }))
     // The verification loop's fix session (plans/0083 D4): the gap list + the
     // task document in, exactly the listed gaps out, under the pack's
     // repair discipline (the default pack's `### repair` rides in).

@@ -140,6 +140,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/interactive.test.ts",
   "test/keyring.test.ts",
   "test/ladder.test.ts",
+  // The test-lane table (plans/0096 D3/D4): pure parse plus temp-directory
+  // overlay packs and in-memory renders (no git repository, no spawn).
+  "test/lane-table.test.ts",
   "test/lanes.test.ts",
   "test/log.test.ts",
   "test/loop-conclusion.test.ts",

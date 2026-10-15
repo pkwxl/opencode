@@ -53,6 +53,7 @@ import type { PromptFacts } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import { packSubsection } from "./intent/load"
 import { guaranteesProblem } from "./intent/guarantees"
+import { testLanesProblem } from "./intent/test-lanes"
 import type { ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { protect } from "./protect"
@@ -306,6 +307,17 @@ export async function preflight(
   // any render — the same load-style strictness the pack file itself gets.
   {
     const problem = guaranteesProblem(renderFacts!.pack)
+    if (problem !== undefined) {
+      log(problem)
+      return { exit: 1 }
+    }
+  }
+  // The test-lane table's grammar (plans/0096 D3): a pack that declares
+  // `### test-lanes` with malformed rows fails the same way — the table is
+  // per-project, so the strict failure is what keeps a typo'd suite row from
+  // rendering half-parsed into every execution prompt.
+  {
+    const problem = testLanesProblem(renderFacts!.pack)
     if (problem !== undefined) {
       log(problem)
       return { exit: 1 }

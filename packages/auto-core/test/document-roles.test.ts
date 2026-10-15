@@ -43,6 +43,12 @@ describe("roleOf", () => {
     ["docs/T-001/S01/index.md", "artifact"],
     ["docs/T-001/S01/todo.md", "artifact"],
     ["docs/T-001/S01/done.md", "artifact"],
+    // The test-lane plan and receipts (plans/0096 D4): the task-role family's
+    // free content — no own role, the artifact policy as-is.
+    ["docs/T-001/testplan.md", "artifact"],
+    ["docs/T-001/testhands/lint.md", "artifact"],
+    ["docs/T-001/testhands/gate.md", "artifact"],
+    ["docs/T-001/testhands/nested/x.md", "artifact"],
     ["docs/R-01/P01-analysis/todo.md", "artifact"], // phase state files
     ["docs/R-01/P01-analysis/done.md", "artifact"],
     ["docs/R-01/P06-knowledge/kb.md", "artifact"], // type-standard artifact
@@ -106,6 +112,14 @@ describe("role-derived policies", () => {
     }
     for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
       expect(eofScanExempt(rel), rel).toBe(false)
+    }
+    // The lane receipts carry the eof terminator (plans/0096 D4): no
+    // exemption, whatever a scanExempt glob says (the roles keep their
+    // policies) — the plan document likewise follows its family's policy.
+    for (const rel of ["docs/T-001/testplan.md", "docs/T-001/testhands/lint.md"]) {
+      expect(eofScanExempt(rel), rel).toBe(false)
+      expect(eofScanExempt(rel, ["docs/**"]), rel).toBe(false)
+      expect(p1Scope(rel), rel).toBe(false)
     }
   })
 

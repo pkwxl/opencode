@@ -15,6 +15,7 @@
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, packSubsection } from "./intent/load"
 import { guaranteeViolation, parseGuaranteeAsserts, PromptGuaranteeError } from "./intent/guarantees"
+import { parseTestLanes } from "./intent/test-lanes"
 import type { IntentPack, IntentSection, ParallelLevel } from "./intent/types"
 import { renderTemplate, renderText, type Ctx } from "./template"
 
@@ -200,6 +201,18 @@ export function promptCtx(facts: PromptFacts, ctx: Ctx): Ctx {
   const full: Ctx = { ask: facts.ask, humanQuestions: facts.humanQuestions, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
   const key = full.ask ? "decisionsAsk" : "decisionsUnattended"
   return { ...full, [key]: intentText(facts, "governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
+}
+
+// The project's test-lane table (plans/0096 D3/D4): the active pack's
+// `### test-lanes` rows joined into one line per suite — the template syntax
+// has no loops, so the join is the caller-side one (the resolveList
+// convention). undefined without the section: the byte-identical zero-intent
+// floor, nothing renders anywhere. The execution templates (whole/subtask/
+// fanout) frame it with the `test-lanes` shared partial's protocol, and the
+// wrap-up gates its receipts clause on the same value.
+function laneTableText(facts: PromptFacts): string | undefined {
+  const lanes = parseTestLanes(facts.pack)
+  return lanes?.map((lane) => `- ${lane.name} (${lane.cost}${lane.exclusive ? ", exclusive" : ""}): \`${lane.command}\` — surfaces: ${lane.surfaces.join(", ")}`).join("\n")
 }
 
 // Parallelism guidance (MP.1, plans/0046 D10/D11; the decompose side since
@@ -534,6 +547,9 @@ export function renderSubtask(
     digest: Boolean(opts.digest),
     last,
     budget: Boolean(opts.budget),
+    // The project's test-lane table (plans/0096 D4), the subtask one: the
+    // `test-lanes` protocol block beside the Verification paragraph.
+    laneTable: laneTableText(facts),
   })
 }
 
@@ -585,6 +601,9 @@ export function renderFanout(
     outputFile: docs.subtask(index).output,
     // The stream's closing self-check (M1.3), the subtask one.
     selfCheck: intentText(facts, "quality", "self-check-subtask", ctx),
+    // The project's test-lane table (plans/0096 D4), the stream one: the
+    // last stream runs the task's full acceptance verification over it.
+    laneTable: laneTableText(facts),
   })
 }
 
@@ -628,6 +647,11 @@ export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView,
     // The verification charter's inspection range (0083 D1); undefined outside
     // git — the charter's {{#if commitRange}} clause drops out cleanly.
     commitRange: opts.commitRange,
+    // The receipts clause's gate (plans/0096 D4): with a lane table in play
+    // the charter accepts a green lane receipt as an executable check's
+    // evidence — inspected, never re-run; without it the clause drops out
+    // (the byte-identical floor).
+    laneTable: laneTableText(facts),
   })
 }
 
@@ -870,6 +894,10 @@ export function renderWhole(
     // clause, so the lead's streams are arranged for the width they will
     // actually get (lane streams under the scheduler).
     ...parallelismVars(facts, opts.parallel),
+    // The project's test-lane table (plans/0096 D4): renders into the
+    // `test-lanes` protocol block at the template's tail; absent without the
+    // pack section (the byte-identical floor).
+    laneTable: laneTableText(facts),
   })
 }
 

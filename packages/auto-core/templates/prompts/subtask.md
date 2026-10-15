@@ -29,7 +29,9 @@ The previous session was interrupted by the context limit. First read {{handoffF
 
 Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.{{#if last}} This is the last subtask: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.{{/if}}
 
-{{#if processRefs}}{{processRefs}}
+{{#if laneTable}}{{> test-lanes}}
+
+{{/if}}{{#if processRefs}}{{processRefs}}
 
 {{/if}}Constraints:
 1. Complete this one subtask strictly, and as soon as it is done, close out with the steps below and end the session, so as to keep the context of a single session small;

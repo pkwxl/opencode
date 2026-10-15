@@ -10,7 +10,9 @@ partials — a conditional section swallows the whole line on its empty branch, 
 template writes those inline. The exception is a whole partial whose body is one line led by
 its `{{#if}}` tag (test-protocol): the empty branch then collapses to the call site's own
 line, which is only clean where the include sits at the template's end (the render trims) —
-anywhere else it leaves a blank line.
+anywhere else it leaves a blank line. test-lanes instead sits mid-template: its calling
+templates wrap the include in `{{#if laneTable}}` on the call line, so the empty branch
+swallows that line's newline too and the floor stays byte-identical.
 When a conditional section carries two whole-branch replacement texts inside a partial
 (like the two `ask` branches of question-rule), the opening and closing tags must sit on the
 same line as the content (`…{{/if}}{{#if x}}…`): a tag alone on its line swallows that line
@@ -110,6 +112,17 @@ are protocol strings the DRIVER parses — write them verbatim; an empty value, 
 write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running). A driver-run script is an observation: it must not modify, create or delete tracked files and must not run git
 state commands (commit, checkout, rebase, …) — scratch output goes to tmp/ or another gitignored path, and a check that inherently rewrites tracked content (snapshot updates, codegen) does not go through tmp/test.sh at all.
 Formatting or style validation is not a test script and is not routed through tmp/test.sh (a task document that itself demands a formatting or style check makes that check part of that task's acceptance — run it as the task says).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — the DRIVER reads that naming family to order handovers, and writing it yourself is misread as a handover that happened. Record test-result interpretations and corrections in this scope's established artifact documents, or leave them for the next handover document.{{/if}}{{/if}}
+## test-lanes
+Test lanes (this project's suites — the table below, declared in the intent pack): when this scope's verification runs the project's suites, run them as parallel background processes you launch and judge yourself — never serially when they are independent, never a child session per suite:
+- Plan the lanes first into docs/{{taskId}}/testplan.md: per suite its exact command (the table row's), its log path under /tmp/opencode/, the verdict line its log carries, the code surfaces it exercises (the row's), and its cost class — the minutes-scale cheap lanes versus the one expensive anchor. Re-use, don't re-run: a lane already green in docs/{{taskId}}/testhands/ whose surfaces no later fix touched carries its verdict forward.
+- Cheap-first: launch the cheap lanes together, and launch an anchor only once they are green — an anchor started beside a cheap lane that vetoes it is a doomed long run, pure waste. A lane marked exclusive must run alone in the tree (its build directory collides with any peer): serialize it against the other lanes.
+- Launch each lane as a background process writing its log (append the exit code: `…; echo LANE_RC=$? >> <log>`); poll every few minutes — each poll is your keep-alive — and read verdicts from the log tails mechanically.
+- On a failure: read its failure region yourself, diagnose, and fix it while the other lanes keep running; kill any running lane whose surfaces the fix touches; then re-run narrowly — only the lanes whose surfaces intersect the fix — and re-green the cheap tier before any anchor re-launch. Two consecutive cycles that close nothing on the same finding → stop retrying: record the finding in the task's documents and end.
+- Write each lane's receipt to docs/{{taskId}}/testhands/<lane id>.md: the lane line, the tree HEADs, start and end times, the verdict, and for a failure the bounded evidence (the ends of the failure region plus the log path); it ends with the terminator line. The acceptance anchor's green receipt is the evidence the verification session checks.
+- Never end a session with a lane process in flight: close out at lane-set boundaries only, every process exited or deliberately killed with its log state recorded.
+{{#if testByDriver}}- The DRIVER's test channel (--test-by-driver) owns what it covers — compilation and test runs through tmp/test.sh: your lanes run only what the task's acceptance names beyond that channel, and never both channels running the anchor.
+{{/if}}The suite table (a task's `## Acceptance` names which row is its anchor):
+{{laneTable}}
 ## plan-duties-a
 
 - Establish the existing implementation's external behaviour, dependencies and boundaries, where the brief names

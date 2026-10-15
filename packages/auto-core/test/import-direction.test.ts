@@ -54,9 +54,12 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // intent: types = the frozen schema (M1.1); load = the pack-acquisition
   // surface (built-in registry + project overlay); guarantees = the pack's
   // declared consistency contract — the assert-line parser and evaluator the
-  // render gate reads and the run boundary catches (plans/0080 §2). Published
+  // render gate reads and the run boundary catches (plans/0080 §2);
+  // test-lanes = the `### test-lanes` suite-table parser (plans/0096 D3),
+  // published for the render layer's table join and preflight's grammar
+  // check (Stage 3's driver scheduler reads the same parse). Published
   // together so the driver never reaches past them into the domain.
-  intent: ["intent/types", "intent/load", "intent/guarantees"],
+  intent: ["intent/types", "intent/load", "intent/guarantees", "intent/test-lanes"],
   // phases: registry = the type registry and phases-value resolution; custom =
   // the project type loader (M3.6, .opencode/auto/phases/<type>.md), which the
   // driver calls where it validates config and preflights a run.

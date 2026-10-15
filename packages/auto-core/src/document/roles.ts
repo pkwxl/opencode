@@ -26,7 +26,11 @@
 // shape check (non-trivial, eof terminator) and the section anchors a
 // decomposition declared for itself; no schema, no required headings. New
 // protocol surface must be justified against this boundary: prefer a marker
-// in an index or handoff file over a schema on free content.
+// in an index or handoff file over a schema on free content. The test-lane
+// plan and receipts (docs/T-NNN/testplan.md, docs/T-NNN/testhands/<lane
+// id>.md, plans/0096 D4) stay inside this free-content family on purpose:
+// the receipts carry the eof terminator like any artifact, so they need no
+// role of their own.
 // The blockage document (plans/0082 §5 D6) extends the boundary's index/state
 // family: its `Choice:` and `Executed:` lines are driver-parsed marks on a
 // round-level document the person answers in place — the same standing the

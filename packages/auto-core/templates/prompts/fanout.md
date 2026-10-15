@@ -29,7 +29,9 @@ The other streams belong to other sessions; do not do their work or change their
 
 Verification: run the checks that target this stream's own changes (its tests, the typecheck or build of what it touched), not the full suite.{{#if last}} This is the last stream: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.{{/if}}
 
-The DRIVER's commit is this stream's record: write no {{outputFile}} for code changes — only a stream whose output is itself a document (analysis, design) writes that document, into {{outputFile}}. Do not change {{subtasksFile}}, and do not create, rename or delete any S<nn>/todo.md or done.md: the DRIVER marks the stream done once this session ends.{{#if handoverTest}} When the DRIVER asks for a test handover, this stream's document is {{testHandoffFile}}.{{/if}}
+{{#if laneTable}}{{> test-lanes}}
+
+{{/if}}The DRIVER's commit is this stream's record: write no {{outputFile}} for code changes — only a stream whose output is itself a document (analysis, design) writes that document, into {{outputFile}}. Do not change {{subtasksFile}}, and do not create, rename or delete any S<nn>/todo.md or done.md: the DRIVER marks the stream done once this session ends.{{#if handoverTest}} When the DRIVER asks for a test handover, this stream's document is {{testHandoffFile}}.{{/if}}
 
 {{> eof-rule}}
 

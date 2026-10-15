@@ -37,5 +37,7 @@ The streams run side by side under this project's parallel level {{parallel}} �
 Line N is stream S<two-digit N> (S01 for the first line). `Depends:` names the streams it waits for (`Depends: none` for none; without the field, the line before it); `Artifacts:` lists every file the stream will create or change — both are protocol strings the DRIVER parses, write them verbatim and untranslated. Each line must be self-contained: the stream's session starts from that line. Then end the session, without writing {{handoffFile}} or any S<nn>/todo.md (the DRIVER writes those from your lines). The DRIVER checks the split mechanically — 2 to 5 lines, valid dependencies, no file declared by two streams unless one depends on the other, the notice reached — and either runs the streams or tells you why not, and you finish the task yourself.
 
 {{/if}}
-{{> test-protocol}}
+{{#if laneTable}}{{> test-lanes}}
+
+{{/if}}{{> test-protocol}}
 <!-- auto: eof -->
