@@ -44,12 +44,14 @@ import {
   orphanRedispatch,
   readyUnits,
   readLaneReport,
-  schedulerActive,
   streamUnitOf,
   streamUnits,
+  worktreeScheduler,
   type InFlightLane,
+  type LaneMaterial,
   type LaneReport,
   type LaneRuntime,
+  type TreeTier,
 } from "./lanes"
 import { recallProgress } from "./resume"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
@@ -125,6 +127,24 @@ export type LoopCtx = {
   // nothing persists it — an interrupted or re-run process starts a fresh
   // budget, like every other run-side width fact.
   repairs: number
+  // The execution tier preflight resolved and logged (plans/0096 D9/D10, the
+  // 0068 amendment): 0 = process parallelism in one tree — no worktree lanes,
+  // this loop's serial path is the execution surface and the parallelism is
+  // the test lanes' (D5); 1 = the sparse CoW materialization (the dispatches
+  // below carry the material facts); 2 = today's full worktree. Undefined (a
+  // context built without a preflight, a lane worker) reads as tier 0.
+  treeTier?: TreeTier
+}
+
+// The tier-1 materialization facts of this run's dispatches (plans/0096 D9):
+// present only at tier 1 — the sparse floor (the driver's built-in `docs`,
+// the process documents every lane reads and writes, plus the project's
+// declared lanes.sparseFloor) and the declared cache homes the launcher
+// injects. Every other tier (and the isolation switch at tier 0) dispatches
+// with the full worktree of 0068, named and unchanged.
+function laneMaterial(ctx: LoopCtx): LaneMaterial | undefined {
+  if ((ctx.treeTier ?? 0) !== 1) return undefined
+  return { floor: ["docs", ...(ctx.opts.lanes?.sparseFloor ?? [])], ...(ctx.opts.lanes?.caches?.length ? { caches: ctx.opts.lanes.caches } : {}) }
 }
 
 // the main task loop: execute in turn all tasks in the current phase's task
@@ -136,21 +156,31 @@ export type LoopCtx = {
 // Branches before the serial path (plans/0068): the readiness scheduler's
 // concurrent lane loop when D10's activation rule holds, and the serial
 // isolation loop behind the rollout switch.
+// Tiered since plans/0096 D9/D10: the scheduler branch additionally requires
+// a worktree tier (treeLanes on, or auto probed into tier 1) — under Tier 0
+// (the default) the scheduler does not run and the serial path below is the
+// execution surface, its parallelism the test lanes' (processes against the
+// frozen tree, stages 2–3); the `parallel` level's planning guidance and the
+// preflight guard keep their meaning whatever the tier.
 export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // Lane isolation (plans/0068 D10/S2, OPENCODE_AUTO_LANE_ISOLATION): the
   // whole task loop runs one lane at a time — every unit in its own worktree
   // through its own worker process, landed through the merge protocol, still
   // strictly serial. Full isolation machinery, zero concurrency; the serial
-  // path below is untouched.
+  // path below is untouched. The switch keeps its meaning beneath whatever
+  // tier is active (plans/0096 D10): it forces the worktree lane machinery,
+  // serially, at tier 0 and tier 1 alike — at tier 1 the isolation dispatches
+  // carry the sparse CoW materialization like the scheduler's.
   // AUTO-DECISION (S3, the branch order): the switch outranks the scheduler —
   // an experiment switch that pins "one lane at a time" is the more specific
   // intent than the run's --max-sessions width, so a run asking both gets
   // isolation (the switch exists precisely to force the serial lane shape).
   if (autoSwitches().laneIsolation) return runIsolationLoop(ctx, phase)
-  // The readiness scheduler (plans/0068 §6.2, S3, D10): active iff
-  // maxSessions ≥ 2 and the project configured a parallel level — the units
-  // of the routed phase run concurrently, each isolated in its own lane.
-  if (schedulerActive(ctx.opts.maxSessions, ctx.opts.parallel)) return runLaneLoop(ctx, phase)
+  // The readiness scheduler (plans/0068 §6.2, S3, D10; tiered by plans/0096
+  // D9): active iff maxSessions ≥ 2, the project configured a parallel level,
+  // and the tier in force materializes worktree lanes (≥ 1) — the units of
+  // the routed phase run concurrently, each isolated in its own lane.
+  if (worktreeScheduler(ctx.opts.maxSessions, ctx.opts.parallel, ctx.treeTier)) return runLaneLoop(ctx, phase)
   const { directory } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
@@ -544,7 +574,7 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     // parent's, so the landed report books into the right task.
     await taskBracket(directory, task.id, task.title, "dispatching an isolation lane", task.attempts)
     const start = Date.now()
-    const dispatched = await dispatchLane(ctx.git, directory, task)
+    const dispatched = await dispatchLane(ctx.git, directory, task, undefined, undefined, laneMaterial(ctx))
     if (dispatched.type === "failed") {
       log(`⏸ ${dispatched.error}`)
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: dispatched.error })
@@ -686,10 +716,12 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // Dispatch one lane for a ready unit: the bracket lines, the bookkeeping
   // and the spawn. Returns false when the dispatch failed (the caller stops
   // scheduling and exits 2 naming the error). A stream unit's dispatch seeds
-  // its fresh worktree with the owning task's split record (S5).
+  // its fresh worktree with the owning task's split record (S5). A tier-1
+  // run's dispatches carry the sparse CoW materialization facts (0096 D9).
+  const material = laneMaterial(ctx)
   const dispatch = async (task: Task): Promise<boolean> => {
     await taskBracket(directory, task.id, task.title, "dispatching a lane", task.attempts)
-    const dispatched = await dispatchLane(ctx.git, directory, task, undefined, seeds.get(task.id))
+    const dispatched = await dispatchLane(ctx.git, directory, task, undefined, seeds.get(task.id), material)
     if (dispatched.type === "failed") {
       log(`⏸ ${dispatched.error}`)
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: dispatched.error })
@@ -720,7 +752,7 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         }
         repaired.add(task.id)
         log(`↻ ${task.id} landing conflict (the merge was aborted, the main tree is clean): ${landed.detail} — the parallel level ${opts.parallel} allows one repair; re-dispatching the lane with the merge instruction (merge ${main} into the lane branch, resolve, exit normally)`)
-        const again = await dispatchLane(ctx.git, directory, task, { merge: main })
+        const again = await dispatchLane(ctx.git, directory, task, { merge: main }, undefined, material)
         if (again.type === "failed") {
           log(`⏸ ${again.error}`)
           emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: again.error })
@@ -873,7 +905,7 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     const again = orphanRedispatch(await unitAttempts(directory, unit.id), stop === undefined)
     if (again.type === "again") {
       log(`↻ ${unit.id} lane worker exited without a report (exit ${exit.code}); re-dispatching the lane in place — it resumes from its own progress record (attempt ${again.attempt} of ${LANE_DISPATCH_CAP})`)
-      const dispatched = await dispatchLane(ctx.git, directory, unit)
+      const dispatched = await dispatchLane(ctx.git, directory, unit, undefined, undefined, material)
       if (dispatched.type === "failed") {
         log(`⏸ ${dispatched.error}`)
         emitStatus({ type: "task-end", task: unit.id, outcome: "blocked", detail: dispatched.error })

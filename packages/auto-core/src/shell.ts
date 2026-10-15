@@ -36,11 +36,14 @@ export type LaneMergeInstruction = { merge: string }
 // so a shell's run spawning lanes reproduces its own invocation; a host
 // without one (a test, a 0067 daemon worker) overrides the profile field.
 // A repair re-dispatch's merge instruction rides along as `--merge <branch>`
-// (the hidden subcommand's own option).
-export function defaultLaneLauncher(worktree: string, unit: string, instruction?: LaneMergeInstruction): LaneWorker {
+// (the hidden subcommand's own option). The optional env record is tier 1's
+// cache-home injection (plans/0096 D9): the declared cache variables resolved
+// to shared and per-lane paths, merged over the inherited environment —
+// absent on every other dispatch, so the child's env is exactly as before.
+export function defaultLaneLauncher(worktree: string, unit: string, instruction?: LaneMergeInstruction, env?: Record<string, string>): LaneWorker {
   return Bun.spawn(
     [process.execPath, process.argv[1]!, "_lane", worktree, "--unit", unit, ...(instruction ? ["--merge", instruction.merge] : [])],
-    { stdout: "pipe", stderr: "pipe" },
+    env === undefined ? { stdout: "pipe", stderr: "pipe" } : { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } },
   )
 }
 
@@ -80,8 +83,11 @@ export type ShellProfile = {
   // its own here; the core never names a shell. The third argument is the
   // merge instruction of a conflict repair's re-dispatch (S3, D7): present
   // only there, so a launcher that spawns the ordinary entry forwards it as
-  // the repair dispatch's one extra fact.
-  laneLauncher?: (worktree: string, unit: string, instruction?: LaneMergeInstruction) => LaneWorker
+  // the repair dispatch's one extra fact. The fourth is the cache-home
+  // injection of a tier-1 dispatch (plans/0096 D9): a record of environment
+  // variables the child should see (the declared shared/per-lane cache
+  // paths); absent on every dispatch that is not tier 1.
+  laneLauncher?: (worktree: string, unit: string, instruction?: LaneMergeInstruction, env?: Record<string, string>) => LaneWorker
 }
 
 export type AgentProfile = {

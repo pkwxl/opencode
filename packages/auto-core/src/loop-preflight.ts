@@ -11,14 +11,14 @@
 // runAll's try, outside its finally (plans/0024-module-split-plan.md §I D13).
 // Does not depend on loop.ts. Split out of src/loop.ts
 // (plans/0024-module-split-plan.md S14, pure move).
-import { readdir, rm } from "node:fs/promises"
+import { mkdir, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { checkAgentBins } from "./agent-pool"
 import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { deleteBranch, fileTracked, type GitOps } from "./git"
+import { deleteBranch, fileTracked, workingTreeMB, type GitOps } from "./git"
 import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
 import {
@@ -32,8 +32,12 @@ import {
   orphanRedispatch,
   pidAlive,
   readLaneReport,
+  resolveTreeTier,
   schedulerActive,
+  worktreeScheduler,
   type LaneReport,
+  type TierProbe,
+  type TreeTier,
 } from "./lanes"
 import { liveRunLock } from "./lock"
 import { log } from "./log"
@@ -54,7 +58,7 @@ import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import { packSubsection } from "./intent/load"
 import { guaranteesProblem } from "./intent/guarantees"
 import { testLanesProblem } from "./intent/test-lanes"
-import type { ParallelLevel } from "./intent/types"
+import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
@@ -150,8 +154,25 @@ export type RunAllOpts = {
   // into the planning sessions; absent = none. Since plans/0068 S3 it is also
   // the second half of the scheduler's activation rule (D10): --max-sessions
   // above 1 runs concurrently only under a level, and the level derives the
-  // landing-conflict response (D21).
+  // landing-conflict response (D21). Since plans/0096 D10 the level's meaning
+  // ends there: it renders guidance and gates concurrency, while the execution
+  // tier below decides which machinery runs.
   parallel?: ParallelLevel
+  // config.treeLanes (plans/0096 D10, the 0068 amendment): the execution tier
+  // — absent (off, the default) = Tier 0, process parallelism in one tree (no
+  // worktree lanes; the D5 test lanes still run); auto = the probe below
+  // decides between Tier 0 and Tier 1's sparse CoW worktree lanes; on =
+  // Tier 2, today's full worktree. The probe runs here, once, and its result
+  // rides the preflight return into the loop context (the registry's
+  // precedent: state the run derives from disk, never a re-derivation per
+  // site).
+  treeLanes?: import("./intent/types").TreeLanesSetting
+  // config.lanes (plans/0096 D9): the tier-1 knobs the project declared —
+  // cache homes (injected into lane workers), the working-tree budget the
+  // probe weighs, the sparse floor. Read here (the probe's budget) and by the
+  // dispatches (the materialization facts); a lane worker carries them
+  // unused, like every other config fact.
+  lanes?: LanesConfig
   // config.scanExempt (plans/0059 X2): the deliverable paths the P1 scan and
   // the terminator scan skip, at subtask close-out and at round close.
   scanExempt?: string[]
@@ -210,7 +231,7 @@ export async function preflight(
   directory: string,
   opts: RunAllOpts,
 ): Promise<
-  | { agentName: string; watcher?: { close(): void }; progress: { close(): void }; registry?: ModelRegistry; services: RunServices }
+  | { agentName: string; watcher?: { close(): void }; progress: { close(): void }; registry?: ModelRegistry; services: RunServices; treeTier: TreeTier }
   | { exit: number }
 > {
   // Legacy layout (M3.7, plans/0047 R3): an old-layout project is a usage error
@@ -370,6 +391,26 @@ export async function preflight(
   if (opts.parallel && (!renderFacts || !packSubsection(renderFacts.pack, "parallelism", opts.parallel))) {
     log(`⚠ parallel ${opts.parallel}: the active intent pack has no \`## parallelism\` / \`### ${opts.parallel}\` subsection; planning sessions get no parallelism guidance`)
   }
+  // The execution tier in force (plans/0096 D10, the 0068 amendment): computed
+  // once here — the probe is preflight's ("preflight probes"), the pure
+  // decision is lanes.ts's resolveTreeTier over the probed facts — logged with
+  // its reason, and returned for the loop context so every worktree-lane site
+  // consults the same answer instead of re-interpreting treeLanes. The tier
+  // matters wherever the worktree machinery could engage: under the scheduler
+  // activation rule it decides between the lane loop and the serial task loop
+  // (Tier 0's "process parallelism, one tree" — the test lanes of D5 are the
+  // parallelism), and beneath the isolation switch it still picks the tier-1
+  // materialization (the switch forces the machinery serially under every
+  // tier). A lane worker re-enters preflight but owns no tier of its own: it
+  // skips the probe and the line (the parent that dispatched it decided).
+  // dryrun probes nothing — it writes no state, and it runs no unit anyway.
+  let treeTier: TreeTier = 0
+  if (!opts.lane && (schedulerActive(opts.maxSessions, opts.parallel) || autoSwitches().laneIsolation)) {
+    const probe = !opts.dryrun && opts.treeLanes === "auto" ? await probeTierFacts(directory, opts.lanes) : undefined
+    const resolved = resolveTreeTier(opts.treeLanes, probe, opts.lanes?.treeBudgetMB)
+    treeTier = resolved.tier
+    log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}`)
+  }
 
   // The agent contract written by init (CONTRACT_AGENT); pre-run integrity
   // check: with the contract file missing the server only answers UnknownError
@@ -483,11 +524,15 @@ export async function preflight(
   // property: they finish; nothing of a lane's work is lost), a dead one
   // re-dispatched in place, resuming through its own progress record, up to
   // the attempts cap — and the park's stragglers pruned after the liveness
-  // checks. This is the scheduler's preflight step: at maxSessions = 1
-  // nothing here runs (the byte-identical floor; the isolation switch keeps
-  // its own exit-2-and-re-run story, S2's), and a lane worker (opts.lane)
-  // owns no lanes of its own.
-  if (!opts.dryrun && !opts.lane && schedulerActive(opts.maxSessions, opts.parallel)) {
+  // checks. This is the scheduler's preflight step: it runs for exactly the
+  // runs whose loop schedules lanes (plans/0096 D10: schedulerActive AND a
+  // worktree tier — at Tier 0 nothing here runs, the byte-identical floor of
+  // a maxSessions = 1 run), and a lane worker (opts.lane) owns no lanes of
+  // its own. A leftover scene under Tier 0 therefore waits for a worktree
+  // tier run or the person — the same story a maxSessions = 1 run has always
+  // told; the park is inert (gitignored), and resetInProgress below frees the
+  // orphaned unit for the serial loop without touching the scene.
+  if (!opts.dryrun && !opts.lane && worktreeScheduler(opts.maxSessions, opts.parallel, treeTier)) {
     const recovered = await recoverOrphanLanes(run.git, directory)
     if (recovered !== undefined) return { exit: recovered }
   }
@@ -534,7 +579,7 @@ export async function preflight(
       return { exit: 2 }
     }
   }
-  return { agentName, watcher, progress, registry, services: run }
+  return { agentName, watcher, progress, registry, services: run, treeTier }
 }
 
 // The dispatches this run can send (plans/0055 §6.3): every role its
@@ -629,6 +674,45 @@ export async function removeRetiredInvalidRefs(dir: string): Promise<boolean> {
   if (!(await Bun.file(file).exists())) return false
   await rm(file, { force: true })
   return true
+}
+
+// —— The tier probe (plans/0096 D10, Stage 5) —— //
+
+// The probe facts of one run: whether this filesystem can reflink (the CoW
+// capability tier 1 is built on — btrfs/XFS; hardlink farms and overlayfs are
+// rejected outright by the plan, D9, so no capability means no tier 1), and
+// the working tree's size — weighed only when a budget is declared, since
+// the walk is the probe's one nontrivial cost. The facts are injected into
+// the pure decision (lanes.ts resolveTreeTier) and never guessed: a test
+// states an outcome the host filesystem cannot provide.
+async function probeTierFacts(dir: string, lanes: LanesConfig | undefined): Promise<TierProbe> {
+  return {
+    reflink: await probeReflink(dir),
+    ...(lanes?.treeBudgetMB !== undefined ? { treeMB: await workingTreeMB(dir) } : {}),
+  }
+}
+
+// Whether `cp --reflink=always` clones here: one small file under the target's
+// own `.auto/` — the same filesystem the lane park materializes on, so the
+// probe measures exactly the copy that would run — cloned and removed again.
+// Any failure (no cp, no reflink, a read-only tree) reads as incapable, which
+// is the fall-through answer; the probe file is cleaned up either way and is
+// driver state `.auto/` already gitignores.
+async function probeReflink(dir: string): Promise<boolean> {
+  const root = join(dir, ".auto")
+  const src = join(root, "reflink-probe")
+  const dst = join(root, "reflink-probe.copy")
+  try {
+    await mkdir(root, { recursive: true })
+    await Bun.write(src, "reflink probe\n")
+    const copied = Bun.spawn(["cp", "--reflink=always", src, dst], { stdout: "ignore", stderr: "ignore" })
+    return (await copied.exited) === 0
+  } catch {
+    return false
+  } finally {
+    await rm(src, { force: true }).catch(() => {})
+    await rm(dst, { force: true }).catch(() => {})
+  }
 }
 
 // —— Orphan recovery (plans/0068 D14, stage S3) ——

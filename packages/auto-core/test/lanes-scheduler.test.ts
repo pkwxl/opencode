@@ -666,6 +666,11 @@ function schedulerCtx(server: AgentHost, opts: Partial<RunAllOpts>): LoopCtx {
     manual: true,
     ran: 0,
     repairs: 0,
+    // The execution tier in force (plans/0096 D10): these suites drive the
+    // scheduler as 0068 ran it — the full worktree per lane, now tier 2.
+    // Under the stage-5 default (tier 0) runTaskLoop's scheduler branch does
+    // not run at all; the tier-0 default itself is lanes-tier.test.ts's.
+    treeTier: 2,
     router: holder.router,
     control: holder.control,
     git: createGitOps(),

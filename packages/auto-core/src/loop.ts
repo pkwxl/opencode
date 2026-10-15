@@ -92,7 +92,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
 type Preinitialized = Exclude<Awaited<ReturnType<typeof preflight>>, { exit: number }>
 
 async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized): Promise<number> {
-  const { agentName, watcher, progress, registry, services: run } = pre
+  const { agentName, watcher, progress, registry, services: run, treeTier } = pre
   // The run's services take effect here and die with the run (the finally
   // below uninstalls them, restoring whatever was in effect before): the
   // session-driving engine and the stats module read the run's clock through
@@ -311,9 +311,15 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       // recovery wait read the request only through ctx or opts.
       control: run.control,
       // The run's git service (the installed holder's), threaded the same
-      // way: the loop family's commit calls and every opts literal the
-      // loop builds read the commit side only through ctx or opts.
+      // way: the loop family's commit calls and every opts literal the loop
+      // builds read the commit side only through ctx or opts.
       git: run.git,
+      // The execution tier preflight resolved and logged (plans/0096 D10):
+      // run state derived from disk once, never re-derived per site — the
+      // task loop's scheduler branch, preflight's recovery and the tier-1
+      // dispatches all read this one answer. Undefined (a context built
+      // without a preflight, a lane worker) reads as tier 0.
+      treeTier,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
     }
     // The lane entry (plans/0068 §6.3): one unit, no phase loop.

@@ -34,7 +34,7 @@ opencode-auto init <dir> --phases "adm" --test-by-driver    # keys not given fal
   `init.defaultBranch` or `main`, printed loudly) and a resolvable commit identity (global/`GIT_*`, or
   pass `--name <name> --email <email>` to write repository-local config; neither → refused).
 - **What it writes**: `.opencode/auto/config.json` (the constitution: `phases`, `mode`, `subtask`,
-  `contextLimit`, `parallel`, `testByDriver`, `idleTime`/`idleMax`, `scanExempt`, `isolate`, …),
+  `contextLimit`, `parallel`, `treeLanes`, `testByDriver`, `idleTime`/`idleMax`, `scanExempt`, `isolate`, …),
   `.opencode/agent/auto.md` (the session contract), `opencode.json`, `.gitignore` entries,
   `.auto/` + `tmp/` workdirs, the `AGENTS.md` marker block, and the project brief stub
   `.opencode/auto/brief.md` (sections `## Goal` / `## Source` / `## Target` / `## Constraints`).
@@ -138,7 +138,7 @@ Notes:
 - **Interruption recovery**: rerun the same command; the progress record re-enters the exact interrupted
   session/step. `run --new-session` discards a stale session. Manual rollback = rename `done.md` back
   to `todo.md` (and untick index lines), rerun.
-- Useful run options: `--max-sessions <N>` (concurrent lanes; requires config `parallel`),
+- Useful run options: `--max-sessions <N>` (concurrent execution; requires config `parallel` — by default tier 0, serial task sessions with the tests as parallel processes; config `treeLanes` `on`/`auto` runs worktree lanes),
   `--repair <N>` (bounded repair rounds on FAIL verdicts), `--dryrun` (permission preflight, no tasks
   run), `--wait-between <min>` (pause between tasks), `--server <url>` (reuse an external `opencode serve`).
 

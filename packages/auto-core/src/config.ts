@@ -12,14 +12,14 @@ import { existsSync, statSync } from "node:fs"
 import { chmod } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { loadIntents } from "./intent/load"
-import { DEFAULT_INTENT, PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
+import { DEFAULT_INTENT, PARALLEL_LEVELS, TREE_LANES_SETTINGS, type LanesConfig, type LaneCacheRule, type ParallelLevel, type TreeLanesSetting } from "./intent/types"
 import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { phaseTypeRoleProblems, type AgentChoice } from "./switches"
 
-export { PARALLEL_LEVELS, type ParallelLevel }
+export { PARALLEL_LEVELS, TREE_LANES_SETTINGS, type LanesConfig, type LaneCacheRule, type ParallelLevel, type TreeLanesSetting }
 
 export type ProjectConfig = {
   // Must be a name registered in loadModes(dir).
@@ -90,6 +90,21 @@ export type ProjectConfig = {
   // into the planning templates. Absent = none (nothing injected, today's
   // prompts byte for byte). Planning guidance only: tasks still run one at a time.
   parallel?: ParallelLevel
+  // The execution tier of the lanes machinery (plans/0096 D10, the 0068
+  // amendment): off (absent, the default) = Tier 0 — process parallelism in
+  // one tree, no worktrees; auto = the preflight probe (reflink capability
+  // and the lanes.treeBudgetMB budget against the working tree) deciding
+  // between Tier 0 and Tier 1's sparse CoW materialization; on = Tier 2,
+  // today's full worktree per lane, unconditionally. Set with init/amend
+  // --tree-lanes; the `parallel` level above stays the planning-guidance key,
+  // its prompt rendering unchanged.
+  treeLanes?: TreeLanesSetting
+  // The tier-1 lane knobs the project declares (plans/0096 D9): the cache
+  // homes injected into lane workers with their concurrency class, the
+  // working-tree budget the `auto` probe weighs, and the sparse floor.
+  // Hand-edited like acceptanceGate/build (no init flag); strictly validated
+  // at load (lanesOf below) so a hand edit hears the same refusal init would.
+  lanes?: LanesConfig
   // Path globs, relative to the target directory, of deliverable files the
   // driver's two content scans skip (plans/0059 X2): the P1 prohibition scan
   // (process-document paths in added lines, at unit close-out and at round
@@ -279,6 +294,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
     (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
     (config.build ? " · build set" : "") +
     (config.parallel ? ` · parallel ${config.parallel}` : "") +
+    (config.treeLanes ? ` · tree-lanes ${config.treeLanes}` : "") +
     (config.scanExempt?.length ? ` · scan-exempt ${config.scanExempt.join(",")}` : "") +
     (config.isolate?.length ? ` · isolate ${config.isolate.join(",")}` : "")
   )
@@ -351,6 +367,8 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
     build: record.build === undefined ? undefined : stringOf("build", record.build),
     parallel: parallelOf(record.parallel),
+    treeLanes: treeLanesOf(record.treeLanes),
+    lanes: lanesOf(record.lanes),
     scanExempt: scanExemptOf(record.scanExempt),
     isolate: isolateOf(record.isolate, dir),
   }
@@ -373,6 +391,74 @@ export function parallelOf(value: unknown): ParallelLevel | undefined {
     throw new Error(`${CONFIG_FILE} parallel must be none|${PARALLEL_LEVELS.join("|")}`)
   }
   return value as ParallelLevel
+}
+
+// treeLanes (plans/0096 D10): off|auto|on; absent and "off" both mean the
+// default tier (undefined, Tier 0), so a config without the key and one
+// saying "off" load the same — the parallel/"none" precedent.
+export function treeLanesOf(value: unknown): TreeLanesSetting | undefined {
+  if (value === undefined || value === "off") return undefined
+  if (typeof value !== "string" || !(TREE_LANES_SETTINGS as readonly string[]).includes(value)) {
+    throw new Error(`${CONFIG_FILE} treeLanes must be off|${TREE_LANES_SETTINGS.join("|")} (the execution tier of the lanes machinery; off is the default)`)
+  }
+  return value as TreeLanesSetting
+}
+
+// The shape of one lanes.caches rule (the record form the JSON file carries).
+type LaneCacheRecord = { env?: unknown; shared?: unknown }
+
+// lanes (plans/0096 D9): an object of the tier-1 knobs — caches (a non-empty
+// array of { env, shared } rules, each env a valid variable name listed once),
+// treeBudgetMB (a positive integer) and sparseFloor (repository-relative
+// directory paths, the scanExempt shape rules). Strict like every config key:
+// a mistyped rule fails the load rather than silently not injecting. An empty
+// object loads as undefined (nothing declared), the scanExempt-[] precedent.
+export function lanesOf(value: unknown): LanesConfig | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${CONFIG_FILE} lanes must be an object (the tier-1 knobs: caches, treeBudgetMB, sparseFloor)`)
+  }
+  const raw = value as Record<string, unknown>
+  const out: LanesConfig = {}
+  if (raw.caches !== undefined) {
+    if (!Array.isArray(raw.caches) || !raw.caches.length) {
+      throw new Error(`${CONFIG_FILE} lanes.caches must be a non-empty array of { env, shared } rules`)
+    }
+    const caches: LaneCacheRule[] = []
+    const seen = new Set<string>()
+    for (const entry of raw.caches) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new Error(`${CONFIG_FILE} lanes.caches entries must be objects: { "env": "CCACHE_DIR", "shared": true }`)
+      }
+      const rule = entry as LaneCacheRecord
+      if (typeof rule.env !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rule.env)) {
+        throw new Error(`${CONFIG_FILE} lanes.caches env must be an environment variable name (e.g. CCACHE_DIR), not ${JSON.stringify(rule.env)}`)
+      }
+      if (typeof rule.shared !== "boolean") {
+        throw new Error(`${CONFIG_FILE} lanes.caches shared must be true|false (true = one shared path, false = per-lane paths)`)
+      }
+      if (seen.has(rule.env)) throw new Error(`${CONFIG_FILE} lanes.caches lists ${rule.env} twice`)
+      seen.add(rule.env)
+      caches.push({ env: rule.env, shared: rule.shared })
+    }
+    out.caches = caches
+  }
+  if (raw.treeBudgetMB !== undefined) {
+    if (typeof raw.treeBudgetMB !== "number" || !Number.isInteger(raw.treeBudgetMB) || raw.treeBudgetMB < 1) {
+      throw new Error(`${CONFIG_FILE} lanes.treeBudgetMB must be a positive integer (megabytes; the auto probe refuses tier 1 beyond it)`)
+    }
+    out.treeBudgetMB = raw.treeBudgetMB
+  }
+  if (raw.sparseFloor !== undefined) {
+    if (!Array.isArray(raw.sparseFloor) || !raw.sparseFloor.every((item) => typeof item === "string")) {
+      throw new Error(`${CONFIG_FILE} lanes.sparseFloor must be an array of repository-relative directory paths`)
+    }
+    const problems = (raw.sparseFloor as string[]).flatMap((path) => scanExemptProblem(path) ?? [])
+    if (problems.length) throw new Error(`${CONFIG_FILE} lanes.sparseFloor: ${problems.join("; ")}`)
+    if (new Set(raw.sparseFloor).size !== raw.sparseFloor.length) throw new Error(`${CONFIG_FILE} lanes.sparseFloor lists a path twice`)
+    out.sparseFloor = raw.sparseFloor
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 // scanExempt (plans/0059 X2): an array of usable globs; absent or [] = none.

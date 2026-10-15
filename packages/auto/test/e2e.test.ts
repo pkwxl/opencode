@@ -698,6 +698,9 @@ describe("CLI parsing: run-side options and the config", () => {
         ["--wrapup"],
         ["--no-wrapup"],
         ["--parallel", "low"],
+        // The execution tier (auto-core plans/0096 D10): frozen like every
+        // constitutional key, revised through amend.
+        ["--tree-lanes", "auto"],
         ["--scan-exempt", "test/fixtures/**"],
       ]
       for (const extra of fixed) {

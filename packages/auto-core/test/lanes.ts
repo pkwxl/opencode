@@ -147,6 +147,11 @@ export const UNIT_LANE: readonly string[] = [
   // The test-lane table (plans/0096 D3/D4): pure parse plus temp-directory
   // overlay packs and in-memory renders (no git repository, no spawn).
   "test/lane-table.test.ts",
+  // Tiered parallelism (plans/0096 D9/D10, Stage 5): the pure tier decision
+  // over injected probe facts, the sparse set, the cache-home resolution and
+  // the config surface — temp directories, no git repository, no spawn (the
+  // end-to-end lane choreography stays in the repo lane's scheduler suites).
+  "test/lanes-tier.test.ts",
   "test/lanes.test.ts",
   "test/log.test.ts",
   "test/loop-conclusion.test.ts",

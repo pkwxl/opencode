@@ -36,12 +36,22 @@
 // advisory — a wrong declaration surfaces as a landing conflict (D7), never
 // as corruption — and the `parallel` level's merge-relevant meaning lives in
 // the landing-conflict response (D21), never in the admission.
+//
+// The tiered-parallelism amendment (plans/0096 D8–D10) lives here too: the
+// pure tier decision over config and probe facts (resolveTreeTier, the
+// select.ts "pure core over injected facts" style — the probe itself runs at
+// preflight and is injected), the tier-qualified activation predicate every
+// worktree-lane site consults (worktreeScheduler), the sparse materialization
+// set (sparseSet) and the cache-home injection (laneCacheEnv) tier-1
+// dispatches carry. OPENCODE_AUTO_LANE_ISOLATION keeps its meaning beneath
+// whatever tier is active: it still forces the worktree lane machinery,
+// serially, under every tier (D10's closing rule).
 import { cp, mkdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
 import { checklistPrerequisites, subtaskId } from "./document/state"
 import { deleteBranch, mergeBaseSha, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
-import type { ParallelLevel } from "./intent/types"
+import type { LaneCacheRule, ParallelLevel, TreeLanesSetting } from "./intent/types"
 import { log } from "./log"
 import { emitStatus } from "./run-status"
 import { statsLaneUsage, type LaneUsageDetail } from "./stats"
@@ -62,6 +72,118 @@ import { begin, checklistTitle, clearLane, laneRecords, setLane, setParked, setS
 // parallelism first").
 export function schedulerActive(maxSessions: number | undefined, parallel: ParallelLevel | undefined): boolean {
   return (maxSessions ?? 1) >= 2 && parallel !== undefined
+}
+
+// —— Tiered parallelism (plans/0096 D8–D10, the 0068 amendment) ——
+
+// The execution tier (D9): 0 = process parallelism in one tree — no worktrees
+// at all, the parallelism is the D4/D5 test-lane machinery against the frozen
+// main tree while the task sessions themselves run serially (the default);
+// 1 = cheap materialization for code-parallel lanes (the `auto` probe's
+// answer: a `--no-checkout` worktree whose cone-mode sparse set over the
+// unit's `Touches:` is copied in by reflink, plus the declared shared
+// caches); 2 = today's full worktree per lane, chosen knowingly (`on`). The
+// cost model behind the tiers is D8's: git already shares the object store,
+// so a worktree's price is the entire working tree plus the artifacts each
+// lane regenerates — processes are bought before trees, and a second tree
+// only for true concurrent code edits, at the cheapest materialization the
+// filesystem allows.
+export type TreeTier = 0 | 1 | 2
+
+// The probe facts preflight derives once per run (D10: "preflight probes") —
+// never module state, always injected, so a test states an outcome the host
+// filesystem cannot provide (ext4 has no reflink). `reflink`: whether
+// `cp --reflink=always` clones on this filesystem (btrfs/XFS) — the CoW
+// capability tier 1 is built on; hardlink farms are rejected outright (an
+// in-place writer corrupts the base checkout) and so is overlayfs (privilege
+// or fuse-perf), which is why no capability means no tier 1, fall through.
+// `treeMB`: the measured working-tree size, taken only when a budget is
+// declared (the probe's other half).
+export type TierProbe = { reflink: boolean; treeMB?: number }
+
+// The tier decision (D10), pure over the config setting and the probe facts:
+//   off/absent → 0 (Tier 0 always — the default execution surface);
+//   on         → 2 (today's full worktree, unconditionally, named);
+//   auto       → the probe: no reflink capability, or a declared
+//                lanes.treeBudgetMB the working tree exceeds, falls through
+//                to 0 (tier 2 stays the explicit `on`); otherwise 1.
+// The returned `reason` is the log line's body — preflight prints
+// `parallel execution: tier <n> — <reason>`, so the person sees not just the
+// tier but why it was chosen (D10: "logs the chosen tier with its reason").
+// `auto` without probe facts (a caller that never probed — a lane worker, a
+// test) reads as tier 0: nothing was proven, and the fail-safe tier is the
+// default one.
+export function resolveTreeTier(
+  treeLanes: TreeLanesSetting | undefined,
+  probe?: TierProbe,
+  budgetMB?: number,
+): { tier: TreeTier; reason: string } {
+  if (treeLanes === "on") return { tier: 2, reason: "treeLanes on — today's full worktree per lane, chosen knowingly" }
+  if (treeLanes !== "auto") return { tier: 0, reason: "treeLanes off — process parallelism, one tree (the default; the driver-run test lanes still run against the frozen tree)" }
+  if (probe === undefined) return { tier: 0, reason: "treeLanes auto was not probed — process parallelism, one tree" }
+  if (!probe.reflink) return { tier: 0, reason: "treeLanes auto: no reflink capability on this filesystem, and tier 1 is built on CoW — process parallelism, one tree" }
+  if (budgetMB !== undefined && probe.treeMB !== undefined && probe.treeMB > budgetMB) {
+    return { tier: 0, reason: `treeLanes auto: the working tree (${Math.round(probe.treeMB)} MB) exceeds the declared lanes.treeBudgetMB (${budgetMB} MB) — process parallelism, one tree` }
+  }
+  const budgetNote = budgetMB !== undefined && probe.treeMB !== undefined ? `, the working tree (${Math.round(probe.treeMB)} MB) within the declared lanes.treeBudgetMB (${budgetMB} MB)` : ""
+  return { tier: 1, reason: `treeLanes auto: reflink capable${budgetNote} — sparse CoW worktree lanes materialized over the unit's Touches` }
+}
+
+// The tier-qualified activation predicate (D9/D10) every worktree-lane site
+// consults — runTaskLoop's scheduler branch and preflight's orphan recovery
+// — so `treeLanes` is interpreted once, here, never per site: the readiness
+// scheduler runs the routed phase's units concurrently iff D10's activation
+// rule holds AND the tier in force materializes worktree lanes (≥ 1). At
+// tier 0 the serial task loop runs instead and the parallelism is the test
+// lanes' — the `parallel` level still renders its planning guidance and the
+// preflight max-sessions-needs-parallel guard keeps its meaning (the level
+// plans for parallel execution whatever surface executes it).
+export function worktreeScheduler(maxSessions: number | undefined, parallel: ParallelLevel | undefined, tier: TreeTier | undefined): boolean {
+  return schedulerActive(maxSessions, parallel) && (tier ?? 0) >= 1
+}
+
+// The tier-1 sparse set (D9): the cone-mode directories a lane's worktree
+// materializes — the union of the unit's declared `Touches:` (the field's own
+// grammar: a directory carries its trailing slash and maps to itself, a file
+// maps to its parent — cone granularity being directories) and the floor
+// (the driver's built-in `docs` — every lane reads and writes the process
+// documents: the phase index, its unit's todo/done, handovers — plus the
+// project-declared lanes.sparseFloor, always directories), nested duplicates
+// dropped (a directory inside another kept directory adds nothing to the
+// cone). A unit that declares nothing (or an empty set) touches everything
+// (G3) and gets undefined — no sparse materialization but the full worktree,
+// exactly the unit the disjointness clause would only ever run alone.
+export function sparseSet(touches: readonly string[] | undefined, floor: readonly string[]): string[] | undefined {
+  if (touches === undefined || touches.length === 0) return undefined
+  const dirs = new Set<string>()
+  const add = (path: string, isDir: boolean): void => {
+    const parts = path.replaceAll("\\", "/").split("/").filter((part) => part !== "" && part !== ".")
+    if (!isDir) parts.splice(-1, 1)
+    if (parts.length) dirs.add(parts.join("/"))
+  }
+  for (const entry of floor) add(entry, true)
+  for (const entry of touches) add(entry, /[\\/]$/.test(entry))
+  const out = [...dirs].filter((dir) => ![...dirs].some((other) => other !== dir && dir.startsWith(`${other}/`)))
+  return out.length ? out.sort() : undefined
+}
+
+// The cache-home injection (D9): the env record a tier-1 dispatch hands the
+// lane launcher — each declared cache home resolved to a directory the tool
+// finds its cache in. shared-safe rules point every lane at one path under
+// the main tree's `.auto/cache/` (the cache survives landings and teardowns,
+// and the artifact multiplier becomes a cache hit rate — the direct answer to
+// "the test might be even larger"); serializing rules point each lane at its
+// own worktree's `.auto/cache/` (the tool locks its directory, so lanes never
+// share it; the copy dies with the worktree at teardown like the rest of its
+// `.auto/` state, and a re-dispatched lane reuses its own). The driver never
+// guesses a tool's safety (D11) — it maps exactly what the project declared.
+export function laneCacheEnv(caches: readonly LaneCacheRule[] | undefined, home: string, worktree: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const rule of caches ?? []) {
+    const slug = rule.env.toLowerCase()
+    env[rule.env] = join(rule.shared ? join(home, ".auto", "cache") : join(worktree, ".auto", "cache"), slug)
+  }
+  return env
 }
 
 // D21's level-derived landing-conflict response: `low` blocks immediately
@@ -584,6 +706,21 @@ export type LaneDispatch =
   | { type: "spawned"; worktree: string; worker: LaneWorker; fresh: boolean; output: Promise<string> }
   | { type: "failed"; error: string }
 
+// The tier-1 materialization facts one dispatch carries (plans/0096 D9):
+// present only when the run's tier is 1 — the sparse floor (the driver's
+// built-in `docs` plus the project-declared lanes.sparseFloor) that narrows
+// the fresh worktree's cone to the unit's `Touches:` set, and the declared
+// cache homes injected into the lane worker's environment. Absent = today's
+// full worktree: tier 2, the isolation switch at tier 0, and every recovery
+// re-dispatch (a scene whose unit's declarations the parent no longer holds —
+// the conservative materialization is the full one). The landing machinery
+// reads none of this: the branch records the full tree whatever the working
+// materialization, and landing is untouched by design.
+export type LaneMaterial = {
+  floor: readonly string[]
+  caches?: LaneCacheRule[]
+}
+
 // The scaffolding a fresh git worktree lacks (F7): the untracked, gitignored
 // local-only state a lane's preflight and sessions need. `.gitignore` rides
 // along although F7's list does not name it: init ignores the file itself
@@ -606,7 +743,13 @@ const SCAFFOLD_FILES = [".gitignore", ".opencode", "opencode.json", "AGENTS.md"]
 // fresh worktree starts with the owning task's split record in its own
 // .auto/units.json (re-rooted onto the worktree's paths), so the worker reads
 // Task.split exactly as the serial world does — a re-dispatch's worktree keeps
-// the record its earlier dispatch wrote.
+// the record its earlier dispatch wrote. The optional material is tier 1's
+// (plans/0096 D9): a fresh worktree materializes its cone-mode sparse set —
+// the unit's `Touches:` over the floor — by reflink from the base checkout
+// (git.ts addWorktree's sparse half), and the launcher receives the declared
+// cache homes resolved to shared and per-lane paths (laneCacheEnv) to inject
+// into the child environment; a re-dispatch's existing worktree keeps whatever
+// it already holds (the material applies to creation alone).
 // AUTO-DECISION (spawn before the runtime-field write): §6.5 orders ④ the
 // fields before ⑤ the spawn, but the pid half of the record exists only once
 // the worker process does; writing worktree and pid together after the spawn
@@ -615,9 +758,10 @@ const SCAFFOLD_FILES = [".gitignore", ".opencode", "opencode.json", "AGENTS.md"]
 export async function dispatchLane(
   gitOps: GitOps,
   dir: string,
-  task: Pick<Task, "id" | "title">,
+  task: Pick<Task, "id" | "title" | "touches">,
   instruction?: LaneMergeInstruction,
   seed?: { task: string; split: { root: string; sha: string }[] },
+  material?: LaneMaterial,
 ): Promise<LaneDispatch> {
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
@@ -632,7 +776,7 @@ export async function dispatchLane(
     if (await stat(park).then(() => true, () => false)) {
       return { type: "failed", error: `a worktree already exists at ${lanePark(task.id)} with no lane record for ${task.id}; remove it manually (git worktree remove ${park}) and re-run` }
     }
-    const added = await gitOps.addWorktree(dir, park, branch)
+    const added = await gitOps.addWorktree(dir, park, branch, material !== undefined ? sparseSet(task.touches, material.floor) : undefined)
     if (!added.ok) return { type: "failed", error: `creating the lane worktree failed: ${added.error}` }
     fresh = true
   } else {
@@ -663,9 +807,20 @@ export async function dispatchLane(
     }
   }
   const launch = shellProfile().laneLauncher ?? defaultLaneLauncher
+  const worktree = fresh ? park : join(dir, record!.worktree)
+  // Tier 1's cache homes (plans/0096 D9): resolved against this dispatch's
+  // worktree and created ahead of the spawn — a shared-safe home points every
+  // lane at one path under the main tree's .auto/cache/, a serializing one at
+  // this lane's own worktree state. Tier 2 and the isolation switch at tier 0
+  // are today's behavior, named (D10), and inject nothing.
+  let caches: Record<string, string> | undefined
+  if (material !== undefined && material.caches?.length) {
+    caches = laneCacheEnv(material.caches, dir, worktree)
+    for (const path of Object.values(caches)) await mkdir(path, { recursive: true }).catch(() => log(`⚠ creating the lane cache directory ${path} failed; the lane worker starts without it`))
+  }
   let worker: LaneWorker
   try {
-    worker = launch(fresh ? park : join(dir, record!.worktree), task.id, instruction)
+    worker = launch(worktree, task.id, instruction, caches)
   } catch (error) {
     if (fresh) {
       await gitOps.removeWorktree(dir, park)
@@ -673,7 +828,6 @@ export async function dispatchLane(
     }
     return { type: "failed", error: `spawning the lane worker failed: ${error instanceof Error ? error.message : String(error)}` }
   }
-  const worktree = fresh ? park : join(dir, record!.worktree)
   await setLane(dir, task.id, { worktree: relative(dir, worktree), ...(worker.pid !== undefined ? { pid: worker.pid } : {}) })
   // D13's prefix relay attaches here, at the spawn: every line the worker
   // prints reaches the parent's terminal and audit log as it arrives

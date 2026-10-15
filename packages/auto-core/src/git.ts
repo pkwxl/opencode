@@ -1,5 +1,5 @@
-import { readdir, realpath, rm } from "node:fs/promises"
-import { join, relative, resolve, sep } from "node:path"
+import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
+import { dirname, join, relative, resolve, sep } from "node:path"
 import type { AddedLine } from "./document/types"
 import { log } from "./log"
 import type { PhaseKey } from "./phases/registry"
@@ -670,10 +670,109 @@ export type WorktreeResult = { ok: boolean; error?: string }
 // — beginUnit's clean gate, the SHA baseline, commitTree and unitViolations —
 // then holds per worktree by construction). path and branch are the caller's
 // protocol strings (src/lanes.ts builds them); nothing here knows task ids.
-export async function addWorktree(dir: string, path: string, branch: string): Promise<WorktreeResult> {
-  const added = await git(dir, ["worktree", "add", "-b", branch, path])
-  if (added.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+//
+// sparse (plans/0096 D9, tier 1) switches the working materialization to the
+// cheap one: `--no-checkout` registers the worktree without populating it, the
+// cone directories are copied in from the base checkout by
+// `cp -a --reflink=always` (byte-shared until divergence — the CoW capability
+// the `auto` probe established; a per-file failure here fails the dispatch,
+// never a silent full write), the index is populated by `read-tree` + a stat
+// refresh so git sees the copied files as already materialized, and
+// cone-mode `sparse-checkout set` then applies the patterns without rewriting
+// them — every file outside the cone stays unmaterialized behind a
+// skip-worktree bit. The landing machinery is untouched: skip-worktree entries
+// ride the index unchanged, so the lane's commits record the FULL tree and the
+// merge lands exactly as under tier 2; sparse affects only the working
+// materialization, per D9's own words.
+// The hazard the cheapness buys (named once, D11's register): a session that
+// writes a path outside its unit's declared `Touches:` meets git's sparse
+// guard — `git add -A` refuses such paths ("outside of your sparse-checkout
+// definition") — so a wrong declaration surfaces as a dirty worktree and a
+// failing unified commit, never as silently unlanded work.
+export async function addWorktree(dir: string, path: string, branch: string, sparse?: readonly string[]): Promise<WorktreeResult> {
+  if (sparse === undefined) {
+    const added = await git(dir, ["worktree", "add", "-b", branch, path])
+    if (added.code === 0) return { ok: true }
+    return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+  }
+  const added = await git(dir, ["worktree", "add", "--no-checkout", "-b", branch, path])
+  if (added.code !== 0) return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+  // The cone set by reflink: each declared directory recursively, plus every
+  // tracked root file (cone mode always materializes the root; `git ls-files`
+  // lists the index, and the dispatch-time clean gate makes index and disk
+  // agree). Root dotfiles included — .gitignore rides along exactly as the
+  // scaffolding copy would need it to.
+  const copied = await copyConeByReflink(dir, path, sparse)
+  if (copied !== undefined) return { ok: false, error: copied }
+  // Populate the index from HEAD without touching the worktree, then refresh
+  // the stat cache: the copied cone files are recorded as already
+  // materialized, so the sparse apply below rewrites nothing. The refresh
+  // reports the not-yet-copied outside-cone files as "needs update" (they are
+  // absent, and not yet behind skip-worktree bits) — expected at this point
+  // in the sequence, and its exit code is deliberately ignored.
+  if ((await git(path, ["read-tree", "HEAD"])).code !== 0) return { ok: false, error: "populating the sparse worktree's index failed (git read-tree HEAD)" }
+  await git(path, ["update-index", "--refresh"])
+  if ((await git(path, ["sparse-checkout", "init", "--cone"])).code !== 0) return { ok: false, error: "enabling cone-mode sparse checkout failed (git sparse-checkout init --cone)" }
+  const applied = await git(path, ["sparse-checkout", "set", ...sparse])
+  if (applied.code !== 0) return { ok: false, error: firstLine(applied.err || applied.out) || `git sparse-checkout set exit code ${applied.code}` }
+  // The consistency guard, fail-closed: an empty status is the proof the
+  // materialized cone matches HEAD (a copy that missed a file, or drifted,
+  // shows here instead of surfacing mid-lane).
+  const status = await git(path, ["status", "--porcelain"])
+  if (status.code !== 0 || status.out.trim() !== "") {
+    return { ok: false, error: `the sparse worktree is not clean after materialization${status.out.trim() ? ` (${firstLine(status.out)})` : ""}; remove ${path} manually and re-run` }
+  }
+  return { ok: true }
+}
+
+// Copy the cone set of a fresh `--no-checkout` worktree by reflink from the
+// base checkout (tier 1's materialization core): the declared directories
+// recursively (`cp -a` preserves modes and timestamps, `--reflink=always`
+// shares the bytes), every tracked root file individually. Returns the error
+// that failed the dispatch, or undefined. A reflink failure here is a real
+// one — the probe established the capability moments earlier — so it blocks
+// the dispatch (the caller fails and names the path) rather than degrading
+// to a full write the tier never asked for.
+async function copyConeByReflink(dir: string, worktree: string, cone: readonly string[]): Promise<string | undefined> {
+  const reflink = async (src: string, dst: string, recursive: boolean): Promise<string | undefined> => {
+    await mkdir(dirname(dst), { recursive: true })
+    const copied = Bun.spawn(["cp", ...(recursive ? ["-a"] : []), "--reflink=always", src, dst], { stdout: "ignore", stderr: "pipe" })
+    const err = await new Response(copied.stderr!).text().catch(() => "")
+    const code = await copied.exited
+    if (code !== 0) return `copying ${relative(dir, src).replaceAll("\\", "/")} into the lane worktree by reflink failed: ${firstLine(err) || `cp exit code ${code}`}`
+    return undefined
+  }
+  for (const rel of cone) {
+    const failed = await reflink(join(dir, rel), join(worktree, rel), true)
+    if (failed !== undefined) return failed
+  }
+  const listed = await git(dir, ["ls-files", "-z"])
+  if (listed.code !== 0) return undefined // no root files to copy; the set step still applies
+  for (const rel of listed.out.split("\0")) {
+    if (!rel || rel.includes("/")) continue
+    const dst = join(worktree, rel)
+    if (await stat(dst).then(() => true, () => false)) continue
+    const failed = await reflink(join(dir, rel), dst, false)
+    if (failed !== undefined) return failed
+  }
+  return undefined
+}
+
+// The working tree's size in MB (plans/0096 D10's probe input): the sum of
+// the tracked files' sizes — the per-lane disk cost of a worktree, since git
+// already shares the object store between linked worktrees (D8's cost model;
+// untracked state never materializes in one). Read-only, never a seam member.
+// undefined = not a git environment (no tree to weigh; the budget check
+// passes vacuously — there is nothing to materialize).
+export async function workingTreeMB(dir: string): Promise<number | undefined> {
+  const listed = await git(dir, ["ls-files", "-z"]).catch(() => undefined)
+  if (!listed || listed.code !== 0) return undefined
+  let bytes = 0
+  for (const rel of listed.out.split("\0")) {
+    if (!rel) continue
+    bytes += (await stat(join(dir, rel)).catch(() => undefined))?.size ?? 0
+  }
+  return bytes / (1024 * 1024)
 }
 
 // The teardown retry schedule (plans/0068 §10's Windows hardening): attempt 1
@@ -1077,7 +1176,10 @@ export type GitOps = {
   // Lane worktrees and the landing merge (plans/0068 §6.5, D7): the dispatch
   // and landing choreography (src/lanes.ts) reaches these through the seam so
   // a test's holder can switch the whole lane machinery off with the double.
-  addWorktree(dir: string, path: string, branch: string): Promise<WorktreeResult>
+  // addWorktree's optional sparse set is plans/0096 D9's tier-1 materialization
+  // (a --no-checkout worktree populated by cone-mode sparse + reflink);
+  // absent = the full checkout of 0068.
+  addWorktree(dir: string, path: string, branch: string, sparse?: readonly string[]): Promise<WorktreeResult>
   removeWorktree(dir: string, path: string): Promise<WorktreeResult>
   pruneWorktrees(dir: string): Promise<WorktreeResult>
   landBranch(dir: string, branch: string, task: { id: string; title: string }, own?: readonly string[]): Promise<LandResult>
