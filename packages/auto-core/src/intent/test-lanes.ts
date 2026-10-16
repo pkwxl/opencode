@@ -4,13 +4,18 @@
 // standing `Depends:`/`Touches:` holds for tasks. One field block per suite:
 //   <name>:
 //   Command: <the project's own runner — a container harness, a make target>
-//   Cost: cheap | anchor
+//   Cost: cheap | anchor | regression
 //   Surfaces: <comma-separated repository-relative paths>
 //   Exclusive: yes | no
 // Per-project and versioned in the pack overlay: the project declares its
 // suites once, and sessions and the driver both read this same parse (Stage
 // 3's driver-run lane scheduler consumes it; a task's `## Acceptance` names
 // which row is its anchor — prompt guidance only, no driver validation).
+// The third cost class (plans/0098 D1) declares the project's full-gate
+// regression — the two-level pass: a regression row is never part of a
+// task's wrap-up lane set and never an anchor (both sites filter it); the
+// driver runs it in the background against committed trees and the phase
+// close holds on its round-scoped receipts (src/regression.ts).
 // Strict like the pack file itself: a malformed row throws naming the pack
 // and the offending line, so preflight (testLanesProblem, mirroring
 // guaranteesProblem) turns it into a usage error ahead of any render. A pack
@@ -30,7 +35,7 @@ import { packSubsection } from "./load"
 export type TestLane = {
   name: string
   command: string
-  cost: "cheap" | "anchor"
+  cost: "cheap" | "anchor" | "regression"
   surfaces: string[]
   exclusive: boolean
 }
@@ -39,7 +44,7 @@ export type TestLane = {
 // content after the colon matches neither and is malformed.
 const SUITE_HEAD = /^([a-z][a-z0-9-]*):\s*$/
 const FIELD_LINE = /^(Command|Cost|Surfaces|Exclusive):[ \t]*(.*)$/
-const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no — one block per suite"
+const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor|regression, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no — one block per suite"
 
 // Parse the active pack's lane table; undefined when the pack declares none
 // (or the section holds comments only — the zero-intent floor). Throws
@@ -58,7 +63,7 @@ export function parseTestLanes(pack: IntentPack): TestLane[] | undefined {
     const command = block.fields.get("Command")!
     if (!command) throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Command must not be empty`)
     const cost = block.fields.get("Cost")!
-    if (cost !== "cheap" && cost !== "anchor") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Cost must be cheap or anchor, got: ${cost || "(empty)"}`)
+    if (cost !== "cheap" && cost !== "anchor" && cost !== "regression") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Cost must be cheap, anchor or regression, got: ${cost || "(empty)"}`)
     const exclusive = block.fields.get("Exclusive")!
     if (exclusive !== "yes" && exclusive !== "no") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Exclusive must be yes or no, got: ${exclusive || "(empty)"}`)
     lanes.push({ name: block.name, command, cost, surfaces: parseSurfaces(pack.name, block.name, block.fields.get("Surfaces")!), exclusive: exclusive === "yes" })
@@ -220,11 +225,15 @@ export function acceptanceSection(body: string): string {
 // one exists; anything else (no name and zero or several anchor-cost rows, or
 // more than one name) is no pre-gate — an ambiguous anchor never gates
 // mechanically, the verify session judges the receipts by inspection.
+// Regression-cost rows never resolve (plans/0098 D1): anchoring is the
+// per-task pre-gate, exactly the critical path the class exists to leave —
+// a task naming one simply has no mechanical anchor, like any ambiguity.
 export function anchorLaneOf(acceptance: string, lanes: readonly TestLane[]): TestLane | undefined {
-  const named = lanes.filter((lane) => new RegExp(`(^|[^a-z0-9-])${escapeRe(lane.name)}($|[^a-z0-9-])`).test(acceptance))
+  const rows = lanes.filter((lane) => lane.cost !== "regression")
+  const named = rows.filter((lane) => new RegExp(`(^|[^a-z0-9-])${escapeRe(lane.name)}($|[^a-z0-9-])`).test(acceptance))
   if (named.length === 1) return named[0]
   if (named.length > 1) return undefined
-  const anchors = lanes.filter((lane) => lane.cost === "anchor")
+  const anchors = rows.filter((lane) => lane.cost === "anchor")
   return anchors.length === 1 ? anchors[0] : undefined
 }
 

@@ -62,13 +62,24 @@ describe("the lane-table grammar (parseTestLanes / testLanesProblem, plans/0096 
     ])
   })
 
+  // The third cost class (plans/0098 D1): the project's full-gate regression,
+  // the row the driver's background slot owns — parsed by the same grammar,
+  // excluded from the wrap-up's set and the anchor resolution below.
+  test("a regression-cost row parses beside its peers", () => {
+    const rows = [ROWS, "", "regress:", "Command: bash test/verify_full.sh", "Cost: regression", "Surfaces: src/, include/, test/", "Exclusive: yes"].join("\n")
+    const parsed = parseTestLanes(lanePack(rows))
+    expect(parsed).toHaveLength(3)
+    expect(parsed![2]).toEqual({ name: "regress", command: "bash test/verify_full.sh", cost: "regression", surfaces: ["src/", "include/", "test/"], exclusive: true })
+    expect(testLanesProblem(lanePack(rows))).toBeUndefined()
+  })
+
   test("malformed rows fail strictly, naming the pack and the offending line", () => {
     const cases: Array<[string, RegExp]> = [
       ["lint: make lint\nCommand: make lint\nCost: cheap\nSurfaces: src/\nExclusive: no", /malformed test-lanes line: lint: make lint/],
       ["Lint:\nCommand: x\nCost: cheap\nSurfaces: src/\nExclusive: no", /malformed test-lanes line: Lint:/],
       ["Command: make lint", /malformed test-lanes line: Command: make lint/],
       ["lint:\nRunner: make lint\nCost: cheap\nSurfaces: src/\nExclusive: no", /malformed test-lanes line: Runner: make lint/],
-      ["lint:\nCommand: make lint\nCost: quick\nSurfaces: src/\nExclusive: no", /suite "lint" Cost must be cheap or anchor, got: quick/],
+      ["lint:\nCommand: make lint\nCost: quick\nSurfaces: src/\nExclusive: no", /suite "lint" Cost must be cheap, anchor or regression, got: quick/],
       ["lint:\nCommand: make lint\nCost: cheap\nSurfaces: src/\nExclusive: maybe", /suite "lint" Exclusive must be yes or no, got: maybe/],
       ["lint:\nCommand: \nCost: cheap\nSurfaces: src/\nExclusive: no", /suite "lint" Command must not be empty/],
       ["lint:\nCost: cheap\nSurfaces: src/\nExclusive: no", /suite "lint" is missing its Command line/],
@@ -297,6 +308,18 @@ describe("the anchor resolution (acceptanceSection / anchorLaneOf — the smalle
     const cheapOnly: TestLane[] = [lanes[0]!]
     expect(anchorLaneOf("The acceptance criteria pass.", cheapOnly)).toBeUndefined()
   })
+
+  test("a regression-cost row never resolves the anchor (plans/0098 D1) — named or as the fallback", () => {
+    const withRegression: TestLane[] = [lanes[0]!, { name: "regress", command: "bash test/verify_full.sh", cost: "regression", surfaces: ["src/"], exclusive: true }]
+    // The regression row is the only non-cheap row and is even named — still
+    // no anchor: it never runs per task, so it cannot pre-gate one.
+    expect(anchorLaneOf("The regress lane is green at the phase's final tree.", withRegression)).toBeUndefined()
+    expect(anchorLaneOf("The acceptance criteria pass.", withRegression)).toBeUndefined()
+    // Beside a real anchor row, naming the regression row alone leaves the
+    // anchor-cost fallback to decide.
+    const both: TestLane[] = [...withRegression, lanes[1]!]
+    expect(anchorLaneOf("The regress receipt is round-scoped evidence.", both)).toBe(lanes[1])
+  })
 })
 
 describe("exclusivity serialization (laneBatches — the set's schedule)", () => {
@@ -505,6 +528,31 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       expect(text).toContain("killed by the watchdog")
     } finally {
       clean([dir, logDir])
+    }
+  })
+
+  // The two-level pass's set-side half (plans/0098 D1): a regression-cost row
+  // is the background slot's, never the wrap-up set's — filtered before any
+  // launch, no receipt, no marker, the carry search untouched.
+  test("a regression-cost row is filtered out of the wrap-up's lane set", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      await git(dir, "commit", "--allow-empty", "-qm", "init")
+      const lanes = withMark(
+        [
+          lane({ name: "lint" }),
+          lane({ name: "regress", cost: "regression", command: "echo regress-ran >> <mark>; exit 0" }),
+        ],
+        file,
+      )
+      const result = await runTestLanes(dir, "T-001", lanes, { logDir })
+      expect(result.runs.map((run) => run.lane)).toEqual(["lint"])
+      expect(await marks(file)).toEqual(["lint"])
+      expect(existsSync(join(dir, laneReceiptDoc("T-001", "regress")))).toBe(false)
+    } finally {
+      clean([dir, scratch, logDir])
     }
   })
 })

@@ -230,7 +230,11 @@ export function laneBatches(lanes: readonly TestLane[]): TestLane[][] {
 // carry-forward rule: a lane whose last green receipt's recorded HEADs..HEAD
 // diff misses its surfaces is not launched at all — incremental execution
 // over the test graph, a phase of ten tasks with localized diffs running its
-// full gate on the intersecting minority, not ten times.
+// full gate on the intersecting minority, not ten times. Regression-cost
+// rows are not this set's to run (plans/0098 D1): the two-level pass keeps
+// them off the per-task critical path entirely — the driver's background
+// slot owns them (src/regression.ts), so they are filtered out here and
+// never read as anchors (anchorLaneOf skips them the same way).
 export async function runTestLanes(
   dir: string,
   taskId: string,
@@ -248,9 +252,10 @@ export async function runTestLanes(
   const guard = await scriptGuardSnapshot(dir)
   const heads = guard.map((shot) => ({ root: relative(dir, shot.root) || ".", sha: shot.head }))
   const timing = { idleMs, maxMs, pollMs, logDir }
+  const rows = lanes.filter((lane) => lane.cost !== "regression")
   const runs: LaneRun[] = []
   const pending: TestLane[] = []
-  for (const lane of lanes) {
+  for (const lane of rows) {
     const carried = await laneCarry(dir, lane)
     if (carried) {
       const now = new Date().toISOString()
