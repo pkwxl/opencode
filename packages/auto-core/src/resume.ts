@@ -157,6 +157,19 @@ export async function forgetProgress(dir: string) {
   await rm(join(dir, FILE), { force: true })
 }
 
+// The task-scoped forget (plans/0099 D8, doc lanes): delete the record only
+// when it belongs to the named task. Under concurrency each pipeline writes
+// the one file wholesale (a sibling's record is never this unit's recovery
+// point — recallProgress mismatches the task and degrades to a fresh
+// session), but an unconditional forget at one unit's completion would drop a
+// live sibling's in-flight record; the conditional keeps it. At concurrency 1
+// the record at a completion is always the task's own — the serial floor is
+// unchanged.
+export async function forgetProgressOf(dir: string, task: string) {
+  const record = await readProgress(dir)
+  if (record?.task === task) await rm(join(dir, FILE), { force: true })
+}
+
 // Reads the progress record belonging to the task (does not verify the
 // session liveness — that verdict sits in runner). Returns undefined on a task
 // mismatch, a missing file, or a corrupt one.

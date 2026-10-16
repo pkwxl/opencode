@@ -19,6 +19,13 @@ import { requireArtifact } from "./artifact"
 // artifacts have since been deleted, invisible to a pure file scan); the
 // driver validates its output against the floor of the deterministic scan.
 // Under --no-auto-number (the opt-out switch) this whole file is inert.
+//
+// Concurrency (plans/0099 D8 audit): the record has no queue because it is
+// single-writer by construction — during a task loop only a formulation
+// unit's collect advances it (advanceNextTask, runner.ts), a phase holds at
+// most one formulation unit (its first task unit), and every other write
+// (ensureNumbering, the append collect) belongs to planning-time moments the
+// phase loop owns before or after the loop, never beside a doc lane.
 
 // The numbering record file (relative to the target directory): its content is
 // a single positive integer (the next available number).

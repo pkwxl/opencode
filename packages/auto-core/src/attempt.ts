@@ -43,7 +43,7 @@ import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { currentRound } from "./phases"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
-import { forgetProgress, peekProgress, saveProgress } from "./resume"
+import { forgetProgressOf, peekProgress, saveProgress } from "./resume"
 import { routingOf, selectContext } from "./routing"
 import { services } from "./services"
 import { clientOf, contextLimitsOf, missingAgentHint, renameSession, zeroUsage } from "./session-api"
@@ -458,7 +458,7 @@ export async function attempt(
     // STATS_PLAN §4.1). Under a registry the same point also books per model
     // and per tier (0055 §7.1): one booking point, one cross-interruption
     // cumulative criterion.
-    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage(), statsModel, statsTier)
+    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage(), statsModel, statsTier, task.id)
     booked = true
     // Proxy-answer posting (auto-resolve H3): closes the segment together
     // with statsSessionEnd — the watch side observes only the question text
@@ -558,7 +558,7 @@ export async function attempt(
       if (result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       if (opts.dir && chain.phase) {
         if (prior) await saveProgress(opts.dir, prior)
-        else await forgetProgress(opts.dir)
+        else await forgetProgressOf(opts.dir, task.id)
       }
     } else {
       // The failed-session record is already cleared — promote wrote the
@@ -627,7 +627,7 @@ export async function attempt(
     // happened is recorded, nothing invented). The model/tier keys are
     // carried the same way (the session was indeed dispatched to that model;
     // a 0-usage session count is also part of the protocol-drift criterion).
-    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage(), statsModel, statsTier)
+    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage(), statsModel, statsTier, task.id)
     // Explicit stream drop: the abort signal cancels the SSE underlying
     // reader and exits its reconnect loop, releasing the connection quota
     // immediately (aborting an already-finished subscription is harmless);

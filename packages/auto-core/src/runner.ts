@@ -20,7 +20,7 @@ import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
 import { begin, checklistTitle, inversionWarnings, markDone, plannedTaskProblems, reloadTask, takenTaskIds, type ChecklistItem, type Plan, type Task } from "./tasks"
-import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
+import { forgetProgressOf, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
 import { statsDecomposeRun, statsModelEvent } from "./stats"
@@ -402,7 +402,7 @@ export async function runTask(
           ? `${task.id}.${subtaskId(opts.stream)} done`
           : `${task.id} lead done ${task.title}`
     await renameSession(await clientOf(client, chain.agent), chain, label)
-    await forgetProgress(dir)
+    await forgetProgressOf(dir, task.id)
     return outcome
   }
   if (outcome.type === "parked") {

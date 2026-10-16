@@ -18,6 +18,13 @@
 // The journal is written straight through (writeSync per entry), so a
 // kill -9'd process leaves a complete log up to its last recorded effect.
 //
+// Concurrency (plans/0099 D8 audit): the single file descriptor plus one
+// synchronous writeSync per line is the whole serialization — concurrent
+// pipelines interleave whole lines on the single-threaded event loop, never
+// tear one — and no queue is needed. This is the engine's only module-level
+// mutable state (the audit's preliminary scan; the concerns own per-session
+// slices through the turn contexts).
+//
 // `stats.ts` is not a fold over these events (R4's explicit ruling): the
 // journal records the turn engine's seam, not the run's bookings.
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs"

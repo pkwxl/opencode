@@ -532,7 +532,10 @@ function fold(handle: Handle) {
   if (now <= open.at) return
   const ms = Math.min(now - open.at, MAX_TICK)
   book(handle.doc, ms, open.ai)
-  if (open.ai && handle.session) handle.session.aiMs += ms
+  if (open.ai && handle.lastKey !== undefined) {
+    const session = handle.active.get(handle.lastKey)
+    if (session) session.aiMs += ms
+  }
   open.at = now
 }
 
@@ -657,7 +660,15 @@ type Handle = {
   // Not persisted.
   boot: { task: Totals; phase: Totals; round: Totals }
   writing: Promise<void> // write-queue tail; all disk writes (heartbeat/event/flush) serialize through this chain
-  session?: ActiveSession // the in-progress AI session (maintained by statsSessionBegin/End)
+  // The in-progress AI sessions (plans/0099 D8, doc lanes), keyed by the unit
+  // id their begin named — the one-key era's single slot generalized so a
+  // sibling pipeline's begin no longer displaces this unit's accumulators.
+  // lastKey is the unit whose begin opened the currently-open segment: fold
+  // credits its accumulator (the union caliber the header documents — with
+  // overlapping sessions only the segment holder's per-session figure grows,
+  // the others undercount).
+  active: Map<string, ActiveSession>
+  lastKey?: string
   // Human-wait nesting depth counter: depth 0→1 closes the segment (after the
   // fold open=undefined; neither wall clock nor AI grows); when it returns to
   // zero, waitMs is posted alone into the three buckets and the segment reopens
@@ -752,6 +763,7 @@ async function load(dir: string): Promise<Loaded> {
     doc,
     boot: { task: copyTotals(doc.taskB), phase: copyTotals(doc.phaseB), round: copyTotals(doc.roundB) },
     writing: Promise.resolve(),
+    active: new Map(),
     wait: { depth: 0, start: 0, ai: false },
   }
   handles.set(dir, handle)
@@ -779,7 +791,8 @@ export async function flushStats(dir: string | undefined): Promise<void> {
   if (!handles.has(dir) && !loading.has(dir)) return
   const { handle } = await ensure(dir)
   stopHeartbeat(handle)
-  handle.session = undefined
+  handle.active.clear()
+  handle.lastKey = undefined
   fold(handle)
   handle.doc.open = undefined
   queueWrite(dir, handle)
@@ -983,14 +996,16 @@ function addUsage(target: Usage, delta: Usage) {
 // heartbeat period; the alternative "queueWrite at begin" only narrows the
 // window by a few seconds while adding one disk write per session, rejected.
 // A session already in progress at begin (parallel, or an unpaired end on an
-// abnormal path): the old session's in-memory accumulators are abandoned
+// abnormal path): the same unit's own in-memory accumulators are abandoned
 // (already posted losslessly to the three buckets; per-session undercounts),
-// and the new session accumulates from zero.
+// and the new session accumulates from zero. A sibling unit's accumulators
+// (plans/0099 D8) are not touched — the map keeps them until their own end.
 export async function statsSessionBegin(dir: string | undefined, taskID: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
   fold(handle)
-  handle.session = { task: taskID, aiMs: 0, waitMs: 0 }
+  handle.active.set(taskID, { task: taskID, aiMs: 0, waitMs: 0 })
+  handle.lastKey = taskID
   handle.doc.open = { at: clock(), ai: true }
   startHeartbeat(dir, handle)
 }
@@ -1025,20 +1040,33 @@ export type StatsSessionReport = {
 // usage, one cumulative criterion across interruptions). Not given: no
 // models/tiers sections are created (every run books over its registry; this
 // corner is the direct caller's alone).
+// task (plans/0099 D8, doc lanes): the unit id captured at dispatch — the
+// booking attributes to it, never to the ambient "current bucket". Under
+// concurrency the task bucket flips between sibling units; a booking whose
+// task names a unit the bucket does not hold books phase/round + per-session
+// only, skipping the sibling's bucket (the statsLaneUsage precedent: never
+// fold into a task bucket that is not the unit's own). An empty task bucket
+// (no statsTask yet — the bypass pseudo tasks' case) keeps today's booking:
+// the serial floor is unchanged.
 export async function statsSessionEnd(
   dir: string | undefined,
   sessionID: string,
   usage: Usage,
   model?: string,
   tier?: string,
+  task?: string,
 ): Promise<StatsSessionReport | undefined> {
   if (!dir) return undefined
   const { handle } = await ensure(dir)
   fold(handle)
   stopHeartbeat(handle)
-  const active = handle.session
-  handle.session = undefined
+  const key = task ?? handle.lastKey
+  const active = key !== undefined ? handle.active.get(key) : undefined
+  if (key !== undefined) handle.active.delete(key)
   const doc = handle.doc
+  // The sibling-bucket test: book into taskB only when the bucket holds this
+  // session's unit (or nothing at all — the pre-statsTask bypass shape).
+  const ownBucket = key === undefined || doc.taskB.id === key || doc.taskB.id === ""
   const now = clock()
   // Close the AI segment and reopen a wall-clock segment; if currently inside
   // a human wait (the segment is already closed), waitEnd does the reopening —
@@ -1046,7 +1074,7 @@ export async function statsSessionEnd(
   // segment, not the ended session's AI segment.
   if (handle.wait.depth === 0) doc.open = { at: now, ai: false }
   else handle.wait.ai = false
-  for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+  for (const bucket of ownBucket ? [doc.taskB, doc.phaseB, doc.roundB] : [doc.phaseB, doc.roundB]) {
     bucket.sessions += 1
     addUsage(bucket.usage, usage)
     if (model !== undefined) {
@@ -1400,7 +1428,10 @@ export async function statsWaitEnd(dir: string | undefined): Promise<void> {
     for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
       bucket.waitMs += ms
     }
-    if (handle.session) handle.session.waitMs += ms
+    if (handle.lastKey !== undefined) {
+      const session = handle.active.get(handle.lastKey)
+      if (session) session.waitMs += ms
+    }
   }
   handle.doc.open = { at: now, ai: handle.wait.ai }
   queueWrite(dir, handle)

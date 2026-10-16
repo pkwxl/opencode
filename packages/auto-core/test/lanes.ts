@@ -34,6 +34,10 @@ export const REPO_LANE: readonly string[] = [
   "test/blockage-executor.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
+  // Doc lanes (plans/0099): the loop-shape cases drive real git repositories
+  // (the same-tree commit boundary the decorator scopes); the pure halves
+  // need no repository, the lane is the honest one.
+  "test/doc-lanes.test.ts",
   "test/config-fix.test.ts",
   // The plan-recorded execution mode (plans/0075): its end-to-end half drives
   // runTask over real git repositories (freshRepo fixtures).

@@ -162,12 +162,25 @@ export function parseIndex(text: string, level: UnitLevel): { entries: IndexEntr
 // (the state file is the fact). Moved here from the task store (0061 E3): the
 // phase index is ticked by the phases domain, which no longer imports the
 // driver's task store.
-export async function tickIndexLine(file: string, id: string): Promise<void> {
-  const text = await Bun.file(file).text().catch(() => undefined)
-  if (text === undefined) return
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
-  if (line.test(text)) await Bun.write(file, text.replace(line, "$1x$2"))
+// Concurrent ticks (plans/0099 D8, doc lanes): two pipelines closing units
+// side by side tick different lines of one index file, and the plain
+// read-modify-write loses the first tick to the second's stale text (both
+// reads resolve before either write lands). The serialized queue — the
+// updateUnits precedent (src/tasks.ts) — makes every tick see the previous
+// one's write; the mutations commute (different lines), so ordering is all
+// the safety there is to buy. Pass-through at concurrency 1: the serial
+// floor's behavior is unchanged.
+let tickQueue: Promise<unknown> = Promise.resolve()
+export function tickIndexLine(file: string, id: string): Promise<void> {
+  const run = tickQueue.then(async () => {
+    const text = await Bun.file(file).text().catch(() => undefined)
+    if (text === undefined) return
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
+    if (line.test(text)) await Bun.write(file, text.replace(line, "$1x$2"))
+  })
+  tickQueue = run.catch(() => {})
+  return run
 }
 
 // —— Unit documents: title line + field block ——
