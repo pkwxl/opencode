@@ -295,6 +295,12 @@ describe("constitution drift ratchet", () => {
     expect(GUIDANCE.DRIVER_PRIMER.length).toBeGreaterThan(500)
     expect(GUIDANCE.ASSIST_RULE).toContain("never invent the person's answer")
     expect(GUIDANCE.ANALYSIS_STATE).toContain("determines the key work of the rounds that follow")
+    // The roadmap line is machine grammar and the state teaches it as that:
+    // a decorated bullet (`- **R-01 (import) — goal**`) reads like the format
+    // but never parses — naming the shape alone left sessions no standard to
+    // fix by.
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("one machine-parsed line per round")
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("does not parse")
     for (const guidance of [
       { kind: "analysis" },
       { kind: "round", round: "R-01" },

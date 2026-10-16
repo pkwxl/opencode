@@ -31,13 +31,16 @@ import { stripComments, stubbedText } from "./round-brief"
 export const ANALYSIS_SECTIONS = ["## Analysis", "## Goals", "## Project brief", "## Roadmap"] as const
 
 // One planned round of the roadmap: `- R-01 adm — <goal>`. The phases value
-// holds no spaces (a letter preset or a comma-separated type-id list, the
-// `amend --phases` grammar); the separator is an em dash, with `--` accepted
-// as the ASCII spelling. Lines that do not match anywhere in the document are
-// prose and ignored — the whole-document scan is the survey `Fork:` line's
-// rule (a roadmap line under a scratch heading still counts: the person reads
-// the whole file before releasing, and so does the driver).
-const ROADMAP_LINE = /^\s*[-*]\s*R-(\d+)\s+([a-z][a-z0-9,()-]*)\s+(?:—|--)\s*(.+)$/
+// is the `amend --phases` grammar — a letter preset or a comma-separated
+// type-id list, spaces around the ids accepted and normalized away on
+// capture (a session's natural `a, b, c` list parses; the line grammar must
+// accept exactly what the phases grammar accepts, or a correct fix bounces);
+// the separator is an em dash, with `--` accepted as the ASCII spelling.
+// Lines that do not match anywhere in the document are prose and ignored —
+// the whole-document scan is the survey `Fork:` line's rule (a roadmap line
+// under a scratch heading still counts: the person reads the whole file
+// before releasing, and so does the driver).
+const ROADMAP_LINE = /^\s*[-*]\s*R-(\d+)\s+([a-z][a-z0-9,() -]*?)\s+(?:—|--)\s*(.+)$/
 
 // The stub the first plan writes: every section carries only a comment hint,
 // so an untouched stub has no content anywhere and fails the release checks
@@ -69,12 +72,17 @@ export function renderAnalysisStub(): string {
     "",
     "## Roadmap",
     "",
-    "<!-- The long-term plan for the next few rounds (usually 2-5), one line per round: -->",
-    "<!-- `- R-NN <phases> — <goal>`, where <phases> is the value `amend --phases` sets for that round. -->",
+    "<!-- The long-term plan for the next few rounds (usually 2-5), one machine-parsed line per -->",
+    "<!-- round: `- R-NN <phases> — <goal>` exactly — nothing else between the round id and the dash -->",
+    "<!-- (bold markers or a parenthetical there breaks the parse); <phases> is the value -->",
+    "<!-- `amend --phases` sets for that round. -->",
     "<!-- Under each line: that round's key work at task granularity, its acceptance posture, its -->",
     "<!-- dependencies on earlier rounds, and the risks it resolves. The bar: a reader of this roadmap -->",
     "<!-- can tell what each of the next rounds is for without new deciding. -->",
     "",
+    "<!-- Roadmap round lines parse mechanically: `- R-NN <phases> — <goal>` with nothing else between -->",
+    "<!-- the round id and the dash — a decorated bullet does not parse and holds this release; a -->",
+    "<!-- round's detail lives under its line as prose. -->",
     "<!-- Release: add the line `Clarified: yes` (whole line) and commit; the next `plan` installs the -->",
     "<!-- approved brief and opens round R-01. -->",
     "",
@@ -112,7 +120,7 @@ export function roadmapRounds(text: string): RoadmapRound[] {
   const rounds: RoadmapRound[] = []
   for (const line of text.split("\n")) {
     const match = ROADMAP_LINE.exec(line)
-    if (match) rounds.push({ round: Number(match[1]), phases: match[2]!, goal: match[3]!.trim() })
+    if (match) rounds.push({ round: Number(match[1]!), phases: match[2]!.replace(/\s+/g, ""), goal: match[3]!.trim() })
   }
   return rounds
 }
@@ -121,6 +129,25 @@ export function roadmapRounds(text: string): RoadmapRound[] {
 // no line for it (the person diverged, or the roadmap ends before it).
 export function roadmapPhases(text: string, round: number): string | undefined {
   return roadmapRounds(text).find((entry) => entry.round === round)?.phases
+}
+
+// Round-like bullets that fail the parse — the incident shape: a document
+// whose rounds are all written as decorated bullets (`- **R-01 (…) — goal**`)
+// reads to its author as planned, and a rule stated generically never points
+// at those lines. In a real environment the tool's messages are the only
+// standard a stranded session can reach (the tool's source is not at hand),
+// so the problems name the document's own non-parsing bullets, capped at
+// three heads with the rest counted.
+const ROUNDLIKE_BULLET = /^\s*[-*]\s*\*{0,2}\s*R-\d+/
+
+function nearMissHeads(text: string): string[] {
+  return text
+    .split("\n")
+    .filter((line) => ROUNDLIKE_BULLET.test(line) && !ROADMAP_LINE.test(line))
+    .map((line) => {
+      const head = line.trim()
+      return head.length > 64 ? `${head.slice(0, 64)}…` : head
+    })
 }
 
 // The grammar problems that hold the release. Empty = the document is
@@ -135,11 +162,24 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
     if (body === undefined) problems.push(`${ANALYSIS_DOC} is missing its \`${heading}\` section`)
     else if (!body) problems.push(`\`${heading}\` holds no content yet (the stub's hints are comments, not content)`)
   }
-  if (!roadmapRounds(text).length) {
-    problems.push(`\`## Roadmap\` plans no round: one line per planned round, \`- R-NN <phases> — <goal>\` (for example \`- R-01 adm — port the retry ladder with tests\`)`)
-  }
+  const rounds = roadmapRounds(text)
+  const near = nearMissHeads(text)
+  const tail = near.length > 3 ? ` (+${near.length - 3} more)` : ""
   const known = types.map((entry) => entry.type)
-  for (const entry of roadmapRounds(text)) {
+  if (!rounds.length) {
+    const named = near.length ? `; this document's round-like bullets do not parse: ${near.slice(0, 3).join("; ")}${tail}` : ""
+    problems.push(
+      `\`## Roadmap\` plans no round: one line per planned round, \`- R-NN <phases> — <goal>\` exactly — nothing else between the round id and the dash (bold markers or a parenthetical there breaks the parse; a round's detail goes under the line as prose); <phases> is the round's \`amend --phases\` value — a letter preset over admtvk containing m, or comma-separated type ids from the known types (${known.join(", ")}), at least one of them implement — for example \`- R-01 adm — port the retry ladder with tests\` or \`- R-01 analysis,implement — port the core and tests\`${named}`,
+    )
+  } else if (near.length) {
+    // A passing roadmap with a decorated leftover is silently lossy: the
+    // bullet's round looks planned but carries no phases advice, so it is a
+    // problem of its own, not a footnote to the empty case.
+    problems.push(
+      `rounds that look planned but do not parse (each planned round is one line \`- R-NN <phases> — <goal>\`, nothing else between the round id and the dash; a non-parsing bullet's round gets no phases advice): ${near.slice(0, 3).join("; ")}${tail}`,
+    )
+  }
+  for (const entry of rounds) {
     if (resolvePhases(entry.phases, types)) continue
     problems.push(`the roadmap line \`R-${String(entry.round).padStart(2, "0")} ${entry.phases}\` is not a phases value (a letter preset over admtvk, or a comma-separated type-id list; known types: ${known.join(", ")})`)
   }
