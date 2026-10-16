@@ -144,6 +144,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // imports nothing at all (the callers hand the texts in), so its placement
   // is the runtime plane bundle/config-fix occupy.
   provenance: "driver",
+  // The bundle sync command's core (plans/0100 D4/D5): plan/apply/format on
+  // the config-fix shape — the write side of the provenance detection, over
+  // the same init-time surfaces bundle/config-fix manage.
+  sync: "driver",
   capability: "driver",
   chain: "driver",
   // The named SessionChain transitions (plans/0061 §4.8): the one home for
@@ -669,6 +673,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // init-time plane — no value edges at all today; runtime so the detection
   // sites (preflight, fix, status, sync) reach it without exception.
   provenance: "runtime",
+  // The bundle sync core (plans/0100 D4/D5): the person's upgrade command's
+  // plan/apply/format, reaching bundle (the resolve/map), provenance (the
+  // stamp) and config (the bootstrap's intent key) — the config-fix seat.
+  sync: "runtime",
   "agent-choice": "runtime",
   "agent-env": "runtime",
   "agent-pool": "runtime",

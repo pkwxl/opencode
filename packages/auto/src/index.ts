@@ -21,6 +21,8 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
+import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
+import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { landUnit } from "@opencode-ai/auto-core/land"
@@ -151,7 +153,7 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -380,11 +382,14 @@ const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", 
 const MODELS_FLAGS = new Set(["probe"])
 const FLAGLESS = command === "status" || command === "models" || command === "install-prompts"
 // reset is de-initialization with nothing to configure: it accepts only
-// -f/--force (skipping the confirmation and the worktree cleanliness gate).
+// -f/--force (skips the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
 // accepts the same plus --dryrun (plans/0052 D11; the read-only listing of
-// the findings, no write-side gates).
+// the findings, no write-side gates). sync (auto-core plans/0100 D4/D5) takes
+// fix's pair plus --from-bundle (the unstamped bootstrap's opt-in overwrite:
+// the person's assertion that a differing pack is pristine-but-old).
 const RESET_FLAGS = new Set(["force"])
+const SYNC_FLAGS = new Set(["force", "dryrun", "from-bundle"])
 // close (auto-core plans/0053 D22) takes only its four flags: --reason (a
 // value flag) and the booleans --cascade, --commit-changes, --stash-changes.
 // Everything else is refused with a close-appropriate message below — the
@@ -399,10 +404,13 @@ const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-chang
 // else is refused with a land-appropriate message, mirroring CLOSE_FLAGS.
 const LAND_FLAGS = new Set(["keep", "abandon", "merge"])
 for (const key of flags.keys()) {
-  if (command === "reset" || command === "fix") {
-    // fix accepts --dryrun beside -f/--force (reset does not)
-    if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun")) continue
-    console.error(`unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : " and -f/--force"}`)
+  if (command === "reset" || command === "fix" || command === "sync") {
+    // fix accepts --dryrun beside -f/--force (reset does not); sync adds
+    // --from-bundle on top (the bootstrap overwrite's opt-in).
+    if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun") || (command === "sync" && SYNC_FLAGS.has(key))) continue
+    console.error(
+      `unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : command === "sync" ? ", -f/--force, --dryrun and --from-bundle" : " and -f/--force"}`,
+    )
     process.exit(1)
   }
   if (command === "close") {
@@ -535,6 +543,7 @@ const directory = resolve(command === "close" ? positional[1] ?? "." : positiona
 // -f/--force alongside it is accepted and inert: dryrun has no gates left to
 // skip.
 const fixDryrun = command === "fix" && flags.has("dryrun") && flags.get("dryrun") !== "false"
+const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryrun") !== "false"
 
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
 // usage error before init/amend/plan/close/fix writes anything, status
@@ -545,7 +554,7 @@ const fixDryrun = command === "fix" && flags.has("dryrun") && flags.get("dryrun"
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "land" || command === "fix" || command === "status" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -560,9 +569,11 @@ if (command === "init" || command === "amend" || command === "plan" || command =
 // themselves — plan before its prelude (re-entered through runAll), close
 // around closeUnit — so neither joins this refusal list. fix --dryrun reads
 // and prints only, so it runs beside a live run (the one write-side gate it
-// skips). (`continue` and `check` used to refuse here too; both retired ahead
-// of every check, their notices above.)
-if (command === "init" || command === "amend" || command === "reset" || (command === "fix" && !fixDryrun)) {
+// skips); sync joins the family beside fix (it rewrites the materialized
+// bundle files a run's sessions read, plans/0100 D4) with the same dryrun
+// exemption. (`continue` and `check` used to refuse here too; both retired
+// ahead of every check, their notices above.)
+if (command === "init" || command === "amend" || command === "reset" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
   const holder = liveRunLock(directory)
   if (holder) {
     for (const line of lockLines(directory, holder)) console.error(line)
@@ -2134,6 +2145,72 @@ if (command === "fix") {
   process.exit(0)
 }
 
+// sync (auto-core plans/0100 D4/D5): the person's upgrade command for a
+// materialized intent bundle — the write side of the provenance detection
+// every run logs. Plan-then-apply on the fix UX: print the plan, then the
+// worktree cleanliness gate and the confirmation (-f skips both), then
+// apply; the sidecar rewrites last. Unedited managed files fast-forward
+// byte-identically to the running binary's bundle; person-edited files and
+// extras are reported and never written or deleted; an unstamped project
+// bootstraps (byte-identical files adopted into a fresh stamp, differing
+// ones report-only unless --from-bundle asserts pristine-but-old). It never
+// touches config.json, never commits (the person reviews and commits), and
+// proceeds past the open-round warning — a round in flight means later
+// phases would plan under changed charters, the person's boundary call.
+// --dryrun keeps the read-only half (plan and print, no write-side gates),
+// exiting 0 when nothing would change and 1 when something would.
+if (command === "sync") {
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    console.error(`nothing to sync: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}`)
+    process.exit(1)
+  }
+  const plan = await planSync(directory, { fromBundle: flags.has("from-bundle") && flags.get("from-bundle") !== "false" })
+  if (plan.nothing !== undefined) {
+    console.log(`✓ nothing to sync: ${plan.nothing}`)
+    process.exit(0)
+  }
+  const actionable = plan.entries.filter((entry) => entry.action !== "current")
+  if (!actionable.length) {
+    console.log(`✓ nothing to sync: every materialized file of bundle "${plan.bundle}" matches the running binary's`)
+    process.exit(0)
+  }
+  console.log(`the bundle sync plan for ${directory} (bundle "${plan.bundle}", stamp ${plan.stampText !== undefined ? "rewrites" : "stands"}):`)
+  console.log(formatSyncPlan(plan))
+  if (syncDryrun) {
+    console.log(
+      syncWritesAnything(plan)
+        ? `dryrun: nothing was changed; apply with opencode-auto sync ${directory}${flags.has("from-bundle") ? "" : " (--from-bundle to also overwrite the differing unstamped files)"}`
+        : "dryrun: nothing was changed; the entries above are report-only",
+    )
+    process.exit(syncWritesAnything(plan) ? 1 : 0)
+  }
+  if (syncWritesAnything(plan) && !flags.has("force")) {
+    const dirty = await checkCleanTree(directory, "sync")
+    if (dirty) {
+      console.error(dirty)
+      process.exit(1)
+    }
+    const writes = plan.writes.length + (plan.stampText !== undefined ? 1 : 0)
+    const ok = await confirm(`apply the sync above (${writes} write(s))? [y/N] `)
+    if (!ok) {
+      console.log("cancelled; nothing was changed")
+      process.exit(0)
+    }
+  }
+  try {
+    await applySync(directory, plan)
+  } catch (error) {
+    console.error(`sync failed: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+  for (const write of plan.writes) console.log(`synced: ${write.path}`)
+  if (plan.stampText !== undefined) console.log(`stamp: ${PROVENANCE_FILE} rewritten`)
+  const held = plan.entries.filter((entry) => entry.action === "edited" || entry.action === "retired" || entry.action === "collision" || entry.action === "differ" || entry.action === "extra")
+  if (held.length) console.error(`${held.length} entr(ies) above are yours alone (person-owned or retired): they were reported, never written`)
+  console.log("✓ bundle synced; review the change and commit it")
+  process.exit(0)
+}
+
 // The phase progress line (shared by run's banner and status): the current
 // round's phase index → P01-analysis✓ P02-design▶ …; a missing or invalid
 // index only yields a warning line and never blocks the caller.
@@ -2224,6 +2301,7 @@ console.error(`usage:
   opencode-auto land [dir] [--keep] [--abandon] [--merge]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
+  opencode-auto sync [dir] [-f|--force] [--dryrun [true|false]] [--from-bundle]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
@@ -2233,13 +2311,14 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — plan establishes them), so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — seed it with init/amend --brief); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
-       -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
+       -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset, fix and sync)
+         sync upgrades a materialized intent bundle to the running binary's (auto-core plans/0100): unedited managed files (the pack, the mode, the phase files init materialized, recorded with their digests in .opencode/auto/provenance.json) fast-forward byte-identically, the stamp rewrites, and the diff is left for review — never committed, never touching config.json. Person-edited files, files the bundle retired and extras under the materialized homes are reported and never written or deleted. An unstamped project (materialized before the stamp existed) bootstraps: byte-identical files are adopted into a fresh stamp, differing ones reported with the headings delta (--from-bundle overwrites them — your assertion the pack is pristine-but-old). A round in flight only warns: later phases would plan under changed charters, your boundary call. sync --dryrun plans and prints, writes nothing (exit 0 when nothing would change, 1 when something would)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); --phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); the existing gates check the result — the round-start gate for the brief, the planning session's own input read for the input. On a fresh target (no rounds yet) the first plan opens the assisted project analysis instead: docs/analysis.md — the thorough analysis, the goals, one Fork: line per open decision, the project-brief proposal and the multi-round roadmap ("- R-NN <phases> — <goal>" per round, its phases value the exact "amend --phases" argument); your "Clarified: yes" line releases it (installs the brief, opens R-01, and the establish stop names the roadmap's phases advice for the round). OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did
          close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
          land [dir] lands each branch-isolated repository's round of work (config isolate, the auto/R-NN branch round establishment switched it onto) back onto its original branch as one commit — default git merge --squash (the deliverable's history gains exactly one commit; --merge takes a true merge commit instead) — deletes the round branch and prints the landed SHA. Landing mid-round is allowed with --keep: the branch is retained and checked back out — the round simply continues on it; a later land recognizes the previous landing and folds only the new commits. --abandon discards the round branch after a person-reviewed reset — the undo path: it checks the original branch back out, deletes auto/R-NN (its tip printed, recoverable via git reflog) and lands nothing. Refusal is never an automated merge resolution: the original branch moved, foreign commits mixed into auto/R-NN's range, a dirty repository or an ambiguous original branch all block (exit 2) naming what to settle; preflight warns about a leftover auto/R-NN of an abandoned round (recoverable state — land --abandon and plain git both address it). The audit-trail trade-off is stated, not hidden: one commit on the deliverable, the full per-unit trail in the driven root's git. Exit codes: 0 landed; 1 usage error; 2 blocked for human
-         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), close holds it around its writes, and land around its branch moves; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
+         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), close holds it around its writes, and land around its branch moves; init, amend, fix, sync and reset refuse while another process holds it (fix/sync --dryrun read and print only, so they run beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. The project brief .opencode/auto/brief.md is seeded with init --brief <text> | --brief-file <path> (written verbatim; omitted writes no file) and revised with amend's --brief/--brief-file or installed from the survey phase's approved proposal — never hand-edited mid-run; every planning session reads it. State the migration source and target there — --source-dir/--source-path/--dest-dir are retired

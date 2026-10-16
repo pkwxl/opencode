@@ -43,6 +43,7 @@ bun run packages/auto/src/index.ts <subcommand> ...
 opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, write the optional project-brief seed of `--brief <text> | --brief-file <path>` verbatim to .opencode/auto/brief.md (omitted: no file; the survey/analysis phase proposes the full brief later), idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by plan. In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
 opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-file <path>]   # rewrite only the given config keys, keep the rest (at least one key, or a brief revision; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
+opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
 opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
@@ -278,6 +279,27 @@ validation, the `handoverTest` pairing check and the phase index prefix guardrai
   `opencode.json`, `.gitignore` and the brief.md stub belong to `init` / `fix`, which amend does not touch.
 - On success it prints `✓ amended (<given options>)`; the changes stay in the worktree, uncommitted — review
   and commit them yourself.
+
+### Bundle sync (sync)
+
+`opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]` upgrades a materialized intent bundle to the
+running binary's (auto-core plans/0100): the write side of the provenance detection every run logs beside
+the intent-pack line (and `fix`/`status` report as manual findings/rows). Init's `--intent` materializes the
+bundle's files and records their digests in `.opencode/auto/provenance.json`; when the binary's bundle
+moves on, that committed surface silently predates it — detection names the drift, `sync` propagates it:
+
+- unedited managed files fast-forward **byte-identically** to the running binary's bundle and the stamp
+  rewrites with the new digests; files the bundle newly ships land, files it retired are reported and never
+  deleted;
+- person-edited files are reported with the headings delta and **never written** (the stamp keeps the
+  tool's last-written bytes, so the binary's offer stays visible in detection); extras under the materialized
+  homes are reported, never deleted;
+- an unstamped legacy project (materialized before the stamp existed) bootstraps: byte-identical files are
+  adopted into a fresh stamp, differing ones reported with the delta — `--from-bundle` overwrites them
+  (your assertion that the pack is pristine-but-old);
+- a round in flight only warns (later phases would plan under changed charters — your boundary call);
+  `config.json` is never touched, nothing is committed (review and commit the diff), and `sync` refuses
+  while a run lock is live (`--dryrun` reads only).
 
 ### Config fix (fix)
 

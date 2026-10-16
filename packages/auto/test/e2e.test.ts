@@ -15,6 +15,8 @@ import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/serv
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
 import { askClassifier, classifierFor } from "@opencode-ai/auto-core/classify"
 import type { AgentClient, AgentEvent, AgentHost } from "@opencode-ai/auto-core/agent/types"
+import { bundleFileMap, parseIntentBundle, resolveIntentBundle } from "@opencode-ai/auto-core/bundle"
+import { provenanceStampOf, renderProvenanceStamp } from "@opencode-ai/auto-core/provenance"
 import { setShellProfile } from "@opencode-ai/auto-core/shell"
 import { setSwitchModelRegistry } from "@opencode-ai/auto-core/switches"
 import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
@@ -2717,7 +2719,7 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
       const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
       await plantLock(dir)
       const refusal = `⏸ another opencode-auto process holds the run lock of ${dir}: plan, pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z.`
-      for (const args of [["init", dir], ["init", dir, "-f"], ["amend", dir, "--context-limit", "64"], ["fix", dir, "-f"], ["reset", dir, "-f"]]) {
+      for (const args of [["init", dir], ["init", dir, "-f"], ["amend", dir, "--context-limit", "64"], ["fix", dir, "-f"], ["sync", dir, "-f"], ["reset", dir, "-f"]]) {
         const refused = await runCli(args)
         expect(refused.code).toBe(1)
         expect(refused.err).toContain(refusal)
@@ -2731,11 +2733,14 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
       expect(status.out.split("\n")[0]).toBe(`▶ plan in progress (pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z)`)
       expect(status.out).toContain("⚙ project config")
       // fix --dryrun reads and prints only, so it runs beside the live lock
-      // (the one write-side gate it skips); the plain fix stays refused above
+      // (the one write-side gate it skips); the plain fix stays refused above.
+      // sync --dryrun is the same read-only shape (plans/0100 D4).
       const dry = await runCli(["fix", dir, "--dryrun"])
       expect(dry.code).toBe(0)
       expect(dry.out).toContain("✓ nothing to fix")
       expect(dry.err).not.toContain("run lock")
+      const syncDry = await runCli(["sync", dir, "--dryrun"])
+      expect(syncDry.err).not.toContain("run lock")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -4911,4 +4916,117 @@ describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   }, 240_000)
+})
+
+// sync (auto-core plans/0100 D4/D5): the person's upgrade command for a
+// materialized intent bundle, driven through the CLI — the plan/confirm/apply
+// UX on the fix pattern, the dryrun exit codes, the never-overwrite-edited
+// invariant, the unstamped bootstrap's adopt/report split with --from-bundle,
+// and the flag discipline.
+describe("CLI: sync (auto-core plans/0100 D4/D5)", () => {
+  const PACK = join(".opencode", "auto", "intents", "faithful.md")
+  const STAMP = join(".opencode", "auto", "provenance.json")
+
+  // An initialized, committed faithful project whose pack and stamp predate
+  // the charter family (the incident's shape, hand-aged as an older binary
+  // would have left them). `unstamped` additionally removes the sidecar (the
+  // legacy project).
+  async function agedProject(unstamped = false): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-sync-"))
+    expect((await runCli(["init", dir, "--intent", "faithful"])).code).toBe(0)
+    const files = (await resolveIntentBundle("faithful"))!
+    const current = await Bun.file(join(dir, PACK)).text()
+    const old = `${current.slice(0, current.indexOf("### verify-plan-test")).trimEnd()}\n`
+    await Bun.write(join(dir, PACK), old)
+    if (unstamped) await rm(join(dir, STAMP))
+    else {
+      const map = bundleFileMap(parseIntentBundle(files))
+      map[PACK.replaceAll("\\", "/")] = old
+      await Bun.write(join(dir, STAMP), renderProvenanceStamp(provenanceStampOf("faithful", map)))
+    }
+    await commitFixture(dir)
+    return dir
+  }
+
+  test("a stale stamped project: dryrun plans, -f fast-forwards, detection goes quiet", async () => {
+    const dir = await agedProject()
+    try {
+      const dry = await runCli(["sync", dir, "--dryrun"])
+      expect(dry.code).toBe(1)
+      expect(dry.out).toContain(`→ ${PACK.replaceAll("\\", "/")}: fast-forward to the running bundle (adds ### verify-plan-test)`)
+      expect(dry.out).toContain("dryrun: nothing was changed")
+      expect(await Bun.file(join(dir, PACK)).text()).not.toContain("### verify-plan-test")
+      // The status row and the fix finding are the detection the person
+      // acted on; after the sync both go quiet.
+      expect((await runCli(["status", dir])).out).toContain("stale")
+      expect((await runCli(["fix", dir, "--dryrun"])).out).toContain("verify-plan-test")
+      const applied = await runCli(["sync", dir, "-f"])
+      expect(applied.code).toBe(0)
+      expect(applied.out).toContain(`synced: ${PACK.replaceAll("\\", "/")}`)
+      expect(applied.out).toContain("stamp: .opencode/auto/provenance.json rewritten")
+      expect(await Bun.file(join(dir, PACK)).text()).toContain("### verify-plan-test")
+      expect((await runCli(["status", dir])).out).not.toContain("stale")
+      expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
+      const again = await runCli(["sync", dir, "--dryrun"])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain("✓ nothing to sync")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a person-edited managed file is never written, reported as the person's alone", async () => {
+    const dir = await agedProject()
+    try {
+      const mode = join(dir, ".opencode", "auto", "modes", "faithful.md")
+      const edited = `${(await Bun.file(mode).text()).trimEnd()}\n\n## my own section\n\nOurs.\n`
+      await Bun.write(mode, edited)
+      await commitFixture(dir)
+      const out = await runCli(["sync", dir, "-f"])
+      expect(out.code).toBe(0)
+      expect(await Bun.file(mode).text()).toBe(edited)
+      expect(out.out).toContain("edited after materialization")
+      expect(out.err).toContain("yours alone")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the unstamped bootstrap: adopt/report split, --from-bundle the overwrite", async () => {
+    const dir = await agedProject(true)
+    try {
+      const dry = await runCli(["sync", dir, "--dryrun"])
+      expect(dry.code).toBe(1)
+      expect(dry.out).toContain(`⚠ ${PACK.replaceAll("\\", "/")}: differs from the running bundle (adds ### verify-plan-test) — report-only`)
+      expect(dry.out).toContain("adopted (the stamp starts managing it)")
+      const adopted = await runCli(["sync", dir, "-f"])
+      expect(adopted.code).toBe(0)
+      // The differing pack was never written without the flag.
+      expect(await Bun.file(join(dir, PACK)).text()).not.toContain("### verify-plan-test")
+      expect(await Bun.file(join(dir, STAMP)).text()).toContain("survey.md")
+      // With the person's pristine-but-old assertion the pack converges.
+      const converged = await runCli(["sync", dir, "-f", "--from-bundle"])
+      expect(converged.code).toBe(0)
+      expect(await Bun.file(join(dir, PACK)).text()).toContain("### verify-plan-test")
+      expect((await runCli(["status", dir])).out).not.toContain("stale")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("flag discipline and the uninitialized refusal", async () => {
+    const dir = await agedProject()
+    const bare = await mkdtemp(join(tmpdir(), "auto-cli-sync-"))
+    try {
+      const bad = await runCli(["sync", dir, "--parallel", "low"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("unknown option --parallel: sync only accepts a directory argument, -f/--force, --dryrun and --from-bundle")
+      const nothing = await runCli(["sync", bare])
+      expect(nothing.code).toBe(1)
+      expect(nothing.err).toContain("has no .opencode/auto/config.json")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(bare, { recursive: true, force: true })
+    }
+  })
 })

@@ -122,6 +122,11 @@ export const UNIT_LANE: readonly string[] = [
   // initialized fresh repository (preflight's log capture, fix's plan,
   // status's rows) — no spawn.
   "test/provenance.test.ts",
+  // The sync plan (plans/0100 D4/D5): plan/apply/format over temp project
+  // directories (a config.json naming the bundle, no git — sync writes files
+  // and never commits) and one process-local registered bundle for the
+  // retired-file shape; no spawn.
+  "test/sync.test.ts",
   // The 0082 pure halves: the span locator, the plan parser, the marks and
   // the caps over plain temp directories; the clamp suite over the ledger
   // (temp files, no repository, no spawn).

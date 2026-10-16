@@ -75,6 +75,17 @@ export function provenanceStampOf(bundle: string, files: Record<string, string>)
     const text = files[path]!
     out[path] = { sha256: sha256Text(text), headings: headingLines(text) }
   }
+  return provenanceStampOfEntries(bundle, out)
+}
+
+// The same stamp from pre-digested entries (sync's shape: a person-edited
+// path keeps its original stamp entry — the tool's last-written bytes —
+// which no text map holds anymore).
+export function provenanceStampOfEntries(bundle: string, files: Record<string, ProvenanceFile>): ProvenanceStamp {
+  const out: Record<string, ProvenanceFile> = {}
+  for (const path of Object.keys(files).sort()) {
+    out[path] = files[path]!
+  }
   const bundleDigest = sha256Text(
     Object.keys(out)
       .sort()

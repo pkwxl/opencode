@@ -178,6 +178,7 @@ driver's unified commit is the completion condition.
 | `init [dir] [keys]` | open a project: write the config layer (full overwrite) |
 | `amend [dir] --<key> <value>` | rewrite only the given config keys |
 | `fix [dir] [-f] [--dryrun]` | repair the config layer by rule |
+| `sync [dir] [-f] [--dryrun] [--from-bundle]` | upgrade a materialized intent bundle to the running binary's (never writes person-edited files, never deletes extras; `--from-bundle` overwrites differing unstamped files) |
 | `reset [dir] [-f]` | de-initialize (remove exactly init's artifacts) |
 | `plan [dir] [-p \| --file]` | open round/phase: plan and stop before execution |
 | `plan [dir] --append -p "…"` | append tasks to the current phase |
