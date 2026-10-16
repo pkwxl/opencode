@@ -722,6 +722,20 @@ describe("renderWrapup", () => {
     expect(wrapOf(plan, task)).toContain("All subtasks of this task were completed one by one")
   })
 
+  test("D11 (plans/0099): a doc lane's wrap-up prompt carries the concurrency clause; a serial wrap-up renders byte-identically without the fact", () => {
+    const plain = wrapOf(plan, task, { solo: true })
+    const lane = wrapOf(plan, task, { solo: true, docLane: true })
+    // The verification session learns the same write fence — it updates this
+    // task's documents only (the report and gap list live in the unit's own
+    // docs/T-NNN/); sibling documents stay readable for cross-checks.
+    expect(lane).toContain("Sibling doc units run beside you in this tree: write only inside this task's declared `Touches` (your own docs/T-002/ included — the report and any gap list live there); the phase index and every other task's documents are read-only to you; reads of sibling documents are fine.")
+    expect(lane.indexOf("Sibling doc units")).toBeGreaterThan(lane.indexOf("This session only performs the wrap-up:"))
+    expect(lane.indexOf("Sibling doc units")).toBeLessThan(lane.indexOf("1. Update the documents"))
+    expect(lane).not.toMatch(/\{\{|\}\}/)
+    expect(plain).not.toContain("Sibling doc units")
+    expect(wrapOf(plan, task, { solo: true, docLane: false })).toBe(plain)
+  })
+
   test("indexed report (auto mode): one line per subtask referencing artifact paths, no copying artifact content", () => {
     const text = wrapOf(plan, task)
     expect(text).toContain("an indexed report")
@@ -843,6 +857,21 @@ describe("renderWhole", () => {
     // its exact pre-S5 bytes.
     expect(wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true, parallel: undefined })).toBe(plain)
     expect(plain).not.toContain("parallel level")
+  })
+
+  test("D11 (plans/0099): a doc lane's whole-task prompt carries the concurrency clause as a constraint; a serial unit renders byte-identically without the fact", () => {
+    const plain = wholeOf(plan, task, { ondemand: true })
+    const lane = wholeOf(plan, task, { ondemand: true, docLane: true })
+    // The write fence, fourth constraint: only the declared Touches (the
+    // unit's own docs/T-NNN/ included); sibling documents stay readable.
+    expect(lane).toContain("4. Sibling doc units run beside you in this tree: write only inside your declared `Touches` (your own docs/T-002/ included); the phase index and every other task's documents are read-only to you; reads of sibling documents are fine.")
+    expect(lane.indexOf("4. Sibling doc units")).toBeGreaterThan(lane.indexOf("3. You may add to the content of docs/"))
+    expect(lane.indexOf("4. Sibling doc units")).toBeLessThan(lane.indexOf("Dependency park:"))
+    expect(lane).not.toMatch(/\{\{|\}\}/)
+    // Without the fact (every serial or solo unit): the constraint list and
+    // the whole prompt keep their exact pre-0099 bytes.
+    expect(plain).not.toContain("Sibling doc units")
+    expect(wholeOf(plan, task, { ondemand: true, docLane: false })).toBe(plain)
   })
 
   test("the rejected split's note: the reason, the removed checklist, no second split; the fresh-session fallback adds the committed earlier work", () => {

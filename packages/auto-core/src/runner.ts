@@ -162,13 +162,16 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // leftover doc units' scopes present in the tree while this one is driven —
 // a strict-resume rollback is tree-wide (stash push -u of everything, then
 // the soft reset), so with siblings present the rollback verdict becomes
-// the human posture (stop 2) instead of sweeping their state.
+// the human posture (stop 2) instead of sweeping their state; `docLane` —
+// D11's render fact, true exactly for a doc lane's units: the whole-task
+// and wrap-up prompts gain their concurrency clause under it (a serial or
+// solo unit renders byte-identically without it).
 export async function runTask(
   client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
-  input: { baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; siblingScopes?: readonly string[] } = {},
+  input: { baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; siblingScopes?: readonly string[]; docLane?: boolean } = {},
 ): Promise<Outcome> {
   // Experiment switches (the OPENCODE_AUTO_* environment-variable layer,
   // plans/0003-fork-decompose-design.md §4.6): parsed once at the entry
@@ -552,7 +555,7 @@ export async function runTask(
         log(`↻ ${task.id} the lead's split was taken earlier; its streams continue from ${taskDoc(task.id, "subtasks")}, the lead does not run again`)
       } else {
         await persistStage({ kind: "whole" })
-        const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover, mode === "auto")
+        const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover, mode === "auto", { docLane: input.docLane })
         if (blocked) return blocked
         task = await reloadTask(plan, task.id)
       }
@@ -828,11 +831,13 @@ export async function runTask(
           round: resume?.kind === "wrapup" ? (resume.round ?? 0) : 0,
           persist: persistStage,
           baseline: unitStart,
-          // plans/0099 D7/D9: a doc lane's unit threads its effective scope
-          // (the charter's path-limited range) and the quiet-tree drain the
-          // wrap-up's lane gate awaits; every serial unit passes neither.
+          // plans/0099 D7/D9/D11: a doc lane's unit threads its effective scope
+          // (the charter's path-limited range), the quiet-tree drain the
+          // wrap-up's lane gate awaits, and the concurrency clause's render
+          // fact; every serial unit passes none of them.
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
           ...(input.drain !== undefined ? { drain: input.drain } : {}),
+          ...(input.docLane ? { docLane: true } : {}),
         })
         if (stopped) return stopped
       }

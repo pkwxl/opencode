@@ -1387,9 +1387,11 @@ async function runDocUnit(
   const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }), {
     // The unit-start SHA baseline beginUnit recorded (0083 D1: the
     // verification charter's commit range) beside the doc-lane facts — the
-    // effective scope (D7) and, on a recovery drive, the rollback refusal's
+    // effective scope (D7), the session prompts' concurrency clause (D11's
+    // docLane render fact), and, on a recovery drive, the rollback refusal's
     // sibling scopes (D10).
     ...(taskBaseline ? { baseline: taskBaseline } : {}),
+    docLane: true,
     scope: input.scope,
     ...(input.drain !== undefined ? { drain: input.drain } : {}),
     ...(input.siblingScopes !== undefined ? { siblingScopes: input.siblingScopes } : {}),

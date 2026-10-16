@@ -299,6 +299,10 @@ export async function executeWhole(
   chain: SessionChain,
   ondemand: boolean,
   lead = false,
+  // plans/0099 D11: the doc-lane render fact — a doc lane's whole-task
+  // prompt carries its concurrency clause; every serial or solo unit leaves
+  // it undefined and renders byte-identically.
+  input: { docLane?: boolean } = {},
 ): Promise<UnitStop | { type: "parked"; blocker: string } | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
@@ -475,7 +479,7 @@ export async function executeWhole(
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel }) + feedback + release,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel, docLane: input.docLane }) + feedback + release,
       opts,
       chain,
       steer,

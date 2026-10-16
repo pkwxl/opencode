@@ -224,18 +224,29 @@ a summary of the output (what changed, key decisions and open items),
 ### low
 
 Declare each task's `Depends:` and `Touches:` fields honestly — name only real prerequisites, and list every path the task
-will change — but do not restructure the plan to create independent tasks: plan the work as you would otherwise.
+will change — but do not restructure the plan to create independent tasks: plan the work as you would otherwise. In
+doc-writing phases the declarations are what same-tree concurrency admits on: documentation-scoped tasks with disjoint
+declared scopes run side by side in this tree, so write `Depends: none` where a task's work really is independent (a task
+without the field waits for the one before it) and give every doc task `Touches: docs/T-NNN/`.
 
 ### medium
 
 Prefer arrangements whose tasks are independent of each other: split work along file and module boundaries rather than
 along layers, keep all edits to a shared file inside one task, and accept somewhat more tasks in exchange for more of
 them being able to proceed side by side. Declare `Depends:` only for real prerequisites and give every task a `Touches:`
-field, so tasks that do not overlap are visibly disjoint.
+field, so tasks that do not overlap are visibly disjoint. In doc-writing phases the declarations are what same-tree
+concurrency admits on: documentation-scoped tasks with disjoint declared scopes run side by side in this tree, so write
+`Depends: none` where a task's work really is independent (a task without the field waits for the one before it) and
+give every doc task `Touches: docs/T-NNN/` — a doc task left undeclared chains after its predecessor and spends the
+width.
 
 ### high
 
 Optimize for the largest number of tasks that can proceed side by side: split aggressively along file and module
 boundaries, move changes to shared files (common headers, build files, registries) into short tasks that come first
 and that the rest depend on, and accept the extra merge and coordination overhead. Declare `Depends:` only for real
-prerequisites and give every task a precise `Touches:` field.
+prerequisites and give every task a precise `Touches:` field. In doc-writing phases the declarations are what same-tree
+concurrency admits on: documentation-scoped tasks with disjoint declared scopes run side by side in this tree, so write
+`Depends: none` where a task's work really is independent (a task without the field waits for the one before it) and
+give every doc task `Touches: docs/T-NNN/` — a doc task left undeclared chains after its predecessor and spends the
+width.

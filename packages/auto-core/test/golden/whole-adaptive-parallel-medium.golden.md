@@ -52,7 +52,11 @@ The streams run side by side under this project's parallel level medium — arra
 Prefer arrangements whose tasks are independent of each other: split work along file and module boundaries rather than
 along layers, keep all edits to a shared file inside one task, and accept somewhat more tasks in exchange for more of
 them being able to proceed side by side. Declare `Depends:` only for real prerequisites and give every task a `Touches:`
-field, so tasks that do not overlap are visibly disjoint.
+field, so tasks that do not overlap are visibly disjoint. In doc-writing phases the declarations are what same-tree
+concurrency admits on: documentation-scoped tasks with disjoint declared scopes run side by side in this tree, so write
+`Depends: none` where a task's work really is independent (a task without the field waits for the one before it) and
+give every doc task `Touches: docs/T-NNN/` — a doc task left undeclared chains after its predecessor and spends the
+width.
 
 Before splitting, do the shared foundation yourself: the types, helpers and fixtures every stream needs. To split, write docs/T-002/subtasks.md with one checklist line per stream:
 

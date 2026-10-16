@@ -133,7 +133,7 @@ async function verifySession(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  input: { solo: boolean; label: string; commitRange?: string },
+  input: { solo: boolean; label: string; commitRange?: string; docLane?: boolean },
 ): Promise<VerifyOutcome> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
@@ -159,7 +159,7 @@ async function verifySession(
       task,
       brief
         ? feedback.trimStart()
-        : renderWrapup(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, solo: input.solo, resolves, commitRange: input.commitRange, ...(ledger !== undefined ? { ledger } : {}) }) + feedback,
+        : renderWrapup(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, solo: input.solo, resolves, commitRange: input.commitRange, ...(input.docLane ? { docLane: true } : {}), ...(ledger !== undefined ? { ledger } : {}) }) + feedback,
       opts,
       chain,
     )
@@ -438,7 +438,7 @@ export async function runWrapup(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void> },
+  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; docLane?: boolean },
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
@@ -462,7 +462,7 @@ export async function runWrapup(
       if (committed.type === "failed") return commitBlocked(`${task.id} ${input.label}`, committed)
       reason = gate.reason
     } else {
-      const outcome = await verifySession(client, plan, task, opts, chain, { solo: input.solo, label: input.label, commitRange })
+      const outcome = await verifySession(client, plan, task, opts, chain, { solo: input.solo, label: input.label, commitRange, ...(input.docLane ? { docLane: true } : {}) })
       if (outcome.kind === "pass") return undefined
       if (outcome.kind === "stop") return outcome.stop
       reason = outcome.reason

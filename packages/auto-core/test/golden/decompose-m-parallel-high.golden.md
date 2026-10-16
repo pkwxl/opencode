@@ -64,7 +64,11 @@ and two items that would change the same file are ordered with `Depends:` instea
 Optimize for the largest number of tasks that can proceed side by side: split aggressively along file and module
 boundaries, move changes to shared files (common headers, build files, registries) into short tasks that come first
 and that the rest depend on, and accept the extra merge and coordination overhead. Declare `Depends:` only for real
-prerequisites and give every task a precise `Touches:` field.
+prerequisites and give every task a precise `Touches:` field. In doc-writing phases the declarations are what same-tree
+concurrency admits on: documentation-scoped tasks with disjoint declared scopes run side by side in this tree, so write
+`Depends: none` where a task's work really is independent (a task without the field waits for the one before it) and
+give every doc task `Touches: docs/T-NNN/` — a doc task left undeclared chains after its predecessor and spends the
+width.
 
 6. Write a scope file for each subtask (item N maps to docs/T-002/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.

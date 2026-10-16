@@ -3681,6 +3681,14 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     // Both units ran as doc lanes (the bracket's lead, twice), landed done
     // and ticked.
     expect(lines.filter((line) => line.includes("starting a doc lane"))).toHaveLength(2)
+    // D11 (stage D): the concurrency clause reached both session kinds —
+    // each unit's execution prompt carries the constraint, each verification
+    // prompt its paragraph (the render fact threaded runDocUnit → runTask →
+    // executeWhole/renderWrapup).
+    for (const id of ["T-001", "T-002"]) {
+      expect(agent.prompts[execAt(agent, id)]!.text).toContain("4. Sibling doc units run beside you in this tree")
+      expect(agent.prompts[wrapAt(agent, id)]!.text).toContain("Sibling doc units run beside you in this tree")
+    }
     for (const id of ["T-001", "T-002"]) {
       expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
       expect(existsSync(join(repo, "docs", id, "notes.md"))).toBe(true)

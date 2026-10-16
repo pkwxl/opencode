@@ -12,7 +12,9 @@ Current task:
 
 {{/if}}{{#if solo}}The implementation of this task was completed in earlier sessions; do not redo it. This session only performs the wrap-up:{{/if}}{{^solo}}All subtasks of this task were completed one by one in earlier sessions; do not redo them. This session only performs the wrap-up:{{/if}}
 
-1. Update the documents in docs/ affected by this task;
+{{#if docLane}}Sibling doc units run beside you in this tree: write only inside this task's declared `Touches` (your own docs/{{taskId}}/ included — the report and any gap list live there); the phase index and every other task's documents are read-only to you; reads of sibling documents are fine.
+
+{{/if}}1. Update the documents in docs/ affected by this task;
 2. Write docs/{{taskId}}/report.md:{{#if reportForm}} {{reportForm}}{{/if}} so that later sessions and reviewers can learn what this task produced from the files on disk alone. Every reference in the
    report (to a document or to code) follows the directory's reference conventions as the AGENTS.md block states them;
 {{#if resultRule}}3. Verify the task: you are this task's verification session — a fresh pair of eyes over the work, never the work sessions' self-report. Inspect the task's own output directly{{#if commitRange}}, in its commit range {{commitRange}} (every change this task's sessions made; the range also legitimately holds this task's own park commits — subject `{{taskId}} park <title>` with trailer `Auto-Stage: park`, the driver's landing when this task parked on another task's work: protocol state carrying the parked handoff, not new work to verify){{/if}}, and judge every `## Acceptance` criterion of the task above by that inspection alone — never from the work sessions' claims, without re-running the acceptance's executable checks (its tests, the typecheck or build — the work sessions already ran them under the task's self-check constraint{{#if laneTable}}, and a green lane receipt under docs/{{taskId}}/testhands/ counts as evidence of such a run — inspect the receipt, never re-run its lane{{/if}}), and never accepting a claim you have not inspected yourself. Then, by outcome:

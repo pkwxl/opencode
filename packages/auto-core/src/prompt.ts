@@ -170,6 +170,13 @@ type Opts = {
   // serial run's options that never carried it) renders nothing — the
   // byte-identical floor.
   parallel?: ParallelLevel
+  // The doc-lane render fact (plans/0099 D11): true exactly for a doc lane's
+  // units, where the whole-task and wrap-up prompts carry their concurrency
+  // clause (sibling doc units run beside you; write only inside your
+  // declared Touches). A per-unit fact, not a run-level one — the caller
+  // threads it from the unit's dispatch; every serial or solo unit leaves
+  // it undefined and renders byte-identically.
+  docLane?: boolean
 }
 
 // The single render exit, also for src/prompt-plan.ts's planning renderers.
@@ -639,6 +646,11 @@ export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView,
   return renderPrompt(facts, "wrapup", {
     ...ctx,
     solo: Boolean(opts.solo),
+    // The doc-lane concurrency clause (plans/0099 D11): a verification
+    // session under doc-lane concurrency learns the write fence — it writes
+    // this task's documents only; serial and solo wrap-ups render
+    // byte-identically without it.
+    docLane: Boolean(opts.docLane),
     resolveList: resolveList(opts.resolves),
     ledger: opts.ledger,
     reportForm: intentText(facts, "artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
@@ -888,6 +900,9 @@ export function renderWhole(
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
     adaptive: Boolean(opts.adaptive),
+    // The doc-lane concurrency clause (plans/0099 D11): sibling doc units
+    // run beside this session; the write fence is the declared Touches.
+    docLane: Boolean(opts.docLane),
     handoffFile: docs.handoff,
     subtasksFile: docs.subtasks,
     // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
