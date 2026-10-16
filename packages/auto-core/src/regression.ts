@@ -33,11 +33,13 @@ import { mkdir, rm } from "node:fs/promises"
 import { basename, join, relative, resolve } from "node:path"
 import { latestRegressionSeq, regressionReceiptDoc } from "./docpaths"
 import { roleOf } from "./document/roles"
-import { changedFiles, pendingChanges, probeReflink, rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, type GitOps, type ScriptGuardViolation } from "./git"
+import { changedFiles, pendingChanges, probeReflink, rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, taskChangedPaths, type GitOps, type ScriptGuardViolation } from "./git"
 import { laneTouches, parseLaneReceipt, parseTestLanes, type TestLane } from "./intent/test-lanes"
 import { log } from "./log"
 import { codeWork } from "./phases/registry"
+import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
+import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
 import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, LANE_LOG_DIR, readLaneVerdict, writeLaneReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
@@ -357,4 +359,117 @@ export async function regressionBoundary(ctx: { directory: string; git: Pick<Git
   const rows = regressionLanes(parseTestLanes(promptFacts(opts).pack))
   if (!rows) return
   await launchStale(ctx.directory, opts, round, rows)
+}
+
+// —— The phase-close hold (plans/0098 D5) ——
+
+// One held lane's facts: the red run's receipt, its log, the bounded
+// evidence and the D6 suspects — everything the repair input and the gate
+// stop name.
+export type HeldLane = { lane: string; receipt: string; log: string; evidence: string[]; suspects: { id: string; title: string }[] }
+
+// The D6 attribution, deliberately advisory: the paths changed since the
+// lane's last green receipt (everything when none exists — the whole phase
+// then sits on unregressed ground) intersected with the lane's surfaces give
+// the failing surface set; the tasks whose own commits (the Auto-Task
+// trailer scan) intersect that set are the named units. Attribution steers
+// the person's rework, never a gate — the receipt decides.
+export async function regressionSuspects(dir: string, round: number, lane: TestLane, tasks: readonly { id: string; title: string }[]): Promise<{ id: string; title: string }[]> {
+  const coverage = await regressionCovered(dir, round, lane)
+  const failing = coverage.changed === undefined ? undefined : coverage.changed.filter((path) => laneTouches(lane.surfaces, [path]))
+  const suspects: { id: string; title: string }[] = []
+  for (const task of tasks) {
+    const paths = await taskChangedPaths(dir, task.id)
+    if (!paths.length) continue
+    if (failing === undefined ? laneTouches(lane.surfaces, paths) : laneTouches(failing, paths)) suspects.push(task)
+  }
+  return suspects
+}
+
+// The hold's verdict: ok = every regression lane covered at the phase's
+// final tree (the receipts the boundary runs and the close-time runs below
+// wrote); held = at least one lane red, its facts carried for the repair
+// append or the gate stop; corrupted = a close-time run moved HEAD, the
+// corrupted-baseline family — no phase completes over it.
+export type RegressionHold = { kind: "ok" } | { kind: "held"; lanes: HeldLane[] } | { kind: "corrupted"; moved: string[] }
+
+// The hold itself, run at the phase's handover between the distillation
+// commit and the completion rename — the one window the full gate may still
+// block, dm-glm's "final regression verification" task as a driver
+// invariant: covered lanes pass through; an in-flight background run is
+// awaited; a stale lane runs NOW in the tree (the driver owns it
+// exclusively here, the stash guard armed like the lane gate's); a red
+// holds the phase. The runs' receipts land through the janitorial commit
+// before any outcome returns — a receipt must never dirty the append or the
+// next unit that follows a held phase.
+export async function ensureRegressionGreen(
+  ctx: { directory: string; git: Pick<GitOps, "commitTree"> },
+  opts: RegressionOpts,
+  phase: PhaseUnit,
+  tasks: readonly { id: string; title: string }[],
+): Promise<RegressionHold> {
+  if (!autoSwitches().regression || opts.dryrun || !(opts.testByDriver && codeWork(phase.entry))) return { kind: "ok" }
+  const rows = regressionLanes(parseTestLanes(promptFacts(opts).pack))
+  if (!rows) return { kind: "ok" }
+  const round = roundNumberOf(phase)
+  const held: HeldLane[] = []
+  for (const lane of rows) {
+    if ((await regressionCovered(ctx.directory, round, lane)).covered) continue
+    const inFlight = regressionInFlight(ctx.directory)
+    if (inFlight) {
+      log(`↻ the phase close waits for the in-flight background regression run of ${lane.name}`)
+      await inFlight
+      if ((await regressionCovered(ctx.directory, round, lane)).covered) continue
+    }
+    const run = await runRegressionLane(ctx.directory, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    if (run.violation?.kind === "head") {
+      await commitPendingReceipts(ctx.directory, round, ctx.git)
+      return { kind: "corrupted", moved: run.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`) }
+    }
+    if (run.verdict === "green") continue
+    held.push({ lane: lane.name, receipt: run.receipt, log: run.log, evidence: run.evidence ?? [], suspects: await regressionSuspects(ctx.directory, round, lane, tasks) })
+  }
+  await commitPendingReceipts(ctx.directory, round, ctx.git)
+  return held.length ? { kind: "held", lanes: held } : { kind: "ok" }
+}
+
+// The remediation-wave input (D5, the 0079 §4 held-verdict shape): the
+// append session reads the receipts' bounded evidence and the suspects, and
+// writes the tasks that re-green the lane — dm-glm's T-100 pattern, the
+// parked wave's remediation hop, as planned work.
+export function regressionRepairInput(phase: PhaseUnit, lanes: readonly HeldLane[]): string {
+  const facts = lanes
+    .map((held) => {
+      const suspects = held.suspects.length ? held.suspects.map((task) => `${task.id} ${task.title}`).join("; ") : "no task of this phase touched the lane's surfaces (an earlier phase or the person did)"
+      const evidence = held.evidence.length ? held.evidence.join("\n") : "(the log is empty)"
+      return [
+        `- Lane \`${held.lane}\` red at the phase's final tree. Receipt \`${held.receipt}\` (log ${held.log}).`,
+        `  Suspects (own commits touching the lane's surfaces since its last green receipt): ${suspects}.`,
+        "  The receipt's bounded evidence:",
+        "",
+        "  ```",
+        ...evidence.split("\n").map((line) => `  ${line}`),
+        "  ```",
+      ].join("\n")
+    })
+    .join("\n")
+  return [
+    `Repair round: the phase is held by its regression gate — the declared full-regression lane(s) ran red at the phase's final tree. ${facts}`,
+    "",
+    "Append repair tasks that fix what the receipts found and re-run the lanes so they green at the new tree; the phase is distilled again after the tasks run.",
+  ].join("\n")
+}
+
+// The gate-stop lines (the logGateStop posture): the held phase, the
+// receipts, the suspects, and the person's ways on.
+export function regressionHoldLines(directory: string, phase: PhaseUnit, lanes: readonly HeldLane[]): string[] {
+  const bin = shellProfile().bin
+  const lines = [`⏸ phase ${phaseLabel(phase)} is held by its regression gate:`]
+  for (const held of lanes) {
+    lines.push(`  the lane \`${held.lane}\` is red at the phase's final tree — receipt ${held.receipt}, log ${held.log}`)
+    lines.push(`  suspects: ${held.suspects.length ? held.suspects.map((task) => `${task.id} (${task.title})`).join(", ") : "no task of this phase touched the lane's surfaces"}`)
+  }
+  lines.push(`  to rework: append fix tasks with ${bin} plan ${directory} --append -p <text> (the phase distills again after they run and the gate re-checks)`)
+  lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
+  return lines
 }

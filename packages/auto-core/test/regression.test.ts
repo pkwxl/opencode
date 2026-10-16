@@ -13,7 +13,7 @@ import { ROLE_POLICIES, roleOf } from "../src/document/roles"
 import { parseLaneReceipt, type TestLane } from "../src/intent/test-lanes"
 import { commitTree } from "../src/git"
 import { phaseType } from "../src/phases/registry"
-import { newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionInFlight, regressionLanes, REGRESSION_COPY, roundNumberOf, runRegressionLane } from "../src/regression"
+import { ensureRegressionGreen, newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionHoldLines, regressionInFlight, regressionLanes, regressionRepairInput, REGRESSION_COPY, roundNumberOf, runRegressionLane } from "../src/regression"
 import { EOF_MARK } from "../src/doccheck"
 import { freshRepo, git } from "./fixtures/runner"
 
@@ -268,6 +268,116 @@ describe("the boundary and the orphan recovery (plans/0098 D4)", () => {
       expect(await Bun.file(join(dir, regressionReceiptDoc(1, 1, lane.name))).exists()).toBe(false)
       // The second boundary stays silent (the once-per-directory deferral).
       await regressionBoundary({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () => {
+  const phase = { round: "R-01", id: "P01", type: "implement", entry: phaseType("implement")!, dir: "docs/R-01/P01-implement" }
+  const tasks = [
+    { id: "T-001", title: "migrate the widget core" },
+    { id: "T-002", title: "write the docs" },
+  ]
+  const withPack = (dir: string, command: string) => {
+    mkdirSync(join(dir, ".opencode", "auto", "intents"), { recursive: true })
+    writeFileSync(
+      join(dir, ".opencode", "auto", "intents", "default.md"),
+      ["# default", "", "## quality", "", "### test-lanes", "", "verify-full:", `Command: ${command}`, "Cost: regression", "Surfaces: src/", "Exclusive: yes", ""].join("\n"),
+    )
+  }
+  // The unit's own commits carry the Auto-Task trailer taskChangedPaths scans.
+  const taskCommit = async (dir: string, task: string, path: string | null, content: string) => {
+    if (path !== null) {
+      mkdirSync(join(dir, join(path, "..")), { recursive: true })
+      writeFileSync(join(dir, path), content)
+      await git(dir, "add", "-A")
+    }
+    return git(dir, "commit", "--allow-empty", "-qm", `${task} exec`, "-m", `Auto-Task: ${task}`)
+  }
+
+  test("covered lanes pass through without running anything; the floor conditions return ok with no runs at all", async () => {
+    const dir = await freshRepo()
+    try {
+      withPack(dir, "echo must-not-run")
+      await taskCommit(dir, "T-001", "src/a.ts", "a\n")
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z"))
+      const covered = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      expect(covered).toEqual({ kind: "ok" })
+      expect(await latestRegressionSeq(dir, 1)).toBe(1)
+      // The floor: no channel, nothing runs even though the lane is stale.
+      const off = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase, tasks)
+      expect(off).toEqual({ kind: "ok" })
+      writeReceipt(dir, 2, receiptText((await git(dir, "rev-parse", "--short", "HEAD")).trim(), "red", "2026-10-15T11:00:00Z"))
+      const stillOff = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase, tasks)
+      expect(stillOff).toEqual({ kind: "ok" })
+      expect(await latestRegressionSeq(dir, 1)).toBe(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a stale lane runs at the close window; green passes and its receipt is committed by the hold itself", async () => {
+    const dir = await freshRepo()
+    try {
+      withPack(dir, "echo full-gate-green")
+      await taskCommit(dir, "T-001", "src/a.ts", "a\n")
+      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      expect(held).toEqual({ kind: "ok" })
+      expect(await latestRegressionSeq(dir, 1)).toBe(1)
+      // The janitorial commit landed inside the hold: the tree is clean and
+      // the receipt carries the driver's stage.
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: regression")
+      expect((await regressionCovered(dir, 1, lane)).covered).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a red lane holds the phase with its suspects named, the receipts committed, and the repair input carrying the evidence", async () => {
+    const dir = await freshRepo()
+    try {
+      withPack(dir, "echo 'the widget regressed at the edge case' >&2; exit 4")
+      await taskCommit(dir, "T-001", "src/a.ts", "a\n")
+      const green = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      writeReceipt(dir, 1, receiptText(green, "green", "2026-10-15T10:00:00Z"))
+      // T-001's post-green change touches the lane's surfaces; T-002's does
+      // not — only T-001 is a suspect.
+      await taskCommit(dir, "T-001", "src/a.ts", "a changed\n")
+      await taskCommit(dir, "T-002", "docs/note.md", "note\n")
+      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      expect(held.kind).toBe("held")
+      if (held.kind !== "held") return
+      expect(held.lanes).toHaveLength(1)
+      expect(held.lanes[0]).toMatchObject({ lane: "verify-full" })
+      expect(held.lanes[0]!.suspects).toEqual([{ id: "T-001", title: "migrate the widget core" }])
+      // The red receipt is committed evidence (the tree clean) and its
+      // bounded evidence rides the repair input with the suspect named.
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      const receiptText2 = await Bun.file(join(dir, held.lanes[0]!.receipt)).text()
+      expect(receiptText2).toContain("the widget regressed at the edge case")
+      const input = regressionRepairInput(phase, held.lanes)
+      expect(input).toContain("T-001 migrate the widget core")
+      expect(input).toContain("the widget regressed at the edge case")
+      expect(input).toContain("Append repair tasks that fix what the receipts found")
+      const lines = regressionHoldLines(dir, phase, held.lanes)
+      expect(lines[0]).toContain("held by its regression gate")
+      expect(lines.some((line) => line.includes("T-001"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a close-time run that moves HEAD is the corrupted-baseline family", async () => {
+    const dir = await freshRepo()
+    try {
+      withPack(dir, "git commit --allow-empty -qm sneaky")
+      await taskCommit(dir, "T-001", "src/a.ts", "a\n")
+      const corrupted = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      expect(corrupted).toMatchObject({ kind: "corrupted" })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

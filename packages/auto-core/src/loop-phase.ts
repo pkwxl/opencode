@@ -35,6 +35,7 @@ import { planInputPath, readPlanInput } from "./plan-input"
 
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
+import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
 import { renderPhaseHandover } from "./prompt"
 import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
@@ -246,6 +247,41 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // them through the handover-complete skip above, no longer relying on
   // session recovery.
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
+  // The regression hold (plans/0098 D5): between the distillation commit and
+  // the completion rename — the one window the full gate may still block.
+  // Covered lanes pass through (the background slot's receipts), a stale one
+  // runs now in the tree, a red holds the phase: under a --repair budget the
+  // remediation wave appends over the receipts (the held-verdict shape, the
+  // loop re-derives the execute route and the hold re-checks after they
+  // run), else the gate stop names the receipts, the suspects and the
+  // person's ways.
+  {
+    const plan = await loadPlan(directory, phase).catch(() => undefined)
+    const hold = await ensureRegressionGreen(ctx, opts, phase, plan?.tasks.map((task) => ({ id: task.id, title: task.title })) ?? [])
+    if (hold.kind === "corrupted") {
+      log(`⏸ a close-time regression lane ran a git state command and moved HEAD (${hold.moved.join("; ")}); no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`)
+      return 2
+    }
+    if (hold.kind === "held") {
+      if (ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs) {
+        ctx.repairs++
+        log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the regression gate holds ${phaseTitle(phase)} — appending repair tasks over the red receipts`)
+        ctx.input = {
+          text:
+            regressionRepairInput(phase, hold.lanes) +
+            // The pack's repair discipline (plans/0080 §6): the boundary that
+            // keeps a repair from re-architecting.
+            withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
+        }
+        const code = await appendPlan(ctx, phase)
+        ctx.input = undefined
+        if (code === 0) return 0
+        log(`⏸ the repair append did not complete (exit ${code}); the regression gate stop follows`)
+      }
+      for (const line of regressionHoldLines(directory, phase, hold.lanes)) log(line)
+      return 2
+    }
+  }
   // The round-report self-heal (plans/0081 D4) runs before the completion
   // rename, only with every gate passing: a report task appended under a
   // held gate would run before the phase may complete anyway. completePhase
