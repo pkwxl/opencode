@@ -78,6 +78,16 @@ export const SWITCH_ENV = {
   // never a check: a timeout degrades to the floor through the D4 ladder
   // like any constructor failure; this only tunes the wait.
   synthesisTimeout: "OPENCODE_AUTO_SYNTHESIS_TIMEOUT",
+  // The regression lane — the two-level pass (plans/0098 D8): where the
+  // pack's lane table declares a regression-cost row, the driver runs it in
+  // the background against committed trees and the phase close holds on its
+  // round-scoped receipts. off is the operator's emergency stop: no
+  // background launches, no hold, no strict wait — the declared rows then
+  // simply run nowhere (the pack author who wants the gate does not flip
+  // the switch), which is why the default is on and the switch can only
+  // remove the machinery, never weaken the wrap-up's own preliminary tier
+  // (the OPENCODE_AUTO_SYNTHESIS precedent).
+  regression: "OPENCODE_AUTO_REGRESSION",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -381,6 +391,11 @@ export type Switches = {
   // fidelity pass and the plan verifier keep their fixed classifier-scale
   // walls — they judge on the cheap entry and answer in seconds.
   synthesisTimeout: number
+  // The regression lane, two-level pass (default on, plans/0098 D8): the
+  // background slot and the phase-close hold activate only where the pack
+  // declares a regression-cost row. off removes the machinery for one run —
+  // no launches, no hold, no strict wait; the preliminary tier is untouched.
+  regression: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -413,6 +428,7 @@ const SWITCH_DEFAULTS: Switches = {
   park: true,
   synthesis: true,
   synthesisTimeout: 15,
+  regression: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -647,6 +663,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
     synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
     synthesisTimeout: positiveMinutes(SWITCH_ENV.synthesisTimeout, env[SWITCH_ENV.synthesisTimeout], SWITCH_DEFAULTS.synthesisTimeout),
+    regression: onOff(SWITCH_ENV.regression, env[SWITCH_ENV.regression], SWITCH_DEFAULTS.regression),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -692,6 +709,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
     switches.synthesisTimeout === SWITCH_DEFAULTS.synthesisTimeout ? undefined : `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
+    switches.regression === SWITCH_DEFAULTS.regression ? undefined : `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -723,6 +741,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
     `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
+    `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
   ].join(", ")
 }
 

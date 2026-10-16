@@ -367,12 +367,18 @@ async function runLaneBatch(
 
 // The verdict read mechanically from the log tail (D1): the last LANE_RC line
 // is the lane's exit code; a watchdog kill leaves none (the kill lands on the
-// bash before its echo), and mirrors runScript's 124.
+// bash before its echo), and mirrors runScript's 124. Exported since
+// plans/0098 D4: the regression lane's background slot reads its verdict
+// through the same rule — one protocol, two runners.
+export function readLaneVerdict(text: string, timedOut: boolean): { code: number; verdict: "green" | "red" } {
+  const codes = [...text.matchAll(/^LANE_RC=(\d+)$/gm)]
+  const code = timedOut || !codes.length ? 124 : Number(codes.at(-1)![1])
+  return { code, verdict: !timedOut && codes.length && code === 0 ? "green" : "red" }
+}
+
 async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; start: number; timedOut: boolean; timeoutReason?: "idle" | "max" }): Promise<LaneRun> {
   const text = await Bun.file(run.log).text().catch(() => "")
-  const codes = [...text.matchAll(/^LANE_RC=(\d+)$/gm)]
-  const code = run.timedOut || !codes.length ? 124 : Number(codes.at(-1)![1])
-  const verdict: LaneRun["verdict"] = !run.timedOut && codes.length && code === 0 ? "green" : "red"
+  const { code, verdict } = readLaneVerdict(text, run.timedOut)
   const end = Date.now()
   const ms = end - run.start
   log(
@@ -397,8 +403,10 @@ async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; s
 // fields parseLaneReceipt reads back. A carried run records no Log of its own
 // (the Carried line names the receipt that has one); a red run carries the
 // bounded evidence block. heads are the set's recorded tree HEADs — the tree
-// every verdict of the set vouches for.
-async function writeLaneReceipt(dir: string, run: LaneRun, heads: { root: string; sha: string }[]): Promise<void> {
+// every verdict of this set vouches for. Exported since plans/0098 D4: the
+// regression lane's receipts are the same format at a round-scoped path,
+// written by the background slot through this one writer.
+export async function writeLaneReceipt(dir: string, run: LaneRun, heads: { root: string; sha: string }[]): Promise<void> {
   const lines = [
     `# Lane ${run.lane}`,
     "",

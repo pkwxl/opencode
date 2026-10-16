@@ -408,6 +408,11 @@ const CLASSIFIED: Record<string, Domain> = {
   "run-status": "driver",
   runner: "driver",
   script: "driver",
+  // The regression lane (plans/0098): the two-level pass's complete tier —
+  // the background slot, the receipts, the phase-close hold. Driver like
+  // script/wrapup: it runs processes and reads git, above the intent domain,
+  // below nothing the engine owns.
+  regression: "driver",
   // Selection (plans/0055 §6): the candidate list, the pick and the
   // nothing-usable decision of a dispatch under a registry; pure, with the
   // clock and the run state injected. Sits below the session layer, above the
@@ -530,6 +535,9 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   resolve: "kernel",
   testrun: "kernel",
   script: "kernel",
+  // The regression lane (plans/0098): the driver-run processes' sibling —
+  // one background lane over a disposable tree copy, receipts, coverage.
+  regression: "kernel",
   // engine — one turn, one dispatch, one ladder: watch and the modules it
   // drives. The concerns are policies and the contract is contract, even
   // where they physically sit under engine/.

@@ -205,6 +205,11 @@ export const UNIT_LANE: readonly string[] = [
   "test/turn-usage.test.ts",
   "test/turn-windows.test.ts",
   "test/usage.test.ts",
+  // The regression lane (plans/0098): the two-level pass's receipts and
+  // coverage over real git repositories, the runner in both modes (in-tree
+  // and the isolated copy), the boundary's janitorial commit — freshRepo
+  // plus real spawns.
+  "test/regression.test.ts",
   // The verification loop (plans/0083): drives runTask and the wrap-up loop over
   // real git repositories (the loop fixture, freshRepo).
   "test/verify-loop.test.ts",

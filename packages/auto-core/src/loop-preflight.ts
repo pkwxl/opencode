@@ -18,7 +18,7 @@ import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { deleteBranch, fileTracked, workingTreeMB, type GitOps } from "./git"
+import { deleteBranch, fileTracked, probeReflink, workingTreeMB, type GitOps } from "./git"
 import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
 import {
@@ -60,6 +60,7 @@ import { guaranteesProblem } from "./intent/guarantees"
 import { testLanesProblem } from "./intent/test-lanes"
 import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
+import { recoverRegression } from "./regression"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
@@ -543,6 +544,14 @@ export async function preflight(
     const recovered = await recoverOrphanLanes(run.git, directory)
     if (recovered !== undefined) return { exit: recovered }
   }
+  // The regression lane's orphan (plans/0098 D4): a background copy or its
+  // in-flight marker the previous parent run left behind. Unlike the lane
+  // scenes above, the background copy exists at every tier (the serial Tier 0
+  // loop launches it too), so its recovery runs for every parent run — the
+  // copy is disposable (no receipt landed, the lane re-runs at the next
+  // boundary), nothing is re-dispatched. A lane worker (opts.lane) owns no
+  // background run of its own; dryrun changes no state.
+  if (!opts.dryrun && !opts.lane) await recoverRegression(directory)
   // interruption recovery: the previous run, killed/Ctrl+C'd, may leave
   // in_progress marks behind (no session running); they are reset to pending,
   // and the main loop still resumes through next(), attempts kept. When close
@@ -696,29 +705,6 @@ async function probeTierFacts(dir: string, lanes: LanesConfig | undefined): Prom
   return {
     reflink: await probeReflink(dir),
     ...(lanes?.treeBudgetMB !== undefined ? { treeMB: await workingTreeMB(dir) } : {}),
-  }
-}
-
-// Whether `cp --reflink=always` clones here: one small file under the target's
-// own `.auto/` — the same filesystem the lane park materializes on, so the
-// probe measures exactly the copy that would run — cloned and removed again.
-// Any failure (no cp, no reflink, a read-only tree) reads as incapable, which
-// is the fall-through answer; the probe file is cleaned up either way and is
-// driver state `.auto/` already gitignores.
-async function probeReflink(dir: string): Promise<boolean> {
-  const root = join(dir, ".auto")
-  const src = join(root, "reflink-probe")
-  const dst = join(root, "reflink-probe.copy")
-  try {
-    await mkdir(root, { recursive: true })
-    await Bun.write(src, "reflink probe\n")
-    const copied = Bun.spawn(["cp", "--reflink=always", src, dst], { stdout: "ignore", stderr: "ignore" })
-    return (await copied.exited) === 0
-  } catch {
-    return false
-  } finally {
-    await rm(src, { force: true }).catch(() => {})
-    await rm(dst, { force: true }).catch(() => {})
   }
 }
 

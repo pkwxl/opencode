@@ -775,6 +775,32 @@ export async function workingTreeMB(dir: string): Promise<number | undefined> {
   return bytes / (1024 * 1024)
 }
 
+// Whether `cp --reflink=always` clones here: one small file under the target's
+// own `.auto/` — the same filesystem the lane park and the regression copy
+// (plans/0098 D4) materialize on, so the probe measures exactly the copy that
+// would run — cloned and removed again. Any failure (no cp, no reflink, a
+// read-only tree) reads as incapable, which is the fall-through answer; the
+// probe file is cleaned up either way and is driver state `.auto/` already
+// gitignores. Shared by the preflight tier probe (plans/0096 D9) and the
+// regression lane's copy gate, which is why it lives beside the tree
+// primitives instead of the preflight.
+export async function probeReflink(dir: string): Promise<boolean> {
+  const root = join(dir, ".auto")
+  const src = join(root, "reflink-probe")
+  const dst = join(root, "reflink-probe.copy")
+  try {
+    await mkdir(root, { recursive: true })
+    await Bun.write(src, "reflink probe\n")
+    const copied = Bun.spawn(["cp", "--reflink=always", src, dst], { stdout: "ignore", stderr: "ignore" })
+    return (await copied.exited) === 0
+  } catch {
+    return false
+  } finally {
+    await rm(src, { force: true }).catch(() => {})
+    await rm(dst, { force: true }).catch(() => {})
+  }
+}
+
 // The teardown retry schedule (plans/0068 §10's Windows hardening): attempt 1
 // plain, attempts 2..N with `--force`, a short wait between attempts — a
 // removal that races an antivirus scanner or a transient file lock usually

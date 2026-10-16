@@ -54,6 +54,7 @@ import {
   type TreeTier,
 } from "./lanes"
 import { recallProgress } from "./resume"
+import { regressionBoundary } from "./regression"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
 import { promptFacts } from "./prompt-facts"
 import { emitStatus } from "./run-status"
@@ -197,6 +198,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     }
     const code = await runSerialUnit(ctx, phase, plan, task)
     if (code !== 0) return code
+    // The background regression boundary (plans/0098 D4): after the unit's
+    // close-out (the tree clean) and before the next unit's start gate —
+    // pending receipts committed, one stale lane launched into the copy.
+    await regressionBoundary(ctx, ctx.opts, phase)
   }
 }
 
@@ -601,6 +606,10 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       for (const line of await taskResolveLines(directory, task.id)) log(line)
       log(`✓ ${task.id} done (lane landed: ${action.report.sessions} session(s), took ${formatDuration(Date.now() - start)})`)
       emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+      // The background regression boundary (plans/0098 D4): the landing left
+      // the main tree clean — pending receipts committed, one stale lane
+      // launched into the copy.
+      await regressionBoundary(ctx, ctx.opts, phase)
       // The task boundary hooks (§6.2: boundaries keep unit granularity — a
       // step pause or /exit stops scheduling and proceeds after the landing).
       await taskBoundary(ctx, `task ${task.id} ${task.title}`)
@@ -798,6 +807,12 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       log(`✓ ${task.id} landed (lane unit closed; the task continues in its other lanes — ${report.sessions} session(s))`)
       emitStatus({ type: "task-end", task: task.id, outcome: "unit-done" })
     }
+    // The background regression boundary (plans/0098 D4): the landing
+    // serialized through the parent left the main tree clean — pending
+    // receipts committed, one stale lane launched into the copy (the launch
+    // conditions re-check cleanliness, so a landing between landings is a
+    // no-op).
+    await regressionBoundary(ctx, ctx.opts, phase)
     // The boundary hooks at each landing (§6.2: unit granularity — a step
     // pause or /exit stops scheduling and drains, then proceeds): the probe
     // form of the /exit checkpoint — the request seen here stops dispatching
