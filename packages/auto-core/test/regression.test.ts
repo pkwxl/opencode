@@ -13,7 +13,7 @@ import { ROLE_POLICIES, roleOf } from "../src/document/roles"
 import { parseLaneReceipt, type TestLane } from "../src/intent/test-lanes"
 import { commitTree } from "../src/git"
 import { phaseType } from "../src/phases/registry"
-import { ensureRegressionGreen, newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionHoldLines, regressionInFlight, regressionLanes, regressionRepairInput, REGRESSION_COPY, roundNumberOf, runRegressionLane } from "../src/regression"
+import { ensureRegressionGreen, newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionHoldLines, regressionInFlight, regressionLanes, regressionRepairInput, REGRESSION_COPY, roundNumberOf, runRegressionLane, strictRegressionWait } from "../src/regression"
 import { EOF_MARK } from "../src/doccheck"
 import { freshRepo, git } from "./fixtures/runner"
 
@@ -380,6 +380,83 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
       expect(corrupted).toMatchObject({ kind: "corrupted" })
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the strict test-readiness (strictRegressionWait — plans/0098 D7)", () => {
+  const strictLane: TestLane = { ...lane, strict: true }
+  const opts = { testByDriver: true } as const
+
+  test("complete dependencies proceed; the current unit's own building atop them never blocks", async () => {
+    const dir = await freshRepo()
+    try {
+      // An initial commit — a root commit's diff-tree names no paths, and a
+      // real dependency always lands on history.
+      await git(dir, "commit", "--allow-empty", "-qm", "init")
+      // T-001 (the dependency) lands, then the green receipt vouches it.
+      mkdirSync(join(dir, "src"), { recursive: true })
+      writeFileSync(join(dir, "src", "a.ts"), "a\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-001 exec", "-m", "Auto-Task: T-001")
+      const green = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      writeReceipt(dir, 1, receiptText(green, "green", "2026-10-15T10:00:00Z"))
+      // The current unit's own commits touch the dependency's paths — its
+      // own testing assesses that building; no wait, no run.
+      writeFileSync(join(dir, "src", "a.ts"), "a built-upon\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-002 exec", "-m", "Auto-Task: T-002")
+      const wait = await strictRegressionWait(dir, 1, [strictLane], ["T-001"], "T-002", opts)
+      expect(wait).toBeUndefined()
+      expect(await latestRegressionSeq(dir, 1)).toBe(1)
+      // No dependencies at all, or nothing strict declared: the standard.
+      expect(await strictRegressionWait(dir, 1, [strictLane], [], "T-002", opts)).toBeUndefined()
+      expect(await strictRegressionWait(dir, 1, [lane], ["T-001"], "T-002", opts)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a dependency changed after the receipt makes the wait run it; green completes, red blocks with the run's facts", async () => {
+    const greenDir = await freshRepo()
+    try {
+      await git(greenDir, "commit", "--allow-empty", "-qm", "init")
+      mkdirSync(join(greenDir, "src"), { recursive: true })
+      writeFileSync(join(greenDir, "src", "a.ts"), "a\n")
+      await git(greenDir, "add", "-A")
+      await git(greenDir, "commit", "-qm", "T-001 exec", "-m", "Auto-Task: T-001")
+      const green = (await git(greenDir, "rev-parse", "--short", "HEAD")).trim()
+      writeReceipt(greenDir, 1, receiptText(green, "green", "2026-10-15T10:00:00Z"))
+      // A THIRD task changes the dependency's paths after the receipt: the
+      // strict wait must run the lane before T-002's testing proceeds.
+      writeFileSync(join(greenDir, "src", "a.ts"), "a moved\n")
+      await git(greenDir, "add", "-A")
+      await git(greenDir, "commit", "-qm", "T-003 exec", "-m", "Auto-Task: T-003")
+      const laneNow = { ...strictLane, command: "echo strict-green" }
+      const wait = await strictRegressionWait(greenDir, 1, [laneNow], ["T-001"], "T-002", opts)
+      expect(wait).toBeUndefined()
+      expect(await latestRegressionSeq(greenDir, 1)).toBe(2)
+      expect((await regressionCovered(greenDir, 1, laneNow)).covered).toBe(true)
+    } finally {
+      rmSync(greenDir, { recursive: true, force: true })
+    }
+    const redDir = await freshRepo()
+    try {
+      await git(redDir, "commit", "--allow-empty", "-qm", "init")
+      mkdirSync(join(redDir, "src"), { recursive: true })
+      writeFileSync(join(redDir, "src", "a.ts"), "a\n")
+      await git(redDir, "add", "-A")
+      await git(redDir, "commit", "-qm", "T-001 exec", "-m", "Auto-Task: T-001")
+      writeFileSync(join(redDir, "src", "a.ts"), "a moved\n")
+      await git(redDir, "add", "-A")
+      await git(redDir, "commit", "-qm", "T-003 exec", "-m", "Auto-Task: T-003")
+      const laneRed = { ...strictLane, command: "echo 'the dependency regressed' >&2; exit 5" }
+      const blocked = await strictRegressionWait(redDir, 1, [laneRed], ["T-001"], "T-002", opts)
+      expect(blocked).toBeDefined()
+      expect(blocked && "run" in blocked ? blocked.run : undefined).toMatchObject({ verdict: "red", code: 5 })
+      expect(blocked && "deps" in blocked ? blocked.deps : undefined).toEqual(["T-001"])
+    } finally {
+      rmSync(redDir, { recursive: true, force: true })
     }
   })
 })

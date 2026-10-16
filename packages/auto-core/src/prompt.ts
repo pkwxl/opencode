@@ -212,7 +212,7 @@ export function promptCtx(facts: PromptFacts, ctx: Ctx): Ctx {
 // wrap-up gates its receipts clause on the same value.
 function laneTableText(facts: PromptFacts): string | undefined {
   const lanes = parseTestLanes(facts.pack)
-  return lanes?.map((lane) => `- ${lane.name} (${lane.cost}${lane.exclusive ? ", exclusive" : ""}): \`${lane.command}\` — surfaces: ${lane.surfaces.join(", ")}`).join("\n")
+  return lanes?.map((lane) => `- ${lane.name} (${lane.cost}${lane.strict ? ", strict" : ""}${lane.exclusive ? ", exclusive" : ""}): \`${lane.command}\` — surfaces: ${lane.surfaces.join(", ")}`).join("\n")
 }
 
 // Parallelism guidance (MP.1, plans/0046 D10/D11; the decompose side since

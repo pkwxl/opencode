@@ -64,13 +64,21 @@ describe("the lane-table grammar (parseTestLanes / testLanesProblem, plans/0096 
 
   // The third cost class (plans/0098 D1): the project's full-gate regression,
   // the row the driver's background slot owns — parsed by the same grammar,
-  // excluded from the wrap-up's set and the anchor resolution below.
-  test("a regression-cost row parses beside its peers", () => {
-    const rows = [ROWS, "", "regress:", "Command: bash test/verify_full.sh", "Cost: regression", "Surfaces: src/, include/, test/", "Exclusive: yes"].join("\n")
+  // excluded from the wrap-up's set and the anchor resolution below. The
+  // strict option (D7) is the one optional field, regression rows only.
+  test("a regression-cost row parses beside its peers, its Strict option with it", () => {
+    const rows = [ROWS, "", "regress:", "Command: bash test/verify_full.sh", "Cost: regression", "Surfaces: src/, include/, test/", "Exclusive: yes", "Strict: yes"].join("\n")
     const parsed = parseTestLanes(lanePack(rows))
     expect(parsed).toHaveLength(3)
-    expect(parsed![2]).toEqual({ name: "regress", command: "bash test/verify_full.sh", cost: "regression", surfaces: ["src/", "include/", "test/"], exclusive: true })
+    expect(parsed![2]).toEqual({ name: "regress", command: "bash test/verify_full.sh", cost: "regression", surfaces: ["src/", "include/", "test/"], exclusive: true, strict: true })
     expect(testLanesProblem(lanePack(rows))).toBeUndefined()
+    // Absent Strict, or `no`, is the wave-scoped standard.
+    const plain = parseTestLanes(lanePack(rows.replace("\nStrict: yes", "")))
+    expect(plain![2]!.strict).toBeUndefined()
+    expect(parseTestLanes(lanePack(rows.replace("Strict: yes", "Strict: no")))![2]!.strict).toBeUndefined()
+    // Strict on a non-regression row and a bad value fail strictly.
+    expect(() => parseTestLanes(lanePack("lint:\nCommand: x\nCost: cheap\nSurfaces: src/\nExclusive: no\nStrict: yes"))).toThrow(/Strict is a regression-row option/)
+    expect(() => parseTestLanes(lanePack("regress:\nCommand: x\nCost: regression\nSurfaces: src/\nExclusive: no\nStrict: maybe"))).toThrow(/Strict must be yes or no/)
   })
 
   test("malformed rows fail strictly, naming the pack and the offending line", () => {

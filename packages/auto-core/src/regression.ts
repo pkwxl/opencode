@@ -473,3 +473,73 @@ export function regressionHoldLines(directory: string, phase: PhaseUnit, lanes: 
   lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
   return lines
 }
+
+// —— The strict test-readiness (plans/0098 D7) ——
+
+// The round of a qualified phase id ("R-01.P03" → 1); the no-phase mode's
+// implicit round 1 when absent.
+export function roundOfPhaseId(id: string | undefined): number {
+  return Number(/^R-(\d+)\./.exec(id ?? "")?.[1] ?? 1)
+}
+
+// Whether one dependency's committed state is exactly what a green run
+// vouched for (D7's honest per-edge rule): the paths changed since the
+// newest green receipt, MINUS the current unit's own commits (its building
+// atop the dependency is what its own testing assesses — without the
+// exclusion every dependent would re-block the full gate on its own work),
+// must miss the dependency's own changed paths. No green receipt at all, or
+// an unreadable range, reads incomplete — the phase's ground is unvouched.
+async function dependencyComplete(dir: string, round: number, lane: TestLane, dep: string, ownPaths: readonly string[]): Promise<boolean> {
+  const receipt = await newestGreenReceipt(dir, round, lane.name)
+  if (!receipt) return false
+  const changed = await rangeChangedFiles(dir, receipt.heads)
+  if (changed === undefined) return false
+  const depPaths = await taskChangedPaths(dir, dep)
+  if (!depPaths.length) return true
+  return !changed.some((path) => laneTouches(depPaths, [path]) && !laneTouches(ownPaths, [path]))
+}
+
+// The strict wait's verdict: undefined = proceed (every dependency complete
+// — or nothing strict declared, or no dependencies at all); blocked = a
+// strict lane ran red at the state the wait produced, the run's facts
+// carried for the anchor-red path; corrupted = the moved-HEAD family.
+export type StrictWait = { lane: string; deps: string[]; run: RegressionRun } | { corrupted: string[] } | undefined
+
+// The strict wait itself, run at the top of the wrap-up's lane gate (D7):
+// for every strict row, each of the task's effective dependencies must be
+// complete per the rule above — an incomplete one first awaits any
+// in-flight background run, then (still incomplete) triggers one run in the
+// tree: the wrap-up moment is a driver-exclusive window like the hold's,
+// the stash guard armed. A green receipt at the current HEAD completes
+// every dependency at once; a red rides the anchor-red path (the fix loop
+// owns the dependency's defect through this unit's rounds).
+export async function strictRegressionWait(dir: string, round: number, rows: readonly TestLane[], deps: readonly string[], ownTask: string, opts: RegressionOpts): Promise<StrictWait> {
+  const strict = rows.filter((lane) => lane.strict)
+  if (!strict.length || !deps.length) return undefined
+  const ownPaths = await taskChangedPaths(dir, ownTask)
+  for (const lane of strict) {
+    const incomplete: string[] = []
+    for (const dep of deps) {
+      if (!(await dependencyComplete(dir, round, lane, dep, ownPaths))) incomplete.push(dep)
+    }
+    if (!incomplete.length) continue
+    log(`◈ the strict regression lane ${lane.name} waits: ${incomplete.join(", ")} changed since its last green receipt`)
+    const inFlight = regressionInFlight(dir)
+    if (inFlight) {
+      log(`↻ the strict wait joins the in-flight background regression run of ${lane.name}`)
+      await inFlight
+    }
+    const awaitedStill: string[] = []
+    for (const dep of incomplete) {
+      if (!(await dependencyComplete(dir, round, lane, dep, ownPaths))) awaitedStill.push(dep)
+    }
+    if (!awaitedStill.length) continue
+    const run = await runRegressionLane(dir, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    if (run.violation?.kind === "head") {
+      return { corrupted: run.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`) }
+    }
+    if (run.verdict === "green") continue
+    return { lane: lane.name, deps: awaitedStill, run }
+  }
+  return undefined
+}

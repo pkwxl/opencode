@@ -38,13 +38,20 @@ export type TestLane = {
   cost: "cheap" | "anchor" | "regression"
   surfaces: string[]
   exclusive: boolean
+  // The per-edge strict form (plans/0098 D7, `Strict: yes` on a regression
+  // row only): the wrap-up's lane gate waits for the task's dependencies'
+  // complete pass before the unit's own testing runs. Absent = the
+  // wave/phase-scoped standard (the background invariant + the phase-close
+  // hold).
+  strict?: true
 }
 
 // The suite-header line (`lint:`); a field line (`Command: …`). A header with
-// content after the colon matches neither and is malformed.
+// content after the colon matches neither and is malformed. Strict is the
+// one optional field, and only a regression row may carry it.
 const SUITE_HEAD = /^([a-z][a-z0-9-]*):\s*$/
-const FIELD_LINE = /^(Command|Cost|Surfaces|Exclusive):[ \t]*(.*)$/
-const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor|regression, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no — one block per suite"
+const FIELD_LINE = /^(Command|Cost|Surfaces|Exclusive|Strict):[ \t]*(.*)$/
+const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor|regression, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no, [regression rows only] Strict: yes|no — one block per suite"
 
 // Parse the active pack's lane table; undefined when the pack declares none
 // (or the section holds comments only — the zero-intent floor). Throws
@@ -66,7 +73,15 @@ export function parseTestLanes(pack: IntentPack): TestLane[] | undefined {
     if (cost !== "cheap" && cost !== "anchor" && cost !== "regression") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Cost must be cheap, anchor or regression, got: ${cost || "(empty)"}`)
     const exclusive = block.fields.get("Exclusive")!
     if (exclusive !== "yes" && exclusive !== "no") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Exclusive must be yes or no, got: ${exclusive || "(empty)"}`)
-    lanes.push({ name: block.name, command, cost, surfaces: parseSurfaces(pack.name, block.name, block.fields.get("Surfaces")!), exclusive: exclusive === "yes" })
+    // The strict option (plans/0098 D7): regression rows only, the per-edge
+    // form of the two-level pass — anything else is a grammar error, kept
+    // tight so the declared vocabulary stays reviewable at preflight.
+    const strict = block.fields.get("Strict")
+    if (strict !== undefined) {
+      if (cost !== "regression") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Strict is a regression-row option (plans/0098 D7), but this row's Cost is ${cost}`)
+      if (strict !== "yes" && strict !== "no") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Strict must be yes or no, got: ${strict || "(empty)"}`)
+    }
+    lanes.push({ name: block.name, command, cost, surfaces: parseSurfaces(pack.name, block.name, block.fields.get("Surfaces")!), exclusive: exclusive === "yes", ...(strict === "yes" ? { strict: true } : {}) })
     block = undefined
   }
   for (const raw of text.split("\n")) {

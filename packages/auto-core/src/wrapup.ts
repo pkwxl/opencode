@@ -46,6 +46,7 @@ import type { UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
 import { ledgerSection } from "./formulate-synthesis"
+import { roundOfPhaseId, strictRegressionWait } from "./regression"
 import { autobanner, log } from "./log"
 import type { ClientSource, Opts, Outcome, UnitStop } from "./opts"
 import { codeWork } from "./phases/registry"
@@ -279,7 +280,15 @@ async function runFixRound(
 // corrupted baseline.
 type LaneGate = { kind: "off" } | { kind: "green" } | { kind: "red"; reason: string; gaps: string[]; runs: LaneRun[] } | { kind: "stop"; stop: UnitStop }
 
-async function laneGate(dir: string, task: Task, opts: Opts): Promise<LaneGate> {
+// The previous task in the index (the loader's default dependency: a task
+// without a `Depends:` field depends on the task listed before it) — the
+// strict wait's effective dependency set mirrors the readiness rule exactly.
+function previousTaskId(plan: Plan, id: string): string[] {
+  const at = plan.tasks.findIndex((task) => task.id === id)
+  return at > 0 ? [plan.tasks[at - 1]!.id] : []
+}
+
+async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan): Promise<LaneGate> {
   // The channel's derived condition, the same line runExecSession gates on
   // (plans/0083 D9): the config flag AND the phase type's codeWork (a
   // phase-less opts resolves onto implement, so bare runs keep the raw-flag
@@ -289,6 +298,35 @@ async function laneGate(dir: string, task: Task, opts: Opts): Promise<LaneGate> 
   if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) return { kind: "off" }
   const lanes = parseTestLanes(promptFacts(opts).pack)
   if (!lanes) return { kind: "off" }
+  // The strict test-readiness (plans/0098 D7): a `Strict: yes` regression
+  // row makes the unit's testing wait for its dependencies' complete pass
+  // — the effective dependency set is the task's `Depends:` ids or, absent
+  // the field, the previous task in the index (the loader's own default).
+  // The wait's red rides the anchor-red path below; its receipts ride this
+  // wrap-up's commits like every lane receipt.
+  {
+    const deps = task.depends === "none" ? [] : task.depends ?? previousTaskId(plan, task.id)
+    const wait = await strictRegressionWait(dir, roundOfPhaseId(opts.phase?.id), lanes, deps, task.id, opts)
+    if (wait && "corrupted" in wait) {
+      return {
+        kind: "stop",
+        stop: {
+          type: "blocked",
+          question:
+            `a strict regression lane ran a git state command and moved HEAD (${wait.corrupted.join("; ")}); ` +
+            `no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`,
+        },
+      }
+    }
+    if (wait) {
+      const reason = `the strict regression lane ${wait.lane} is red at the dependency state (${wait.deps.join(", ")})${wait.run.timedOut ? " (watchdog timeout)" : wait.run.code ? ` (LANE_RC=${wait.run.code})` : ""}`
+      const gaps = [
+        laneGap(wait.run),
+        `The strict regression lane \`${wait.lane}\` vouches for the dependencies ${wait.deps.join(", ")} — its round-scoped receipts live under docs/R-${String(roundOfPhaseId(opts.phase?.id)).padStart(2, "0")}/regression/.`,
+      ]
+      return { kind: "red", reason, gaps, runs: [wait.run] }
+    }
+  }
   const anchor = anchorLaneOf(acceptanceSection(task.body), lanes)
   const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs })
   if (set.violation?.kind === "head") {
@@ -385,7 +423,7 @@ export async function runWrapup(
   for (let round = input.round ?? 0; ; ) {
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
-    const gate = await laneGate(dir, task, opts)
+    const gate = await laneGate(dir, task, opts, plan)
     if (gate.kind === "stop") return gate.stop
     let reason: string
     if (gate.kind === "red") {
