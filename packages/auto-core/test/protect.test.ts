@@ -56,6 +56,21 @@ describe("protect", () => {
     expect(await Bun.file(join(dir, MODELS_FILE)).exists()).toBe(false)
   })
 
+  // plans/0100 D1: the bundle provenance sidecar is committed driver-written
+  // state (init's materialization and the person's sync write it — never
+  // mid-run, and sync refuses under a live run lock), so it goes read-only
+  // during protection like the registry layer.
+  test("the provenance sidecar goes read-only during protection and writable after", async () => {
+    const sidecar = join(dir, ".opencode/auto/provenance.json")
+    await Bun.write(sidecar, "{}\n")
+    expect(await writable(sidecar)).toBe(true)
+    await protect(dir)
+    expect(await writable(sidecar)).toBe(false)
+    await unprotect(dir)
+    expect(await writable(sidecar)).toBe(true)
+    expect(await Bun.file(sidecar).text()).toBe("{}\n")
+  })
+
   test("task unit documents are not protected, they stay writable throughout", async () => {
     const todo = join(dir, "docs/T-001/todo.md")
     await Bun.write(todo, "# T-001: sample task\n")

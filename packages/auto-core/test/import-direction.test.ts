@@ -138,6 +138,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // the same seat config.ts holds; driver, not the intent domain, because it
   // reads the config/opts shapes it stamps.
   bundle: "driver",
+  // Bundle provenance (plans/0100 D1/D2): the committed sidecar's pure half —
+  // the stamp build/serialize/parse and the three-state comparison over
+  // stamp/disk/binary text maps. Init-time detection machinery beside bundle;
+  // imports nothing at all (the callers hand the texts in), so its placement
+  // is the runtime plane bundle/config-fix occupy.
+  provenance: "driver",
   capability: "driver",
   chain: "driver",
   // The named SessionChain transitions (plans/0061 §4.8): the one home for
@@ -659,6 +665,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // machinery beside config/config-fix — parse/materialize/register over the
   // policy files, reaching only the provider parsers and opts' mode words.
   bundle: "runtime",
+  // The provenance sidecar's pure half (plans/0100): detection state for the
+  // init-time plane — no value edges at all today; runtime so the detection
+  // sites (preflight, fix, status, sync) reach it without exception.
+  provenance: "runtime",
   "agent-choice": "runtime",
   "agent-env": "runtime",
   "agent-pool": "runtime",

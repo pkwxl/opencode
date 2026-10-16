@@ -14,15 +14,20 @@ import { PROTECTED_FILES } from "./document/roles"
 // runAll restores writability in a finally block so a human can edit the
 // files (including manual config amendments) after the driver stops.
 // The file list is the driverState role's fixed-location files
-// (document/roles.ts PROTECTED_FILES, M2.3) plus the contract surface AGENTS.md
-// and the model registry's project layer (plans/0055 §4.1). The project layer
+// (document/roles.ts PROTECTED_FILES, M2.3) plus the contract surface AGENTS.md,
+// the model registry's project layer (plans/0055 §4.1) and the bundle
+// provenance sidecar (plans/0100 D1). The project layer
 // is the operator's, not driverState: the driver reads it once at run start and
 // never writes it, so it has no allowWrite path, and it goes read-only while a
 // session runs as opencode.json does. Its path is src/models.ts MODELS_FILE,
 // spelled out because this document-domain module imports nothing from the
-// driver plane; test/protect.test.ts pins the two together.
+// driver plane; test/protect.test.ts pins the two together. The provenance
+// sidecar is the same shape of state (committed, written only by init's
+// materialization and the person's sync — never mid-run; sync refuses under a
+// live run lock), spelled out from src/provenance.ts PROVENANCE_FILE for the
+// same layering reason.
 // AUTO-RESOLVE: does a run keep the project layer's own mode (say 0o600) or leave it 0o644 like the other files? -> the same fixed modes as the other files, 0o444 during run and 0o644 after (the layer holds references, never a key, and one mode rule keeps a killed run's leftovers repairable by the next run's unprotect)
-const FILES = [...PROTECTED_FILES, "AGENTS.md", ".opencode/auto/models.json"]
+const FILES = [...PROTECTED_FILES, "AGENTS.md", ".opencode/auto/models.json", ".opencode/auto/provenance.json"]
 
 let enabled = false
 

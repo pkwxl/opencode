@@ -117,6 +117,10 @@ export const UNIT_LANE: readonly string[] = [
   // The intent-bundle surface (plans/0079 §3): parse/materialize over temp
   // directories, no repository, no spawn.
   "test/bundle.test.ts",
+  // The provenance sidecar's pure half (plans/0100 D1/D2): the stamp and the
+  // three-state comparison over temp materializations, no repository, no
+  // spawn.
+  "test/provenance.test.ts",
   // The 0082 pure halves: the span locator, the plan parser, the marks and
   // the caps over plain temp directories; the clamp suite over the ledger
   // (temp files, no repository, no spawn).

@@ -19,6 +19,7 @@
 import { readFileSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
+import { PROVENANCE_FILE, provenanceStampOf, renderProvenanceStamp } from "./provenance"
 import { parseIntentFile } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
 import { parseModeFile } from "./mode"
@@ -192,6 +193,10 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
 // .opencode/auto/ surfaces; returns the repository-relative paths written.
 // The config stamps are the caller's (init's) to apply — materialization
 // writes files only, never config. Bun.write creates parent directories.
+// Beside the files it lands the provenance sidecar (plans/0100 D1): the
+// committed record of exactly these bytes, so preflight/fix/status/sync can
+// later tell current from stale from person-edited against the running
+// binary's bundle. Re-running init rewrites it with the same digests.
 export async function materializeIntentBundle(dir: string, bundle: IntentBundle): Promise<string[]> {
   const written: string[] = []
   const write = async (rel: string, text: string) => {
@@ -203,7 +208,23 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
   }
   if (bundle.files.pack !== undefined) await write(join(".opencode", "auto", "intents", `${bundle.name}.md`), bundle.files.pack)
   if (bundle.files.mode !== undefined) await write(join(".opencode", "auto", "modes", `${bundle.name}.md`), bundle.files.mode)
+  await write(PROVENANCE_FILE, renderProvenanceStamp(provenanceStampOf(bundle.name, bundleFileMap(bundle))))
   return written
+}
+
+// The repository-relative file map a materialization of this bundle writes
+// (exactly materializeIntentBundle's set): the detection and sync callers
+// resolve the running bundle by name and hand this map to the provenance
+// comparison. Forward-slash keys on purpose — they live in the committed
+// sidecar, where node:path's separator would not stay portable.
+export function bundleFileMap(bundle: IntentBundle): Record<string, string> {
+  const files: Record<string, string> = {}
+  for (const [type, text] of Object.entries(bundle.files.phases)) {
+    files[[".opencode", "auto", "phases", `${type}.md`].join("/")] = text
+  }
+  if (bundle.files.pack !== undefined) files[[".opencode", "auto", "intents", `${bundle.name}.md`].join("/")] = bundle.files.pack
+  if (bundle.files.mode !== undefined) files[[".opencode", "auto", "modes", `${bundle.name}.md`].join("/")] = bundle.files.mode
+  return files
 }
 
 // The built-in bundles (the load.ts pattern: a shipped bundle = one directory

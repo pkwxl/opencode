@@ -131,7 +131,7 @@ describe("materializeIntentBundle", () => {
       const bundle = parseIntentBundle(CLEANROOM)
       const written = await materializeIntentBundle(dir, bundle)
       expect(written.sort()).toEqual(
-        [".opencode/auto/intents/cleanroom.md", ".opencode/auto/modes/cleanroom.md", ".opencode/auto/phases/audit.md", ".opencode/auto/phases/spec-read.md"].sort(),
+        [".opencode/auto/intents/cleanroom.md", ".opencode/auto/modes/cleanroom.md", ".opencode/auto/phases/audit.md", ".opencode/auto/phases/spec-read.md", ".opencode/auto/provenance.json"].sort(),
       )
       // The pack: loadIntents resolves it by name, the render facts select
       // it by the config's intent key (§2), and its subsections address.
@@ -282,7 +282,7 @@ describe("bundle sources", () => {
       const dir = tempDir()
       try {
         const written = await materializeIntentBundle(dir, bundle)
-        expect(written.sort()).toEqual([`.opencode/auto/intents/${name}.md`, `.opencode/auto/modes/${name}.md`, ".opencode/auto/phases/survey.md"].sort())
+        expect(written.sort()).toEqual([`.opencode/auto/intents/${name}.md`, `.opencode/auto/modes/${name}.md`, ".opencode/auto/phases/survey.md", ".opencode/auto/provenance.json"].sort())
         // The pack resolves by the config's intent selection key.
         expect(promptFacts({ dir, intent: name }).pack.name).toBe(name)
         const pack = loadIntents(dir)[name]!
