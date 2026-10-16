@@ -23,6 +23,7 @@
 // lists the same findings without writing.
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
+import { provenanceComparison } from "./bundle"
 import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING } from "./brief"
 import {
   CONFIG_DEFAULTS,
@@ -35,6 +36,7 @@ import {
   type ProjectConfig,
 } from "./config"
 import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
+import { provenanceFindings } from "./provenance"
 import { CONTRACT_AGENT } from "./opts"
 import { loadIntents } from "./intent/load"
 import { shellProfile } from "./shell"
@@ -217,6 +219,17 @@ export async function planFix(dir: string): Promise<FixPlan> {
 
   if (!(await Bun.file(join(dir, "opencode.json")).exists())) {
     fixable("opencode.json", "missing", "write the template", async () => Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text()))
+  }
+  // The bundle provenance findings (plans/0100 D3): manual only — a charter
+  // change is not meaning-preserving, so the class stays out of the fixable
+  // set by the rule table's own contract, and `sync` owns the write side.
+  // Report-only: the write list gains nothing, and the findings appear
+  // exactly when a stamp exists and a managed file is stale or edited.
+  {
+    const comparison = await provenanceComparison(dir)
+    if (comparison !== undefined) {
+      for (const finding of provenanceFindings(comparison)) findings.push({ class: "manual", path: finding.path, problem: finding.problem })
+    }
   }
   // A missing brief is no longer a finding (plans/0081 D11): omitted seed
   // writes no file, and the analysis phase proposes the brief in its round.

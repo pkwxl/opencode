@@ -4,7 +4,7 @@
 // that predates the running binary's charter family reports stale with the
 // headings delta naming exactly the missing section — never a digest
 // complaint.
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -248,6 +248,144 @@ describe("purity", () => {
       const stamp = readStamp(dir)
       compareProvenance(stamp, diskOf(dir, stamp.files), bundleFileMap(parseIntentBundle(await binaryFiles())))
       expect(readFileSync(join(dir, PROVENANCE_FILE), "utf8")).toBe(before)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// —— the detection sites (plans/0100 D3) ——
+//
+// One stale project drives all three: preflight's clause beside the intent
+// line, fix's manual finding (report-only — the write list stays empty for
+// the pack), status's row. The staleness is built exactly as the incident
+// left it: the on-disk pack and the sidecar predate the charter family, the
+// running binary ships it — and no site blocks, exits nonzero, or writes.
+import { ensurePointer } from "../src/agents-block"
+import { renderAgentContract } from "../src/config-fix"
+import { planFix } from "../src/config-fix"
+import { CONFIG_DEFAULTS } from "../src/config"
+import { provenanceComparison } from "../src/bundle"
+import { provenanceFindings, provenanceNoticeLine } from "../src/provenance"
+import { preflight } from "../src/loop-preflight"
+import { unprotect } from "../src/protect"
+import { renderStatus } from "../src/status"
+import { freshRepo, git } from "./fixtures/runner"
+
+// An initialized, committed project with the faithful bundle materialized;
+// `stale` rewrites the pack and the sidecar to the pre-charter-family bytes
+// an older binary would have written (the incident's exact shape).
+async function bundleProject(stale: boolean): Promise<string> {
+  const dir = await freshRepo()
+  const files = await resolveIntentBundle("faithful")
+  await materializeIntentBundle(dir, parseIntentBundle(files!))
+  if (stale) {
+    const packRel = ".opencode/auto/intents/faithful.md"
+    const current = readFileSync(join(dir, packRel), "utf8")
+    const old = `${current.slice(0, current.indexOf("### verify-plan-test")).trimEnd()}\n`
+    await Bun.write(join(dir, packRel), old)
+    const map = bundleFileMap(parseIntentBundle(files!))
+    map[packRel] = old
+    await Bun.write(join(dir, PROVENANCE_FILE), renderProvenanceStamp(provenanceStampOf("faithful", map)))
+  }
+  await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+  await Bun.write(join(dir, ".opencode/auto/config.json"), `${JSON.stringify({ ...CONFIG_DEFAULTS, intent: "faithful", phases: "survey,analysis,design,implement,test,acceptance" }, null, 2)}\n`)
+  await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+  await ensurePointer(dir)
+  await git(dir, "add", "-A")
+  await git(dir, "commit", "-qm", "init")
+  return dir
+}
+
+describe("the detection sites (plans/0100 D3)", () => {
+  test("a current stamp stays silent everywhere: no line, no finding, no row", async () => {
+    const dir = await bundleProject(false)
+    try {
+      const comparison = await provenanceComparison(dir)
+      expect(comparison).toBeDefined()
+      expect(provenanceNoticeLine(comparison!)).toBeUndefined()
+      expect(provenanceFindings(comparison!)).toEqual([])
+      const plan = await planFix(dir)
+      expect(plan.findings.filter((finding) => finding.path.startsWith(".opencode/auto/intents") || finding.path.startsWith(".opencode/auto/modes") || finding.path.startsWith(".opencode/auto/phases"))).toEqual([])
+      expect(await renderStatus(dir)).not.toContain("stale")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the stale pack: the comparison names the missing charter, preflight logs one line and still passes", async () => {
+    const dir = await bundleProject(true)
+    try {
+      const comparison = await provenanceComparison(dir)!
+      expect(comparison).toBeDefined()
+      const state = comparison!.files[".opencode/auto/intents/faithful.md"]!
+      expect(state.state).toBe("stale")
+      if (state.state === "stale") {
+        expect(state.direction).toBe("binary-newer")
+        expect(state.added).toEqual(["### verify-plan-test"])
+      }
+      const line = provenanceNoticeLine(comparison!)
+      expect(line).toContain("intent bundle faithful")
+      expect(line).toContain("### verify-plan-test")
+      expect(line).toContain("sync")
+      // Preflight: the clause is a log line, never a gate — the run starts.
+      const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+      for (const [key] of ambient) delete process.env[key]
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map((arg) => String(arg)).join(" "))
+      })
+      try {
+        const result = await preflight(dir, { intent: "faithful" })
+        expect("exit" in result).toBe(false)
+        if (!("exit" in result)) {
+          result.progress.close()
+          result.watcher?.close()
+        }
+        expect(lines.some((logged) => logged.includes("### verify-plan-test") && logged.includes("⚠"))).toBe(true)
+      } finally {
+        printed.mockRestore()
+        for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+        // Preflight protects the driver-state files (the sidecar among them
+        // now); the module-global guard must not leak into later suites.
+        await unprotect(dir)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fix reports the stale pack as a manual finding and writes nothing for it", async () => {
+    const dir = await bundleProject(true)
+    try {
+      const plan = await planFix(dir)
+      const finding = plan.findings.find((item) => item.path === ".opencode/auto/intents/faithful.md")
+      expect(finding).toBeDefined()
+      expect(finding!.class).toBe("manual")
+      expect(finding!.problem).toContain("### verify-plan-test")
+      expect(finding!.problem).toContain("sync")
+      // Report-only: no write touches any managed file.
+      expect(plan.writes.map((write) => write.path)).not.toContain(".opencode/auto/intents/faithful.md")
+      // The pack on disk is untouched by planning alone.
+      const before = readFileSync(join(dir, ".opencode/auto/intents/faithful.md"), "utf8")
+      for (const write of plan.writes) await write.apply()
+      expect(readFileSync(join(dir, ".opencode/auto/intents/faithful.md"), "utf8")).toBe(before)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("status carries the row in the fix finding's shape, person-edited included", async () => {
+    const dir = await bundleProject(true)
+    try {
+      const lines = await renderStatus(dir)
+      expect(lines.some((line) => line.includes("⚠ .opencode/auto/intents/faithful.md: stale") && line.includes("### verify-plan-test"))).toBe(true)
+      // A person-edited managed file is a row too (stale files are not the
+      // only finding class fix and status share).
+      const packPath = join(dir, ".opencode/auto/intents/faithful.md")
+      await Bun.write(packPath, `${readFileSync(packPath, "utf8").trimEnd()}\n\n### my-own-section\n\nOurs.\n`)
+      const edited = await renderStatus(dir)
+      expect(edited.some((line) => line.includes("edited after materialization") && line.includes("### my-own-section"))).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

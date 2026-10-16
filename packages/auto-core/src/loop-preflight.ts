@@ -16,6 +16,7 @@ import { join } from "node:path"
 import { checkAgentBins } from "./agent-pool"
 import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
+import { provenanceComparison } from "./bundle"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
 import { deleteBranch, fileTracked, probeReflink, workingTreeMB, type GitOps } from "./git"
@@ -58,6 +59,7 @@ import type { PromptFacts } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import { packSubsection } from "./intent/load"
 import { guaranteesProblem } from "./intent/guarantees"
+import { provenanceNoticeLine } from "./provenance"
 import { testLanesProblem } from "./intent/test-lanes"
 import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
@@ -360,6 +362,16 @@ export async function preflight(
   if (opts.intent !== undefined) {
     const project = await Bun.file(join(directory, ".opencode", "auto", "intents", `${opts.intent}.md`)).exists()
     log(`ℹ intent pack ${opts.intent} (${project ? "project" : "builtin"})`)
+  }
+  // The bundle provenance clause (plans/0100 D3): one line naming the
+  // direction and the headings delta when any materialized file is stale
+  // against the running binary's bundle (or the binary predates the pack).
+  // Detection only — a stale pack still loads and still runs; `sync` is the
+  // write side, and no exit code moves on this line.
+  {
+    const comparison = await provenanceComparison(directory)
+    const notice = comparison === undefined ? undefined : provenanceNoticeLine(comparison)
+    if (notice !== undefined) log(notice)
   }
   // The driver's own traffic (plans/0055 §8.10): it reaches a managed opencode
   // server over loopback with Bun's fetch, which does not bypass loopback on

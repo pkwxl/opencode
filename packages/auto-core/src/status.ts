@@ -12,6 +12,8 @@
 // parent run holds lanes (a killed parent's leftovers show here too, which
 // is the recovery story's first line).
 import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { provenanceComparison } from "./bundle"
+import { provenanceFindings } from "./provenance"
 import { shellProfile } from "./shell"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
 
@@ -30,15 +32,24 @@ function depends(task: Task): string {
 export async function renderStatus(dir: string): Promise<string[]> {
   const round = await currentRound(dir)
   const lines: string[] = []
+  // The bundle provenance rows (plans/0100 D3): one ⚠ row per stale or
+  // person-edited managed file, the same shape as fix's manual findings —
+  // detection everywhere, and no read of the tree depends on it. Computed
+  // first so the broken-tree paths below still surface it.
+  const provenance: string[] = []
+  {
+    const comparison = await provenanceComparison(dir)
+    if (comparison !== undefined) for (const finding of provenanceFindings(comparison)) provenance.push(`⚠ ${finding.path}: ${finding.problem}`)
+  }
   let state
   try {
     state = await readPhases(dir)
   } catch (error) {
-    return [`⚠ ${error instanceof Error ? error.message : String(error)}`]
+    return [...provenance, `⚠ ${error instanceof Error ? error.message : String(error)}`]
   }
   // plan owns the rounds (plans/0053 D31): the pointer names it, with the bin
   // from the shell profile.
-  if (!state) return [`⚠ phase index ${phaseIndexPath(round)} is missing; run ${shellProfile().bin} plan to establish the round`]
+  if (!state) return [...provenance, `⚠ phase index ${phaseIndexPath(round)} is missing; run ${shellProfile().bin} plan to establish the round`]
   // The in-flight lanes section (plans/0068 D13, S4): first, like the shell's
   // live-lock line — the fact a watcher polls for. Registry order, each lane
   // with its worktree (the park path, repository-relative) and the worker's
@@ -50,6 +61,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
       lines.push(`  [▶] ${lane.unit} (worktree ${lane.worktree.replaceAll("\\", "/")}${lane.pid !== undefined ? `, pid ${lane.pid}` : ""})`)
     }
   }
+  lines.push(...provenance)
   const current = currentPhase(state)
   lines.push(`R-${String(round).padStart(2, "0")} (${state.done.size}/${state.phases.length} phases done)`)
   for (const phase of state.phases) {

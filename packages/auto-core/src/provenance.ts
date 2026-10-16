@@ -185,3 +185,66 @@ export function compareProvenance(stamp: ProvenanceStamp, disk: Record<string, s
   }
   return { bundle: stamp.bundle, files, binaryStamp: provenanceStampOf(stamp.bundle, binary) }
 }
+
+// —— the detection messages (plans/0100 D3) ——
+//
+// Pure formatters over one comparison: the single ⚠ line the preflight log
+// gains beside the intent-pack line (stale files only — either direction;
+// the person's own edits are theirs, fix and status report those), and one
+// finding text per non-current managed file for fix's manual findings and
+// status's rows. Every message names the headings delta, never a digest.
+
+function deltaText(added: readonly string[], removed: readonly string[]): string {
+  const parts: string[] = []
+  if (added.length) parts.push(`adds ${added.join(", ")}`)
+  if (removed.length) parts.push(`drops ${removed.join(", ")}`)
+  return parts.join(", ")
+}
+
+function editText(added: readonly string[], removed: readonly string[]): string {
+  const parts: string[] = []
+  if (added.length) parts.push(`adds ${added.join(", ")}`)
+  if (removed.length) parts.push(`removes ${removed.join(", ")}`)
+  return parts.join(", ")
+}
+
+// One finding per stale or person-edited managed file (fix's manual class,
+// status's rows); empty when everything is current — the quiet floor.
+export function provenanceFindings(comparison: ProvenanceComparison): { path: string; problem: string }[] {
+  const findings: { path: string; problem: string }[] = []
+  for (const [path, state] of Object.entries(comparison.files)) {
+    if (state.state === "stale") {
+      const direction = !state.inBinary
+        ? "the running bundle no longer ships this file"
+        : state.direction === "binary-newer"
+          ? "the running bundle is newer"
+          : state.direction === "binary-older"
+            ? "the running binary's bundle predates your materialized pack"
+            : "the running bundle diverged from your materialized pack"
+      findings.push({ path, problem: `stale — ${direction} (${deltaText(state.added, state.removed)}); run sync to fast-forward the unedited files` })
+    } else if (state.state === "person-edited") {
+      const own = state.onDisk ? editText(state.stampAdded, state.stampRemoved) : "the file was deleted"
+      const offer = deltaText(state.added, state.removed)
+      findings.push({
+        path,
+        problem: `edited after materialization (${own}${offer ? `; the running bundle ${offer}` : ""}) — person-owned, sync never writes it`,
+      })
+    }
+  }
+  return findings
+}
+
+// The preflight clause: one line when any managed file is stale (either
+// direction), undefined on the quiet floor. Names the direction and the
+// headings delta; a fast-forwardable pack says so.
+export function provenanceNoticeLine(comparison: ProvenanceComparison): string | undefined {
+  const stale = Object.entries(comparison.files).filter(([, state]) => state.state === "stale")
+  if (!stale.length) return undefined
+  const older = stale.some(([, state]) => state.state === "stale" && state.direction === "binary-older")
+  const parts = stale.map(([path, state]) => {
+    if (state.state !== "stale") return ""
+    const delta = deltaText(state.added, state.removed)
+    return `${path}: ${!state.inBinary ? "no longer shipped by the running bundle" : state.direction === "binary-older" ? "your pack predates it, the running bundle lacks sections you have" : delta ? `the running bundle ${delta}` : "the running bundle differs"}`
+  })
+  return `⚠ intent bundle ${comparison.bundle}: ${stale.length} materialized file(s) ${older ? "differ from the running binary's bundle (a stale binary disables sections just as silently — upgrade the tool)" : "can fast-forward to the running binary's bundle (sync)"} — ${parts.join("; ")}`
+}

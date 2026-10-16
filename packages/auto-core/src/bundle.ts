@@ -19,7 +19,7 @@
 import { readFileSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { PROVENANCE_FILE, provenanceStampOf, renderProvenanceStamp } from "./provenance"
+import { PROVENANCE_FILE, compareProvenance, parseProvenanceStamp, provenanceStampOf, renderProvenanceStamp, type ProvenanceComparison } from "./provenance"
 import { parseIntentFile } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
 import { parseModeFile } from "./mode"
@@ -225,6 +225,29 @@ export function bundleFileMap(bundle: IntentBundle): Record<string, string> {
   if (bundle.files.pack !== undefined) files[[".opencode", "auto", "intents", `${bundle.name}.md`].join("/")] = bundle.files.pack
   if (bundle.files.mode !== undefined) files[[".opencode", "auto", "modes", `${bundle.name}.md`].join("/")] = bundle.files.mode
   return files
+}
+
+// The detection orchestration (plans/0100 D3): read the sidecar, resolve the
+// running binary's bundle by the stamp's name, compare. undefined when there
+// is no sidecar (a hand-written pack is person-owned by construction), the
+// sidecar does not parse (the unstamped floor — never a failure), or the
+// bundle no longer resolves (a directory bundle that went missing has
+// nothing to compare against). Never throws; the pure comparison and the
+// message formatters live in src/provenance.ts.
+export async function provenanceComparison(dir: string): Promise<ProvenanceComparison | undefined> {
+  const text = await Bun.file(join(dir, PROVENANCE_FILE)).text().catch(() => undefined)
+  if (text === undefined) return undefined
+  const stamp = parseProvenanceStamp(text)
+  if (stamp === undefined) return undefined
+  const files = await resolveIntentBundle(stamp.bundle)
+  if (files === undefined) return undefined
+  const binary = bundleFileMap(parseIntentBundle(files))
+  const disk: Record<string, string> = {}
+  for (const path of Object.keys(stamp.files)) {
+    const onDisk = await Bun.file(join(dir, path)).text().catch(() => undefined)
+    if (onDisk !== undefined) disk[path] = onDisk
+  }
+  return compareProvenance(stamp, disk, binary)
 }
 
 // The built-in bundles (the load.ts pattern: a shipped bundle = one directory
