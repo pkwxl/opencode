@@ -15,7 +15,7 @@
 // "Result: PASS"). The ratchet also proves itself non-vacuous: every
 // (template, phase) pair the bundle declares asserts over is rendered here.
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -25,7 +25,7 @@ import { loadIntents, packSubsection, parseIntentFile } from "../src/intent/load
 import type { IntentPack } from "../src/intent/types"
 import { loadModes, type ModeSpec } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
-import { BUILTIN_PHASE_TYPES, resolvePhases, type PhaseTypeEntry } from "../src/phases/registry"
+import { BUILTIN_PHASE_TYPES, phaseType, resolvePhases, type PhaseTypeEntry } from "../src/phases/registry"
 import { renderFormulationTodo } from "../src/prompt-plan"
 import { promptFacts } from "../src/prompt-facts"
 import { renderSubtask, renderWhole, renderWrapup, type PromptFacts } from "../src/prompt"
@@ -190,44 +190,63 @@ const packOf = (text: string): IntentPack => {
   }
 }
 
-describe("the per-phase charter channel (plans/0097 D1)", () => {
-  test("key validation: a verify-plan-* suffix must be a builtin letter or a declared custom type id", () => {
+describe("the per-phase charter channel (plans/0097 D1; keys canonicalized to type ids by plans/0100 D8–D11)", () => {
+  test("key validation: a verify-plan-* suffix must be a phase type id, or a preset letter as a legacy spelling", () => {
     const base = (key: string) => `# pack\n\n## guarantees\n\n### ${key}\n\nCharter text.\n`
-    // A builtin letter passes; a custom id passes when declared.
+    // A builtin type id passes (the canonical form); its preset letter passes
+    // too (the legacy spelling); a custom id passes when declared.
+    expect(guaranteesProblem(packOf(base("verify-plan-test")))).toBeUndefined()
     expect(guaranteesProblem(packOf(base("verify-plan-t")))).toBeUndefined()
     expect(guaranteesProblem(packOf(base("verify-plan-spec-read")), ["spec-read"])).toBeUndefined()
-    // A typo, and a builtin type id (the vocabulary is letters for builtins,
-    // ids for custom types — the phaseTag range), are strict failures naming
-    // the pack and the key.
+    // A typo'd key is a strict failure naming the pack, the key, and the
+    // canonical form (the steering message).
     expect(guaranteesProblem(packOf(base("verify-plan-tests")))).toContain('intent pack "pack" declares "### verify-plan-tests"')
-    expect(guaranteesProblem(packOf(base("verify-plan-implement")))).toContain('declares "### verify-plan-implement"')
+    expect(guaranteesProblem(packOf(base("verify-plan-tests")))).toContain("the suffix is the phase type id")
+    expect(guaranteesProblem(packOf(base("verify-plan-tests")))).toContain("legacy spellings")
     // A custom id the project does not declare fails naming the known ids.
-    expect(guaranteesProblem(packOf(base("verify-plan-spec-read")), ["audit"])).toContain("known: audit")
+    expect(guaranteesProblem(packOf(base("verify-plan-spec-read")), ["audit"])).toContain("declared custom: audit")
+    // Both spellings declared for one builtin type: a duplication error,
+    // never silent precedence.
+    const both = packOf("# pack\n\n## guarantees\n\n### verify-plan-test\n\nId text.\n\n### verify-plan-t\n\nLetter text.\n")
+    expect(guaranteesProblem(both)).toContain('declares both "### verify-plan-test" and "### verify-plan-t"')
     // The pack-global charter and the assert lines stay valid as before.
     expect(guaranteesProblem(packOf("# pack\n\n## guarantees\n\n### verify-plan\n\nCharter.\n"))).toBeUndefined()
   })
 
-  test("resolution: resolvedVerifyPlan returns both charters with the key; verifyPlanCharterText composes them", () => {
+  test("resolution: id-first, letter-fallback; phaseKey records the key actually consumed", () => {
     const pack = packOf(
       ["# pack", "", "## guarantees", "", "### verify-plan", "", "Global bar.", "", "### verify-plan-t", "", "Test bar.", ""].join("\n"),
     )
-    expect(resolvedVerifyPlan(pack, "t")).toEqual({ global: "Global bar.", phase: "Test bar.", phaseKey: "t" })
+    expect(resolvedVerifyPlan(pack, phaseType("test"))).toEqual({ global: "Global bar.", phase: "Test bar.", phaseKey: "t" })
     expect(resolvedVerifyPlan(pack)).toEqual({ global: "Global bar." })
-    expect(resolvedVerifyPlan(pack, "m")).toEqual({ global: "Global bar." })
+    expect(resolvedVerifyPlan(pack, phaseType("implement"))).toEqual({ global: "Global bar." })
     const only = packOf("# pack\n\n## guarantees\n\n### verify-plan-t\n\nTest bar.\n")
-    expect(resolvedVerifyPlan(only, "t")).toEqual({ phase: "Test bar.", phaseKey: "t" })
-    expect(verifyPlanCharterText(resolvedVerifyPlan(only, "t"))).toContain("verify-plan-t")
-    expect(verifyPlanCharterText(resolvedVerifyPlan(only, "m"))).toBeUndefined()
+    expect(resolvedVerifyPlan(only, phaseType("test"))).toEqual({ phase: "Test bar.", phaseKey: "t" })
+    expect(verifyPlanCharterText(resolvedVerifyPlan(only, phaseType("test")))).toContain("(verify-plan-t)")
+    expect(verifyPlanCharterText(resolvedVerifyPlan(only, phaseType("implement")))).toBeUndefined()
+    // The canonical id resolves without the letter, and a custom type's id
+    // alone resolves (no letter exists to fall back on).
+    const byId = packOf("# pack\n\n## guarantees\n\n### verify-plan-test\n\nId bar.\n")
+    expect(resolvedVerifyPlan(byId, phaseType("test"))).toEqual({ phase: "Id bar.", phaseKey: "test" })
+    const custom: PhaseTypeEntry = { ...phaseType("survey")!, type: "spec-read", origin: "project" }
+    const customPack = packOf("# pack\n\n## guarantees\n\n### verify-plan-spec-read\n\nCustom bar.\n")
+    expect(resolvedVerifyPlan(customPack, custom)).toEqual({ phase: "Custom bar.", phaseKey: "spec-read" })
+    // Id wins when both spellings are somehow declared (the preflight error is
+    // the guard; resolution stays deterministic for an unstamped hand-pack).
+    const dup = packOf("# pack\n\n## guarantees\n\n### verify-plan-test\n\nId bar.\n\n### verify-plan-t\n\nLetter bar.\n")
+    expect(resolvedVerifyPlan(dup, phaseType("test")).phaseKey).toBe("test")
   })
 
-  test("the shipped bundles declare a valid verify-plan-t (D9: the raw material fitted per axis)", async () => {
+  test("the shipped bundles declare a valid verify-plan-test under the id key (the letter form retired, plans/0100 D12)", async () => {
     for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
       const b = await stamped(name)
       try {
         expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type))).toBeUndefined()
-        const resolved = resolvedVerifyPlan(b.pack, "t")
+        const resolved = resolvedVerifyPlan(b.pack, phaseType("test"))
         expect(resolved.global).toBeDefined()
         expect(resolved.phase).toBeDefined()
+        // The id is canonical in every shipped bundle — no letter-keyed charter.
+        expect(resolved.phaseKey).toBe("test")
         // De-migrationed wording: the shared spine's non-negotiables.
         expect(resolved.phase).toContain("never invent them")
         expect(resolved.phase).toContain("Adaptive test planning")
@@ -236,5 +255,26 @@ describe("the per-phase charter channel (plans/0097 D1)", () => {
         rmSync(b.dir, { recursive: true, force: true })
       }
     }
+  })
+})
+
+// The stage-A ratchet (plans/0100 stage A): no shipped bundle declares a
+// letter-keyed charter — the id is canonical in what the tool materializes,
+// so a stamp never records a letter key (D12's rename-before-any-stamp).
+describe("the letter-key ratchet (plans/0100 D12)", () => {
+  test("no shipped bundle declares a letter-keyed verify-plan section", () => {
+    const dir = join(import.meta.dir, "..", "templates", "bundles")
+    const offenders: string[] = []
+    for (const name of readdirSync(dir)) {
+      const packFile = join(dir, name, "intents")
+      if (!existsSync(packFile)) continue
+      for (const file of readdirSync(packFile)) {
+        const text = readFileSync(join(packFile, file), "utf8")
+        for (const line of text.split("\n")) {
+          if (/^###\s+verify-plan-[admtvk]\s*$/.test(line)) offenders.push(`${name}/intents/${file}: ${line.trim()}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
   })
 })

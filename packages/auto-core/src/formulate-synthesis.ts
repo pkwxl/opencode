@@ -314,8 +314,10 @@ export type SynthesisInput = {
   pool: AgentPool
   routing: RoutingFacts | undefined
   facts: PromptFacts
-  // The phase key of the charter resolution (undefined in m mode).
-  phaseKey: string | undefined
+  // The phase type entry of the charter resolution (plans/0100 D9: keyed by
+  // type id, the preset letter a legacy fallback); undefined in m mode, where
+  // the pack-global charter alone resolves.
+  phaseEntry?: PhaseTypeEntry
   // The phase type entry (the route and the seeded rows); the implicit
   // implement entry in m mode.
   entry: PhaseTypeEntry
@@ -335,9 +337,13 @@ export type SynthesisInput = {
 
 export async function synthesizeFormulation(input: SynthesisInput): Promise<SynthesisOutcome> {
   const stamp = () => new Date().toISOString()
+  const resolved = resolvedVerifyPlan(input.facts.pack, input.phaseEntry)
+  // The keys the charter actually came from (plans/0100 D11): the id when the
+  // pack keys canonically, the letter when a legacy pack keys by preset
+  // letter — the audit line shows which spelling was in force.
   const charterKeys = [
-    ...(resolvedVerifyPlan(input.facts.pack).global !== undefined ? ["verify-plan"] : []),
-    ...(input.phaseKey !== undefined && resolvedVerifyPlan(input.facts.pack, input.phaseKey).phase !== undefined ? [`verify-plan-${input.phaseKey}`] : []),
+    ...(resolved.global !== undefined ? ["verify-plan"] : []),
+    ...(resolved.phase !== undefined ? [`verify-plan-${resolved.phaseKey}`] : []),
   ]
   const seeded = seededLedgerRows(input.entry, input.finalPhase, input.reportFile)
   let lastFidelityAudit: string | undefined
@@ -346,7 +352,7 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     reason,
     audit: [...before, `- ${stamp()} formulation ${input.phaseStep} synthesis: FALLBACK — ${reason}`],
   })
-  const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.phaseKey))
+  const charter = verifyPlanCharterText(resolved)
   if (charter === undefined) return { kind: "off", reason: "no resolved plan charter — the deterministic floor" }
   if (!autoSwitches().synthesis) {
     return { kind: "off", reason: `${SWITCH_ENV.synthesis}=off — the deterministic floor is forced; the charter still rides the Acceptance and the verifier` }

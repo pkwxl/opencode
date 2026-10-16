@@ -146,7 +146,7 @@ behavior is the bar. A deliberate divergence from the reference's structure is l
 only as a recorded deviation; tests prove named behaviors against the behavior baseline; the
 acceptance verdict judges parity and follows the findings.
 
-### verify-plan-t
+### verify-plan-test
 
 The test plan must establish a verifiable path to the round's coverage targets, the
 validation of the applicable design objectives, and an honest quality assessment of the

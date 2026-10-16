@@ -117,6 +117,11 @@ describe("typeNameProblem", () => {
     expect(typeNameProblem("2nd")).toContain("lowercase")
     expect(typeNameProblem("implement")).toContain("builtin")
     expect(typeNameProblem("mad")).toContain("letter preset")
+    // plans/0100 D13: a custom type whose id equals a preset letter (phases/t.md)
+    // is ambiguous against --phases letter expansion and the charter fallback
+    // resolution — rejected as strictly as any preset-shaped name.
+    expect(typeNameProblem("t")).toContain("letter preset")
+    expect(typeNameProblem("ad")).toContain("letter preset")
   })
 
   test("role words are rejected by the driver for project types only (phaseTypeRoleProblems)", () => {

@@ -21,14 +21,13 @@ import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./k
 import { formatTokens, log } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
-import { REQUIRED_TYPE, phaseType } from "./phases/registry"
+import { REQUIRED_TYPE, phaseType, type PhaseTypeEntry } from "./phases/registry"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "./prompt-plan"
 import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
-import { phaseTag } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
@@ -91,13 +90,13 @@ const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string =>
 // writes the blockage document the person answers with one `Choice:` line.
 // "remediate" = the interactive fast path executed an approved option inline
 // (D9): the caller re-composes and re-verifies from scratch (D7).
-// The phase key of a formulation's charter resolution (plans/0097 D1): the
-// phaseTag vocabulary — a builtin letter or a custom type id. m mode passes
-// none (the pack-global charter alone resolves, D10).
-const charterPhaseKey = (ctx: LoopCtx, phase: PhaseUnit): string | undefined => (ctx.manual ? undefined : phaseTag(phase.entry))
+// The phase type entry of a formulation's charter resolution (plans/0097 D1;
+// keyed by type id since plans/0100 D9, the preset letter a legacy fallback).
+// m mode passes none (the pack-global charter alone resolves, D10).
+const charterPhaseEntry = (ctx: LoopCtx, phase: PhaseUnit): PhaseTypeEntry | undefined => (ctx.manual ? undefined : phase.entry)
 
 async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prompt: string, blocks: readonly BlockMapEntry[]): Promise<number | "remediate"> {
-  const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt, phase: charterPhaseKey(ctx, phase) })
+  const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt, entry: charterPhaseEntry(ctx, phase) })
   if (outcome.kind === "inactive") return 0
   const audit = join(dirname(phase.dir), "prompt-audit.md")
   const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
@@ -282,7 +281,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   const compose = async (): Promise<
     { todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[]; audit: string[]; digest: string; landed: boolean; id?: string }
   > => {
-    const charter = formulationAcceptance(planFacts(ctx), charterPhaseKey(ctx, phase))
+    const charter = formulationAcceptance(planFacts(ctx), charterPhaseEntry(ctx, phase))
     const n = await formulationNumber(directory, phase, Boolean(opts.autoNumber))
     const facts = planFacts(ctx)
     const baseInput = ctx.manual
@@ -342,8 +341,8 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         id: state.id,
       }
     }
-    const phaseKeyOf = charterPhaseKey(ctx, phase)
-    const resolved = resolvedVerifyPlan(facts.pack, phaseKeyOf)
+    const phaseEntryOf = charterPhaseEntry(ctx, phase)
+    const resolved = resolvedVerifyPlan(facts.pack, phaseEntryOf)
     if (verifyPlanCharterText(resolved) === undefined) {
       return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
     }
@@ -375,7 +374,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       pool: ctx.server,
       routing: ctx.routing,
       facts,
-      phaseKey: phaseKeyOf,
+      phaseEntry: phaseEntryOf,
       entry,
       phaseStep: phaseKey(phase).id,
       finalPhase,

@@ -153,7 +153,7 @@ sake, and every removal is justified in the task documents. Tests prove named be
 against the behavior baseline; the acceptance verdict judges external parity plus the
 debt-removal accounting, and follows the findings.
 
-### verify-plan-t
+### verify-plan-test
 
 The test plan must establish a verifiable path to the round's coverage targets, the
 validation of the applicable design objectives, and an honest quality assessment of the

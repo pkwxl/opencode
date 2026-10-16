@@ -180,7 +180,7 @@ defect, not a goal. Where the specification is silent, the minimal behavior cons
 with the public interfaces is chosen and the assumption is recorded; the audit phase
 judges compliance and independence, and its verdict follows the findings.
 
-### verify-plan-t
+### verify-plan-test
 
 The test plan must establish a verifiable path to the round's coverage targets, the
 validation of the applicable design objectives, and an honest quality assessment of the

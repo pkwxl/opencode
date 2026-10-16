@@ -25,6 +25,7 @@
 import { classifierEntry, oneShot } from "./classify"
 import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { packSubsection } from "./intent/load"
+import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { renderPrompt } from "./prompt"
@@ -69,20 +70,20 @@ export function parseVerifyReply(text: string): { consistent: boolean; evidence?
 // entry's agent resolves its host through it); routing carries the registry
 // and the router the entry selection reads; step names the planning step in
 // the prompt and the audit record (e.g. "phase-plan R-01.P02-implement").
-// phase is the formulation's phase key (plans/0097 D1: a builtin letter or a
-// custom type id — the phaseTag vocabulary); absent in m mode, where the
-// pack-global charter alone resolves. Activation: the resolved charter
-// (global + phase) — a pack declaring only `verify-plan-t` verifies test
-// phases and never the others.
+// entry is the formulation's phase type entry (plans/0097 D1, keyed by type
+// id since plans/0100 D9); absent in m mode, where the pack-global charter
+// alone resolves. Activation: the resolved charter (global + phase) — a pack
+// declaring only `verify-plan-test` verifies test phases and never the
+// others.
 export async function verifyPlanPrompt(input: {
   pool: AgentPool
   routing: RoutingFacts | undefined
   facts: PromptFacts
   step: string
   prompt: string
-  phase?: string
+  entry?: PhaseTypeEntry
 }): Promise<PlanVerifyOutcome> {
-  const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.phase))
+  const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.entry))
   if (charter === undefined) return { kind: "inactive" }
   if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is switched off (the render gate and the precedence blocks still hold)` }
   if (input.routing === undefined) {

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
+import { phaseType } from "../src/phases/registry"
 import { constructFormulation, formulationAcceptance, formulationNumber, formulationState, formulateTitle, isFormulation } from "../src/formulate"
 import { loadPlan, renderTaskIndex, taskIndexPath } from "../src/tasks"
 import { promptFacts } from "../src/prompt-facts"
@@ -77,19 +78,20 @@ describe("the charter-as-acceptance (plans/0095 D2)", () => {
       ].join("\n"),
     )
     const facts = promptFacts({ dir })
-    // No phase key: the global charter alone (m mode's resolution, D10).
+    // No phase entry: the global charter alone (m mode's resolution, D10).
     const manual = formulationAcceptance(facts)
     expect(manual).toContain("GLOBAL-CHARTER-SENTENCE.")
     expect(manual).not.toContain("TEST-CHARTER-SENTENCE")
-    // The test phase's key resolves both, global first under its lead-in.
-    const test = formulationAcceptance(facts, "t")
+    // The test phase's entry resolves both, global first under its lead-in —
+    // the letter key is the legacy spelling resolution still honors (0100 D9).
+    const test = formulationAcceptance(facts, phaseType("test"))
     expect(test).toContain("GLOBAL-CHARTER-SENTENCE.")
     expect(test).toContain("The phase's own plan charter (verify-plan-t)")
     expect(test).toContain("TEST-CHARTER-SENTENCE the test plan must establish.")
     expect(test.indexOf("GLOBAL-CHARTER-SENTENCE.")).toBeLessThan(test.indexOf("TEST-CHARTER-SENTENCE"))
-    // A key the pack does not declare keeps the global-only acceptance —
-    // a pack declaring only verify-plan-t is floor everywhere else.
-    const other = formulationAcceptance(facts, "m")
+    // An entry the pack does not declare a charter for keeps the global-only
+    // acceptance — a pack declaring only verify-plan-t is floor everywhere else.
+    const other = formulationAcceptance(facts, phaseType("implement"))
     expect(other).toContain("GLOBAL-CHARTER-SENTENCE.")
     expect(other).not.toContain("TEST-CHARTER-SENTENCE")
     // A pack declaring only the phase charter: the phase resolves it, every
@@ -99,8 +101,8 @@ describe("the charter-as-acceptance (plans/0095 D2)", () => {
       "# default\n\n## guarantees\n\n### verify-plan-t\n\nTEST-CHARTER-SENTENCE only.\n",
     )
     const fresh = promptFacts({ dir })
-    expect(formulationAcceptance(fresh, "t")).toContain("TEST-CHARTER-SENTENCE only.")
-    expect(formulationAcceptance(fresh, "m")).not.toContain("TEST-CHARTER-SENTENCE")
+    expect(formulationAcceptance(fresh, phaseType("test"))).toContain("TEST-CHARTER-SENTENCE only.")
+    expect(formulationAcceptance(fresh, phaseType("implement"))).not.toContain("TEST-CHARTER-SENTENCE")
     expect(formulationAcceptance(fresh)).not.toContain("The project's intent charter binds")
   })
 })

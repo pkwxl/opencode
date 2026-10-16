@@ -694,3 +694,67 @@ describe("preflight: branch-isolation leftovers (plans/0074 §4, U-L2)", () => {
     expect(lane.lines.some((line) => line.includes("auto/R-01 holds"))).toBe(false)
   })
 })
+
+describe("preflight: the guarantees charter-key grammar (plans/0097 D1; ids canonical since plans/0100 D10)", () => {
+  // The initialized, committed project the other suites build, plus an
+  // active intent pack declaring charter keys — the surface the grammar
+  // check reads.
+  async function charterRepo(pack: string): Promise<string> {
+    const dir = await freshRepo()
+    dirs.push(dir)
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/intents/charter.md"), pack)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  async function run(dir: string) {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, { intent: "charter" })
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      return { result, lines }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+  }
+
+  test("the id key and the legacy letter key both pass; the intent line still logs provenance", async () => {
+    for (const key of ["verify-plan-test", "verify-plan-t"]) {
+      const dir = await charterRepo(`# charter\n\n## guarantees\n\n### ${key}\n\nCharter bar.\n`)
+      const { result, lines } = await run(dir)
+      expect("exit" in result).toBe(false)
+      expect(lines.some((line) => line.includes("intent pack charter (project)"))).toBe(true)
+    }
+  })
+
+  test("a typo'd suffix exits 1 steering to the phase type id form", async () => {
+    const dir = await charterRepo("# charter\n\n## guarantees\n\n### verify-plan-tests\n\nCharter bar.\n")
+    const { result, lines } = await run(dir)
+    expect(result).toEqual({ exit: 1 })
+    expect(lines.some((line) => line.includes('declares "### verify-plan-tests"'))).toBe(true)
+    expect(lines.some((line) => line.includes("the suffix is the phase type id"))).toBe(true)
+  })
+
+  test("both spellings declared for one builtin type exits 1 naming the duplication", async () => {
+    const dir = await charterRepo("# charter\n\n## guarantees\n\n### verify-plan-test\n\nId bar.\n\n### verify-plan-t\n\nLetter bar.\n")
+    const { result, lines } = await run(dir)
+    expect(result).toEqual({ exit: 1 })
+    expect(lines.some((line) => line.includes('declares both "### verify-plan-test" and "### verify-plan-t"'))).toBe(true)
+  })
+})
