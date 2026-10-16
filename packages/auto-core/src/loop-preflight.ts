@@ -23,6 +23,7 @@ import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
 import {
   dispatchLane,
+  docScheduler,
   laneBranch,
   laneExit,
   laneOutcome,
@@ -418,6 +419,23 @@ export async function preflight(
     const resolved = resolveTreeTier(opts.treeLanes, probe, opts.lanes?.treeBudgetMB)
     treeTier = resolved.tier
     log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}`)
+  }
+  // --handover-test refuses under doc-lane activation (plans/0099 D2): the
+  // idle test protocol runs driver scripts against the whole tree from
+  // inside the session engine — the one driver-run surface with no landing
+  // window to drain into (its stash guard would treat a sibling's in-flight
+  // doc writes as its own to restore). The wrapup lane gate and the strict
+  // wait have drain points (D9); the idle test does not, so the two run
+  // shapes are mutually exclusive and say so. Lane isolation keeps the
+  // combination (the switch pins full isolation, one session, serially —
+  // doc lanes never engage), and the kill switch removes the branch rather
+  // than the flag.
+  if (opts.handoverTest && autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, opts.parallel, treeTier)) {
+    log(
+      `--handover-test with max sessions ${opts.maxSessions} under doc lanes (tier 0, parallel ${opts.parallel}): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. ` +
+        `Run with --max-sessions 1, or drop --handover-test`,
+    )
+    return { exit: 1 }
   }
 
   // The agent contract written by init (CONTRACT_AGENT); pre-run integrity

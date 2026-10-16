@@ -577,6 +577,30 @@ describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
     expect("exit" in (await run(dir, { maxSessions: 2, parallel: "low", waitAnswer: 0 })).result).toBe(false)
   })
 
+  // Doc lanes (plans/0099 D2): --handover-test refuses under doc-lane
+  // activation — the idle test protocol runs driver scripts against the
+  // whole tree from inside the session engine, the one driver-run surface
+  // with no landing window to drain into. The floors keep it: one session,
+  // and a worktree tier (the doc scheduler is tier-0-only). The switch-off
+  // and isolation floors are the branch site's (stage C) and the switch
+  // parse's (test/switches.test.ts) own tests.
+  test("--handover-test refuses under doc-lane activation; the serial and worktree-tier shapes keep it", async () => {
+    const dir = await project()
+    const refused = await run(dir, { maxSessions: 2, parallel: "low", handoverTest: true })
+    expect(refused.result).toEqual({ exit: 1 })
+    expect(
+      refused.lines.filter((line) => line.startsWith("--handover-test")),
+    ).toEqual([
+      "--handover-test with max sessions 2 under doc lanes (tier 0, parallel low): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. Run with --max-sessions 1, or drop --handover-test",
+    ])
+    // One session: doc-lane activation is off, the idle test protocol runs
+    // exactly as today.
+    expect("exit" in (await run(dir, { maxSessions: 1, parallel: "low", handoverTest: true })).result).toBe(false)
+    // A worktree tier: the doc scheduler never engages (tier 2 keeps the
+    // lane loop; a lane worker's tree is its own).
+    expect("exit" in (await run(dir, { maxSessions: 2, parallel: "low", handoverTest: true, treeLanes: "on" })).result).toBe(false)
+  })
+
   test("the floor: at maxSessions = 1 preflight is unchanged whatever the level and the interactive flags", async () => {
     const dir = await project()
     for (const parallel of [undefined, "low", "medium", "high"] as const) {

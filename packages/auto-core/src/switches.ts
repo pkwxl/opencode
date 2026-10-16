@@ -88,6 +88,12 @@ export const SWITCH_ENV = {
   // remove the machinery, never weaken the wrap-up's own preliminary tier
   // (the OPENCODE_AUTO_SYNTHESIS precedent).
   regression: "OPENCODE_AUTO_REGRESSION",
+  // Doc lanes (plans/0099 D2): same-tree concurrent pipelines for
+  // documentation-scoped units at tier 0 — the branch of the task loop's
+  // chain that runs the doc-lane scheduler. off removes the branch (a
+  // tier-0 parallel run is exactly today's serial loop), never the serial
+  // floor beneath it; the OPENCODE_AUTO_REGRESSION house pattern.
+  docLanes: "OPENCODE_AUTO_DOC_LANES",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -396,6 +402,11 @@ export type Switches = {
   // declares a regression-cost row. off removes the machinery for one run —
   // no launches, no hold, no strict wait; the preliminary tier is untouched.
   regression: boolean
+  // Doc lanes (default on, plans/0099 D2): a tier-0 parallel run routes
+  // its documentation-scoped units through concurrent in-process pipelines
+  // in the main tree. off removes the scheduler for one run — the serial
+  // loop runs instead; it never adds anything.
+  docLanes: boolean
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -429,6 +440,7 @@ const SWITCH_DEFAULTS: Switches = {
   synthesis: true,
   synthesisTimeout: 15,
   regression: true,
+  docLanes: true,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -664,6 +676,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
     synthesisTimeout: positiveMinutes(SWITCH_ENV.synthesisTimeout, env[SWITCH_ENV.synthesisTimeout], SWITCH_DEFAULTS.synthesisTimeout),
     regression: onOff(SWITCH_ENV.regression, env[SWITCH_ENV.regression], SWITCH_DEFAULTS.regression),
+    docLanes: onOff(SWITCH_ENV.docLanes, env[SWITCH_ENV.docLanes], SWITCH_DEFAULTS.docLanes),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -710,6 +723,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
     switches.synthesisTimeout === SWITCH_DEFAULTS.synthesisTimeout ? undefined : `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     switches.regression === SWITCH_DEFAULTS.regression ? undefined : `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
+    switches.docLanes === SWITCH_DEFAULTS.docLanes ? undefined : `${SWITCH_ENV.docLanes}=${switches.docLanes ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -742,6 +756,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
     `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
+    `${SWITCH_ENV.docLanes}=${switches.docLanes ? "on" : "off"}`,
   ].join(", ")
 }
 

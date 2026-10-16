@@ -101,11 +101,19 @@ async function verifyVerdict(dir: string, task: Task): Promise<{ kind: "pass" } 
 // baseline at unit start through HEAD — everything the task's sessions
 // changed. undefined outside git / under the no-commit double (the charter
 // words the inspection without a range then).
-function commitRangeText(dir: string, baseline: UnitBaseline): string | undefined {
+// scope (plans/0099 D7): a doc unit's rendered range becomes path-limited —
+// `<sha>..HEAD -- <scope>` — because under doc-lane concurrency the plain
+// range contains the siblings' commits; the pathspec (the unit's effective
+// scope, exclusive to the unit by disjointness) makes the range exactly the
+// unit's own commits. The template sentence stays generic; the injected
+// string carries the pathspec. Absent = today's range, byte-identical.
+// Exported for the doc-lanes suite's pure-half tests.
+export function commitRangeText(dir: string, baseline: UnitBaseline, scope?: readonly string[]): string | undefined {
   if (!baseline.length) return undefined
+  const spec = scope?.length ? ` -- ${scope.join(" ")}` : ""
   return baseline
     .map(({ root, sha }) => {
-      const range = sha ? `${sha}..HEAD` : "HEAD (the unit's whole history)"
+      const range = sha ? `${sha}..HEAD${spec}` : "HEAD (the unit's whole history)"
       const rel = relative(dir, root) || "."
       return baseline.length === 1 ? range : `${rel}: ${range}`
     })
@@ -403,7 +411,9 @@ function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: strin
 // this task has already spent (resume, D7: a round counts once it opens, so a
 // resumed run never re-runs a spent round); persist advances the progress
 // record's wrapup stage; baseline is the unit's start SHA baseline (the
-// charter's commit range). label is the unit name used when a commit fails;
+// charter's commit range); scope is D7's effective-scope pathspec of a doc
+// lane's unit (absent on every serial unit — the charter's range stays
+// today's). label is the unit name used when a commit fails;
 // solo is the off/auto/ondemand whole-task mode, every mode but the true
 // pipeline (the report is an output summary rather than an index).
 // undefined = verification passed; the only non-blocked other exit never
@@ -415,11 +425,11 @@ export async function runWrapup(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline },
+  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[] },
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
-  const commitRange = commitRangeText(dir, input.baseline ?? [])
+  const commitRange = commitRangeText(dir, input.baseline ?? [], input.scope)
   for (let round = input.round ?? 0; ; ) {
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })

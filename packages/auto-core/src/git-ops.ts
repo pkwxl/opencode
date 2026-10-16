@@ -1,9 +1,11 @@
 // The git service's home (the run services' commit-side seam): the session
 // close-out afterSession with its proxy-answer marker collection, and the
-// two instances of the seam — createGitOps (production delegation to the
-// free commit functions of src/git.ts) and noCommitGit (the double that
-// reproduces the `commit: false` off-path, which tests install instead of
-// the retired option). Split out of src/unit-commit.ts, which keeps the
+// seam's shapes — createGitOps (production delegation to the free commit
+// functions of src/git.ts), noCommitGit (the double that reproduces the
+// `commit: false` off-path, which tests install instead of the retired
+// option) and createDocLaneGit (the doc-lane decorator of plans/0099 D4–D6,
+// wrapping any base with one serialized, path-scoped commit queue driven by
+// the loop's registry). Split out of src/unit-commit.ts, which keeps the
 // recovery-fidelity half (strict resume, model eligibility, rollback
 // orchestration).
 //
@@ -31,13 +33,17 @@ import {
   changedFiles,
   commitPending,
   commitTree,
+  driverStateFile,
   landBranch,
   pruneWorktrees,
   removeWorktree,
   unitBaseline,
   unitViolations,
+  withinScopes,
+  type CommitResult,
   type GitOps,
   type UnitBaseline,
+  type UnitGate,
 } from "./git"
 import { clampRecordedResolves } from "./charter-clamp"
 import { log, vlog } from "./log"
@@ -184,5 +190,171 @@ export function noCommitGit(): GitOps {
     removeWorktree: async () => ({ ok: true }),
     pruneWorktrees: async () => ({ ok: true }),
     landBranch: async () => ({ type: "failed", error: "the no-commit git double does not merge lane branches" }),
+  }
+}
+
+// —— Doc lanes (plans/0099 D4–D6): the seam's decorator —— //
+
+// The registry the doc loop owns and the decorator reads (D4): the live doc
+// lanes' effective scopes (keyed by unit id — the loop updates the map at
+// dispatch, landing and recovery, and empties it when the lanes drain), and
+// the quarantine set (D6: the stray-write paths a blocked landing recorded —
+// tolerated by every later guard so sibling lanes land around them; the
+// human still owns the dirt, and the quarantine dies with the run: the next
+// run's clean gate sees it and blocks).
+export type DocLaneRegistry = {
+  live: Map<string, string[]>
+  quarantine: Set<string>
+}
+
+export function createDocLaneRegistry(): DocLaneRegistry {
+  return { live: new Map(), quarantine: new Set() }
+}
+
+// The GitOps decorator of doc-lane mode (D4–D6), installed by the doc loop
+// at entry for its duration — wrapping ctx.git — while the run's activation
+// holds (docScheduler). An empty registry makes every method a pass-through
+// (the post-drain phase machinery and the serial degrade run safely with it
+// in place), so the decorator's deltas are exactly the three the registry
+// drives:
+//   - D4, committed sequentially and path-scoped: every commit-shaped call
+//     funnels through one awaited queue (commit-at-a-time — the parent is
+//     the sole writer of git state, and the serialized commits keep the
+//     index and the object store single-writer in practice). A live doc
+//     unit's commit adds its effective scope plus the dirty driver-exclusive
+//     state files — the index tick of its close-out rides the unit's own
+//     commit exactly as the serial world's done commit does (dm-glm's
+//     measured shape: `docs/T-NNN/done.md` plus the phase `tasks.md` tick);
+//     every other call adds everything except the live scopes (with no
+//     lanes in flight that is `.` — today's sweep, byte-identical).
+//   - D5, the start gate relaxes by exactly the live scopes: beginUnit
+//     tolerates dirt inside the *other* live doc units' effective scopes
+//     (the in-flight set's own writes), everything else keeps today's
+//     semantics — driver-state-only dirt self-heals through the carryover
+//     commit (itself queued and exclude-scoped), anything else blocks for
+//     the human.
+//   - D6, the landing guard: before a live doc unit's commit lands, every
+//     changed path must lie inside the unit's own effective scope ∪ the
+//     live siblings' scopes ∪ the quarantine ∪ driver-exclusive state (the
+//     tick is a driver write, never a session's — tolerating it does not
+//     weaken the "a session wrote past its declaration" check those paths
+//     exist to make loud). Anything else is recorded in the quarantine and
+//     the commit fails naming the files — the caller's block stops
+//     dispatching, the in-flight lanes drain, the run exits 2 (a wrong
+//     `Touches` declaration surfaces as a failing unified commit, never as
+//     silently unlanded work — the tier-1 sparse guard's posture).
+// The existing call sites are unchanged: afterSession, commitTree and
+// commitPending already carry the task, which is all the decorator needs to
+// read the registry by unit id.
+export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOps {
+  // The one awaited queue (D4). The stage-A precedent (updateUnits,
+  // tickIndexLine): a module-scope promise chain per instance; here it lives
+  // in the decorator's closure, so each installed decorator owns exactly its
+  // run's commits. Errors never wedge the queue — the failing caller gets
+  // the rejection, the chain continues from a resolved placeholder.
+  let queue: Promise<unknown> = Promise.resolve()
+  const serialized = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = queue.then(run)
+    queue = next.catch(() => {})
+    return next
+  }
+  // The live scopes as one flat list, the given unit's own scope excepted —
+  // the sibling set both D5's tolerance and D6's guard read. Read inside the
+  // queue's continuation (or from a plain call that precedes one), where the
+  // loop's single-threaded landing continuation is the only mutator.
+  const siblingScopes = (unit: string): string[] =>
+    [...registry.live.entries()].filter(([id]) => id !== unit).map(([, scope]) => scope).flat()
+  // The queued, scoped, guarded commit core every commit-shaped method of
+  // the decorator routes through — the one place the D4 scoping and the D6
+  // guard exist, so beginUnit's carryover, commitPending's backfill and
+  // afterSession's close-out cannot drift apart.
+  const commitDocTree = (dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult> =>
+    serialized(async () => {
+      const scope = registry.live.get(task.id)
+      if (scope === undefined) {
+        // Everything except the live scopes — the serial degrade's units,
+        // the carryover self-heal, the janitorial commits, close-out
+        // commits. With no lanes in flight: today's sweep, byte-identical.
+        const live = siblingScopes("")
+        return base.commitTree(dir, task, info, live.length ? [".", ...live.map((path) => `:(exclude)${path}`)] : undefined)
+      }
+      // D6's landing guard: everything dirty must be the unit's own scope,
+      // a live sibling's in-flight scope, a quarantined stray, or a
+      // driver-exclusive state file. The rest is a session that wrote past
+      // its declaration — quarantined here so the sibling lanes' guards and
+      // close-outs tolerate exactly those paths while they drain.
+      const dirty = await base.changedFiles(dir)
+      const stray = dirty.filter(
+        (rel) => !withinScopes(rel, [...scope, ...siblingScopes(task.id)]) && !registry.quarantine.has(rel) && !driverStateFile(rel),
+      )
+      if (stray.length) {
+        for (const rel of stray) registry.quarantine.add(rel)
+        log(`  ⚠ ${task.id} wrote outside its declared scope: ${stray.join(", ")}; the paths are quarantined — sibling doc lanes keep landing around them, the run stops once they drain`)
+        return { ok: false, failures: [{ rel: ".", error: `stray writes outside the unit's declared scope (Touches + docs/${task.id}/): ${stray.join(", ")}` }] }
+      }
+      // The driver-state files riding the unit's own commit: the close-out
+      // tick of the phase index (a driver write outside every scope, left
+      // dirty by markDone moments before); the unit's own todo/done state
+      // files are already inside the scope and stay deduplicated away.
+      return base.commitTree(dir, task, info, [...scope, ...dirty.filter((rel) => driverStateFile(rel) && !withinScopes(rel, scope))])
+    })
+  return {
+    records: base.records,
+    commitTree: commitDocTree,
+    // D5's relaxed gate. Byte-identical to the base gate over an empty
+    // registry: no tolerated scope survives the filter, so `rest` is the
+    // full dirty set, the driver-state-only shape heals through the same
+    // carryover subject, and anything else returns the same dirty files.
+    beginUnit: async (dir, opts, task): Promise<UnitGate> => {
+      if (opts.dryrun) return { type: "ok", baseline: undefined }
+      const dirty = await base.changedFiles(dir)
+      if (!dirty.length) return { type: "ok", baseline: await base.unitBaseline(dir) }
+      const rest = dirty.filter((rel) => !withinScopes(rel, siblingScopes(task.id)))
+      if (!rest.length) return { type: "ok", baseline: await base.unitBaseline(dir) }
+      if (rest.every(driverStateFile)) {
+        const healed = await commitDocTree(dir, task, { stage: "carryover", subject: `${task.id} carryover driver-state posting` })
+        if (healed.ok) {
+          log(`  ✓ driver state files not posted (${rest.join(", ")}), self-healed with a catch-up commit`)
+          return { type: "ok", baseline: await base.unitBaseline(dir) }
+        }
+      }
+      return { type: "dirty", files: rest }
+    },
+    // The named-files rule unchanged (D4: the files are outside every live
+    // scope by D6's guard, or the guard has already blocked); the backfill
+    // commit itself routes through the queued, scoped core.
+    commitPending: async (dir, opts, task, info, files) => {
+      if (opts.dryrun) return "clean"
+      const dirty = await base.changedFiles(dir)
+      if (!files.some((file) => dirty.includes(file))) return "clean"
+      return commitDocTree(dir, task, info)
+    },
+    afterSession: async (dir, opts, task, info, baseline) => {
+      if (!dir) return { type: "ok" }
+      await collectSessionMarks(dir, opts.phase, task, info.stage)
+      if (opts.dryrun) return { type: "ok" }
+      const result = await commitDocTree(dir, task, info)
+      if (!result.ok) {
+        return {
+          type: "failed",
+          question: `unified commit failed: ${result.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Changes are left in the worktree; please handle git manually and re-run.`,
+        }
+      }
+      if (baseline) {
+        // The close-out check under concurrency (D7): the live scopes hold
+        // in-flight sibling writes and the quarantine holds the blocked
+        // unit's strays — excluded, never swept and never judged. Clause ②
+        // (the commit range) is the free function's own, unchanged.
+        const violations = await unitViolations(dir, baseline, [...siblingScopes(""), ...registry.quarantine])
+        if (violations.length) return { type: "failed", question: `unit close-out check failed: ${violations.join("; ")}` }
+      }
+      return { type: "ok" }
+    },
+    unitBaseline: base.unitBaseline,
+    changedFiles: base.changedFiles,
+    addWorktree: base.addWorktree,
+    removeWorktree: base.removeWorktree,
+    pruneWorktrees: base.pruneWorktrees,
+    landBranch: base.landBranch,
   }
 }

@@ -49,6 +49,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       synthesis: true,
       synthesisTimeout: 15,
       regression: true,
+      docLanes: true,
     })
   })
 
@@ -96,6 +97,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       synthesis: true,
       synthesisTimeout: 15,
       regression: true,
+      docLanes: true,
     })
   })
 
@@ -139,6 +141,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       synthesis: true,
       synthesisTimeout: 15,
       regression: true,
+      docLanes: true,
     })
   })
 
@@ -325,11 +328,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
-  test("the default combination is silent: non-default items undefined; the full listing names all twenty-two", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all twenty-three", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=on, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=on, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
   })
 
@@ -337,7 +340,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=on, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=on, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
@@ -364,6 +367,13 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     expect(unregressed.regression).toBe(false)
     expect(nonDefaultSwitches(unregressed)).toBe("OPENCODE_AUTO_REGRESSION=off")
     expect(() => parseSwitches({ [SWITCH_ENV.regression]: "maybe" })).toThrow(/OPENCODE_AUTO_REGRESSION invalid value/)
+    // Doc lanes' kill switch (plans/0099 D2): off lists (the scheduler's
+    // branch removed — a tier-0 parallel run is exactly today's serial
+    // loop), on (the default) is silent.
+    const undoc = parseSwitches({ [SWITCH_ENV.docLanes]: "off" })
+    expect(undoc.docLanes).toBe(false)
+    expect(nonDefaultSwitches(undoc)).toBe("OPENCODE_AUTO_DOC_LANES=off")
+    expect(() => parseSwitches({ [SWITCH_ENV.docLanes]: "maybe" })).toThrow(/OPENCODE_AUTO_DOC_LANES invalid value/)
     // The constructor's wall (plans/0097 D3/D6): positive minutes, fractions
     // allowed, default 15 silent; 0 and garbage fail strictly.
     expect(parseSwitches({ [SWITCH_ENV.synthesisTimeout]: "2.5" }).synthesisTimeout).toBe(2.5)

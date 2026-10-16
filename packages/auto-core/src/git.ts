@@ -94,15 +94,32 @@ export type CommitResult = { ok: boolean; failures: { rel: string; error: string
 // (the caller disposes of it by the completion condition — a caller with the
 // gate off ignoring the return value is the old behavior). subject is the
 // subject line.
-export async function commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult> {
+// paths (plans/0099 D4): the add step's pathspec, target-directory-relative —
+// absent = today's whole-subtree sweep (`.`), the byte-identical floor. The
+// doc-lane seam decorator injects it (never a caller): a live doc unit's
+// effective scope, or everything-minus-the-live-scopes
+// (`. ':(exclude)<scope>' …`). The scoping applies at the outer repository
+// only (the root that is the target directory itself); nested roots commit
+// whole as before — they are reachable solely through doc-ineligible units,
+// which drain first (D9), and the D6 landing guard has already blocked any
+// stray nested write before the add runs. The skip check narrows with the
+// same pathspec (hasChanges below), so a scoped add that would stage nothing
+// skips the repository instead of failing the commit.
+export async function commitTree(
+  dir: string,
+  task: { id: string; title: string },
+  info: { stage: string; subject: string; body?: string },
+  paths?: readonly string[],
+): Promise<CommitResult> {
   const roots = await repoRoots(dir)
   const subject = commitTitle(info.subject)
   const failures: { rel: string; error: string }[] = []
   for (const root of roots) {
     const rel = relative(dir, root) || "."
+    const spec = root === dir ? paths : undefined
     try {
-      if (!(await hasChanges(root))) continue
-      const added = await git(root, ["add", "-A", "--", "."])
+      if (!(await hasChanges(root, spec))) continue
+      const added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
       if (added.code !== 0) {
         const error = `git add exit code ${added.code} (${firstLine(added.err || added.out)})`
         log(`  ⚠ git commit failed (${rel}): ${error}`)
@@ -300,6 +317,23 @@ export function driverStateFile(rel: string): boolean {
   return DRIVER_STATE.some((re) => re.test(path))
 }
 
+// Whether a repository-relative path lies inside one of the scope entries
+// (an entry may name a file or a directory, trailing slash optional): equal
+// paths count, and a directory entry contains every path under it. The doc
+// lanes' surfaces read it (plans/0099): the seam decorator's landing guard
+// and start-gate relaxation (src/git-ops.ts), the close-out exclusion and
+// the scans' scope filter (below). git.ts is a leaf module, so the
+// containment lives here rather than in lanes.ts's overlap vocabulary
+// (which would close a cycle); an empty entry set — like an absent
+// parameter — contains nothing.
+export function withinScopes(rel: string, scopes: readonly string[]): boolean {
+  const path = rel.replaceAll("\\", "/")
+  return scopes.some((scope) => {
+    const dir = scope.replaceAll("\\", "/").replace(/\/+$/, "")
+    return dir !== "" && (path === dir || path.startsWith(`${dir}/`))
+  })
+}
+
 // Unit SHA baseline: each repository's short HEAD SHA (an empty repository
 // records the empty string — every commit after it happens during this unit,
 // and the close-out check examines the full history).
@@ -320,10 +354,17 @@ export async function unitBaseline(dir: string): Promise<UnitBaseline> {
 // external commit (human / another process) happened in between, breaking
 // "a commit is the isolation boundary". Returns the violation list (empty =
 // pass); an empty baseline (non-git environment / gate off) always passes.
-export async function unitViolations(dir: string, baseline: UnitBaseline): Promise<string[]> {
+// exclude (plans/0099 D7): paths clause ① tolerates — under doc-lane
+// concurrency a unit's range closes while sibling scopes hold in-flight
+// writes, and quarantined stray writes survive for the human by design, so
+// the doc-lane caller passes the live scopes ∪ quarantine. Absent (or
+// empty) = today's function, byte-identical; clause ② is unchanged either
+// way (interleaved sibling commits all carry the trailer, a foreign commit
+// is still caught).
+export async function unitViolations(dir: string, baseline: UnitBaseline, exclude?: readonly string[]): Promise<string[]> {
   if (!baseline.length) return []
   const problems: string[] = []
-  const dirty = await changedFiles(dir)
+  const dirty = (await changedFiles(dir)).filter((rel) => !withinScopes(rel, exclude ?? []))
   if (dirty.length) {
     problems.push(`worktree still has uncommitted changes: ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ` … (${dirty.length} files total)` : ""}`)
   }
@@ -365,7 +406,11 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
 // this unit, the same criterion as untrackedFiles). Deletions are excluded
 // (the file is not on disk, no shape-check subject); an empty baseline
 // (non-git environment / gate off) returns the empty set.
-export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Promise<Set<string>> {
+// scope (plans/0099 D7): the diff gains the pathspec and the untracked walk
+// filters by it, so blame never crosses units under doc-lane concurrency
+// (the baseline..worktree range contains the siblings' writes). Absent =
+// today's whole-subtree question, byte-identical.
+export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<Set<string>> {
   const phys = await physicalDir(dir)
   const files = new Set<string>()
   for (const { root, sha } of baseline) {
@@ -378,11 +423,14 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Pro
     // --ignore-submodules=all: a nested repository is a single gitlink in the
     // outer one; its inner files are listed separately by that repository's
     // own diff (the same reasoning as gitDiffFiles/statusEntries).
-    const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", "."])
+    const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", ...(scope ?? ["."])])
     if (diff.code !== 0) continue
     for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
   }
-  for (const rel of await untrackedFiles(dir)) files.add(rel)
+  for (const rel of await untrackedFiles(dir)) {
+    if (scope !== undefined && !withinScopes(rel, scope)) continue
+    files.add(rel)
+  }
   return files
 }
 
@@ -394,7 +442,10 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Pro
 // for them. Deletions contribute nothing; binary files neither (git prints no
 // hunks for them; untracked files with NUL bytes or over 1 MiB are skipped).
 // Nested repositories are covered per baseline root, like unitChangedFiles.
-export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promise<Map<string, AddedLine[]>> {
+// scope (plans/0099 D7): the diff gains the pathspec and the untracked walk
+// filters by it — under doc-lane concurrency the unit's attribution must be
+// its own writes alone. Absent = today's whole-subtree diff, byte-identical.
+export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<Map<string, AddedLine[]>> {
   const phys = await physicalDir(dir)
   const added = new Map<string, AddedLine[]>()
   const push = (rel: string, line: number, text: string) => {
@@ -418,7 +469,7 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promi
       "--ignore-submodules=all",
       sha || EMPTY_TREE,
       "--",
-      ".",
+      ...(scope ?? ["."]),
     ])
     if (diff.code !== 0) continue
     // A file header runs from `diff --git` to the first hunk; only there is a
@@ -453,6 +504,7 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promi
     }
   }
   for (const rel of await untrackedFiles(dir)) {
+    if (scope !== undefined && !withinScopes(rel, scope)) continue
     const handle = Bun.file(join(dir, rel))
     if (handle.size > 1 << 20) continue
     const text = await handle.text().catch(() => "")
@@ -1181,7 +1233,16 @@ async function squashFailure(root: string, failed: { code: number; out: string; 
 // opts → git → opts.
 export type GitOps = {
   readonly records: boolean
-  commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult>
+  // commitTree's optional add pathspec (plans/0099 D4) is the doc-lane seam
+  // decorator's injection point — never a caller's argument: absent = the
+  // whole-subtree sweep, the byte-identical floor every existing call site
+  // keeps by passing nothing.
+  commitTree(
+    dir: string,
+    task: { id: string; title: string },
+    info: { stage: string; subject: string; body?: string },
+    paths?: readonly string[],
+  ): Promise<CommitResult>
   beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate>
   commitPending(
     dir: string,
@@ -1312,9 +1373,11 @@ export async function statusEntries(dir: string, root: string): Promise<{ rel: s
 // Whether the repository has uncommitted changes (confined to this
 // directory's subtree; a collapsed directory entry can only be a nested
 // repository, handled separately by its own commit). When git is unavailable
-// (spawn throws), treat as no changes.
-async function hasChanges(root: string): Promise<boolean> {
-  const status = await git(root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."]).catch(() => undefined)
+// (spawn throws), treat as no changes. paths narrows the check the way the
+// commit's add step is narrowed (plans/0099 D4): absent = the whole subtree
+// (today's question, byte-identical).
+async function hasChanges(root: string, paths?: readonly string[]): Promise<boolean> {
+  const status = await git(root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", ...(paths ?? ["."])]).catch(() => undefined)
   if (!status || status.code !== 0) return false
   return status.out.split("\0").some((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
 }

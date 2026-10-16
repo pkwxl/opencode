@@ -56,7 +56,7 @@ import { log } from "./log"
 import { emitStatus } from "./run-status"
 import { statsLaneUsage, type LaneUsageDetail } from "./stats"
 import { splitTaken } from "./split"
-import { taskDoc } from "./docpaths"
+import { taskDoc, taskDir } from "./docpaths"
 import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
 import { begin, checklistTitle, clearLane, laneRecords, setLane, setParked, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, withParked, type Plan, type PlanPhase, type Task } from "./tasks"
 
@@ -140,6 +140,23 @@ export function resolveTreeTier(
 // plans for parallel execution whatever surface executes it).
 export function worktreeScheduler(maxSessions: number | undefined, parallel: ParallelLevel | undefined, tier: TreeTier | undefined): boolean {
   return schedulerActive(maxSessions, parallel) && (tier ?? 0) >= 1
+}
+
+// The doc scheduler's activation predicate (plans/0099 D2): the doc-lane
+// branch of runTaskLoop's chain runs the routed phase's units concurrently
+// iff the scheduler activation rule holds (--max-sessions ≥ 2 and a
+// configured parallel level) AND the run's tier is 0 — Tier 0 grows task
+// parallelism (the doc lanes are its task parallelism; 0096 bought
+// processes before trees and left Tier 0's tasks serial), while tiers 1–2
+// keep the worktree lane loop unchanged: at tier ≥ 1 a doc-scheduler branch
+// would strand the phase's non-doc units, so doc units run there as
+// ordinary worktree lanes — correct, more expensive. The kill switch
+// OPENCODE_AUTO_DOC_LANES is consulted at the branch site (off removes the
+// branch — a tier-0 parallel run is exactly today's serial loop), never
+// here: the predicate stays pure over injected facts, the worktreeScheduler
+// precedent.
+export function docScheduler(maxSessions: number | undefined, parallel: ParallelLevel | undefined, tier: TreeTier | undefined): boolean {
+  return schedulerActive(maxSessions, parallel) && (tier ?? 0) === 0
 }
 
 // The tier-1 sparse set (D9): the cone-mode directories a lane's worktree
@@ -338,6 +355,59 @@ export function readyUnits(
 export function laneEligible(task: Pick<Task, "touches">, nestedRoots: readonly string[]): boolean {
   if (task.touches === undefined) return true
   return !task.touches.some((path) => nestedRoots.some((root) => pathsOverlap(path, root)))
+}
+
+// —— Doc lanes (plans/0099 D1): the admission predicates ——
+
+// The doc-lane eligibility predicate (D1), pure over the declaration: a unit
+// runs as a doc lane iff
+//   1. `Touches:` is present and non-empty — absent/empty means "touches
+//      everything" (G3's fail-safe) and is never eligible;
+//   2. every entry lies under `docs/` of the outer repository
+//      (repository-relative, so no nested-repo root is reachable by
+//      construction — `docs/` never overlaps them, the same boundary the
+//      contention itself draws);
+//   3. the unit is whole-task: `Decompose: whole`, or the field absent.
+//      `pipeline` units and split streams keep their existing tier ≥ 1
+//      story; under doc-lane mode they run through the serial degrade (D9).
+// An undeclared task simply never becomes a doc lane — the fail-safe
+// directions of G3 are untouched.
+export function docEligible(task: Pick<Task, "touches" | "decompose">): boolean {
+  if (task.touches === undefined || task.touches.length === 0) return false
+  if (task.decompose !== undefined && task.decompose !== "whole") return false
+  return task.touches.every((path) => segments(path)[0] === "docs")
+}
+
+// The effective scope of a doc unit (D1): the declared `Touches` plus its
+// own `docs/T-NNN/` directory, always — the task document, report, gaps,
+// handoff.md and testhands live there whether or not the planner listed the
+// directory (a task that declares only a shared document still writes its
+// own report). Everything the design calls "its scope" — the commit scoping,
+// the guards, the disjointness admission — means this set. The own directory
+// is skipped only when a declaration already covers it (the directory
+// itself, or a parent such as `docs/`) — a declaration that merely lies
+// inside it does not cover the report and gaps the unit still writes there.
+export function docScope(task: Pick<Task, "id" | "touches">): string[] {
+  const own = `${taskDir(task.id)}/`
+  const ownSegments = segments(own)
+  const scope = [...(task.touches ?? [])]
+  const covers = (entry: string): boolean => {
+    const declared = segments(entry)
+    return declared.length <= ownSegments.length && declared.every((part, i) => part === ownSegments[i])
+  }
+  if (!scope.some(covers)) scope.push(own)
+  return scope
+}
+
+// D1's admission comparison over effective scopes: two doc units run side by
+// side only when neither's effective scope reaches the other's — the raw
+// `touches` comparison readyUnits makes would miss the task that declares
+// only a shared document (its own `docs/T-NNN/` still belongs to its scope,
+// so a sibling owning that directory must not run beside it). The doc loop's
+// admission wrapper applies this; readyUnits itself keeps its raw comparison
+// for the worktree lanes, never changed by this design.
+export function scopesDisjoint(a: readonly string[], b: readonly string[]): boolean {
+  return !a.some((path) => b.some((other) => pathsOverlap(path, other)))
 }
 
 // —— The landing-side tick sync (D7 step ③) ——
