@@ -120,6 +120,14 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // (the eof terminator applies), with driver-parsed rows like the blockage
   // document's marks.
   coverage: { eofScan: true, process: true },
+  // The regression lane's round-scoped receipts (plans/0098 D2):
+  // docs/R-NN/regression/<seq>-<lane id>.md, driver-written background
+  // evidence of the two-level pass's complete tier — the same machine fields
+  // the task-family receipts carry (parseLaneReceipt reads both), the eof
+  // terminator like every committed evidence document. Never a session write
+  // target; the driver's background slot (src/regression.ts) is the only
+  // writer.
+  regression: { eofScan: true, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
   freeform: { eofScan: true, process: false },
@@ -187,6 +195,13 @@ const ANALYSIS_DOC_RE = /^docs\/analysis\.md$/
 // classifies as its own role rather than a plain task artifact.
 const COVERAGE_DOC = /^docs\/T-\d+\/coverage\.md$/
 
+// The regression lane's round-scoped receipts (plans/0098 D2):
+// docs/R-NN/regression/<seq>-<lane id>.md — one per background run, the seq
+// per-round monotonic (the append-only discipline dm-glm's evidence tags
+// held), the lane id keeping the table's filename-safe grammar. Checked
+// before PROCESS_DOCS like its round-level siblings.
+const REGRESSION_RECEIPT = /^docs\/R-\d+\/regression\/\d+-[a-z][a-z0-9-]*\.md$/
+
 // A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
 const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
 
@@ -214,6 +229,7 @@ export function roleOf(rel: string): DocumentRole {
   if (GAPS_DOC.test(path)) return "gaps"
   if (ANALYSIS_DOC_RE.test(path)) return "analysisDoc"
   if (COVERAGE_DOC.test(path)) return "coverage"
+  if (REGRESSION_RECEIPT.test(path)) return "regression"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

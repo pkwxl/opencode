@@ -113,6 +113,29 @@ export function laneReceiptDoc(id: string, lane: string): string {
   return join(taskDir(id), "testhands", `${lane}.md`)
 }
 
+// The regression lane's round-scoped receipt (relative to the target
+// directory): docs/R-01/regression/3-verify-full.md (plans/0098 D2). One per
+// background run, the seq per-round monotonic (append-only history, the
+// discipline dm-glm's evidence tags held), the lane id keeping the table's
+// filename-safe grammar. The `regression` document role classifies the
+// family; parseLaneReceipt reads the same machine fields the task-family
+// receipts carry.
+export function regressionReceiptDoc(round: number, seq: number, lane: string): string {
+  return join(roundDir(round), "regression", `${seq}-${lane}.md`)
+}
+
+// The largest receipt seq already on disk under the round's regression
+// directory (the latestHandoffSeq precedent: scan and take the max, so
+// numbering survives interruptions and re-runs); 0 when the directory holds
+// no receipts yet.
+export async function latestRegressionSeq(dir: string, round: number): Promise<number> {
+  let max = 0
+  for (const name of await readdir(join(dir, roundDir(round), "regression")).catch(() => [] as string[])) {
+    max = Math.max(max, Number(/^(\d+)-[a-z][a-z0-9-]*\.md$/.exec(name)?.[1] ?? 0))
+  }
+  return max
+}
+
 // The prompt layer's document-path view of one task (E2, plans/0061 §6.3):
 // every layout path the task-family prompt templates reference, precomputed
 // here — the prompt renderers construct no paths themselves. The shape is
