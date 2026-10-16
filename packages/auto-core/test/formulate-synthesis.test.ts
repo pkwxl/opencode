@@ -246,7 +246,7 @@ const FIDELITY_MARK = "You judge the fidelity of one synthesis"
 // test scripts its own.
 const fidelityTurn = (verdict: string): TurnScript => (ctx) => {
   if (!ctx.text.includes(FIDELITY_MARK)) return undefined
-  return [ev.text(ctx.session, `fid_${ctx.n}`, verdict), ev.idle(ctx.session)]
+  return [ev.text(ctx.session, `fid_${ctx.n}`, verdict), ev.step(ctx.session, `fidstp_${ctx.n}`), ev.idle(ctx.session)]
 }
 
 // The formulation unit's document text, whatever its state file is (a
@@ -273,7 +273,7 @@ const unblock = async (dir: string, id: string): Promise<void> => {
 // so the ladder under test is the synthesis side alone.
 const verifyYes: TurnScript = (ctx) => {
   if (!ctx.text.includes(VERIFY_MARK)) return undefined
-  return [ev.text(ctx.session, `vrf_${ctx.n}`, "Consistent: yes"), ev.idle(ctx.session)]
+  return [ev.text(ctx.session, `vrf_${ctx.n}`, "Consistent: yes"), ev.step(ctx.session, `vrfstp_${ctx.n}`), ev.idle(ctx.session)]
 }
 
 // The titles of every create() call the fake agent saw.
@@ -344,6 +344,33 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       const log = await f.git("log", "--format=%s", "--", "docs/T-001/todo.md")
       expect(log).toContain("PLAN formulate P01-implement Implementation")
     } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the constructor's wait is visible and its tokens booked: the start line names the model and the configured wall, the one-shot usage reaches the synthesis sink", async () => {
+    // The wall comes from the OPENCODE_AUTO_SYNTHESIS_TIMEOUT switch — 0.5 min
+    // renders as a 30 s bound, so the start line pins both the model the
+    // constructor runs on and the budget it waits under.
+    clampSwitches({ synthesisTimeout: 0.5 })
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!)
+    // The sink goes on the services holder the fixture's run will read (the
+    // fixture installs its own fresh holder at creation).
+    const booked: number[] = []
+    services().router.setSynthesisUsageSink((usage) => booked.push(usage.steps))
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      expect(code).toBe(0)
+      const start = lines.find((line) => line.includes("◈ formulation synthesis: the constructor a (route phase-plan) re-voices"))
+      expect(start).toContain("bounded 30 s")
+      expect(lines.some((line) => line.includes("ℹ formulation synthesis: the fidelity pass"))).toBe(true)
+      // The constructor's and the fidelity pass's one-shots each reported
+      // their usage through the run router's sink (booked steps, whatever
+      // the figure) — a fallback that burns attempts stays countable.
+      expect(booked.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      services().router.setSynthesisUsageSink(undefined)
+      clampSwitches({ synthesisTimeout: 15 })
       await rmSync(f.dir, { recursive: true, force: true })
     }
   })

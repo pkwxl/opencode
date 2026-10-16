@@ -159,6 +159,13 @@ export type Router = {
   noteClassifierLimit(): void
   setClassifyUsageSink(sink: ClassifyUsageSink | undefined): void
   classifyUsageSink(): ClassifyUsageSink | undefined
+  // The formulation one-shots' usage sink (plans/0097 D6): the constructor
+  // and the fidelity pass book their tokens through it into the stats
+  // `synthesis` bucket — outside the unit-session totals, the classify
+  // precedent; the entry name is dropped by the wiring, which books into one
+  // bucket. Until a run registers one, the usage is only measured.
+  setSynthesisUsageSink(sink: ClassifyUsageSink | undefined): void
+  synthesisUsageSink(): ClassifyUsageSink | undefined
   // —— The routing decisions ——
   // The dispatch target of one routing decision: a fresh-prompt selection
   // over the facts — the pick's candidate key, undefined = nothing usable
@@ -374,6 +381,7 @@ export function createRouter(): Router {
   let classifierCallsMade = 0
   let classifierLimitLine = false
   let classifyUsageSink: ClassifyUsageSink | undefined
+  let synthesisUsageSink: ClassifyUsageSink | undefined
 
   // Marks at a scope boundary: the boundary clears every mark the scope
   // covers — phase clears under every scope, task under task (default) and
@@ -729,6 +737,11 @@ export function createRouter(): Router {
       classifyUsageSink = sink
     },
     classifyUsageSink: () => classifyUsageSink,
+    // The formulation one-shots' sink, same lifecycle.
+    setSynthesisUsageSink: (sink) => {
+      synthesisUsageSink = sink
+    },
+    synthesisUsageSink: () => synthesisUsageSink,
 
     // —— The routing decisions ——
     // The dispatch target (see the type comment): a fresh selection over

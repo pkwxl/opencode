@@ -219,6 +219,9 @@ export const synthesisTurn = (brief: string, rows: readonly string[], rationale 
   if (!ctx.text.includes(SYNTHESIS_MARK)) return undefined
   return [
     ev.text(ctx.session, `syn_${ctx.n}`, ["<<<SOURCES-BRIEF", brief, "SOURCES-BRIEF>>>", "<<<LEDGER", ...rows, "LEDGER>>>", `Rationale: ${rationale}`].join("\n")),
+    // One billed step, as a real one-shot turn always closes with — the
+    // usage the router's synthesis sink books.
+    ev.step(ctx.session, `synstp_${ctx.n}`),
     ev.idle(ctx.session),
   ]
 }

@@ -70,6 +70,14 @@ export const SWITCH_ENV = {
   // rides the Acceptance and the verifier; the switch can only remove the
   // enhancement, never a check (the OPENCODE_AUTO_PLAN_VERIFY precedent).
   synthesis: "OPENCODE_AUTO_SYNTHESIS",
+  // The formulation constructor's one-shot wall in minutes (plans/0097
+  // D3/D6): default 15, a planning-scale budget — the constructor reads the
+  // full evidential source stack of a formulation (six figures of bytes on a
+  // handover-rich round) and composes its whole reply in one turn, nothing
+  // like the classifier-scale seconds of its sibling one-shots. The wall is
+  // never a check: a timeout degrades to the floor through the D4 ladder
+  // like any constructor failure; this only tunes the wait.
+  synthesisTimeout: "OPENCODE_AUTO_SYNTHESIS_TIMEOUT",
   // The operator layer of the model registry (src/models.ts): a file path, not
   // a switch. Env-only and empty = unset, like the switches, but parseSwitches
   // does not read it and the switch lines do not list it: the registry's own
@@ -368,6 +376,11 @@ export type Switches = {
   // the enhancement, never the charter itself (which keeps riding the
   // Acceptance and the verifier).
   synthesis: boolean
+  // The constructor one-shot's wall in minutes (default 15, plans/0097
+  // D3/D6): a planning-scale budget, see SWITCH_ENV.synthesisTimeout. The
+  // fidelity pass and the plan verifier keep their fixed classifier-scale
+  // walls — they judge on the cheap entry and answer in seconds.
+  synthesisTimeout: number
 }
 
 export type AgentChoice = "opencode" | "claude"
@@ -399,6 +412,7 @@ const SWITCH_DEFAULTS: Switches = {
   analysis: true,
   park: true,
   synthesis: true,
+  synthesisTimeout: 15,
 }
 
 // Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
@@ -573,6 +587,16 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     }
     return value
   }
+  // Positive minutes (a wall of 0 would time out before the first event):
+  // fractions allowed, so unit tests can take sub-minute values.
+  const positiveMinutes = (name: string, raw: string | undefined, fallback: number): number => {
+    if (raw === undefined || raw === "") return fallback
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`env ${name} invalid value: "${raw}" (expected positive minutes, fractions allowed; empty string = unset, default ${fallback})`)
+    }
+    return value
+  }
   const forkBaseRaw = env[SWITCH_ENV.forkBase]
   const forkBase = forkBaseRaw === undefined || forkBaseRaw === "" ? SWITCH_DEFAULTS.forkBase : forkBaseRaw
   if (forkBase !== "session" && forkBase !== "digest") {
@@ -622,6 +646,7 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
     synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
+    synthesisTimeout: positiveMinutes(SWITCH_ENV.synthesisTimeout, env[SWITCH_ENV.synthesisTimeout], SWITCH_DEFAULTS.synthesisTimeout),
     agent,
     laneIsolation: onOff(SWITCH_ENV.laneIsolation, env[SWITCH_ENV.laneIsolation], SWITCH_DEFAULTS.laneIsolation),
   }
@@ -666,6 +691,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
+    switches.synthesisTimeout === SWITCH_DEFAULTS.synthesisTimeout ? undefined : `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
@@ -696,6 +722,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
+    `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
   ].join(", ")
 }
 

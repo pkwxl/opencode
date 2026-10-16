@@ -252,7 +252,19 @@ export function seededLedgerRows(entry: PhaseTypeEntry, finalPhase: boolean, rep
 // Bounded: one feedback retry, then the degradation ladder (D4).
 
 const SYNTH_TITLE = "auto: formulation synthesis"
-const SYNTH_TIMEOUT_MS = 300_000
+
+// The constructor's wall: the OPENCODE_AUTO_SYNTHESIS_TIMEOUT switch in
+// minutes (default 15) — a planning-scale budget, nothing like the
+// classifier-scale walls of the sibling one-shots below (60–120 s: they judge
+// small inputs on the cheap entry and answer in seconds). The constructor
+// reads a formulation's full evidential source stack — six figures of bytes
+// on a handover-rich round — and composes its whole reply in one turn; the
+// original 300 s wall killed both attempts mid-reasoning on the first
+// charter project (77 KB of reasoning streamed, no reply yet), and the floor
+// correctly caught them at 2×300 s of silent deep-tier tokens. The wall is
+// never a check: a timeout degrades through the D4 ladder like any
+// constructor failure; the switch only tunes the wait.
+const synthTimeoutMs = (): number => autoSwitches().synthesisTimeout * 60_000
 
 // The first usable entry of the planning role's route (the classifierEntry
 // discipline over the phase-plan candidate list: the agent filter, the
@@ -359,20 +371,33 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     phaseType: input.entry.name,
   })
   let feedback = ""
+  // The wall is a wait the person watches: a start line before the first
+  // attempt (the model and the bound — the same visibility every dispatched
+  // session gets), a line at every retry, so the two bounded attempts are
+  // never minutes of silent log (the 0082 principle — never continue
+  // silently — read over the wait itself, not just its failures).
+  const timeoutMs = synthTimeoutMs()
+  const seconds = Math.round(timeoutMs / 1000)
+  log(
+    `◈ formulation synthesis: the constructor ${pick.name} (route phase-plan) re-voices ${input.sources.length} source(s) under the charter — one reply bounded ${seconds} s`,
+  )
   for (let attempt = 1; attempt <= 2; attempt++) {
     const outcome = await oneShot(
       client,
       pick.entry,
       feedback ? `${text}\n\n---\nYour last reply failed the DRIVER's mechanical checks:\n${feedback}\nRe-write the reply in the exact prescribed shape, fixing exactly these findings.` : text,
-      SYNTH_TIMEOUT_MS,
+      timeoutMs,
       SYNTH_TITLE,
     )
+    if (outcome.usage.steps > 0) input.routing.router.synthesisUsageSink()?.(outcome.usage, pick.name)
     if (outcome.kind === "timeout") {
-      feedback = `the constructor gave no reply within ${Math.round(SYNTH_TIMEOUT_MS / 1000)} s`
+      feedback = `the constructor gave no reply within ${seconds} s`
+      if (attempt === 1) log(`⚠ formulation synthesis: ${feedback} — one retry with the finding as feedback`)
       continue
     }
     if (outcome.kind === "failed") {
       feedback = `the constructor session failed: ${outcome.error.message ?? "session error"}`
+      if (attempt === 1) log(`⚠ formulation synthesis: ${feedback} — one retry`)
       continue
     }
     const parsed = parseSynthesisReply(outcome.text)
@@ -494,8 +519,10 @@ async function fidelityPass(
     ledger: renderLedger(input.rows),
   })
   let lastReason = "the fidelity check produced no answer"
+  log(`ℹ formulation synthesis: the fidelity pass ${pick.name} judges the brief and ledger against the sources (bounded ${Math.round(FIDELITY_TIMEOUT_MS / 1000)} s)`)
   for (let attempt = 1; attempt <= 2; attempt++) {
     const outcome = await oneShot(client, pick.entry, text, FIDELITY_TIMEOUT_MS, FIDELITY_TITLE)
+    if (outcome.usage.steps > 0) routing.router.synthesisUsageSink()?.(outcome.usage, pick.name)
     if (outcome.kind === "timeout") {
       lastReason = `the fidelity check gave no verdict within ${Math.round(FIDELITY_TIMEOUT_MS / 1000)} s`
       continue

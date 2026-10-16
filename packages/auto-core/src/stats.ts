@@ -143,6 +143,14 @@ export type TierStat = {
 // in practice hits.
 export const CLASSIFY_BUCKET = "classify"
 
+// The bucket the formulation one-shots' tokens go to (plans/0097 D6): the
+// constructor (deep-tier, six figures of input tokens on a handover-rich
+// round) and the fidelity pass — outside the unit's session totals, keyed
+// beside the internal model names, the classify precedent. One shared bucket
+// for both one-shots (they are one pipeline; the run log and the audit name
+// which ran), and the same collision edge accepted for the same reason.
+export const SYNTHESIS_BUCKET = "synthesis"
+
 export type Bucket = Totals & { id: string; since: number }
 
 // Per-sessionID accumulation (requirement 2: sub-session continuation); task is the owning task, at is the last-active moment (eviction order).
@@ -1256,6 +1264,21 @@ export async function statsClassifyUsage(dir: string | undefined, usage: Usage):
   const { handle } = await ensure(dir)
   for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
     const stat = ((bucket.models ??= {})[CLASSIFY_BUCKET] ??= emptyModelStat())
+    addUsage(stat.usage, usage)
+    stat.sessions += 1
+  }
+  queueWrite(dir, handle)
+}
+
+// The formulation one-shots' token booking (plans/0097 D6): the constructor
+// and the fidelity pass, through the router's synthesis sink — same shape as
+// the classify booking, its own bucket so the two pipelines' overhead stay
+// readable apart in the per-model lines.
+export async function statsSynthesisUsage(dir: string | undefined, usage: Usage): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const stat = ((bucket.models ??= {})[SYNTHESIS_BUCKET] ??= emptyModelStat())
     addUsage(stat.usage, usage)
     stat.sessions += 1
   }
