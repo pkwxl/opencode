@@ -119,7 +119,24 @@ export async function commitTree(
     const spec = root === dir ? paths : undefined
     try {
       if (!(await hasChanges(root, spec))) continue
-      const added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
+      let added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
+      if (added.code !== 0 && spec !== undefined) {
+        // The pathspec tolerance (plans/0099 D4): `git status` beside the
+        // add tolerates a pathspec matching nothing, `git add` fatals on it
+        // — and a declared `Touches` entry is a scope bound, never a
+        // promise the file exists (a shared document the unit ends up not
+        // touching, a directory still empty). The offending pathspecs are
+        // named in the message; dropped, the add stages everything the
+        // remaining scope covers, which is exactly the dirt hasChanges
+        // already vouched for.
+        let drop = [...spec]
+        while (added.code !== 0 && /did not match any files/.test(`${added.err}${added.out}`)) {
+          const named = [...`${added.err}${added.out}`.matchAll(/pathspec '([^']+)' did not match/g)].map((match) => match[1]!)
+          if (!named.length || drop.length === named.length) break
+          drop = drop.filter((entry) => !named.includes(entry))
+          added = drop.length ? await git(root, ["add", "-A", "--", ...drop]) : { code: 0, out: "", err: "" }
+        }
+      }
       if (added.code !== 0) {
         const error = `git add exit code ${added.code} (${firstLine(added.err || added.out)})`
         log(`  ⚠ git commit failed (${rel}): ${error}`)
@@ -1360,7 +1377,11 @@ export async function statusEntries(dir: string, root: string): Promise<{ rel: s
   if ((await top.exited) !== 0 || !toplevel) return []
   const proc = Bun.spawn(
     ["git", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."],
-    { stdout: "pipe", stderr: "ignore" },
+    // The same GIT_OPTIONAL_LOCKS=0 the spawn helper sets (plans/0099 D4):
+    // this status runs outside the doc-lane commit queue (beginUnit's dirty
+    // check, the close-out checks), and the env form covers the one site
+    // that does not route through the helper.
+    { stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
   )
   const output = await new Response(proc.stdout).text()
   if ((await proc.exited) !== 0) return []
@@ -1507,7 +1528,14 @@ async function identityArgs(root: string): Promise<string[]> {
 }
 
 async function git(root: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
-  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
+  // GIT_OPTIONAL_LOCKS=0 (plans/0099 D4): read-shaped commands (`git status`,
+  // `git diff`) opportunistically take the index lock to refresh the stat
+  // cache; under doc lanes those reads run beside the decorator's serialized
+  // commits, and a status's brief lock makes a concurrent queued `git commit`
+  // fail with "index.lock: File exists". Optional locks are exactly that —
+  // optional: this env drops only the opportunistic refresh write, never the
+  // locks commands require (add/commit/stash take theirs regardless).
+  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } })
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
   return { code, out, err }
 }

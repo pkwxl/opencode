@@ -418,7 +418,16 @@ export async function preflight(
     const probe = !opts.dryrun && opts.treeLanes === "auto" ? await probeTierFacts(directory, opts.lanes) : undefined
     const resolved = resolveTreeTier(opts.treeLanes, probe, opts.lanes?.treeBudgetMB)
     treeTier = resolved.tier
-    log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}`)
+    // The doc-lane note (plans/0099 D12): the doc scheduler's branch will
+    // run — tier 0's task parallelism, documentation-scoped units as
+    // concurrent in-process pipelines in this tree. The isolation switch
+    // outranks the branch (it pins full isolation, serially), and the kill
+    // switch removes the branch rather than the note.
+    const docNote =
+      autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, opts.parallel, resolved.tier)
+        ? "; doc lanes on — documentation-scoped units run concurrently in this tree"
+        : ""
+    log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}${docNote}`)
   }
   // --handover-test refuses under doc-lane activation (plans/0099 D2): the
   // idle test protocol runs driver scripts against the whole tree from

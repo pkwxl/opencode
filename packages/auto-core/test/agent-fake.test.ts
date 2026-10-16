@@ -35,6 +35,10 @@ import { sessionRole } from "../src/roles/registry"
 import { resetQuotaWindows } from "../src/quota-windows"
 import { recallProgress, saveProgress } from "../src/resume"
 import { runTask } from "../src/runner"
+import { runTaskLoop, type LoopCtx } from "../src/loop-task"
+import { renderTaskIndex } from "../src/tasks"
+import { createGitOps } from "../src/git-ops"
+import { EOF_MARK } from "../src/doccheck"
 import { WORKTREE_CHECK, forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
@@ -47,12 +51,12 @@ import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { workOrder } from "../src/work-order"
-import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, type TurnScript, WINDOW } from "./fixtures/agent"
+import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, type TurnContext, type TurnScript, WINDOW } from "./fixtures/agent"
 import { artifactTurns, appendOneTask, loopFixture, promptPhaseDir, SYNTHESIS_MARK, synthesisTurn, type LoopFixture } from "./fixtures/loop"
 import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
-import { establishRound } from "../src/phases"
+import { establishRound, readPhases, type PhaseUnit } from "../src/phases"
 
 // Fresh failback/down-mark state mid-test (the moved state lives in the
 // run's router and has no reset hook): reinstall the holder with a fresh
@@ -3517,6 +3521,375 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }
+  })
+})
+
+// —— Doc lanes (plans/0099 stage C: the loop) —— //
+// The doc scheduler's end-to-end cases over this suite's native fake: the
+// concurrent pipelines, the admission under overlap, the landing guard, the
+// park, the recovery flatten and the D2 floors — driven through runTaskLoop
+// on a real git repository, so the decorator's commit scoping and the
+// serialized queues stay live. The pure halves (the predicates, the
+// decorator over a fake base, the scoped variants) live in
+// test/doc-lanes.test.ts.
+describe("doc lanes (plans/0099 stage C: the loop)", () => {
+  // Log lines of the runs, kept out of the test output.
+  let printed: ReturnType<typeof spyOn>
+  const lines: string[] = []
+  let dir: string
+
+  beforeEach(() => {
+    installServices(createServices())
+    lines.length = 0
+    printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+  })
+  afterEach(async () => {
+    printed.mockRestore()
+    uninstallServices()
+    await flushStats(dir).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  // One doc-declared task document: the field block carries the declaration
+  // the scheduler admits on.
+  const declaredTodo = (unit: { id: string; touches?: string[]; depends?: string }): string =>
+    [
+      `# ${unit.id}: task ${unit.id}`,
+      "Phase: R-01.P01",
+      `Depends: ${unit.depends ?? "none"}`,
+      ...(unit.touches ? [`Touches: ${unit.touches.join(", ")}`] : []),
+      "",
+      "## Goal",
+      "",
+      `task ${unit.id} delivered.`,
+      "",
+      "## Scope",
+      "",
+      `docs/${unit.id}/ alone.`,
+      "",
+      "## Acceptance",
+      "",
+      `task ${unit.id}'s statements hold.`,
+      "",
+      EOF_MARK,
+      "",
+    ].join("\n")
+
+  // A committed m-mode repository with the declared doc phase: the task
+  // index and every task document at HEAD, the driver state gitignored.
+  const docRepo = async (units: readonly { id: string; touches?: string[]; depends?: string }[]): Promise<{ dir: string; phase: PhaseUnit }> => {
+    const repo = await freshRepo()
+    dir = repo
+    await Bun.write(join(repo, ".gitignore"), ".auto/\ntmp/\n")
+    await establishRound(repo, { phases: "m" })
+    await Bun.write(join(repo, "docs", "R-01", "P01-implement", "tasks.md"), renderTaskIndex("R-01.P01", units.map((unit) => ({ id: unit.id, title: `task ${unit.id}` }))))
+    for (const unit of units) {
+      await mkdir(join(repo, "docs", unit.id), { recursive: true })
+      await Bun.write(join(repo, "docs", unit.id, "todo.md"), declaredTodo(unit))
+    }
+    await git(repo, "add", "-A")
+    await git(repo, "commit", "-qm", "baseline")
+    return { dir: repo, phase: (await readPhases(repo))!.phases[0]! }
+  }
+
+  // The default turn script of a doc unit: the execution session writes one
+  // note inside the unit's own directory (the declared scope's shape), the
+  // wrap-up report is artifactTurns' own. `extra` adds per-test side effects
+  // ahead of both.
+  const docTurns = (repo: string, extra: (ctx: TurnContext) => void = () => {}): TurnScript => (ctx) => {
+    extra(ctx)
+    if (!ctx.text.includes("you are this task's verification session")) {
+      const id = /docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
+      if (id) {
+        mkdirSync(join(repo, "docs", id), { recursive: true })
+        writeFileSync(join(repo, "docs", id, "notes.md"), `# Notes (${id})\n\ndelivered by the fake session.\n\n${EOF_MARK}\n`)
+      }
+    }
+    return artifactTurns(repo)(ctx)
+  }
+
+  const docCtx = (repo: string, server: LoopCtx["server"], opts: Partial<LoopCtx["opts"]> = {}): LoopCtx => {
+    const holder = services()
+    return {
+      directory: repo,
+      opts: { maxSessions: 2, subtask: "off", parallel: "low", ...opts },
+      server,
+      agentName: "auto",
+      phases: "m",
+      manual: true,
+      ran: 0,
+      repairs: 0,
+      router: holder.router,
+      control: holder.control,
+      git: createGitOps(),
+    }
+  }
+
+  const serverOf = (agent: FakeAgent): LoopCtx["server"] => {
+    const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    return { ...singleHost(host), startedAgents: () => ["fake"] }
+  }
+
+  // One doc-lane loop run: the ambient OPENCODE_AUTO_* layer scrubbed (the
+  // boundary hooks read the switches), the memo reset, the given overrides
+  // applied for the run alone.
+  const runDocLoop = async (ctx: LoopCtx, phase: PhaseUnit, env: Record<string, string> = {}): Promise<number> => {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    Object.assign(process.env, env)
+    setSwitchModelRegistry(undefined)
+    try {
+      return await runTaskLoop(ctx, phase)
+    } finally {
+      for (const key of Object.keys(env)) delete process.env[key]
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      setSwitchModelRegistry(undefined)
+    }
+  }
+
+  // Prompt ordinals for the ordering assertions: the execution prompt of a
+  // unit (its document named, the verification clause absent) and its
+  // wrap-up prompt.
+  const execAt = (agent: FakeAgent, id: string): number =>
+    agent.prompts.findIndex((prompt) => prompt.text.includes(`docs/${id}/todo.md`) && !prompt.text.includes("verification session"))
+  const wrapAt = (agent: FakeAgent, id: string): number => agent.prompts.findIndex((prompt) => prompt.text.includes("verification session") && prompt.text.includes(`docs/${id}/`))
+
+  test("two disjoint doc units run side by side: both land, each commit stays inside its scope, the tick rides the done commit, the charter range is path-limited", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    const agent = make({ turn: docTurns(repo) })
+    // The concurrency latch: T-001's execution dispatch holds until T-002's
+    // execution dispatched — under the serial loop nothing else dispatches
+    // while a unit runs, so the wait would never resolve and the test would
+    // time out (the fails-by-construction witness).
+    let release!: () => void
+    const t2Dispatched = new Promise<void>((resolve) => (release = resolve))
+    const plain = agent.client.prompt.bind(agent.client)
+    agent.client.prompt = async (input, signal) => {
+      const exec = !input.text.includes("verification session")
+      if (exec && input.text.includes("docs/T-002/todo.md")) release()
+      if (exec && input.text.includes("docs/T-001/todo.md")) await t2Dispatched
+      return plain(input, signal)
+    }
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    // Both units ran as doc lanes (the bracket's lead, twice), landed done
+    // and ticked.
+    expect(lines.filter((line) => line.includes("starting a doc lane"))).toHaveLength(2)
+    for (const id of ["T-001", "T-002"]) {
+      expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
+      expect(existsSync(join(repo, "docs", id, "notes.md"))).toBe(true)
+    }
+    expect(await Bun.file(join(repo, "docs", "R-01", "P01-implement", "tasks.md")).text()).toContain("- [x] T-001 task T-001")
+    expect(await Bun.file(join(repo, "docs", "R-01", "P01-implement", "tasks.md")).text()).toContain("- [x] T-002 task T-002")
+    // The commits stayed scoped: every driver commit of the run (the
+    // Auto-Stage trailer) has its files inside one unit's own scope plus
+    // the phase index (the tick riding the done commit, dm-glm's measured
+    // shape) — no commit ever crossed the sibling's scope.
+    const logText = await git(repo, "log", "--name-only", "--pretty=format:@%h", "--grep=Auto-Stage")
+    for (const commit of logText.split("@").filter(Boolean)) {
+      const files = commit.split("\n").slice(1).map((file) => file.trim()).filter(Boolean)
+      for (const file of files) {
+        expect(file.startsWith("docs/T-001/") || file.startsWith("docs/T-002/") || file === "docs/R-01/P01-implement/tasks.md").toBe(true)
+      }
+    }
+    // D7: the wrap-up's charter range is path-limited to the unit's scope —
+    // the plain range would hold the sibling's interleaved commits.
+    const t1Wrap = agent.prompts[wrapAt(agent, "T-001")]!.text
+    expect(t1Wrap).toContain("..HEAD -- docs/T-001/")
+    expect(await git(repo, "status", "--porcelain")).toBe("")
+  })
+
+  test("admission under overlap: a declaration reaching the sibling's own directory keeps the units serial — the raw touches comparison would have admitted both", async () => {
+    const { dir: repo, phase } = await docRepo([
+      // T-001 declares only the shared document; its own docs/T-001/ joins
+      // its effective scope. T-002's declaration reaches inside it, while
+      // the two RAW touches sets are disjoint — exactly the case readyUnits'
+      // own clause misses and the admission wrapper exists to catch.
+      { id: "T-001", touches: ["docs/shared/glossary.md"] },
+      { id: "T-002", touches: ["docs/T-001/notes.md"] },
+    ])
+    const agent = make({ turn: docTurns(repo) })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(0)
+    // T-002 dispatched only after T-001's whole pipeline (wrap-up included)
+    // resolved: the admission rejected the first batch's second slot.
+    expect(execAt(agent, "T-002")).toBeGreaterThan(wrapAt(agent, "T-001"))
+    expect(lines.filter((line) => line.includes("starting a doc lane"))).toHaveLength(2)
+    expect(existsSync(join(repo, "docs", "T-002", "done.md"))).toBe(true)
+  })
+
+  test("a session writing past its declaration: the guard blocks naming the files, the stray is quarantined and survives for the human, the unit's own scope lands in the scene commit", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"], depends: "T-001" },
+    ])
+    const agent = make({
+      turn: docTurns(repo, (ctx) => {
+        // T-002's execution writes a stray source file beside its scoped
+        // note — past its declaration.
+        if (!ctx.text.includes("verification session") && ctx.text.includes("docs/T-002/todo.md")) {
+          mkdirSync(join(repo, "src"), { recursive: true })
+          writeFileSync(join(repo, "src", "stray.ts"), "stray\n")
+        }
+      }),
+    })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(2)
+    // The guard's own line names the stray; the blocked posture carries it.
+    expect(lines.some((line) => line.includes("T-002 wrote outside its declared scope: src/stray.ts"))).toBe(true)
+    expect(lines.some((line) => line.includes("T-002 is blocked"))).toBe(true)
+    // T-001 landed normally; T-002's own scope committed through the
+    // interrupted-scene commit; the stray survives dirty for the human
+    // (quarantined, never swept).
+    expect(existsSync(join(repo, "docs", "T-001", "done.md"))).toBe(true)
+    expect(existsSync(join(repo, "docs", "T-002", "notes.md"))).toBe(true)
+    expect((await git(repo, "status", "--porcelain")).trim()).toBe("?? src/")
+  })
+
+  test("a doc unit parks mid-flight: the park commit lands scoped, the blocker runs and completes, the released unit re-runs and the phase finishes", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+      { id: "T-003", touches: ["docs/T-003/"] },
+    ])
+    let parkedOnce = false
+    const agent = make({
+      turn: docTurns(repo, (ctx) => {
+        if (!parkedOnce && !ctx.text.includes("verification session") && ctx.text.includes("docs/T-002/todo.md")) {
+          parkedOnce = true
+          writeFileSync(join(repo, "docs", "T-002", "handoff.md"), "T-002 waits on T-003's mapping table.\n\nStatus: park T-003\n")
+        }
+      }),
+    })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    expect(lines.some((line) => line.includes("T-002 parked on T-003"))).toBe(true)
+    // The park commit rode the unit's own scoped boundary (Auto-Stage: park).
+    expect(await git(repo, "log", "--format=%B")).toContain("T-002 park task T-002")
+    for (const id of ["T-001", "T-002", "T-003"]) expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
+  })
+
+  test("the recovery flatten with siblings: the rollback verdict is refused — exit 2 names the sibling scopes, their dirt is never swept", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    // A killed run's scene: both units in_progress, both scopes dirty, one
+    // active record (T-001's — the record file is single-slot) whose session
+    // is dead and carries no model, so strict resume's ladder answers
+    // rollback; T-002 is the record-less sibling leftover.
+    await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-001": { status: "in_progress" }, "T-002": { status: "in_progress" } } }, null, 2)}\n`)
+    await mkdir(join(repo, "docs", "T-001"), { recursive: true })
+    await mkdir(join(repo, "docs", "T-002"), { recursive: true })
+    await Bun.write(join(repo, "docs", "T-001", "notes.md"), "half-written by the killed run\n")
+    await Bun.write(join(repo, "docs", "T-002", "notes.md"), "half-written by the killed run\n")
+    const sha = (await git(repo, "rev-parse", "--short", "HEAD")).trim()
+    await saveProgress(repo, { task: "T-001", session: "ses_dead", at: Date.now(), active: true, phase: { kind: "whole" }, baseline: [{ root: repo, sha }] })
+    const agent = make({ turn: docTurns(repo) })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(2)
+    // The refusal names the sibling scopes and never rolled anything back:
+    // no stash was created, T-002's dirt is untouched, T-001's dirt landed
+    // through the interrupted-scene commit (its own scope) — the tree's
+    // only remaining dirt is the sibling's preserved state.
+    const refusal = lines.find((line) => line.includes("a rollback is tree-wide and would sweep it"))
+    expect(refusal).toBeDefined()
+    expect(refusal).toContain("docs/T-002/")
+    expect(await git(repo, "stash", "list")).toBe("")
+    expect(await Bun.file(join(repo, "docs", "T-002", "notes.md")).text()).toBe("half-written by the killed run\n")
+    expect((await git(repo, "status", "--porcelain")).trim()).toBe("?? docs/T-002/notes.md")
+    expect((await git(repo, "log", "--format=%B")).toString()).toContain("T-001 blocked task T-001")
+  })
+
+  test("the recovery flatten alone (the common kill): the rollback keeps today's exact semantics, the unit redoes cold and completes", async () => {
+    const { dir: repo, phase } = await docRepo([{ id: "T-001", touches: ["docs/T-001/"] }, { id: "T-002", touches: ["docs/T-002/"], depends: "T-001" }])
+    await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-001": { status: "in_progress" } } }, null, 2)}\n`)
+    await mkdir(join(repo, "docs", "T-001"), { recursive: true })
+    await Bun.write(join(repo, "docs", "T-001", "notes.md"), "half-written by the killed run\n")
+    const sha = (await git(repo, "rev-parse", "--short", "HEAD")).trim()
+    await saveProgress(repo, { task: "T-001", session: "ses_dead", at: Date.now(), active: true, phase: { kind: "whole" }, baseline: [{ root: repo, sha }] })
+    const agent = make({ turn: docTurns(repo) })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(0)
+    // The rollback ran (the stash holds the killed run's half-work), the
+    // redo completed the unit cold, and scheduling continued through the
+    // rest of the phase.
+    expect(lines.some((line) => line.includes("T-001 execution unit rolled back to unit baseline"))).toBe(true)
+    expect(await git(repo, "stash", "list")).toContain("auto-rollback")
+    expect(existsSync(join(repo, "docs", "T-001", "done.md"))).toBe(true)
+    expect(existsSync(join(repo, "docs", "T-002", "done.md"))).toBe(true)
+  })
+
+  test("the D2 floors: the switch off and a phase with no doc-eligible units are the serial loop's own stream", async () => {
+    // (a) the kill switch removes the branch — a tier-0 parallel run is
+    // exactly today's serial loop.
+    const off = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    const offAgent = make({ turn: docTurns(off.dir) })
+    const offCode = await runDocLoop(docCtx(off.dir, serverOf(offAgent)), off.phase, { OPENCODE_AUTO_DOC_LANES: "off" })
+    expect(offCode).toBe(0)
+    expect(lines.some((line) => line.includes("starting a doc lane"))).toBe(false)
+    expect(lines.filter((line) => line.includes("starting execution"))).toHaveLength(2)
+    expect(existsSync(join(off.dir, "docs", "T-002", "done.md"))).toBe(true)
+    // (b) a tier-0 parallel run over a phase whose units declare source
+    // scopes: the doc loop's degrade is silent — every unit through
+    // runSerialUnit, the serial loop's own lines, byte-identical.
+    lines.length = 0
+    const src = await docRepo([
+      { id: "T-001", touches: ["src/alpha/"] },
+      { id: "T-002", touches: ["src/beta/"] },
+    ])
+    const srcAgent = make({ turn: docTurns(src.dir) })
+    const srcCode = await runDocLoop(docCtx(src.dir, serverOf(srcAgent)), src.phase)
+    expect(srcCode).toBe(0)
+    expect(lines.some((line) => line.includes("starting a doc lane"))).toBe(false)
+    expect(lines.some((line) => line.includes("cannot be isolated"))).toBe(false)
+    expect(lines.filter((line) => line.includes("starting execution"))).toHaveLength(2)
+    expect(lines).toContain("✓ all tasks complete")
+    expect(existsSync(join(src.dir, "docs", "T-002", "done.md"))).toBe(true)
+  })
+
+  test("the wrap-up lane gates of two concurrent doc units drain on each other without deadlocking, and both receipts land", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    // A pack with one docs-surfaced cheap lane: every doc unit's changes
+    // touch docs/, so both wrap-up gates run driver lanes — the two drains
+    // meet, and only the ordinal rule keeps them from waiting on each other
+    // forever (a naive "wait for the sibling's pipeline" deadlocks here).
+    // The pack is the built-in default with the table spliced into
+    // ## quality (the golden family's construction): an overlay pack is a
+    // whole pack, never a merge, so the default's own acceptance and
+    // artifact sections must ride along.
+    await mkdir(join(repo, ".opencode", "auto", "intents"), { recursive: true })
+    await writeFile(
+      join(repo, ".opencode", "auto", "intents", "verify.md"),
+      readFileSync(join(import.meta.dir, "..", "templates", "intents", "default.md"), "utf8")
+        .replace("# default", "# verify")
+        .replace("\n## phase duties", "\n### test-lanes\n\ndocs-lint:\nCommand: true\nCost: cheap\nSurfaces: docs/\nExclusive: no\n\n## phase duties"),
+    )
+    await git(repo, "add", "-A")
+    await git(repo, "commit", "-qm", "pack")
+    const agent = make({ turn: docTurns(repo) })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent), { testByDriver: true, intent: "verify" }), phase)
+    expect(code).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    // Both units' lanes ran and their receipts landed as committed evidence.
+    for (const id of ["T-001", "T-002"]) {
+      expect(existsSync(join(repo, "docs", id, "testhands", "docs-lint.md"))).toBe(true)
+      expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
+    }
+    expect(await git(repo, "status", "--porcelain")).toBe("")
   })
 })
 

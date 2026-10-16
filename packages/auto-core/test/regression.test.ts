@@ -221,13 +221,13 @@ describe("the boundary and the orphan recovery (plans/0098 D4)", () => {
       writeReceipt(dir, 1, receiptText((await git(dir, "rev-parse", "--short", "HEAD")).trim(), "green", "2026-10-15T10:00:00Z"))
       // testByDriver off and no lane table: the launch machinery is inert,
       // but the receipt still must not dirty the next unit's start gate.
-      await regressionBoundary({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase)
+      await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase)
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: regression")
       // Foreign dirt beside a pending receipt: no dedicated commit sweeps it.
       writeReceipt(dir, 2, receiptText((await git(dir, "rev-parse", "--short", "HEAD")).trim(), "green", "2026-10-15T11:00:00Z"))
       writeFileSync(join(dir, "src.ts"), "someone else's work\n")
-      await regressionBoundary({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase)
+      await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase)
       const status = await git(dir, "status", "--porcelain")
       expect(status).toContain("docs/R-01/regression/2-verify-full.md")
       expect(status).toContain("src.ts")
@@ -263,11 +263,11 @@ describe("the boundary and the orphan recovery (plans/0098 D4)", () => {
       await git(dir, "commit", "--allow-empty", "-qm", "init")
       // A stale lane (no receipt at all) on a tmpfs scratch: no reflink, so
       // no background copy — no receipt, no in-flight slot.
-      await regressionBoundary({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase)
+      await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase)
       expect(regressionInFlight(dir)).toBeUndefined()
       expect(await Bun.file(join(dir, regressionReceiptDoc(1, 1, lane.name))).exists()).toBe(false)
       // The second boundary stays silent (the once-per-directory deferral).
-      await regressionBoundary({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase)
+      await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -304,14 +304,14 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
       await taskCommit(dir, "T-001", "src/a.ts", "a\n")
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
       writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z"))
-      const covered = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      const covered = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase, tasks)
       expect(covered).toEqual({ kind: "ok" })
       expect(await latestRegressionSeq(dir, 1)).toBe(1)
       // The floor: no channel, nothing runs even though the lane is stale.
-      const off = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase, tasks)
+      const off = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase, tasks)
       expect(off).toEqual({ kind: "ok" })
       writeReceipt(dir, 2, receiptText((await git(dir, "rev-parse", "--short", "HEAD")).trim(), "red", "2026-10-15T11:00:00Z"))
-      const stillOff = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: false }, phase, tasks)
+      const stillOff = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase, tasks)
       expect(stillOff).toEqual({ kind: "ok" })
       expect(await latestRegressionSeq(dir, 1)).toBe(2)
     } finally {
@@ -324,7 +324,7 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
     try {
       withPack(dir, "echo full-gate-green")
       await taskCommit(dir, "T-001", "src/a.ts", "a\n")
-      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase, tasks)
       expect(held).toEqual({ kind: "ok" })
       expect(await latestRegressionSeq(dir, 1)).toBe(1)
       // The janitorial commit landed inside the hold: the tree is clean and
@@ -348,7 +348,7 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
       // not — only T-001 is a suspect.
       await taskCommit(dir, "T-001", "src/a.ts", "a changed\n")
       await taskCommit(dir, "T-002", "docs/note.md", "note\n")
-      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      const held = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase, tasks)
       expect(held.kind).toBe("held")
       if (held.kind !== "held") return
       expect(held.lanes).toHaveLength(1)
@@ -376,7 +376,7 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
     try {
       withPack(dir, "git commit --allow-empty -qm sneaky")
       await taskCommit(dir, "T-001", "src/a.ts", "a\n")
-      const corrupted = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { dir, testByDriver: true }, phase, tasks)
+      const corrupted = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase, tasks)
       expect(corrupted).toMatchObject({ kind: "corrupted" })
     } finally {
       rmSync(dir, { recursive: true, force: true })

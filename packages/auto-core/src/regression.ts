@@ -45,10 +45,13 @@ import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, LA
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
-// own reads (testByDriver, the watchdog timings, dryrun) plus promptFacts's
-// pack inputs; RunAllOpts satisfies it structurally, so the loop contexts
-// pass their opts as-is.
-export type RegressionOpts = { dir?: string; intent?: string; dryrun?: boolean; testByDriver?: boolean; idleMs?: number; maxMs?: number }
+// own reads (testByDriver, the watchdog timings, dryrun) plus the intent name
+// the pack load keys on; RunAllOpts satisfies it structurally, so the loop
+// contexts pass their opts as-is. The directory never rides the opts (the
+// shell's run does not set Opts.dir): both entry points take it from their
+// ctx and build the facts themselves — a project's overlay pack loads the
+// same way the lane gate's session opts load it.
+export type RegressionOpts = { intent?: string; dryrun?: boolean; testByDriver?: boolean; idleMs?: number; maxMs?: number }
 
 // The round number of a phase unit's round name ("R-01" → 1) — the boundary
 // sites hold the PhaseUnit; the receipt constructors take the number.
@@ -356,7 +359,7 @@ export async function regressionBoundary(ctx: { directory: string; git: Pick<Git
   const round = roundNumberOf(phase)
   if (!opts.dryrun) await commitPendingReceipts(ctx.directory, round, ctx.git)
   if (!autoSwitches().regression || opts.dryrun || !(opts.testByDriver && codeWork(phase.entry))) return
-  const rows = regressionLanes(parseTestLanes(promptFacts(opts).pack))
+  const rows = regressionLanes(parseTestLanes(promptFacts({ dir: ctx.directory, intent: opts.intent }).pack))
   if (!rows) return
   await launchStale(ctx.directory, opts, round, rows)
 }
@@ -409,7 +412,7 @@ export async function ensureRegressionGreen(
   tasks: readonly { id: string; title: string }[],
 ): Promise<RegressionHold> {
   if (!autoSwitches().regression || opts.dryrun || !(opts.testByDriver && codeWork(phase.entry))) return { kind: "ok" }
-  const rows = regressionLanes(parseTestLanes(promptFacts(opts).pack))
+  const rows = regressionLanes(parseTestLanes(promptFacts({ dir: ctx.directory, intent: opts.intent }).pack))
   if (!rows) return { kind: "ok" }
   const round = roundNumberOf(phase)
   const held: HeldLane[] = []

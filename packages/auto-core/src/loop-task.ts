@@ -12,6 +12,10 @@
 // merge (T-125) the three shapes share their scaffolding through the helpers
 // below runTaskLoop: taskBracket (the unit-start bracket), taskBoundary (the
 // task-boundary hook set) and handleLaneExit (the shared lane-exit arms).
+// Since plans/0099 stage C a fourth branch sits under the scheduler's: the
+// doc loop (runDocLaneLoop + runDocUnit) — tier 0's task parallelism,
+// documentation-scoped units as concurrent in-process pipelines in the main
+// tree, one writer through the git seam's decorator (createDocLaneGit).
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
 import { relative } from "node:path"
@@ -20,8 +24,9 @@ import { closeUnit } from "./close"
 import type { Control } from "./exit"
 import { parseUnitDoc } from "./document/unit"
 import { subtaskStateSpec } from "./document/spec"
-import { currentBranch, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
+import { currentBranch, changedFiles, driverStateFile, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
 import { mergeLaneUpstream } from "./git"
+import { createDocLaneGit, createDocLaneRegistry, type DocLaneRegistry } from "./git-ops"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
@@ -35,6 +40,9 @@ import { phaseKey, routePhase, type PhaseUnit } from "./phases"
 import {
   conflictRepair,
   dispatchLane,
+  docEligible,
+  docScheduler,
+  docScope,
   laneEligible,
   laneExit,
   laneOutcome,
@@ -44,6 +52,7 @@ import {
   orphanRedispatch,
   readyUnits,
   readLaneReport,
+  scopesDisjoint,
   streamUnitOf,
   streamUnits,
   worktreeScheduler,
@@ -182,6 +191,15 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   // and the tier in force materializes worktree lanes (≥ 1) — the units of
   // the routed phase run concurrently, each isolated in its own lane.
   if (worktreeScheduler(ctx.opts.maxSessions, ctx.opts.parallel, ctx.treeTier)) return runLaneLoop(ctx, phase)
+  // The doc scheduler (plans/0099 D2, stage C): tier 0 + the same activation
+  // rule — Tier 0 grows task parallelism, and the doc lanes are it: units
+  // whose declared Touches lie entirely under docs/ run as concurrent
+  // in-process pipelines in the main tree (no worktree, no branch, no merge;
+  // the parent stays the sole writer of git state through one serialized,
+  // path-scoped commit queue). The kill switch is consulted here, at the
+  // branch site (off removes the branch — a tier-0 parallel run is exactly
+  // today's serial loop), never inside the predicate.
+  if (autoSwitches().docLanes && docScheduler(ctx.opts.maxSessions, ctx.opts.parallel, ctx.treeTier)) return runDocLaneLoop(ctx, phase)
   const { directory } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
@@ -938,6 +956,520 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     scheduling = false
     if (stop === undefined) stop = 2
   }
+}
+
+// —— Doc lanes (plans/0099 stage C): same-tree concurrency —— //
+
+// One doc lane the loop holds in flight: the unit's task, its effective
+// scope (D1 — the registry entry and the commit pathspec are the same set),
+// its dispatch ordinal (the drain's order: a wrap-up gate waits for
+// earlier-dispatched lanes to complete and treats later-dispatched parked
+// ones as quiet), the gate flag (set once the unit's wrap-up lane gate
+// begins draining — while any lane holds one, the loop dispatches nothing,
+// so driver-run lanes never meet a newly dispatched sibling's writes), and
+// the pipeline promise (runDocUnit's result — raced, and the drains'
+// completion signal beside it).
+type LiveDocLane = {
+  task: Task
+  scope: string[]
+  ordinal: number
+  gate: boolean
+  resolved: boolean
+  done: Promise<void>
+  pipeline: Promise<DocUnitResult>
+}
+
+// What one doc unit's pipeline came back with: done = the unit closed
+// (completed or parked — scheduling continues); blocked = runTask concluded
+// blocked with the repair fact riding along — the loop's landing
+// continuation finishes it (the repair block mutates the loop's single-slot
+// ctx state, so it runs serialized at the landing: D3's "the repair append
+// runs in the landing window"); stop = a finished failure arm (a dirty start
+// gate, an incomplete unit) — scheduling stops, the in-flight lanes drain,
+// the loop exits with the code. A doc unit's committed work is already in
+// the main tree, so the stop is honest with nothing landing late (D3).
+type DocUnitResult = { kind: "done" } | { kind: "blocked"; question: string; repair?: { reason?: string } } | { kind: "stop"; code: number }
+
+// The doc scheduler's task loop (D3): runLaneLoop's shape with the worker
+// process replaced by an in-process pipeline. Slots = maxSessions; the free
+// ones fill from the readiness predicate (readyUnits, its clauses unchanged)
+// filtered by the doc admission (docEligible plus the effective-scope
+// disjointness D1's wrapper adds over the registry's live scopes);
+// Promise.race resolves one pipeline at a time into this loop's
+// single-threaded continuation — that await chain is the mutex for
+// everything driver-exclusive. The failure posture is the lane loop's: a
+// blocked/incomplete/dirty unit stops dispatching, the in-flight lanes
+// drain, the loop returns 2. Phases serialize (0068 D20): the loop drains
+// before returning. The serial degrade (D9) is silent per D2's floor: a
+// non-doc unit — a source-touching task, a pipeline decompose, a missing
+// declaration, a taken split — drains the lanes, runs runSerialUnit alone,
+// scheduling resumes; v1 does not overlap the degrade with doc lanes.
+// The decorator (createDocLaneGit) wraps ctx.git for the whole duration:
+// every commit below is queued and scoped by it, and an empty registry
+// makes it a pass-through — the degrade and the post-drain phase machinery
+// run byte-identically with it in place.
+async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+  const { directory, opts, repl } = ctx
+  const slots = Math.max(1, opts.maxSessions ?? 1)
+  const registry = createDocLaneRegistry()
+  const baseGit = ctx.git
+  ctx.git = createDocLaneGit(baseGit, registry)
+  try {
+    const inFlight = new Map<string, LiveDocLane>()
+    // false = no new lanes are dispatched (a block, an environment stop, a
+    // step pause or /exit): the in-flight lanes drain.
+    let scheduling = true
+    // The run's terminal stop once set (the first failure wins) — returned
+    // after the drain.
+    let stop: number | undefined
+    // The /exit label the drain ends at: set when the request is seen at a
+    // landing boundary; thrown (maybeExit) after the last lane lands.
+    let exitLabel: string | undefined
+    let ordinal = 0
+    let landings = 0
+    // The drain waiters' recompute wake: a lane parking at its gate changes
+    // another waiter's blocking set, and a promise raced once does not
+    // re-fire — the broadcast below is the second wake source.
+    let parkedWaiters: (() => void)[] = []
+    const changed = (): Promise<void> => new Promise((resolve) => parkedWaiters.push(resolve))
+    const notify = (): void => {
+      const waiters = parkedWaiters
+      parkedWaiters = []
+      for (const resolve of waiters) resolve()
+    }
+
+    // D9's drain callback the doc unit's wrap-up lane gate awaits: the tree
+    // must be quiet — no sibling writing — while driver-run test lanes or
+    // the strict wait's in-tree run hold it (a sibling's in-flight write
+    // would cross the set-level stash guard and be restored away as the
+    // guard's own). Quiet is ordered by dispatch ordinal: a lane waits for
+    // every earlier-dispatched sibling to COMPLETE and treats a
+    // later-dispatched sibling parked at its own drain as quiet — the
+    // parked sibling stays parked until this lane completes (its own drain
+    // waits for every earlier-dispatched lane), so two gates never run
+    // concurrently and the wait graph is a DAG by ordinal, never a cycle.
+    // The gate flag stays set for the lane's remainder (fix rounds
+    // included): while any lane holds one the loop dispatches nothing, so a
+    // gate that has begun never meets a newly dispatched sibling's writes.
+    const drainOf = (lane: LiveDocLane) => async (): Promise<void> => {
+      lane.gate = true
+      notify()
+      for (;;) {
+        const blocking = [...inFlight.values()].filter((other) => other.task.id !== lane.task.id && !(other.gate && other.ordinal > lane.ordinal))
+        if (!blocking.length) return
+        await Promise.race([...blocking.map((other) => other.done), changed()])
+      }
+    }
+
+    // The repair round's quiet wait (the landing window's other half):
+    // closeUnit refuses a dirty tree, so the repair path first waits for
+    // every other lane's pipeline to resolve — a resolved-but-unlanded lane
+    // is already committed (its landing bookkeeping runs after this one
+    // returns), so a settled pipeline is a quiet tree. The loop is parked
+    // here, so nothing dispatches meanwhile.
+    const waitQuiet = async (): Promise<void> => {
+      for (;;) {
+        const pending = [...inFlight.values()].filter((other) => !other.resolved)
+        if (!pending.length) return
+        await Promise.race([...pending.map((other) => other.done), changed()])
+      }
+    }
+
+    // The admission wrapper (D1): readyUnits' own clauses as they stand,
+    // then the doc predicates — eligibility (whole-task, declared, all
+    // under docs/) and the effective-scope disjointness against everything
+    // the registry holds live (the in-flight lanes' scopes and the recovery
+    // leftovers'; the raw `touches` comparison readyUnits makes would miss
+    // a declaration reaching a sibling's own docs/T-NNN/). A run forcing
+    // the subtask pipeline (--subtask true — the hard override ignores the
+    // Decompose field) and a task with a taken split degrade serially:
+    // their execution is the subtask loop's, whose scans and close-outs are
+    // the serial world's (D1 clause 3's tier ≥ 1 story).
+    const docAdmissible = (task: Task): boolean => {
+      if (opts.subtask === "true" || task.split !== undefined) return false
+      if (!docEligible(task)) return false
+      const scope = docScope(task)
+      return [...registry.live.values()].every((other) => scopesDisjoint(scope, other))
+    }
+
+    // The ready set of one pass over the reloaded plan (D5's predicate over
+    // the merged states and the registry view; no stream expansion — a task
+    // with a taken split degrades as a whole).
+    const readyNow = async (): Promise<{ plan: Plan; ready: Task[] }> => {
+      const plan = await loadPlan(directory, phase)
+      const states = new Set(plan.tasks.filter((unit) => unit.status === "done").map((unit) => unit.id))
+      const runtime = new Map<string, LaneRuntime>()
+      for (const task of plan.tasks) if (task.status === "in_progress") runtime.set(task.id, { status: "in_progress" })
+      const lanes = new Map<string, InFlightLane>()
+      for (const lane of inFlight.values()) lanes.set(lane.task.id, { touches: lane.task.touches })
+      return { plan, ready: readyUnits(plan, states, runtime, lanes, slots) }
+    }
+
+    const dispatch = (task: Task, plan: Plan): void => {
+      const scope = docScope(task)
+      registry.live.set(task.id, scope)
+      const lane: LiveDocLane = { task, scope, ordinal: ++ordinal, gate: false, resolved: false, done: Promise.resolve(), pipeline: Promise.resolve({ kind: "done" }) }
+      inFlight.set(task.id, lane)
+      lane.pipeline = runDocUnit(ctx, phase, plan, task, registry, { scope, drain: drainOf(lane) })
+      lane.done = lane.pipeline.then(
+        () => {
+          lane.resolved = true
+        },
+        () => {
+          lane.resolved = true
+        },
+      )
+    }
+
+    // The blocked outcome's finisher, in the loop's single-threaded landing
+    // continuation: runSerialUnit's two arms verbatim, with one drain — the
+    // repair path first waits the other lanes quiet (closeUnit refuses a
+    // dirty tree), and any refusal or a spent budget falls through to
+    // today's block exactly as the serial world's does. Returns true when
+    // scheduling may continue (the repair round), false when the run stops.
+    const finishBlocked = async (task: Task, blocked: { question: string; repair?: { reason?: string } }): Promise<boolean> => {
+      if (blocked.repair !== undefined && opts.stopBefore !== "execute" && (opts.repair ?? 0) > ctx.repairs) {
+        await waitQuiet()
+        ctx.repairs++
+        const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${blocked.repair.reason ? ` (${blocked.repair.reason})` : ""}`
+        const closed = await closeUnit(directory, task.id, { reason, phases: ctx.phases, acceptanceGate: opts.acceptanceGate })
+        for (const line of closed.lines) log(`  ${line}`)
+        if (closed.type === "closed") {
+          emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${opts.repair})` })
+          log(`↻ ${task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${opts.repair})`)
+          ctx.input = {
+            text:
+              `Repair round ${ctx.repairs}: the task ${task.id} was closed — its report docs/${task.id}/report.md concluded ` +
+              `Result: FAIL${blocked.repair.reason ? ` (${blocked.repair.reason})` : ""}. Read that report and the task's documents for what it ` +
+              `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
+              `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
+              // The pack's repair discipline (plans/0080 §6): the boundary that
+              // keeps a repair from re-architecting.
+              withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
+          }
+          ctx.append = true
+          ctx.ran++
+          return true
+        }
+        log(`⏸ the repair round could not close ${task.id}; blocking as usual`)
+      }
+      await block(directory, task.id)
+      log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${blocked.question}`)
+      // the proxy-answer highlight block (plans/0020 §H-②, H5), pinned above
+      // the conclusion line like the serial loop's.
+      for (const line of await taskResolveLines(directory, task.id)) log(line)
+      const lines = await taskEndLines(directory, task.id)
+      if (lines) {
+        log(`⏸ ${task.id} blocked: ${lines[0]}`)
+        for (const line of lines.slice(1)) log(line)
+      }
+      // The interruption scene rides the unit's own scoped commit (the lane
+      // is registry-live through this finisher): the D6 guard tolerates the
+      // quarantine's strays, so they survive for the human instead of being
+      // swept into the scene.
+      const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+      if (!settledBlocked.ok) log(`⚠ interruption-scene commit failed: ${settledBlocked.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
+      emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: blocked.question })
+      return false
+    }
+
+    // One lane's landing (the pipeline resolved into this single-threaded
+    // continuation — the mutex). The unit stays registry-live through a
+    // blocked finisher (its scene commit routes as its own scoped add),
+    // then the bookkeeping mirrors the lane loop's: the regression
+    // boundary, the boundary hooks in probe form (a /exit seen here stops
+    // dispatching and takes effect after the drain), the wait-between
+    // pause between landings.
+    const land = async (lane: LiveDocLane, result: DocUnitResult): Promise<void> => {
+      const task = lane.task
+      if (result.kind === "blocked") {
+        const keep = await finishBlocked(task, result)
+        registry.live.delete(task.id)
+        if (keep) {
+          landings++
+          await regressionBoundary(ctx, opts, phase)
+        } else {
+          scheduling = false
+          if (stop === undefined) stop = 2
+        }
+        return
+      }
+      registry.live.delete(task.id)
+      if (result.kind === "stop") {
+        scheduling = false
+        if (stop === undefined) stop = result.code
+        return
+      }
+      landings++
+      // The background regression boundary (plans/0098 D4): the landing
+      // left this unit's scope committed — pending receipts committed (the
+      // decorator's janitorial routing excludes the live sibling scopes),
+      // one stale lane launched into the copy when the launch conditions
+      // hold (with sibling scopes dirty the launch defers, its log-once
+      // discipline, so the slot concentrates at the phase-close hold that
+      // runs after the loop drained).
+      await regressionBoundary(ctx, opts, phase)
+      await taskBoundary(ctx, `task ${task.id} ${task.title}`, () => {
+        scheduling = false
+        exitLabel = `task ${task.id} ${task.title}`
+      })
+      // --wait-between pauses between landings — never before the first,
+      // the lane loop's placement (the lane boundary is the landing).
+      if (landings > 1 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
+    }
+
+    // D10's recovery flatten, before scheduling: a killed run leaves doc
+    // units in_progress with their scopes dirty. Every leftover's scope
+    // counts as live for the gate relaxations (they tolerate each other's
+    // dirt), then each one WITH an active progress record is driven one at a
+    // time through runDocUnit — the resumed-run clean exemption is the
+    // existing rule, and the unit's own scope dirt is its resumable state.
+    // A leftover WITHOUT an active record keeps today's posture when its
+    // dispatch turn comes: the start gate sees dirt no live scope covers
+    // and blocks for the human. A driven leftover's rollback verdict is
+    // refused while other leftovers remain (runTask's rollbackRefused,
+    // D10): the ladder's tree-wide stash would sweep their state — the
+    // refusal arrives as this loop's own blocked outcome and finishes
+    // exactly like a landing's (the block, the logged question, the
+    // interrupted-scene commit riding the unit's still-live scope; no
+    // repair arm fires mid-flatten, a rollback verdict carries no repair
+    // fact and nothing else has run yet). The declared-but-unwritten
+    // siblings are never driven here: only an active record says the run
+    // was inside the unit.
+    const flattenPlan = await loadPlan(directory, phase)
+    const leftovers = flattenPlan.tasks.filter((unit) => unit.status === "in_progress" && docEligible(unit))
+    for (const task of leftovers) registry.live.set(task.id, docScope(task))
+    for (const task of leftovers) {
+      const recalled = await recallProgress(directory, task.id)
+      if (recalled?.active !== true) continue
+      const siblings = [...registry.live.entries()].filter(([id]) => id !== task.id).map(([, scope]) => scope).flat()
+      const result = await runDocUnit(ctx, phase, flattenPlan, task, registry, {
+        scope: registry.live.get(task.id)!,
+        ...(siblings.length ? { siblingScopes: siblings } : {}),
+        // Nothing else runs during the flatten — one unit at a time — and
+        // the sibling leftovers' dirt predates any driver-run lane's guard
+        // snapshot (the guard judges the before/after delta), so the
+        // wrap-up gate's drain is a no-op here.
+        drain: async () => {},
+      })
+      if (result.kind === "blocked") {
+        const keep = await finishBlocked(task, result)
+        registry.live.delete(task.id)
+        if (!keep) return 2
+        await regressionBoundary(ctx, opts, phase)
+        continue
+      }
+      registry.live.delete(task.id)
+      if (result.kind === "done") {
+        await regressionBoundary(ctx, opts, phase)
+        await taskBoundary(ctx, `task ${task.id} ${task.title}`)
+        continue
+      }
+      return result.code
+    }
+
+    for (;;) {
+      // Fill the free slots: dispatch the ready, admitted doc units (index
+      // order; the batch is mutually scope-disjoint — each dispatch
+      // registers its scope, so the next candidate's admission sees it).
+      // While any lane holds a wrap-up gate, nothing dispatches.
+      if (scheduling && inFlight.size < slots && ![...inFlight.values()].some((lane) => lane.gate)) {
+        const { plan, ready } = await readyNow()
+        for (const task of ready) {
+          if (inFlight.size >= slots) break
+          if (!docAdmissible(task)) continue
+          dispatch(task, plan)
+        }
+      }
+      // Nothing in flight: the drain is done (or never started) — return,
+      // run the serial degrade, or the phase is complete.
+      if (inFlight.size === 0) {
+        if (stop !== undefined || exitLabel !== undefined) {
+          // A /exit seen at a landing takes effect here, after the drain —
+          // maybeExit throws (runAll maps it); scheduling had already
+          // stopped at the landing that saw the request.
+          if (exitLabel !== undefined) ctx.control.maybeExit("task", exitLabel)
+          return stop ?? 0
+        }
+        const plan = await loadPlan(directory, phase)
+        const task = next(plan)
+        if (!task) {
+          const stranded = strandedParks(plan)
+          if (stranded.length) {
+            log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
+            emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
+            return 2
+          }
+          log("✓ all tasks complete")
+          return 0
+        }
+        // D9's serial degrade, silent per D2's floor (unlike the worktree
+        // loop's degrade line): with the slots free and nothing doc-admissible
+        // ready, the first ready unit runs through today's serial path —
+        // alone, after the lanes drained. Every unit of a phase with no
+        // doc-eligible tasks goes through here, which is what makes that
+        // floor byte-identical to the serial loop's stream.
+        const states = new Set(plan.tasks.filter((unit) => unit.status === "done").map((unit) => unit.id))
+        const runtime = new Map<string, LaneRuntime>()
+        for (const unit of plan.tasks) if (unit.status === "in_progress") runtime.set(unit.id, { status: "in_progress" })
+        const ineligible = readyUnits(plan, states, runtime, new Map(), 1).find((unit) => !docAdmissible(unit))
+        if (ineligible === undefined) {
+          // Unreachable with a checked graph and nothing executing: every
+          // not-done unit has an unmet dependency forever (an admission
+          // reject the fill would have skipped leaves the ready set empty).
+          // Stop rather than spin.
+          log(`⏸ ${task.id} is not ready and nothing is executing; the dependency graph cannot progress — fix the task index manually and re-run`)
+          emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: "not ready with nothing executing" })
+          return 2
+        }
+        const code = await runSerialUnit(ctx, phase, plan, ineligible)
+        if (code !== 0) return code
+        await regressionBoundary(ctx, opts, phase)
+        continue
+      }
+      // Await any lane's pipeline; land it in this single-threaded
+      // continuation — the mutex everything driver-exclusive funnels
+      // through (D3).
+      const first = await Promise.race([...inFlight.values()].map((lane) => lane.pipeline.then((result) => ({ lane, result }))))
+      inFlight.delete(first.lane.task.id)
+      await land(first.lane, first.result)
+    }
+  } finally {
+    ctx.git = baseGit
+  }
+}
+
+// One doc unit's pipeline (D3): runSerialUnit's sequence with the
+// concurrency deltas this design owns — the relaxed start gate (D5, alive in
+// the decorator ctx.git wraps for the loop's duration), the scoped evidence
+// (D7: runTask's input scope threads the wrap-up's path-limited charter
+// range, and the close-out check excludes the live sibling scopes and the
+// quarantine), and the repair deferral (the blocked outcome returns to the
+// loop's landing continuation — the landing window). The wait-between pause
+// and the boundary hooks are the loop's, at the landing (the probe form);
+// nothing here runs them.
+async function runDocUnit(
+  ctx: LoopCtx,
+  phase: PhaseUnit,
+  plan: Plan,
+  task: Task,
+  registry: DocLaneRegistry,
+  input: { scope: readonly string[]; drain?: () => Promise<void>; siblingScopes?: readonly string[] },
+): Promise<DocUnitResult> {
+  const { directory, opts, server: serverHandle } = ctx
+  if (task.status === "blocked") {
+    log(`↻ ${task.id} was blocked previously, resuming directly (block reason in the previous run's log)`)
+  }
+  // The unit-start clean gate + SHA baseline: an active progress record is a
+  // resumed continuation (this unit's own scope dirt is its resumable
+  // state, D10) and only records the baseline; otherwise the decorator's
+  // beginUnit — the D5 relaxation tolerates exactly the other live scopes'
+  // dirt, driver-state dirt self-heals through the queued carryover, and
+  // anything else blocks for the human.
+  let taskBaseline: UnitBaseline | undefined
+  {
+    const recalled = await recallProgress(directory, task.id)
+    if (recalled?.active === true) {
+      if (!opts.dryrun) taskBaseline = await ctx.git.unitBaseline(directory)
+    } else {
+      const gate = await ctx.git.beginUnit(directory, opts, task)
+      if (gate.type === "dirty") {
+        log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
+        for (const file of gate.files) log(`  ${file}`)
+        emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
+        return { kind: "stop", code: 2 }
+      }
+      taskBaseline = gate.baseline
+    }
+  }
+  await taskBracket(directory, task.id, task.title, "starting a doc lane", task.attempts)
+  const start = Date.now()
+  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }), {
+    // The unit-start SHA baseline beginUnit recorded (0083 D1: the
+    // verification charter's commit range) beside the doc-lane facts — the
+    // effective scope (D7) and, on a recovery drive, the rollback refusal's
+    // sibling scopes (D10).
+    ...(taskBaseline ? { baseline: taskBaseline } : {}),
+    scope: input.scope,
+    ...(input.drain !== undefined ? { drain: input.drain } : {}),
+    ...(input.siblingScopes !== undefined ? { siblingScopes: input.siblingScopes } : {}),
+  })
+  if (outcome.type === "dirty") {
+    log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
+    for (const file of outcome.files) log(`  ${file}`)
+    emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
+    return { kind: "stop", code: 2 }
+  }
+  if (outcome.type === "parked") {
+    // The dependency park (plans/0096 D7): the park commit landed inside the
+    // pipeline (scoped like every doc-lane commit) and the parked record is
+    // written — the unit counts as done for its successors and the loop
+    // keeps dispatching around it. The landing's task-end event was already
+    // emitted by the pipeline's own arm above; the boundary hooks run at
+    // the landing as usual.
+    log(`⏸ ${task.id} parked on ${outcome.blocker} — its landed consumables release its successors; scheduling continues around it`)
+    ctx.ran++
+    return { kind: "done" }
+  }
+  if (outcome.type === "blocked") {
+    return { kind: "blocked", question: outcome.question, ...(outcome.repair !== undefined ? { repair: outcome.repair } : {}) }
+  }
+  if (outcome.type === "incomplete") {
+    log(`⏸ ${task.id} incomplete, reverted to pending. Improve this task's description in docs/${task.id}/todo.md and re-run:\n${outcome.reason}`)
+    for (const line of await taskResolveLines(directory, task.id)) log(line)
+    const lines = await taskEndLines(directory, task.id)
+    if (lines) {
+      log(`⏸ ${task.id} incomplete: ${lines[0]}`)
+      for (const line of lines.slice(1)) log(line)
+    }
+    const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+    if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
+    emitStatus({ type: "task-end", task: task.id, outcome: "incomplete", detail: outcome.reason })
+    return { kind: "stop", code: 2 }
+  }
+  {
+    for (const line of await taskResolveLines(directory, task.id)) log(line)
+    const lines = await taskEndLines(directory, task.id)
+    if (lines) {
+      log(`✓ ${task.id} done: ${lines[0]}`)
+      for (const line of lines.slice(1)) log(line)
+    } else {
+      log(`✓ ${task.id} done (took ${formatDuration(Date.now() - start)})`)
+    }
+  }
+  ctx.ran++
+  // the terminal commit of task completion: the todo.md → done.md rename
+  // and the index tick ride this unit's own scoped commit (dm-glm's
+  // measured `T-NNN done` shape — the tick is driver state outside every
+  // scope, and the decorator's own-scope add carries it).
+  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+  if (!settled.ok) {
+    const failure = `${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}`
+    log(`⏸ ${failure}. The task mark is still in the worktree; commit manually and re-run`)
+    emitStatus({ type: "failure", message: failure })
+    emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: failure })
+    return { kind: "stop", code: 2 }
+  }
+  emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
+  if (taskBaseline) {
+    // D7: the close-out check's clause ① (the worktree clean) excludes the
+    // live scopes, the quarantine and the dirty driver-state files — an
+    // in-flight sibling's index tick (the one shared committed file a
+    // pipeline writes, D8) is a driver write in transit, never this unit's
+    // isolation breach. Clause ② (the commit range) is unchanged:
+    // interleaved sibling commits all carry the Auto-Stage trailer, and a
+    // foreign commit is still caught.
+    const dirty = await changedFiles(directory)
+    const exclude = [...[...registry.live.values()].flat(), ...registry.quarantine, ...dirty.filter((rel) => driverStateFile(rel))]
+    const violations = await unitViolations(directory, taskBaseline, exclude)
+    if (violations.length) {
+      log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
+      for (const problem of violations) log(`  ${problem}`)
+      emitStatus({ type: "failure", message: `${task.id} unit close-out check failed (isolation boundary violated): ${violations.join("; ")}` })
+      return { kind: "stop", code: 2 }
+    }
+  }
+  return { kind: "done" }
 }
 
 // —— The lane entry (plans/0068 §6.3) —— //

@@ -343,9 +343,13 @@ export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOp
       if (baseline) {
         // The close-out check under concurrency (D7): the live scopes hold
         // in-flight sibling writes and the quarantine holds the blocked
-        // unit's strays — excluded, never swept and never judged. Clause ②
-        // (the commit range) is the free function's own, unchanged.
-        const violations = await unitViolations(dir, baseline, [...siblingScopes(""), ...registry.quarantine])
+        // unit's strays — excluded, never swept and never judged. The dirty
+        // driver-state files join them (a sibling's index tick in transit,
+        // D8's one shared committed write — a driver write, never a
+        // session's isolation breach). Clause ② (the commit range) is the
+        // free function's own, unchanged.
+        const dirty = await base.changedFiles(dir)
+        const violations = await unitViolations(dir, baseline, [...siblingScopes(""), ...registry.quarantine, ...dirty.filter((rel) => driverStateFile(rel))])
         if (violations.length) return { type: "failed", question: `unit close-out check failed: ${violations.join("; ")}` }
       }
       return { type: "ok" }

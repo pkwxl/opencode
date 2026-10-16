@@ -154,12 +154,21 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // continues) / abort+block (ask-fail). Blocking happens on a repeated
 // question on the same issue, exhausted transient session errors, a FAIL
 // result line, or an ask-fail permission timeout.
+// input (plans/0099 stage C): `baseline` — the unit-start SHA baseline the
+// loop's beginUnit recorded (0083 D1's verification charter commit range);
+// `scope` — a doc lane's effective scope, threading D7's pathspec to the
+// wrap-up's charter range; `drain` — D9's quiet-tree callback the wrap-up's
+// lane gate awaits; `siblingScopes` — D10's recovery-flatten fact: the other
+// leftover doc units' scopes present in the tree while this one is driven —
+// a strict-resume rollback is tree-wide (stash push -u of everything, then
+// the soft reset), so with siblings present the rollback verdict becomes
+// the human posture (stop 2) instead of sweeping their state.
 export async function runTask(
   client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
-  input: { baseline?: UnitBaseline } = {},
+  input: { baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; siblingScopes?: readonly string[] } = {},
 ): Promise<Outcome> {
   // Experiment switches (the OPENCODE_AUTO_* environment-variable layer,
   // plans/0003-fork-decompose-design.md §4.6): parsed once at the entry
@@ -199,6 +208,21 @@ export async function runTask(
     await statsDecomposeRun(dir, { task: task.id, mode, from: decompose.from })
   }
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
+  // D10's rollback refusal (plans/0099): a strict-resume rollback is
+  // tree-wide — under the recovery flatten, with sibling leftover doc units'
+  // state in the tree, honoring the verdict would sweep their dirt into this
+  // unit's stash and retract their landed shares. With siblings present the
+  // verdict becomes the human posture: a blocked outcome naming the unit, the
+  // ladder's reason and the sibling scopes. (The session-level rollback
+  // inside executeWhole's handover engine is not suppressed — D10 names the
+  // ladder's verdict; a killed flatten hitting that deeper rollback is the
+  // follow-up if a real kill ever surfaces it.)
+  const rollbackRefused = (why: string): Outcome => ({
+    type: "blocked",
+    question:
+      `${task.id} resume after interruption: ${why}. Strict resume would roll the unit back to its baseline, but the recovery flatten holds sibling doc lanes' state in the tree ` +
+      `(${input.siblingScopes!.join(", ")}); a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely`,
+  })
   // Strict resume (plans/0022-session-recovery-fidelity-design.md): when on,
   // records carry the unit baseline / effective model, verified on resume;
   // when fidelity cannot be guaranteed, roll back and re-run. The task-level
@@ -291,6 +315,7 @@ export async function runTask(
       handoffStatus(handoffRaw) === undefined &&
       recalled.baseline !== undefined
     if (handoffInvalid) {
+      if (input.siblingScopes?.length) return rollbackRefused("the handover document exists but has no valid status line")
       const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
       recalled.active = false
@@ -339,6 +364,7 @@ export async function runTask(
         // to the summarized state (reusing the existing "not a resumed run"
         // semantics — pipeline cleans up the stale handover document and the
         // next unit starts from a clean baseline).
+        if (input.siblingScopes?.length) return rollbackRefused(verdict.why)
         const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
         recalled.active = false
@@ -802,6 +828,11 @@ export async function runTask(
           round: resume?.kind === "wrapup" ? (resume.round ?? 0) : 0,
           persist: persistStage,
           baseline: unitStart,
+          // plans/0099 D7/D9: a doc lane's unit threads its effective scope
+          // (the charter's path-limited range) and the quiet-tree drain the
+          // wrap-up's lane gate awaits; every serial unit passes neither.
+          ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.drain !== undefined ? { drain: input.drain } : {}),
         })
         if (stopped) return stopped
       }

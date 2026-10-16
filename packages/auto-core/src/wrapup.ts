@@ -296,7 +296,7 @@ function previousTaskId(plan: Plan, id: string): string[] {
   return at > 0 ? [plan.tasks[at - 1]!.id] : []
 }
 
-async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan): Promise<LaneGate> {
+async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?: () => Promise<void>): Promise<LaneGate> {
   // The channel's derived condition, the same line runExecSession gates on
   // (plans/0083 D9): the config flag AND the phase type's codeWork (a
   // phase-less opts resolves onto implement, so bare runs keep the raw-flag
@@ -306,6 +306,17 @@ async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan): Promis
   if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) return { kind: "off" }
   const lanes = parseTestLanes(promptFacts(opts).pack)
   if (!lanes) return { kind: "off" }
+  // The doc-lane drain (plans/0099 D9): driver-run lanes and the strict
+  // wait's in-tree run need a quiet tree — a sibling doc lane's in-flight
+  // writes would cross the set-level stash guard (a tracked mutation it
+  // would restore as its own). The doc loop's drain callback brings the
+  // tree to "no other lane in flight" before anything launches; an absent
+  // callback (every serial unit, the lane loops' workers) is today's
+  // behavior. For a doc unit the gate is usually a no-op anyway — the
+  // carry-forward rule skips lanes whose surfaces miss the unit's
+  // docs-only changes — so the drain cost is rare; a docs-surfaced lane
+  // (a docs-lint suite) still runs, correctly, on a quiet tree.
+  await drain?.()
   // The strict test-readiness (plans/0098 D7): a `Strict: yes` regression
   // row makes the unit's testing wait for its dependencies' complete pass
   // — the effective dependency set is the task's `Depends:` ids or, absent
@@ -413,7 +424,9 @@ function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: strin
 // record's wrapup stage; baseline is the unit's start SHA baseline (the
 // charter's commit range); scope is D7's effective-scope pathspec of a doc
 // lane's unit (absent on every serial unit — the charter's range stays
-// today's). label is the unit name used when a commit fails;
+// today's); drain is D9's doc-lane quiet-tree callback, awaited by the lane
+// gate and the strict wait before any driver-run lane launches (absent =
+// today's behavior). label is the unit name used when a commit fails;
 // solo is the off/auto/ondemand whole-task mode, every mode but the true
 // pipeline (the report is an output summary rather than an index).
 // undefined = verification passed; the only non-blocked other exit never
@@ -425,7 +438,7 @@ export async function runWrapup(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[] },
+  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void> },
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
@@ -433,7 +446,7 @@ export async function runWrapup(
   for (let round = input.round ?? 0; ; ) {
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
-    const gate = await laneGate(dir, task, opts, plan)
+    const gate = await laneGate(dir, task, opts, plan, input.drain)
     if (gate.kind === "stop") return gate.stop
     let reason: string
     if (gate.kind === "red") {
