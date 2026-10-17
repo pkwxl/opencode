@@ -13,6 +13,8 @@
 // is the recovery story's first line).
 import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
 import { provenanceComparison } from "./bundle"
+import { awaitingFormulation } from "./formulate"
+import { loadProjectConfig } from "./config"
 import { provenanceFindings } from "./provenance"
 import { shellProfile } from "./shell"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
@@ -47,9 +49,15 @@ export async function renderStatus(dir: string): Promise<string[]> {
   } catch (error) {
     return [...provenance, `⚠ ${error instanceof Error ? error.message : String(error)}`]
   }
-  // plan owns the rounds (plans/0053 D31): the pointer names it, with the bin
-  // from the shell profile.
-  if (!state) return [...provenance, `⚠ phase index ${phaseIndexPath(round)} is missing; run ${shellProfile().bin} plan to establish the round`]
+  // The rounds' opening command (plans/0053 D31, re-keyed by plans/0101 D4):
+  // phased projects advance with transfer, m mode keeps plan (transfer
+  // refuses m mode) — the pointer names whichever the config's phases value
+  // runs.
+  if (!state) {
+    const { bin } = shellProfile()
+    const phased = (await loadProjectConfig(dir).catch(() => undefined))?.phases !== "m"
+    return [...provenance, `⚠ phase index ${phaseIndexPath(round)} is missing; run ${bin} ${phased ? "transfer" : "plan"} to establish the round`]
+  }
   // The in-flight lanes section (plans/0068 D13, S4): first, like the shell's
   // live-lock line — the fact a watcher polls for. Registry order, each lane
   // with its worktree (the park path, repository-relative) and the worker's
@@ -67,18 +75,26 @@ export async function renderStatus(dir: string): Promise<string[]> {
   for (const phase of state.phases) {
     // Closed before done, as in formatPhases: the two views agree.
     const mark = state.closed.has(phase.id) ? "⊘" : state.done.has(phase.id) ? "✓" : phase === current ? "▶" : " "
-    // The awaiting-clarification note (plans/0081 D14.3): a human-gated phase
-    // whose tasks are all done but whose survey still records open forks —
-    // the round is waiting on the person, and status says so.
-    const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
-    lines.push(`  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`)" : ""}`)
     let tasks: Task[]
     try {
       tasks = (await loadPlan(dir, phase)).tasks
     } catch (error) {
+      lines.push(`  [${mark}] ${phaseLabel(phase)}`)
       lines.push(`      ⚠ ${error instanceof Error ? error.message : String(error)}`)
       continue
     }
+    // The awaiting-clarification note (plans/0081 D14.3): a human-gated phase
+    // whose tasks are all done but whose survey still records open forks —
+    // the round is waiting on the person, and status says so. Beside it the
+    // review-seam note (plans/0101 D3/D4): the current phase's plan task
+    // stands constructed and not yet run — the round waits on the person's
+    // dispatch (plan) or its rejection (fix the todo's inputs, re-run
+    // transfer).
+    const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
+    const awaitingPlan = phase === current ? awaitingFormulation(tasks, phase) !== undefined : false
+    lines.push(
+      `  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`)" : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
+    )
     for (const task of tasks) {
       const checklist = task.checklist ?? []
       const count = checklist.length ? ` [subtasks ${checklist.filter((item) => item.done).length}/${checklist.length}]` : ""

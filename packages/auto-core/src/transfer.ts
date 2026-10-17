@@ -39,7 +39,7 @@ import { ensurePointer } from "./agents-block"
 import { analysisProblems, releasedRoadmapRounds, renderAnalysisStub } from "./analysis"
 import { briefProposal, installBriefProposal } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
-import { isFormulation } from "./formulate"
+import { awaitingFormulation } from "./formulate"
 import { commitTree } from "./git"
 import { runAll } from "./loop"
 import { logGateStop } from "./loop-phase"
@@ -113,14 +113,16 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   // from the roadmap's line or the exhausted stop.
   if (route.type === "complete") return await roundOpen(directory, round, opts)
   // The construct-and-review tail (shapes 1/2/4's second invocation, and the
-  // rejection channel of D3): an empty index awaits its formulation todo, a
-  // pending formulation task awaits dispatch — either way the loop
+  // rejection channel of D3): an empty index awaits its formulation todo, an
+  // awaiting formulation task awaits dispatch — either way the loop
   // constructs (idempotent rewrite-on-diff; the digest-keep holds an
-  // unchanged floor) and stops at the review seam.
+  // unchanged floor) and stops at the review seam. The predicate is the
+  // shared awaiting one (plans/0101 D4): the todo wherever it sits in the
+  // index, beside hand-added tasks too.
   if (route.type === "plan") return await advanceToReview(directory, opts)
   if (route.type === "execute") {
     const remaining = route.plan.tasks.filter((task) => task.status !== "done")
-    if (remaining.length && remaining.every((task) => isFormulation(task, route.phase))) return await advanceToReview(directory, opts)
+    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, opts)
     log(
       `⏸ nothing to advance: ${phaseRefText(route.phase)} still holds ${remaining.length} pending task(s) — ` +
         `execute them first: ${bin} run ${directory}; the boundary follows their completion`,

@@ -220,6 +220,13 @@ export type RunAllOpts = {
   // continuous crossing. Meaningful to plain run only — under a stopBefore
   // (plan, transfer) the loop follows its own stop condition and ignores it.
   boundary?: "stop" | "flow"
+  // transfer --resynthesize (plans/0101 D3): bypass the digest-keep of a
+  // standing formulation todo — the synthesis pipeline re-voices the sources
+  // and construction's rewrite-on-diff lands the new todo for review. A
+  // one-shot force for the rejected-synthesized-ledger case: the floor digest
+  // is unchanged, so the next plain transfer keeps whatever lands. transfer's
+  // alone (the shell refuses the flag on every other command).
+  resynthesize?: boolean
   // The planning input plan hands the run (plans/0053 D9): the first planning
   // step persists it to its phase's plan-input.md and plans against it.
   planInput?: PlanInput

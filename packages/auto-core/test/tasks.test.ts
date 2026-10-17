@@ -3,7 +3,7 @@
 // .auto/units.json, the driver's completion (rename + index tick), the
 // subtask checklist from subtasks.md, and the planning-session checks.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
@@ -539,5 +539,37 @@ describe("planning output", () => {
     expect(await Bun.file(join(dir, p2!.dir, "tasks.md")).exists()).toBe(false)
     expect(await Bun.file(join(dir, "docs/T-002/todo.md")).exists()).toBe(false)
     expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+  })
+})
+
+describe("renderStatus review-seam note (plans/0101 D3/D4)", () => {
+  test("the current phase's standing plan task reads as awaiting your review; a done one does not", async () => {
+    // The driver-constructed formulation task: the Formulate field naming the
+    // owning phase, pending in the index.
+    await Bun.write(
+      join(dir, phase.dir, "tasks.md"),
+      renderTaskIndex("R-01.P01", [{ id: "T-001", title: "Formulate the Implementation tasks", done: false }]),
+    )
+    await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+    await Bun.write(
+      join(dir, "docs/T-001/todo.md"),
+      "# T-001: Formulate the Implementation tasks\nPhase: R-01.P01\nFormulate: R-01.P01\n\nbody\n\n<!-- auto: eof -->\n",
+    )
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)",
+      "      [ ] T-001 Formulate the Implementation tasks",
+    ])
+    // Dispatched and done: the note goes quiet (the phase routes on).
+    await Bun.write(
+      join(dir, phase.dir, "tasks.md"),
+      renderTaskIndex("R-01.P01", [{ id: "T-001", title: "Formulate the Implementation tasks", done: true }]),
+    )
+    await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement",
+      "      [✓] T-001 Formulate the Implementation tasks",
+    ])
   })
 })

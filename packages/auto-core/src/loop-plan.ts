@@ -15,7 +15,7 @@ import { openBlockage, type BlockageSite } from "./blockage-diagnose"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, type LedgerSource } from "./formulate-synthesis"
-import { constructFormulation, formulationAcceptance, formulationNumber, formulationState } from "./formulate"
+import { constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
 import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
@@ -263,6 +263,11 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // analysis, the final-phase report duty — read once; both the floor and
   // the synthesis compose from the same parts. m mode has none of it.
   const parts = ctx.manual ? undefined : await formulationParts(ctx, phase)
+  // Whether a formulation todo already stands (plans/0101 D4): the dispatch
+  // discipline below keys on it — a standing todo whose floor moved is
+  // transfer's reconstruct, never plan's rewrite — read ahead of the compose
+  // loop so the remediate passes cannot change the answer.
+  const standingAtEntry = (await standingFormulation(directory, phase)) !== undefined
   // The compose-and-verify loop (plans/0082 §5 D7 / §6 D9, retargeted by
   // 0095 D4): the assembled formulation todo — the exact document
   // construction is about to write — meets the intent charter here, where
@@ -330,9 +335,18 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     const floorTodo = renderFormulationTodo(facts, baseInput)
     const floorDocument = previewFormulationDocument(floorTodo, phaseId)
     const digest = floorDigest(floorDocument)
-    const state = await formulationState(directory, phase)
-    if (state.type === "pending" && !state.inProgress && (await unitSynthDigest(directory, state.id)) === digest) {
-      const landedText = await Bun.file(join(directory, taskStatePaths(state.id).pending)).text()
+    // The digest-keep (plans/0097 D6, widened by plans/0101 D4 to the
+    // standing predicate — the todo keeps its place beside hand-added tasks):
+    // a standing todo whose recorded digest still matches keeps its landed
+    // text (no churn from constructor nondeterminism); a changed floor
+    // re-runs the pipeline. transfer --resynthesize (plans/0101 D3) bypasses
+    // the keep — the rejected synthesized ledger is re-voiced, construction's
+    // rewrite-on-diff landing the new todo for review (a one-shot force: the
+    // floor digest is unchanged, so the next plain transfer keeps whatever
+    // lands).
+    const standing = await standingFormulation(directory, phase)
+    if (standing && !opts.resynthesize && (await unitSynthDigest(directory, standing.id)) === digest) {
+      const landedText = await Bun.file(join(directory, taskStatePaths(standing.id).pending)).text()
       return {
         todo: floorTodo,
         document: landedText,
@@ -340,7 +354,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         audit: [],
         digest,
         landed: true,
-        id: state.id,
+        id: standing.id,
       }
     }
     const phaseEntryOf = charterPhaseEntry(ctx, phase)
@@ -446,6 +460,23 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     verified = await verifyPlanStep(ctx, phase, `formulation ${phaseKey(phase).id}`, composed.document, composed.blocks)
     if (verified !== "remediate") {
       if (verified !== 0) return verified
+      // The dispatch discipline (plans/0101 D4): plan dispatches the reviewed
+      // todo exactly as constructed. A standing todo whose floor moved — an
+      // input edited since the review stop, through the document or a
+      // re-passed -p the prelude cannot see — is transfer's idempotent
+      // reconstruct, and plan never rewrites what a person may be reviewing;
+      // the refusal names the re-run (the reconstruct lands the new todo and
+      // stops for review again). A fresh construction under the stop
+      // condition is the loop's own continuation shape (m mode, the
+      // open-step recovery), unchanged.
+      if (opts.stopBefore === "execute" && !ctx.manual && standingAtEntry && !composed.landed) {
+        const { bin } = shellProfile()
+        log(
+          `⏸ the reviewed plan task of ${phaseTitle(phase)} no longer matches its inputs — an input changed since construction; ` +
+            `the reconstruct is transfer's: re-run: ${bin} transfer ${directory}`,
+        )
+        return 1
+      }
       // Construction (plans/0095 D1): land the verified document as the
       // phase's first task unit — idempotent, so the remediate loop's final
       // composition is the one that lands. The digest-hit re-entry (D6)
@@ -477,15 +508,32 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       // named. A rejected todo is fixed through its inputs by re-running
       // transfer: construction is idempotent rewrite-on-diff (plans/0095),
       // and the digest-keep above preserves a pending todo whose floor is
-      // unchanged (plans/0097 D6).
+      // unchanged (plans/0097 D6). The stop's output (D3) names the records
+      // beside the todo — the round's prompt-audit.md, where the plan-verify
+      // verdict and the synthesis:/fidelity:/FALLBACK lines of the
+      // construction live — and the round-brief duty: a round.md still the
+      // untouched stub says so, the fill and the re-run the answer (the
+      // reconstruct absorbs it; plan's dispatch refuses on a stub).
       if (opts.stopBefore === "formulate") {
         const { bin } = shellProfile()
         log(
           `⏸ review stop: the formulation todo of ${id} (docs/${id}/todo.md — driver-owned, fix its inputs, never the todo) awaits your review`,
         )
+        const audit = join(dirname(phase.dir), "prompt-audit.md")
+        if (await Bun.file(join(directory, audit)).exists()) {
+          log(`ℹ the construction's records sit beside it in ${audit} (the plan-verify verdict; the synthesis:/fidelity: entries and any FALLBACK of the constructor)`)
+        }
+        const round = await currentRound(directory)
+        if (!(await roundBriefText(directory, round))) {
+          log(
+            `⚠ the round brief ${roundBriefPath(round)} is still the untouched stub — the todo rendered against no round goals; fill it in ` +
+              `(## Goal, ## Acceptance criteria, ## Release criteria), commit, and re-run: ${bin} transfer ${directory} ` +
+              `(the reconstruct absorbs it; plan refuses to dispatch while it stays a stub)`,
+          )
+        }
         log(
           `next: dispatch it with ${bin} plan ${directory} (the formulation session runs, the batch review follows), or fix the inputs ` +
-            `(${roundBriefPath(await currentRound(directory))}, ${planInputPath(phase)}, the project brief, the roadmap line) and re-run: ${bin} transfer ${directory}`,
+            `(${roundBriefPath(round)}, ${planInputPath(phase)}, the project brief, the roadmap line) and re-run: ${bin} transfer ${directory}`,
         )
         return 0
       }

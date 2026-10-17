@@ -1675,17 +1675,18 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("init --phases valid values freeze into the config; the summary carries the phases; the closing line uniformly points at plan", async () => {
+  test("init --phases valid values freeze into the config; the summary carries the phases; the closing line points at transfer (the phased opener)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "admtvk"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect(init.out).toContain("phases admtvk")
-      // config-only init (plans/0053 D31): the closing line no longer splits
-      // by phases — it always points at plan's round-establishment route;
-      // nothing is written under docs/
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      // config-only init (plans/0053 D31, re-keyed by plans/0101 D4): the
+      // closing line names the rounds' opening command — transfer on a phased
+      // project, plan in m mode (which transfer refuses); nothing is written
+      // under docs/
+      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       expect(init.out).not.toContain("to start analysis")
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       // An amend without --phases keeps the existing value; an explicit init
@@ -1709,9 +1710,9 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
-      // init establishes no round: only after plan establishes the current
+      // init establishes no round: only after transfer establishes the current
       // round is there a phase index to judge
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       // A value starting with "d" would drop the completed P01-analysis →
       // refused (plannedPhaseUnits' read-only check, before any write)
@@ -1731,9 +1732,9 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(ok.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admt" })
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [ ] P02 design\n- [ ] P03 implement\n")
-      // An overwrite init (round established) ends with the plain plan
-      // pointer, no longer claiming to establish R-01
-      expect(ok.out).toContain(`next: opencode-auto plan ${dir}`)
+      // An overwrite init (round established) ends with the plain transfer
+      // pointer (the phased opener), no longer claiming to establish R-01
+      expect(ok.out).toContain(`next: opencode-auto transfer ${dir}`)
       expect(ok.out).not.toContain("establishes round")
       // The guard judges this run's effective value: a bare full-overwrite
       // init would fall phases back to "m", incompatible with the completed
@@ -1773,8 +1774,9 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     const on = { OPENCODE_AUTO_ANALYSIS: "on" as const }
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      // The first plan opens the assisted analysis (default on): the stub.
-      const stubbed = await runCli(["plan", dir], on)
+      // The first transfer opens the assisted analysis (default on): the stub
+      // (the project-start shape is transfer's since plans/0101 D2).
+      const stubbed = await runCli(["transfer", dir], on)
       expect(stubbed.code).toBe(0)
       expect(stubbed.out).toContain("the project analysis is open")
       // The person releases an analysis whose R-01 roadmap line (amt)
@@ -1804,7 +1806,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
           "",
         ].join("\n"),
       )
-      const established = await runCli(["plan", dir], on)
+      const established = await runCli(["transfer", dir], on)
       expect(established.code).toBe(0)
       expect(established.out).toContain("approved project brief installed")
       // The roadmap's line wins over config: three phases, the stop naming
@@ -1847,10 +1849,10 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const init = await runCli(["init", dir, "--phases", "analysis, security-review ,implement,security-review"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "analysis,security-review,implement,security-review" })
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis`)
-      // After plan establishes the round, status prints the phase tree (per
-      // the index)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis`)
+      // After transfer establishes the round, status prints the phase tree
+      // (per the index)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       expect((await runCli(["status", dir])).out).toContain(
         "  [▶] P01-analysis\n  [ ] P02-security-review\n  [ ] P03-implement\n  [ ] P04-security-review\n",
       )
@@ -2005,6 +2007,15 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
       const input = await runCli(["transfer", dir, "--file", "x.md"])
       expect(input.code).toBe(1)
       expect(input.err).toContain("transfer takes no planning input")
+      // --resynthesize is transfer's alone (plans/0101 D3): every other
+      // command refuses it with the transfer pointer, the --round/--phase
+      // pattern.
+      for (const command of ["run", "plan", "init", "close"] as const) {
+        const refused = await runCli([command, dir, "--resynthesize"])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(`--resynthesize is a transfer option: ${command} takes no --resynthesize`)
+        expect(refused.err).toContain("opencode-auto transfer <dir> --resynthesize")
+      }
       // An uninitialized directory loads the config defaults (m mode), so
       // the m-mode refusal answers it — exit 1 either way, nothing written.
       const fresh = await mkdtemp(join(tmpdir(), "auto-cli-"))
@@ -2276,30 +2287,33 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
     }
   })
 
-  test("init writes the config layer only (fresh and overwrite) and prints the plan-pointing closing line", async () => {
+  test("init writes the config layer only (fresh and overwrite) and prints the opening-command closing line (plan in m mode, transfer phased)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       // The config layer only: nothing lands under docs/ (no round directory,
-      // no round.md stub — round artifacts are all plan's), and no brief is
-      // written without --brief (plans/0081 D11)
+      // no round.md stub — round artifacts are all the opening command's), and
+      // no brief is written without --brief (plans/0081 D11)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       expect(await stat(join(dir, "docs/R-01")).catch(() => undefined)).toBeUndefined()
       expect(await Bun.file(join(dir, "docs/R-01/round.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
-      // An overwrite init (no round established): the same closing line, still
-      // no round established
+      // An overwrite init turning the project phased (no round established):
+      // the closing line names transfer (the phased opener, plans/0101 D4),
+      // still no round established
       await commitFixture(dir)
       const overwrite = await runCli(["init", dir, "--phases", "amt"])
       expect(overwrite.code).toBe(0)
-      expect(overwrite.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      expect(overwrite.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // Once plan has established the round, an overwrite init's closing line
-      // is the plain plan pointer (no longer claiming to establish R-01)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      // Once transfer has established the round, an overwrite init's closing
+      // line is the plain opener pointer (no longer claiming to establish
+      // R-01) — and a bare overwrite falls phases back to "m", so its opener
+      // is plan's again
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await commitFixture(dir)
       const again = await runCli(["init", dir])
       expect(again.code).toBe(0)
@@ -2314,16 +2328,16 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
 })
 
 describe("CLI: phased flow P2 (round directories / empty templates / phase lines / ledger preflight)", () => {
-  test("init --phases amt writes the config layer only; plan establishes R-01 at round start (phase index + phase directories, no PLAN.md); status prints the phase tree", async () => {
+  test("init --phases amt writes the config layer only; transfer establishes R-01 at round start (phase index + phase directories, no PLAN.md); status prints the phase tree", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "amt"])
       expect(init.code).toBe(0)
       // init establishes no round (plans/0053 D31): docs/ does not exist, the
-      // closing line points at plan
+      // closing line points at transfer (the phased opener, plans/0101 D4)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
-      const made = await runCli(["plan", dir])
+      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      const made = await runCli(["transfer", dir])
       expect(made.code).toBe(0)
       expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement, P03-test")
       // The task unit layout (M3.4): no root or in-round PLAN.md anymore
@@ -2383,7 +2397,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await commitFixture(dir)
       const index = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
       // An invalid index line → preflight exits 1, the message pointing a
@@ -2421,7 +2435,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await Bun.write(join(dir, "docs/R-01/phases.md"), "an arbitrary line\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
@@ -2503,11 +2517,11 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
     }
   })
 
-  test("an initialized project gets the retirement message too; plan's route for opening the next round is unchanged", async () => {
+  test("an initialized project gets the retirement message too; transfer's route for opening the next round is unchanged", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       // Even with the previous round complete (where continue's old semantics
       // would have applied), the retirement outranks every behavioral check
       await completeLetters(dir, ["a", "m"])
@@ -2515,11 +2529,15 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(1)
       expect(cont.err).toBe(NOTICE)
-      // plan still opens the next round as usual (the retirement took the
-      // subcommand, not the round capability)
-      const opened = await runCli(["plan", dir])
+      // transfer still opens the next round as usual (the retirement took the
+      // subcommand, not the round capability); its G1 stop names transfer's
+      // follow-up (the construct), plans/0101 D2
+      const opened = await runCli(["transfer", dir])
       expect(opened.code).toBe(0)
       expect(opened.out).toContain("✓ round R-02 established: P01-analysis, P02-implement")
+      expect(opened.out).toContain(
+        `then run: opencode-auto transfer ${dir} — it constructs R-02.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
+      )
       // run's startup banner carries the round annotation on the phase
       // progress line (deleting the agent contract file makes run exit before
       // the server)
@@ -2636,9 +2654,9 @@ describe("CLI: amend (plans/0052 D25)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "32", "--phases", "am", "--parallel", "low", "--agent", "claude"])).code).toBe(0)
-      // plan establishes the current round; amend writes only the config
+      // transfer establishes the current round; amend writes only the config
       // layer and no longer re-syncs the phase tail
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await rm(join(dir, "opencode.json"))
       await rm(join(dir, ".opencode/auto/brief.md"), { force: true })
       const amended = await runCli(["amend", dir, "--test-by-driver", "--phases", "amt", "--parallel", "none", "--agent", "opencode"])
@@ -2667,7 +2685,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       const config = await readConfig(dir)
       for (const [args, message] of [
@@ -3175,53 +3193,61 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
     }
   })
 
-  test("phased, execute route: the planned notice without input; input is a mistake (D7)", async () => {
+  test("phased, execute route: plan refuses naming run and transfer; input is a mistake (D7)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "task", "body"]])
-      const notice = await runCli(["plan", dir])
-      expect(notice.code).toBe(0)
-      expect(notice.out).toContain(
-        `ℹ R-01.P02 implement is planned (1 of 1 tasks pending); next: opencode-auto run ${dir} ` +
-          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      // The dispatch seam (plans/0101 D4): bare plan on an execute route
+      // refuses — the pending task is run's, the boundary transfer's
+      const refused = await runCli(["plan", dir])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain(
+        `no reviewed plan task awaits dispatch: R-01.P02 implement holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
+          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
       )
+      // Input is a mistake (D7): an input adds tasks with --append, it never
+      // dispatches — the same refusal carrying the input clause
       const withInput = await runCli(["plan", dir, "-p", "input"])
       expect(withInput.code).toBe(1)
-      expect(withInput.err).toContain(
-        `R-01.P02 implement already lists tasks, so the planning input would not be used; ` +
-          `add tasks with opencode-auto plan ${dir} --append -p <text> | --file <path>`,
-      )
+      expect(withInput.err).toContain(`no reviewed plan task awaits dispatch: R-01.P02 implement holds 1 pending task(s)`)
+      expect(withInput.err).toContain(`a planning input adds tasks with --append, it never dispatches`)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("a complete round: the round-close gate fails with exit 2 (input refused too); passing opens R-02 with the G1 lines", async () => {
+  test("a complete round: plan refuses naming transfer; transfer's round-close gate fails with exit 2; passing opens R-02 with the G1 lines", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await completeLetters(dir, ["a", "m"])
-      // Round complete: G8 does not pass (`## Close` unfilled) → exit code 2
-      // (D4; in the continue era it was 1)
-      const fail = await runCli(["plan", dir])
+      // A phased complete round is transfer's (plans/0101 D4): plan refuses
+      // naming the advance command — bare and with input alike
+      for (const args of [["plan", dir], ["plan", dir, "-p", "input"]]) {
+        const refused = await runCli(args)
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(`round R-01 is complete and no plan task awaits dispatch: the round close and the next round's opening are transfer's; run: opencode-auto transfer ${dir}`)
+      }
+      // Round complete: G8 does not pass (`## Close` unfilled) → transfer
+      // exits 2 naming the checks (D2's round-close shape; in the continue
+      // era it was 1)
+      const fail = await runCli(["transfer", dir])
       expect(fail.code).toBe(2)
-      expect(fail.err).toContain("round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
-      expect(fail.err).toContain("`## Close` is empty")
-      expect(fail.err).toContain(`then re-run: opencode-auto plan ${dir}`)
+      expect(fail.out).toContain("round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
+      expect(fail.out).toContain("`## Close` is empty")
+      expect(fail.out).toContain(`next: fix them, commit, then re-run: opencode-auto transfer ${dir}`)
       expect(await stat(join(dir, "docs/R-02")).catch(() => undefined)).toBeUndefined()
-      // Input on the completion route is likewise refused before any write
-      const withInput = await runCli(["plan", dir, "-p", "input"])
-      expect(withInput.code).toBe(1)
-      expect(withInput.err).toContain("round R-01 is complete and round R-02 is not established yet")
       await fillClose(dir)
-      const pass = await runCli(["plan", dir])
+      const pass = await runCli(["transfer", dir])
       expect(pass.code).toBe(0)
       expect(pass.out).toContain("✓ round R-02 established: P01-analysis, P02-implement")
-      expect(pass.out).toContain(`then run: opencode-auto plan ${dir} to plan R-02.P01 analysis (or run to plan and execute)`)
+      expect(pass.out).toContain(
+        `then run: opencode-auto transfer ${dir} — it constructs R-02.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
+      )
       expect(await Bun.file(join(dir, "docs/R-02/phases.md")).text()).toContain("- [ ] P01 analysis")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -3253,7 +3279,7 @@ describe("CLI: the phase-index drift (auto-core plans/0053 D34)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-drift-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await commitFixture(dir)
       // A person drops the unstarted test phase from the index by hand (its
       // directory stays): the index's unstarted tail no longer matches config.
@@ -3427,7 +3453,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the skipped task", "body"]])
       await git("add", "-A")
@@ -3675,34 +3701,37 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
     }
   })
 
-  test("force-closes a phase and skips to the next phase: the mechanical handover is written and plan stops on the next phase's notice", async () => {
+  test("force-closes a phase and skips to the next phase: the mechanical handover is written and plan stops on the next phase's dispatch refusal", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-phase-"))
     const git = gitOf(dir)
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       // P01 done, P02 current with a task to skip over, P03 already planned
-      // (its tasks listed by hand), so the follow-up planning stops on the
-      // deterministic execute notice naming P03.
+      // (its tasks listed by hand), so the follow-up prelude stops on the
+      // deterministic dispatch refusal naming P03 (plans/0101 D4: its pending
+      // task is run's).
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the skipped task", "body"]])
       await listTasks(dir, "docs/R-01/P03-test", "R-01.P03", [["T-002", "next-phase task", "body"]])
       await git("add", "-A")
       await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
       const run = await runCli(["plan", dir, "--force-close", "R-01.P02", "--reason", "skipped this round"])
-      expect(run.err).toBe("")
-      expect(run.code).toBe(0)
+      // The close itself succeeded (its lines on stdout, exit 0's half); the
+      // prelude's continuation is the refusal — the close code is plan's.
+      expect(run.code).toBe(1)
       // The phase's open task closes with it, then the phase itself, with
       // the mechanical handover close writes for a closed phase.
       expect(run.out).toContain("✓ closed T-001: skipped this round")
       expect(run.out).toContain("✓ closed R-01.P02 implement: skipped this round")
       expect(run.out).toContain("ℹ mechanical handover written: docs/R-01/P02-implement/handover.md")
       // Plan continues in the same process: the next phase is current now,
-      // and its planned state is the notice plan stops on (exit 0, plan's).
-      expect(run.out).toContain(
-        `ℹ R-01.P03 test is planned (1 of 1 tasks pending); next: opencode-auto run ${dir} ` +
-          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      // and its pending hand-listed task makes the prelude refuse (exit 1)
+      // naming run and transfer.
+      expect(run.err).toContain(
+        `no reviewed plan task awaits dispatch: R-01.P03 test holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
+          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
       )
       // Phase state: closed done.md, the four handover sections, the index
       // tick, P03 untouched.
@@ -3748,7 +3777,7 @@ describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () =>
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      expect((await runCli(["transfer", dir])).code).toBe(0)
       // P01 done, P02 current with one pending task (the execute route).
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the existing task", "body"]])
@@ -3918,7 +3947,7 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
     }
   }, 60_000)
 
-  test("phased (am): init → plan establishes R-01 (G1) → fill round.md and commit → plan -p plans P01 and stops → plan shows the execute notice", async () => {
+  test("phased (am): init → transfer establishes R-01 (G1) → fill round.md and commit → transfer constructs the plan task and stops for review → plan dispatches it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-flow-am-"))
     const agent = await fakeClaude()
     const git = gitOf(dir)
@@ -3927,54 +3956,69 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
       const init = await runCli(["init", dir, "--phases", "am"])
       expect(init.code).toBe(0)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // plan establishes the round and stops at the round-start gate (G1)
-      const made = await agent.run(["plan", dir])
+      // transfer establishes the round and stops at the round-start gate (G1);
+      // the follow-up it names is transfer's construct (plans/0101 D2)
+      const made = await agent.run(["transfer", dir])
       expect(made.code).toBe(0)
       expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement")
       expect(made.out).toContain(
         `next (round-start gate): review the round setup, fill in docs/R-01/round.md (goal, acceptance and release criteria), and commit it; ` +
-          `then run: opencode-auto plan ${dir} to plan R-01.P01 analysis (or run to plan and execute)`,
+          `then run: opencode-auto transfer ${dir} — it constructs R-01.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
       )
       // The gate: a person fills in the round brief and commits the setup
       await Bun.write(join(dir, "docs/R-01/round.md"), "# Round R-01\n\n## Goal\n\nSurvey the target.\n")
       await git("add", "-A")
       await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
-      // plan -p: the formulation task is constructed as P01-analysis's first
-      // unit (plans/0095), the session plans one task past it, and plan stops
-      // for review (the stop is the review point of the round's tasks)
-      const planned = await agent.run(["plan", dir, "-p", "Add a survey task."])
+      // transfer constructs the formulation task as P01-analysis's first unit
+      // (plans/0095) and stops at the review seam (plans/0101 D3): the todo is
+      // driver-owned, its inputs the fix channel, dispatch plan's — no
+      // session ran at all on this advance (the default pack carries no
+      // charter, so the construct is driver-side only).
+      const constructed = await agent.run(["transfer", dir])
+      expect(constructed.err).toBe("")
+      expect(constructed.code).toBe(0)
+      expect(constructed.out).toContain("✓ formulation task T-001 constructed: its todo is the planning session's single input (docs/T-001/todo.md)")
+      expect(constructed.out).toContain(
+        "⏸ review stop: the formulation todo of T-001 (docs/T-001/todo.md — driver-owned, fix its inputs, never the todo) awaits your review",
+      )
+      expect(constructed.out).toContain(
+        `next: dispatch it with opencode-auto plan ${dir} (the formulation session runs, the batch review follows), ` +
+          `or fix the inputs (docs/R-01/round.md, docs/R-01/P01-analysis/plan-input.md, the project brief, the roadmap line) and re-run: opencode-auto transfer ${dir}`,
+      )
+      expect(await Bun.file(join(dir, "docs/R-01/prompt-audit.md")).exists()).toBe(false)
+      // plan dispatches the reviewed task: the formulation session runs (the
+      // fake claude plans one task past the formulation line), the collect
+      // checks pass, and the dispatch stops for review
+      const planned = await agent.run(["plan", dir])
       expect(planned.err).toBe("")
       expect(planned.code).toBe(0)
-      expect(planned.out).toContain("✓ planning input saved to docs/R-01/P01-analysis/plan-input.md")
-      expect(planned.out).toContain("✓ formulation task T-001 constructed: its todo is the planning session's single input (docs/T-001/todo.md)")
       expect(planned.out).toContain("✓ T-001 formulation output accepted: docs/R-01/P01-analysis/tasks.md lists 1 planned task(s)")
       expect(planned.out).toContain("✓ phase planning complete: docs/R-01/P01-analysis/tasks.md lists 1 task(s)")
       expect(planned.out).toContain("✓ planned R-01.P01 analysis: 1 task(s) in docs/R-01/P01-analysis/tasks.md")
       expect(planned.out).toContain(`next: review them (edit, close, or plan --append), then run: opencode-auto run ${dir}`)
       // The artifacts: the index with the done formulation line first and the
       // planned task after it (plans/0095), the task document, the commits.
-      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/plan-input.md")).text()).toBe("Add a survey task.\n")
       expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toBe(
         "# Tasks (R-01.P01)\n\n- [x] T-001 Formulate the Analysis tasks\n- [ ] T-002 task T-002\n",
       )
       expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P01")
-      const subjects = (await git("log", "--format=%s", "-6")).trim().split("\n")
+      const subjects = (await git("log", "--format=%s", "-5")).trim().split("\n")
       expect(subjects).toEqual([
         "T-001 done Formulate the Analysis tasks",
         "T-001 wrapup Formulate the Analysis tasks",
         "T-001 exec Formulate the Analysis tasks",
         "PLAN formulate P01-analysis Analysis",
-        "PLAN plan-input P01-analysis Analysis",
         "round setup",
       ])
       expect((await git("status", "--porcelain")).trim()).toBe("")
-      // The follow-up plan (no input) lands on the phased execute notice —
-      // the formulation unit done beside the one pending task
+      // The follow-up plan (no input) refuses on the execute route
+      // (plans/0101 D4): the one pending task is run's, the boundary
+      // transfer's
       const again = await runCli(["plan", dir])
-      expect(again.code).toBe(0)
-      expect(again.out).toContain(
-        `ℹ R-01.P01 analysis is planned (1 of 2 tasks pending); next: opencode-auto run ${dir} ` +
-          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      expect(again.code).toBe(1)
+      expect(again.err).toContain(
+        `no reviewed plan task awaits dispatch: R-01.P01 analysis holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
+          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
       )
     } finally {
       await agent.done()

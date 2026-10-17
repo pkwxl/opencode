@@ -227,7 +227,9 @@ describe("planPrelude: isolation at round establishment (plans/0074 §2.2, U-L1)
       const original = await branchOf(pkg)
       const setup = await shaOf(pkg, original)
       writeFileSync(join(pkg, "wip.txt"), "uncommitted\n")
-      const blocked = await planPrelude(dir, { phases: "am", isolate: ["pkg"] })
+      // m mode since plans/0101 D4 (plan's phased establishment refused as
+      // transfer's); the isolation machinery is mode-independent.
+      const blocked = await planPrelude(dir, { phases: "m", isolate: ["pkg"] })
       expect(blocked).toEqual({
         type: "stop",
         code: 2,
@@ -246,7 +248,7 @@ describe("planPrelude: isolation at round establishment (plans/0074 §2.2, U-L1)
       writeFileSync(join(pkg, "wip.txt"), "settled\n")
       await git(pkg, "add", "-A")
       await git(pkg, "commit", "-qm", "settle")
-      const opened = await planPrelude(dir, { phases: "am", isolate: ["pkg"] })
+      const opened = await planPrelude(dir, { phases: "m", isolate: ["pkg"] })
       expect(opened.type === "stop" && opened.code).toBe(0)
       expect(await branchOf(pkg)).toBe("auto/R-01")
     }),

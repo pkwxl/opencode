@@ -15,7 +15,7 @@ import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECT
 import { reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
-import { isFormulation } from "./formulate"
+import { awaitingFormulation } from "./formulate"
 import { banner, log } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
@@ -806,14 +806,16 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // A stop condition in force (plans/0053 D6, D7): an execute route this
       // run did not plan (planning stops the run itself), e.g. a next phase
       // whose tasks were listed by hand. The one exception (plans/0095 D4):
-      // a phase whose remaining work is only its formulation task is still
-      // planning — plan finishes what it started (an interrupted formulation
-      // runs to completion here, the task-pipeline re-entry of the former
-      // openStep precedence), and transfer (plans/0101 D2) re-enters the
-      // same step for the idempotent reconstruct, ending at its review stop.
+      // a phase whose remaining work holds its formulation task is still
+      // planning — plan dispatches the reviewed todo (finishing what it
+      // started: an interrupted formulation runs to completion here, the
+      // task-pipeline re-entry of the former openStep precedence), and
+      // transfer (plans/0101 D2) re-enters the same step for the idempotent
+      // reconstruct, ending at its review stop. The predicate is the shared
+      // awaiting one (plans/0101 D4): wherever the todo sits in the index —
+      // beside hand-added tasks too — it is the dispatch's target.
       if (opts.stopBefore !== undefined) {
-        const remaining = route.plan.tasks.filter((task) => task.status !== "done")
-        if (remaining.length && remaining.every((task) => isFormulation(task, route.phase))) {
+        if (awaitingFormulation(route.plan.tasks, route.phase) !== undefined) {
           banner(`${phaseTitle(route.phase)} phase planning`)
           return await planWithStep(ctx, route.phase)
         }

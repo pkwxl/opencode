@@ -33,6 +33,24 @@ const phaseText = (phase: PhaseUnit): string => `${phaseLabel(phase)} ${phaseNam
 // Whether one loaded task is the formulation unit of the phase it belongs to.
 export const isFormulation = (task: Pick<Task, "formulate">, phase: PlanPhase): boolean => task.formulate === qualifiedPhase(phase)
 
+// The phase's awaiting formulation task (plans/0101 D3/D4): constructed and
+// not yet run — pending or blocked, never in flight — wherever it sits in the
+// index (beside hand-added tasks too, the review-seam state --new-task
+// creates). The one predicate of the dispatch seam: plan's dispatch route,
+// transfer's advance pre-check, the loop's stop-condition branch and the
+// compose digest-keep all ask this same question, so a hand-added task beside
+// the todo never hides the awaiting review.
+export function awaitingFormulation<T extends Pick<Task, "id" | "formulate" | "status">>(tasks: readonly T[], phase: PlanPhase): T | undefined {
+  return tasks.find((task) => isFormulation(task, phase) && task.status !== "done" && task.status !== "in_progress")
+}
+
+// The awaiting formulation read from disk (the loaded plan's tasks); a broken
+// index has none — the caller's own routing surfaces the loader's error.
+export async function standingFormulation(dir: string, phase: PlanPhase): Promise<Task | undefined> {
+  const plan = await loadPlan(dir, phase).catch(() => undefined)
+  return plan === undefined ? undefined : awaitingFormulation(plan.tasks, phase)
+}
+
 // The phase's formulation state on disk (plans/0095 D4): `none` = the index is
 // absent, empty or lists no pending formulation unit (the fresh-construction
 // path); `pending` = the index lists exactly the formulation task, not done
@@ -57,13 +75,15 @@ export async function formulationState(dir: string, phase: PlanPhase): Promise<F
 }
 
 // The formulation number without landing (the compose-and-verify loop's
-// preview needs it before construction commits): a pending formulation keeps
-// its id's number; a fresh construction takes the record, never below the
-// deterministic floor — the same allocation constructFormulation makes, over
-// the same unchanged state (nothing runs between the two).
+// preview needs it before construction commits): a standing formulation keeps
+// its id's number — wherever it sits in the index (plans/0101 D4's awaiting
+// predicate, the same widening the digest-keep made); a fresh construction
+// takes the record, never below the deterministic floor — the same allocation
+// constructFormulation makes, over the same unchanged state (nothing runs
+// between the two).
 export async function formulationNumber(dir: string, phase: PlanPhase, autoNumber: boolean): Promise<number> {
-  const state = await formulationState(dir, phase)
-  if (state.type === "pending") return taskNumber(state.id) ?? (await taskNumberFloor(dir))
+  const standing = await standingFormulation(dir, phase)
+  if (standing) return taskNumber(standing.id) ?? (await taskNumberFloor(dir))
   const floor = await taskNumberFloor(dir)
   const record = autoNumber ? await readNextTask(dir) : undefined
   return Math.max(record ?? 0, floor)

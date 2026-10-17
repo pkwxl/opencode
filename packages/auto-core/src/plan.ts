@@ -7,6 +7,11 @@
 // import the loop. The loop (loop-phase, loop-plan) prints the same stop
 // lines through the helpers here, so plan says the same thing wherever it
 // stops.
+// Since plans/0101 D4 plan is the dispatch half of the person-bracketed
+// boundary: bare plan runs the awaiting, reviewed formulation task (one
+// session chain, stop on completion), and every phased state that is not
+// that dispatch — the project start, the round advance, an unplanned phase,
+// a boundary — refuses naming transfer, the single advance command.
 //
 // Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
@@ -43,6 +48,7 @@ import {
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
+import { awaitingFormulation } from "./formulate"
 import { commitTree, isolateRound } from "./git"
 import { renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
@@ -57,17 +63,25 @@ import { adoptUnit, unitNotReady, workOrder } from "./work-order"
 type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
 
-// The routes the prelude decides, first match wins (plans/0053 D4):
-//   0. no rounds exist and the analysis switch is on (plans/0084) → the
-//      pre-round project analysis: 0a the stub + the AGENTS.md analysis
-//      guidance; 0b grammar problems hold the release; 0c an unreleased
-//      analysis awaits the person's `Clarified: yes`; 0d a released one
-//      installs the approved brief proposal and establishes R-01 (row 1's
-//      establish) — the released roadmap's line for the round is its phase
-//      list (plans/0101 D5), named in the stop —
-//      OPENCODE_AUTO_ANALYSIS=off falls through to row 1 directly;
-//   1. the current round is not established → (G8 of the previous round) + establish, G1 lines;
-//   2. the round is complete → G8; pass = establish the next round, fail = exit 2;
+// The routes the prelude decides, first match wins (plans/0053 D4; since
+// plans/0101 D4 bare plan is the dispatch half of the person-bracketed
+// boundary — transfer constructs the plan task and stops for review, plan
+// dispatches the reviewed todo, so the phased establishment and
+// round-advance rows refuse naming transfer):
+//   0. phased, no established round (the analysis flow, the establishment,
+//      the interrupted start, the switch off) → refuse exit 1 naming
+//      transfer — the project start is transfer's shape 1 (plans/0101 D4);
+//      m mode keeps the 0084 rows below it: 0a the analysis stub + the
+//      AGENTS.md guidance; 0b grammar problems hold the release; 0c an
+//      unreleased analysis awaits the person's `Clarified: yes`; 0d a
+//      released one installs the approved brief proposal and establishes
+//      R-01 (row 1's establish) — the released roadmap's line for the round
+//      is its phase list (plans/0101 D5), named in the stop;
+//   1. m mode, the current round is not established → (G8 of the previous
+//      round) + establish, G1 lines;
+//   2. the round is complete → phased: refuse exit 1 naming transfer (the
+//      round close and the next opening are transfer's shapes 3/4); m mode
+//      never reaches here (its single phase stays open);
 //   3. the round's phase index drifted from the phases value → re-sync the
 //      unstarted tail (uncommitted), stop for review;
 //   4. the route is blocked → exit 1;
@@ -76,8 +90,15 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 //      round guidance (and the m-mode stub establishment never wrote);
 //  15. --phase → the assisted planning-input preparation stop for the next
 //      phase to plan: the AGENTS.md phase guidance with the pack's scaffold;
-//   6. phased, plan or handover without --append → the loop (input: a phase must be left to plan it);
-//   7. phased, execute without --append → notice, exit 0 (input: exit 1);
+//   6. phased, plan or handover without --append → refuse exit 1 naming
+//      transfer (nothing is constructed, or the phase is at its boundary);
+//      an input's home is the phase's plan-input.md;
+//   7. phased, execute without --append → an awaiting formulation task of
+//      the phase the route names dispatches (the loop); the input must equal
+//      the persisted plan-input.md (an input that changes what the todo
+//      rendered refuses naming the transfer re-run, plans/0101 D4), and the
+//      round brief must be filled (the untouched stub refuses exit 2 naming
+//      the fill, plans/0101 D3); otherwise exit 1 naming run and transfer;
 //   8. m mode, empty task index → input: the loop; else a notice;
 //   9. m mode, tasks listed → input: the loop (an append, D23; --append implied, the flag redundant); else a notice;
 //  10. phased, --append on execute or handover → the loop (an append to the phase the route names now, D23).
@@ -190,20 +211,33 @@ export async function planPrelude(dir: string, opts: {
     ])
   }
   const round = await currentRound(dir)
-  // Rows 0a–0d (plans/0084): the pre-round project analysis — the assisted
-  // first-run step that fixes the engagement's goals before any round exists.
-  // Practice ruled the first analysis determines the key work of the rounds
-  // that follow, so it runs before R-01 opens and its roadmap decides the
-  // phases value each round should be established under (the config stays
-  // constitutional — the driver only advises the exact amend command). The
-  // switch's parse error is a usage stop here, the prelude being the first
-  // switch reader on the plan path.
+  // The switch's parse error is a usage stop here, the prelude being the
+  // first switch reader on the plan path.
   let analysisOn: boolean
   try {
     analysisOn = autoSwitches().analysis
   } catch (error) {
     return stop(1, [error instanceof Error ? error.message : String(error)])
   }
+  // plans/0101 D4 — bare plan is the dispatch half of the boundary: every
+  // phased not-established state (the pre-round analysis of rows 0a–0d, the
+  // round establishment of row 1, the interrupted round start, the analysis
+  // switch off) is transfer's shape 1, and the round's opening after a
+  // complete one (row 2) is transfer's shapes 3/4 — plan refuses naming
+  // transfer, whatever route option rode along (the flag-specific refusals
+  // of the old rows die with them: one line, one command). m mode keeps
+  // today's rows below in full (D8 — no boundary vocabulary applies, and
+  // transfer itself refuses m mode).
+  if (!manual && !(await Bun.file(join(dir, phaseIndexPath(round))).exists())) {
+    return stop(1, [transferStartLine(dir)])
+  }
+  // Rows 0a–0d (plans/0084), m mode only since plans/0101 D4: the pre-round
+  // project analysis — the assisted first-run step that fixes the
+  // engagement's goals before any round exists. Practice ruled the first
+  // analysis determines the key work of the rounds that follow, so it runs
+  // before R-01 opens and its roadmap decides the phases value each round
+  // should be established under (the config stays constitutional — the
+  // driver only advises the exact amend command).
   if (analysisOn && round === 1 && !(await roundRoot(dir, 1))) {
     // The row-1 refusals' shape (D5: input is refused before any write) on
     // the analysis rows: the flags name no round yet, so each refusal points
@@ -275,7 +309,8 @@ export async function planPrelude(dir: string, opts: {
     return establish(dir, 1, opts, lines)
   }
   // Row 1: no docs/R-NN/, or its phase index is missing (an interrupted
-  // round start, plans/0049 G6).
+  // round start, plans/0049 G6). m mode only since plans/0101 D4 — the
+  // phased states refused as transfer's above.
   if (!(await Bun.file(join(dir, phaseIndexPath(round))).exists())) {
     if (opts.input) {
       return stop(1, [
@@ -302,8 +337,17 @@ export async function planPrelude(dir: string, opts: {
     return establish(dir, round, opts, lines)
   }
   const route = await routePhase(dir, { loadPlan, bin })
-  // Row 2: m mode never gets here (its single phase stays open).
+  // Row 2 (plans/0101 D4): a phased complete round is transfer's — the round
+  // close (shape 3) and the next round's opening (shape 4) refuse here naming
+  // the advance command. m mode never gets past this guard's else (its single
+  // phase stays open), the establishment body below its dead m-mode path,
+  // kept for it alone.
   if (route.type === "complete") {
+    if (!manual) {
+      return stop(1, [
+        `round ${roundDirName(round)} is complete and no plan task awaits dispatch: the round close and the next round's opening are transfer's; run: ${bin} transfer ${dir}`,
+      ])
+    }
     const next = roundDirName(round + 1)
     if (opts.input) {
       return stop(1, [
@@ -379,8 +423,10 @@ export async function planPrelude(dir: string, opts: {
   if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
   // The advisory notices (plans/0081 D11.3/D12.3): the plan route is where a
   // planning session is imminent — m mode's row 8 included (route.type is
-  // "plan" there too).
-  if (route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input)) log(line)
+  // "plan" there too). Phased refuses the route below (plans/0101 D4), so the
+  // notices are m mode's alone there — a refusal line needs no advisories
+  // ahead of it.
+  if (manual && route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input)) log(line)
   // Row 5: the interrupted step is finished first (plans/0018 precedence);
   // the loop decides whether the record still matches the route. A hand-add
   // must not run under an open step: its snapshot and resume machinery
@@ -418,10 +464,14 @@ export async function planPrelude(dir: string, opts: {
     if (!(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))
     const filled = (await roundBriefText(dir, round)) !== undefined
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: roundDirName(round) } })
+    // The continue pointer follows the boundary grammar (plans/0101 D4):
+    // phased continues with transfer (the construct reads the filled brief
+    // and stops for review), m mode with plan as before.
+    const next = manual ? `${bin} plan ${dir}` : `${bin} transfer ${dir}`
     return stop(0, [
       filled
-        ? `ℹ the round brief ${roundBriefPath(round)} is filled; revise it with your agent if the round's goals moved (this state's guidance is in AGENTS.md), then continue: ${bin} plan ${dir}`
-        : `ℹ the round brief ${roundBriefPath(round)} is the stub: work with your agent on its goal, acceptance and release criteria (this state's guidance is in AGENTS.md), review and commit, then continue: ${bin} plan ${dir}`,
+        ? `ℹ the round brief ${roundBriefPath(round)} is filled; revise it with your agent if the round's goals moved (this state's guidance is in AGENTS.md), then continue: ${next}`
+        : `ℹ the round brief ${roundBriefPath(round)} is the stub: work with your agent on its goal, acceptance and release criteria (this state's guidance is in AGENTS.md), review and commit, then continue: ${next}`,
     ])
   }
   // Row 15 (--phase, plans/0084): the assisted planning-input preparation
@@ -472,7 +522,10 @@ export async function planPrelude(dir: string, opts: {
       existing?.trim()
         ? `an input exists there already — revise it with your agent (this state's guidance is in AGENTS.md)`
         : `work with your agent on it (this state's guidance and the scaffold are in AGENTS.md); a template also prints with ${bin} plan ${dir} --scaffold`,
-      `when the file holds your intent, run: ${bin} plan ${dir} — the planning session consumes it as written`,
+      // The consumption pointer follows the boundary grammar (plans/0101
+      // D4): phased constructs through transfer (the review stop between
+      // construction and dispatch), m mode plans as before.
+      `when the file holds your intent, run: ${manual ? `${bin} plan ${dir} — the planning session consumes it as written` : `${bin} transfer ${dir} — its construct reads it as written and stops for review`}`,
     ])
   }
   // Row 11 (--new-task): add one task the person names, with no session, to
@@ -540,27 +593,52 @@ export async function planPrelude(dir: string, opts: {
       if (mid) return stop(1, [midPipelineLine(mid)])
       return { type: "loop" }
     }
-    // Row 6 (the plan route plans the phase normally; --append is redundant
-    // there — an empty index has nothing to append to).
+    // Row 6 (plans/0101 D4): the plan and handover routes hold no dispatched
+    // work — the phase is unplanned (transfer constructs its plan task and
+    // stops for review) or at its boundary (transfer distills the handover,
+    // closes the phase and constructs the next one's task). An input's home
+    // is the phase's plan-input.md: the assisted --phase route points the
+    // guidance at it, and the next transfer's construct reads it.
     if (route.type === "plan" || route.type === "handover") {
-      if (!opts.input) return { type: "loop" }
-      let target: { phase: PhaseUnit; listed: boolean } | undefined
-      try {
-        target = await planTarget(dir, route)
-      } catch (error) {
-        return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
-      }
-      if (!target) return stop(1, [`no phase is left to plan in round ${roundDirName(round)}; the planning input would not be used`])
-      if (target.listed) {
-        return stop(1, [
-          `${phaseRefText(target.phase)}, the next phase to plan, already lists tasks in ${taskIndexPath(target.phase)}; the planning input would not be used`,
-        ])
-      }
-      return { type: "loop" }
+      return stop(1, [
+        route.type === "plan"
+          ? `nothing is constructed for ${phaseRefText(route.phase)} yet — transfer constructs its plan task and stops for your review; run: ${bin} transfer ${dir}` +
+            (opts.input
+              ? ` (the planning input's home is ${planInputPath(route.phase)} — write it there, or prepare it with ${bin} plan ${dir} --phase, commit, and the construct reads it)`
+              : "")
+          : `${phaseRefText(route.phase)} is at its boundary — the handover distillation, the phase close and the next plan task's construction are transfer's; run: ${bin} transfer ${dir}` +
+            (opts.input ? ` (a planning input for the next phase belongs in its plan-input.md, after the advance)` : ""),
+      ])
     }
-    // Row 7 (D7): exit 0 without input keeps `plan && run` usable; input on
-    // a planned phase is a real mistake.
-    return opts.input ? stop(1, [inputUnusedLine(dir, route), ...executeNotice(dir, route, false)]) : stop(0, executeNotice(dir, route, false))
+    // Row 7 (plans/0101 D4): the dispatch — a reviewed formulation task of
+    // the phase the route names awaits (wherever it sits in the index, beside
+    // hand-added tasks too); anything else is run's execute work and
+    // transfer's boundary, and plan refuses naming both.
+    if (awaitingFormulation(route.plan.tasks, route.phase) === undefined) {
+      const pending = route.plan.tasks.filter((task) => task.status !== "done").length
+      return stop(1, [
+        `no reviewed plan task awaits dispatch: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — execute work for ${bin} run ${dir}; ` +
+          `the boundary and the next plan task are transfer's (${bin} transfer ${dir})` +
+          (opts.input ? `; a planning input adds tasks with --append, it never dispatches` : ""),
+      ])
+    }
+    // The input-invalidation rule (plans/0101 D4 — 0053 D10's restart rule
+    // on the seam): an input that changes what the todo rendered invalidates
+    // it, the reconstruct is transfer's; the same text re-passed dispatches
+    // as-is (a no-op restatement of the persisted file). The input is
+    // refused before any write, the round-setup rows' discipline.
+    if (opts.input) {
+      const persisted = (await readPlanInput(dir, route.phase))?.trim()
+      if (persisted === undefined || persisted !== opts.input.text.trim()) {
+        return stop(1, [inputInvalidatedLine(dir, route.phase)])
+      }
+    }
+    // The incident's guard (plans/0101 D3): no planning session dispatches
+    // against an empty round brief — plan refuses (exit 2, awaiting-person)
+    // while docs/R-NN/round.md is the untouched stub, naming the fill and
+    // the reconstruct that absorbs it.
+    if (!(await roundBriefText(dir, round))) return stop(2, stubRoundLines(dir, round))
+    return { type: "loop" }
   }
   // Row 8.
   if (route.type === "plan") return opts.input ? { type: "loop" } : stop(0, emptyIndexNotice(dir, route.plan.index))
@@ -932,14 +1010,48 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { ty
   ]
 }
 
-// Input on a planned phase without --append (row 7): nothing would plan it —
-// appending is what the input is for.
-function inputUnusedLine(dir: string, route: Extract<PhaseRoute<Plan>, { type: "execute" | "handover" }>): string {
+// Input on a planned phase without --append (row 7's old refusal) retired
+// with plans/0101 D4's narrowing: the execute route now either dispatches the
+// awaiting formulation task or refuses naming run and transfer, the input
+// clause riding the refusal.
+
+// The phased not-established refusal (plans/0101 D4): every project-start
+// shape — the analysis flow, the establishment, the interrupted round start —
+// is transfer's, one line naming the advance command.
+function transferStartLine(dir: string): string {
   const { bin } = shellProfile()
   return (
-    `${phaseRefText(route.phase)} already lists tasks, so the planning input would not be used; ` +
-    `add tasks with ${bin} plan ${dir} --append -p <text> | --file <path>`
+    `no plan task awaits dispatch and no round is established: the project start — the analysis, the round establishment, ` +
+    `the first plan task's construction — is transfer's; run: ${bin} transfer ${dir}`
   )
+}
+
+// The input-invalidation refusal (plans/0101 D4, 0053 D10's restart rule on
+// the seam): an input that changes what the reviewed todo rendered
+// invalidates it — the reconstruct is transfer's, and the refusal names the
+// input's home (the phase's plan-input.md, the assisted --phase route's
+// target) where the text belongs.
+function inputInvalidatedLine(dir: string, phase: PhaseUnit): string {
+  const { bin } = shellProfile()
+  return (
+    `the planning input changes what the reviewed plan task rendered — an input that changes after construction invalidates the todo: ` +
+    `write it into ${planInputPath(phase)} (or prepare it with ${bin} plan ${dir} --phase), commit, and re-run: ${bin} transfer ${dir} — ` +
+    `its idempotent reconstruct absorbs the input and stops for review again (the same text re-passed dispatches as-is)`
+  )
+}
+
+// The stub-round refusal (plans/0101 D3, the incident's guard): plan refuses
+// — exit 2, awaiting-person — while the round brief is the untouched stub; no
+// planning session dispatches against an empty round brief. The fill and the
+// transfer re-run are the answer (the reconstruct absorbs the filled brief;
+// --round re-points the guidance at the document).
+function stubRoundLines(dir: string, round: number): string[] {
+  const { bin } = shellProfile()
+  return [
+    `⏸ the round brief ${roundBriefPath(round)} is still the untouched stub: no planning session dispatches against an empty round brief`,
+    `next: fill it in (## Goal, ## Acceptance criteria, ## Release criteria — ${bin} plan ${dir} --round points the AGENTS.md guidance at it), commit, ` +
+      `then re-run: ${bin} transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again`,
+  ]
 }
 
 // m mode with nothing listed and no input (plans/0053 D15).

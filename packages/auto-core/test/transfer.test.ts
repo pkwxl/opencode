@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spyOn } from "bun:test"
+import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/analysis"
 import { runTransfer } from "../src/transfer"
 import { setSwitchModelRegistry } from "../src/switches"
@@ -20,8 +21,11 @@ import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
 import { reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
+import type { RoutingFacts } from "../src/routing"
+import { services } from "../src/services"
+import { ev, type TurnScript } from "./fixtures/agent"
 import { freshRepo, git } from "./fixtures/runner"
-import { appendOneTask, artifactTurns, loopFixture, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -330,5 +334,189 @@ describe("transfer: the advance through the loop (stopBefore \"formulate\", plan
     expect(executed.code).toBe(0)
     expect(executed.lines.filter((line) => line.includes("✓ phase boundary"))).toHaveLength(1)
     expect(existsSync(join(f.dir, "docs/R-01/P02-test/todo.md"))).toBe(true)
+  })
+})
+
+// The reviewed plan task's seam (plans/0101 D3/D4): the strict roadmap-line
+// failure transfer's establishment meets (the D5 pin plan's phased rows used
+// to carry), the review stop's output — the records beside the todo, the
+// round-brief duty of a stub round.md — and --resynthesize bypassing the
+// digest keep of a standing synthesized todo.
+describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3)", () => {
+  test("a released roadmap line the project cannot establish fails exit 1 naming the line (D5)", async () => {
+    const dir = await repo()
+    await Bun.write(
+      join(dir, "docs/analysis.md"),
+      ANALYSIS(["- R-01 analysis,nonexistent,implement — port the core"]),
+    )
+    // The interrupted-start shape (the release gate checked the line against
+    // the types of its day; the pack since stopped shipping one — the round
+    // directory exists, the index is the missing piece): establishment meets
+    // the line here, past the analysis branch.
+    mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+    const out = await capture(() => runTransfer(dir, { phases: "am" }))
+    expect(out.code).toBe(1)
+    expect(out.lines.some((line) => line.includes('the roadmap of docs/analysis.md plans R-01 with "analysis,nonexistent,implement"'))).toBe(true)
+    expect(out.lines.some((line) => line.includes("unknown phase type(s) nonexistent"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/phases.md"))).toBe(false)
+  })
+
+  test("the review stop names the round-brief duty of a stub round.md; the fill and the re-run reconstruct on it (the walkthrough's step)", async () => {
+    const f = await loopFixture("mt")
+    fixtures.push(f)
+    await establishRound(f.dir, { phases: "mt" })
+    await f.commit("round setup")
+    // run executes P01 and stops at its boundary (D1); the advance
+    // constructs P02's plan task — round.md still the stub the whole way.
+    expect((await f.run()).code).toBe(0)
+    const advanced = await f.run({ stopBefore: "formulate" })
+    expect(advanced.code).toBe(0)
+    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("driver-owned, fix its inputs, never the todo"))).toBe(true)
+    // The duty (D3): the stop says round.md is still the untouched stub,
+    // names the fill and the transfer re-run whose reconstruct absorbs it.
+    expect(advanced.lines.some((line) => line.includes("⚠ the round brief docs/R-01/round.md is still the untouched stub"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("plan refuses to dispatch while it stays a stub"))).toBe(true)
+    // The audit pointer: this round holds no prompt-audit.md (the
+    // charter-less construct writes no records), so the records line stays
+    // quiet beside the todo — the --resynthesize case below pins the other
+    // half (a synthesis run writes the audit, the stop names it).
+    expect(existsSync(join(f.dir, "docs/R-01/prompt-audit.md"))).toBe(false)
+    expect(advanced.lines.some((line) => line.includes("the construction's records sit beside it"))).toBe(false)
+    // The person fills the round brief: the reconstruct absorbs it — the
+    // todo re-renders (a new floor), the duty line goes quiet.
+    writeFileSync(
+      join(f.dir, "docs/R-01/round.md"),
+      renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core; the journal deferred."),
+    )
+    await f.commit("fill the round brief")
+    const reconstructed = await f.run({ stopBefore: "formulate" })
+    expect(reconstructed.code).toBe(0)
+    expect(reconstructed.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(false)
+    expect(reconstructed.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(reconstructed.lines.some((line) => line.includes("is still the untouched stub"))).toBe(false)
+    // The re-rendered todo carries the filled brief's goal (the construct
+    // reads round.md), its id the index's pending formulation line.
+    const index = (await Bun.file(join(f.dir, "docs/R-01/P02-test/tasks.md")).text()).trim().split("\n")
+    const pending = index.filter((line) => /^- \[ \] T-\d+/.test(line))
+    expect(pending).toHaveLength(1)
+    const id = /^- \[ \] (T-\d+)/.exec(pending[0]!)![1]!
+    const todo = await Bun.file(join(f.dir, "docs", id, "todo.md")).text()
+    expect(todo).toContain("Port the core; the journal deferred.")
+    // plan dispatches the reviewed task (the loop's formulation route).
+    expect((await f.run({ stopBefore: "execute" })).code).toBe(0)
+  })
+
+  // The charter pack (the synthesis suite's): a verify-plan charter makes the
+  // construct run the constructor session, so the digest keep and its
+  // --resynthesize bypass are observable as sessions and todo bytes.
+  const CHARTER_PACK = [
+    "# verify",
+    "",
+    "## acceptance",
+    "",
+    "### result-line",
+    "",
+    "Write it in every report: `Result: PASS` means every acceptance criterion was observed to pass.",
+    "",
+    "## guarantees",
+    "",
+    "### verify-plan",
+    "",
+    "The charter bar the plan must serve.",
+    "",
+  ].join("\n")
+
+  const entry = (name: string): ModelEntry => ({ name, layer: "operator", agent: "opencode", model: `prov/${name}` })
+  const routing = (): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map([entry("a"), entry("free")].map((item) => [item.name, item])),
+      tiers: { deep: { tier: "deep", names: ["a"], layer: "operator" } as TierList },
+      routes: new Map(),
+      unused: [],
+      classifier: { names: ["free"], layer: "operator" },
+    } as ModelRegistry,
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+    runAgent: "opencode",
+    router: services().router,
+    clock: services().clock,
+  })
+
+  const VERIFY_MARK = "You read one prompt that a planning step"
+  const FIDELITY_MARK = "You judge the fidelity of one synthesis"
+  const verifyYes: TurnScript = (ctx) => {
+    if (!ctx.text.includes(VERIFY_MARK)) return undefined
+    return [ev.text(ctx.session, `vrf_${ctx.n}`, "Consistent: yes"), ev.step(ctx.session, `vrfstp_${ctx.n}`), ev.idle(ctx.session)]
+  }
+  const fidelityPass: TurnScript = (ctx) => {
+    if (!ctx.text.includes(FIDELITY_MARK)) return undefined
+    return [ev.text(ctx.session, `fid_${ctx.n}`, "Fidelity: pass"), ev.step(ctx.session, `fidstp_${ctx.n}`), ev.idle(ctx.session)]
+  }
+
+  // The constructor turn: one obligation row per source section the prompt
+  // carries, quoting its first line (the content-tolerant locate's happy
+  // path), the ids continuing at the prompt's own nextId.
+  const constructorOf = (brief: () => string): TurnScript => (ctx) => {
+    if (!ctx.text.includes(SYNTHESIS_MARK)) return undefined
+    const start = Number(/continue the O sequence at O-(\d+)/.exec(ctx.text)?.[1] ?? "2")
+    const rows: string[] = []
+    for (const match of ctx.text.matchAll(/^### (\S+\.md)\n\n([^\n]+)/gm)) {
+      rows.push(`- O-${String(start + rows.length).padStart(2, "0")} | ${match[1]} | "${match[2]!.trim()}" | the plan's tasks cover it`)
+    }
+    return synthesisTurn(brief(), rows)(ctx)
+  }
+
+  test("--resynthesize bypasses the digest keep: the constructor re-voices, the new todo lands for review", async () => {
+    const brief = { text: "The round's goals, re-voiced under the charter." }
+    const f = await loopFixture("mt", (dir) => ({
+      turn: (ctx) => verifyYes(ctx) ?? fidelityPass(ctx) ?? constructorOf(() => brief.text)(ctx) ?? artifactTurns(dir)(ctx)!,
+    }))
+    fixtures.push(f)
+    await mkdirSync(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
+    await Bun.write(join(f.dir, ".opencode/auto/intents/verify.md"), CHARTER_PACK)
+    await establishRound(f.dir, { phases: "mt" })
+    writeFileSync(join(f.dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core with the protocol intact."))
+    await f.commit("round setup")
+    // The construct runs the synthesis pipeline: the constructor session
+    // re-voices, the synthesized todo lands, the review stop answers.
+    const first = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
+    expect(first.code).toBe(0)
+    expect(first.lines.some((line) => line.includes("✓ formulation synthesis: the constructor"))).toBe(true)
+    const todo = await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()
+    expect(todo).toContain(brief.text)
+    // The synthesis wrote the round's audit record: the review stop names it
+    // beside the todo (D3's output — the verdicts and the synthesis:/
+    // fidelity: entries live there).
+    expect(first.lines.some((line) => line.includes("ℹ the construction's records sit beside it in docs/R-01/prompt-audit.md"))).toBe(true)
+    expect((await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text()).includes("synthesis:")).toBe(true)
+    // The plain re-run digest-keeps (plans/0097 D6): no constructor session,
+    // the todo byte-identical — the no-person-edit-channel discipline (the
+    // todo is driver-owned, whatever stands is what construction landed).
+    const constructorsBefore = f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK)).length
+    const again = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
+    expect(again.code).toBe(0)
+    expect(again.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
+    expect(f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK))).toHaveLength(constructorsBefore)
+    expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(todo)
+    // --resynthesize (plans/0101 D3): the keep bypassed — the constructor
+    // session runs again, the new brief lands through the rewrite-on-diff.
+    brief.text = "A sharper re-voicing of the same sources."
+    const resynthesized = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing(), resynthesize: true })
+    expect(resynthesized.code).toBe(0)
+    expect(resynthesized.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(false)
+    expect(resynthesized.lines.some((line) => line.includes("✓ formulation synthesis: the constructor"))).toBe(true)
+    expect(f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK))).toHaveLength(constructorsBefore + 1)
+    const after = await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()
+    expect(after).toContain("A sharper re-voicing")
+    expect(after).not.toBe(todo)
+    // A one-shot force: the next plain re-run keeps whatever landed.
+    const settled = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
+    expect(settled.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
+    expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(after)
   })
 })
