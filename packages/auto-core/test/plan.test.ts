@@ -360,6 +360,30 @@ describe("planPrelude: row 3, the phase-index drift (D34)", () => {
       expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
     }),
   )
+
+  test(
+    "a roadmap-governed round is never drift against config; moving the line re-shapes the tail under the roadmap's name (D5)",
+    withDir(async (dir) => {
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // A released roadmap whose R-01 line (amt) established the round; the
+      // resolution — not the switch — carries it (the document is released,
+      // so it rules whatever flow wrote it).
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS)
+      await establishRound(dir, { phases: "amt" })
+      // Config says "am": against the roadmap-established index that is not
+      // a drift — the roadmap's line holds, the round routes on.
+      expect(await planPrelude(dir, { phases: "am" })).toEqual({ type: "loop" })
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
+      // The person edits the line — the documents-decide channel: the tail
+      // re-syncs, the stop naming the roadmap as the authority moved.
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests", "- R-01 am — port the core"))
+      const moved = await planPrelude(dir, { phases: "am" })
+      expect(moved.type === "stop" && moved.code).toBe(0)
+      expect(moved.type === "stop" && moved.lines[0]).toContain("re-synced to the roadmap of docs/analysis.md (P03-test dropped)")
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement"])
+    }),
+  )
 })
 
 describe("planPrelude: routes (rows 4–9)", () => {
@@ -792,6 +816,35 @@ describe("run's drift stop (D34)", () => {
       )
     }),
   )
+
+  test(
+    "a moved roadmap line is run's drift authority too: the stop names the roadmap, never config (D5)",
+    withDir(async (dir) => {
+      const { runAll } = await import("../src/loop")
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // The released roadmap's R-01 line (amt) established the round; the
+      // person then edits the line to am — run refuses before the pool,
+      // naming the roadmap as the value the index drifted from (config "am"
+      // agrees with the edited line; naming config would name nothing).
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS)
+      await establishRound(dir, { phases: "amt" })
+      mkdirSync(join(dir, ".opencode", "agent"), { recursive: true })
+      writeFileSync(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
+      await commitAll(dir)
+      // The person's line edit, committed like theirs would be — run's start
+      // requires a clean tree.
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests", "- R-01 am — port the core"))
+      await commitAll(dir)
+      const stopped = await runQuiet(() => runAll(dir, { phases: "am" }))
+      expect(stopped.code).toBe(1)
+      expect(stopped.lines).toContain(
+        `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from the roadmap of docs/analysis.md ` +
+          `(P01-analysis, P02-implement): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+      )
+      expect(stopped.lines.some((line) => line.includes("differs from config phases"))).toBe(false)
+    }),
+  )
 })
 
 // A filled, releasable analysis document: every section holds content, one
@@ -873,7 +926,7 @@ describe("planPrelude: the pre-round project analysis (rows 0a–0d, plans/0084)
   )
 
   test(
-    "row 0d: a released analysis installs the brief, establishes R-01, and the differing roadmap recommendation rides as advice",
+    "row 0d: a released analysis installs the brief and establishes R-01 under the roadmap's line (D5: the roadmap wins over config, one establishment, no amend detour)",
     withDir(async (dir) => {
       analysisOn()
       await commitAll(dir)
@@ -883,19 +936,65 @@ describe("planPrelude: the pre-round project analysis (rows 0a–0d, plans/0084)
       expect(result.type === "stop" && result.code).toBe(0)
       if (result.type !== "stop") return
       expect(result.lines[0]).toBe("✓ approved project brief installed: docs/analysis.md `## Project brief` section → .opencode/auto/brief.md")
-      expect(result.lines).toContain("✓ round R-01 established: P01-analysis, P02-implement")
+      // The roadmap's R-01 line (amt) wins over config (am): three phases,
+      // the stop naming source and value — application is visible, the
+      // advice line and its amend-then-re-run detour are gone.
       expect(result.lines).toContain(
-        `ℹ the roadmap of docs/analysis.md recommends phases "amt" for this round, config has "am"; ` +
-          `to follow it run opencode-auto amend ${dir} --phases amt before committing the setup, then opencode-auto plan ${dir} again`,
+        '✓ round R-01 established: P01-analysis, P02-implement, P03-test — phases from the roadmap of docs/analysis.md (R-01 line "port the core and its tests"; config default was "am")',
       )
-      expect(await exists(dir, "docs/R-01/phases.md")).toBe(true)
+      expect(result.lines.some((line) => line.includes("recommends phases"))).toBe(false)
+      expect(await exists(dir, "docs/R-01/P03-test/todo.md")).toBe(true)
       expect((await read(dir, ".opencode/auto/brief.md")).trim()).toBe("A faithful port of the core into the monorepo, tests included.")
       expect(await read(dir, "AGENTS.md")).toContain("round R-01 preparation")
-      // The re-run over the amended value: the install is idempotent (no
-      // line) and the round stands.
-      const again = await planPrelude(dir, { phases: "amt" })
-      expect(again.type === "stop" && again.code).toBe(0)
-      expect(again.type === "stop" && again.lines.some((line) => line.includes("approved project brief installed"))).toBe(false)
+      // The double-establishment path is gone: with config still "am" (the
+      // person never amends), the re-run resolves the same roadmap value, so
+      // no drift stop re-syncs anything — the round routes on.
+      const again = await planPrelude(dir, { phases: "am" })
+      expect(again).toEqual({ type: "loop" })
+      expect(await read(dir, "docs/R-01/phases.md")).toContain("P03 test")
+    }),
+  )
+
+  test(
+    "row 0d fallback: with no roadmap line for the round (m mode aside), config establishes as before — today's line, no source suffix",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // A released analysis whose roadmap plans only R-02: R-01 falls back
+      // to config, the stop keeping its pre-D5 shape.
+      writeFileSync(
+        join(dir, "docs/analysis.md"),
+        FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests\n", ""),
+      )
+      const result = await planPrelude(dir, { phases: "am" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      expect(result.type === "stop" && result.lines).toContain("✓ round R-01 established: P01-analysis, P02-implement")
+      expect(result.type === "stop" && result.lines.some((line) => line.includes("phases from the roadmap"))).toBe(false)
+      expect(await exists(dir, "docs/R-01/P03-test")).toBe(false)
+    }),
+  )
+
+  test(
+    "D5 strict failure: a released roadmap line this project cannot establish fails exit 1 naming the line",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // The release gate checked the line against the types of its day; the
+      // pack since stopped shipping one — establishment meets the line here
+      // (rows 0b/0c are past: the round directory exists, the index is the
+      // interrupted start's missing piece, G6).
+      writeFileSync(
+        join(dir, "docs/analysis.md"),
+        FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests", "- R-01 analysis,nonexistent,implement — port the core"),
+      )
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      const result = await planPrelude(dir, { phases: "am" })
+      expect(result.type === "stop" && result.code).toBe(1)
+      expect(result.type === "stop" && result.lines.some((line) => line.includes("the roadmap of docs/analysis.md plans R-01 with \"analysis,nonexistent,implement\""))).toBe(true)
+      expect(result.type === "stop" && result.lines.some((line) => line.includes("unknown phase type(s) nonexistent"))).toBe(true)
+      expect(await exists(dir, "docs/R-01/phases.md")).toBe(false)
     }),
   )
 

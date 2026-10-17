@@ -44,6 +44,7 @@ import {
 import { liveRunLock } from "./lock"
 import { log } from "./log"
 import { leftoverIsolationLines } from "./land"
+import { resolveRoundPhases } from "./analysis"
 import { checkModelReferences, loadModels } from "./models"
 import type { ModelRegistry } from "./models-schema"
 import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
@@ -319,7 +320,11 @@ export async function preflight(
     // with a list the agent filter emptied is a usage error, never a silent
     // wait (plans/0055 §6.3, §10 item 7).
     const facts = registry !== undefined ? routingFacts(registry, opts.agent, run.clock, run.router) : undefined
-    const coverage = facts !== undefined ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
+    // The coverage judges the phases value in force for the current round
+    // (plans/0101 D5: the released roadmap's line over config) — the run's
+    // dispatches follow the round as established, not the config fallback.
+    const authority = await resolveRoundPhases(directory, await currentRound(directory), opts.phases ?? "m")
+    const coverage = facts !== undefined ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded, authority.phases)) : []
     // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
     // references runs `<bin> --version` under its env, 10 s timeout. The
     // driver never logs in or reads credentials — an expired login surfaces
@@ -639,13 +644,15 @@ export async function preflight(
 
 // The dispatches this run can send (plans/0055 §6.3): every role its
 // reachable phase types dispatch, plus the run-level roles no phase owns.
-// The reachable types are the configured phases (custom types included,
-// resolved against the loaded type list); "m" is the implicit implement
-// phase. Per type with tasks: the task sessions take the type's execute tier
-// (`whole` outside the true subtask mode — auto's lead is a whole-task
-// session, plans/0059 D2 —, `subtask` in every mode — a checklist a person
-// wrote dispatches too —, and the merged understand/decompose session in the
-// true mode, the planned pipeline), and the wrap-up session runs unless
+// The reachable types are the phases value in force for the current round —
+// the D5 resolution passed by the caller (the roadmap's line, else the
+// configured phases; custom types included, resolved against the loaded
+// type list); "m" is the implicit implement phase. Per type with tasks: the
+// task sessions take the type's execute tier (`whole` outside the true
+// subtask mode — auto's lead is a whole-task session, plans/0059 D2 —,
+// `subtask` in every mode — a checklist a person wrote dispatches too —,
+// and the merged understand/decompose session in the true mode, the planned
+// pipeline), and the wrap-up session runs unless
 // wrapup is off; a type without tasks runs its own knowledge session.
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
 // rebuilds, the dryrun precheck), the phased loop's planning and handover
@@ -654,11 +661,11 @@ export async function preflight(
 // stay off the list: both are simple sessions, so the bypass need keeps
 // their tier covered.
 // AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans or scans.
-function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[]): DispatchNeed[] {
+function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phases: string): DispatchNeed[] {
   // An invalid phases value fails at its own validation (config load, the
   // loop's routing); the coverage check stays total on the implicit type.
-  const entries = resolvePhases(opts.phases ?? "m", types) ?? [phaseType(REQUIRED_TYPE)!]
-  const phased = opts.phases !== undefined && opts.phases !== "m"
+  const entries = resolvePhases(phases, types) ?? [phaseType(REQUIRED_TYPE)!]
+  const phased = phases !== "m"
   const needs: DispatchNeed[] = [{ role: "bypass" }]
   if (phased) needs.push({ role: "phase-plan" }, { role: "phase-handover" })
   else if (opts.planInput !== undefined) needs.push({ role: "implement-scan" })

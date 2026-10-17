@@ -20,8 +20,13 @@
 // After the release the text stays alive as the survey phase's planning
 // input (analysisText below, plans/0085): what the analysis settles is
 // settled — the survey records settled lines instead of re-raising forks.
+// Since plans/0101 D5 the released roadmap is also the establishment
+// authority: each round's line is applied as its phase list (the resolution
+// below), config `phases` the fallback for rounds the roadmap does not
+// cover.
 import { join } from "node:path"
 import { ANALYSIS_DOC } from "./docpaths"
+import { clarifiedMark } from "./phases"
 import { resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import { stripComments, stubbedText } from "./round-brief"
 
@@ -129,6 +134,38 @@ export function roadmapRounds(text: string): RoadmapRound[] {
 // no line for it (the person diverged, or the roadmap ends before it).
 export function roadmapPhases(text: string, round: number): string | undefined {
   return roadmapRounds(text).find((entry) => entry.round === round)?.phases
+}
+
+// The released roadmap's line for one round, undefined when no analysis
+// exists, when it is not released yet (no whole-line `Clarified: yes` — an
+// unreleased roadmap is not the person's decision and never rules), or when
+// the roadmap plans no line for the round.
+export async function releasedRoadmapRound(dir: string, round: number): Promise<RoadmapRound | undefined> {
+  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+  if (raw === undefined || !clarifiedMark(raw)) return undefined
+  return roadmapRounds(raw).find((entry) => entry.round === round)
+}
+
+// The released roadmap's phases value alone (the amend precedence note's
+// read, plans/0101 D5).
+export async function releasedRoadmapPhases(dir: string, round: number): Promise<string | undefined> {
+  return (await releasedRoadmapRound(dir, round))?.phases
+}
+
+export type RoundPhasesResolution = { phases: string; roadmap?: RoadmapRound }
+
+// Roadmap-driven establishment (plans/0101 D5): the released roadmap's line
+// for a round *is* its phase list — `roadmapPhases(analysis, round) ??
+// config.phases`, the one resolution establishment and the drift checks
+// share, so a roadmap-established round is never drift against config and a
+// config value alone never silently re-shapes a round the roadmap covers.
+// The line rides along for the sourced stop line and the strict-failure
+// naming. m mode never consults the roadmap (an m-mode project has no phased
+// roadmap), whatever lines the document carries.
+export async function resolveRoundPhases(dir: string, round: number, fallback: string): Promise<RoundPhasesResolution> {
+  if (fallback === "m") return { phases: fallback }
+  const roadmap = await releasedRoadmapRound(dir, round)
+  return roadmap ? { phases: roadmap.phases, roadmap } : { phases: fallback }
 }
 
 // Round-like bullets that fail the parse — the incident shape: a document

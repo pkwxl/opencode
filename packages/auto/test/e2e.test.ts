@@ -1754,6 +1754,69 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
+  test("roadmap-driven establishment and the amend --phases precedence note (auto-core plans/0101 D5)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      // The first plan opens the assisted analysis (default on): the stub.
+      const stubbed = await runCli(["plan", dir])
+      expect(stubbed.code).toBe(0)
+      expect(stubbed.out).toContain("the project analysis is open")
+      // The person releases an analysis whose R-01 roadmap line (amt)
+      // differs from config (am).
+      await Bun.write(
+        join(dir, "docs/analysis.md"),
+        [
+          "# Project analysis",
+          "",
+          "## Analysis",
+          "",
+          "A CLI tool of three modules; the retry ladder is the risk area.",
+          "",
+          "## Goals",
+          "",
+          "Ship the port with the protocol intact.",
+          "",
+          "## Project brief",
+          "",
+          "A faithful port of the core into the monorepo, tests included.",
+          "",
+          "## Roadmap",
+          "",
+          "- R-01 amt — port the core and its tests",
+          "",
+          "Clarified: yes",
+          "",
+        ].join("\n"),
+      )
+      const established = await runCli(["plan", dir])
+      expect(established.code).toBe(0)
+      expect(established.out).toContain("approved project brief installed")
+      // The roadmap's line wins over config: three phases, the stop naming
+      // source and value — no amend detour, no advice to transcribe.
+      expect(established.out).toContain(
+        '✓ round R-01 established: P01-analysis, P02-implement, P03-test — phases from the roadmap of docs/analysis.md (R-01 line "port the core and its tests"; config default was "am")',
+      )
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
+      // The amend precedence note: the released line covers the round this
+      // amendment targets (the live round, incomplete) and diverges from the
+      // amended value — named, or the person amends, re-establishes, and is
+      // silently overridden.
+      const diverged = await runCli(["amend", dir, "--phases", "am"])
+      expect(diverged.code).toBe(0)
+      expect(diverged.out).toContain("✓ amended (--phases)")
+      expect(diverged.out).toContain(
+        'ℹ the roadmap of docs/analysis.md covers round R-01 with phases "amt": round establishment takes the roadmap line over config — edit the line to diverge (config phases applies to rounds the roadmap does not cover)',
+      )
+      // An amend that agrees with the line stays quiet.
+      const agreeing = await runCli(["amend", dir, "--phases", "amt"])
+      expect(agreeing.code).toBe(0)
+      expect(agreeing.out).not.toContain("the roadmap of docs/analysis.md covers")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("init --phases type-id list: custom types from .opencode/auto/phases, repeats allowed, prefix guard by type", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {

@@ -12,7 +12,7 @@
 import { join } from "node:path"
 import { mkdir } from "node:fs/promises"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, renderAnalysisStub, roadmapPhases } from "./analysis"
+import { analysisProblems, renderAnalysisStub, resolveRoundPhases } from "./analysis"
 import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { log } from "./log"
@@ -41,6 +41,7 @@ import {
   type PhaseUnit,
 } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
+import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
 import { commitTree, isolateRound } from "./git"
 import { renderRoundBrief, roundBriefText } from "./round-brief"
@@ -62,7 +63,8 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 //      guidance; 0b grammar problems hold the release; 0c an unreleased
 //      analysis awaits the person's `Clarified: yes`; 0d a released one
 //      installs the approved brief proposal and establishes R-01 (row 1's
-//      establish, with the roadmap's phases advice riding in its stop) —
+//      establish) — the released roadmap's line for the round is its phase
+//      list (plans/0101 D5), named in the stop —
 //      OPENCODE_AUTO_ANALYSIS=off falls through to row 1 directly;
 //   1. the current round is not established → (G8 of the previous round) + establish, G1 lines;
 //   2. the round is complete → G8; pass = establish the next round, fail = exit 2;
@@ -264,8 +266,9 @@ export async function planPrelude(dir: string, opts: {
     }
     // Row 0d, the release: install the approved brief proposal (the survey
     // release's mechanism, D15.2 generalized), then establish R-01 like row
-    // 1 — the roadmap's phases advice rides in establish's stop, advisory:
-    // the person amends before committing the setup, or diverges on purpose.
+    // 1 — the released roadmap's line for the round is its phase list,
+    // applied and named in establish's stop (plans/0101 D5; the round-start
+    // commit remains the person's veto).
     const lines: string[] = []
     const proposal = briefProposal(raw)
     if (proposal !== undefined) lines.push(...(await installBriefProposal(dir, ANALYSIS_DOC, proposal, commitTree)))
@@ -341,30 +344,36 @@ export async function planPrelude(dir: string, opts: {
     if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${bin} plan ${dir}`])
     for (const line of executionLines(executed)) log(line)
   }
-  // Row 3 (plans/0053 D34): the phase index drifted from the phases value —
-  // config `phases` changed after the round was established. plan owns the
-  // re-sync (run refuses to, Q4): syncPhaseIndex replaces the unstarted tail,
-  // the change stays uncommitted like any round setup, and the stop asks for
-  // the review. Input is refused before the write (D5): the input would plan
-  // into a tail nobody has reviewed yet. A value the sync refuses (dropping a
+  // Row 3 (plans/0053 D34): the phase index drifted from the phases value in
+  // force — config `phases` changed after the round was established, or (since
+  // plans/0101 D5) the released roadmap's line for this round moved. plan owns
+  // the re-sync (run refuses to, Q4): syncPhaseIndex replaces the unstarted
+  // tail, the change stays uncommitted like any round setup, and the stop asks
+  // for the review. The comparison value is the D5 resolution (the roadmap's
+  // line over config), so a roadmap-established round is never drift against
+  // config, and only a move of the ruling document reshapes the tail. Input
+  // is refused before the write (plans/0053 D5): the input would plan into a
+  // tail nobody has reviewed yet. A value the sync refuses (dropping a
   // completed phase, a directory that holds work) surfaces as the error
   // plannedPhaseUnits throws.
+  const authority = await resolveRoundPhases(dir, round, opts.phases)
+  const authorityText = authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"
   let drift: PhaseTailDrift | undefined
   try {
-    drift = await phaseTailDrift(dir, round, opts.phases)
+    drift = await phaseTailDrift(dir, round, authority.phases)
   } catch (error) {
     return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
   }
   if (drift) {
-    if (opts.input) return stop(1, [driftInputLine(dir, drift)])
-    if (opts.newTask !== undefined) return stop(1, [driftNewTaskLine(dir, drift)])
-    if (opts.export !== undefined || opts.adopt !== undefined) return stop(1, [driftOrderLine(dir, drift)])
+    if (opts.input) return stop(1, [driftInputLine(dir, drift, authorityText)])
+    if (opts.newTask !== undefined) return stop(1, [driftNewTaskLine(dir, drift, authorityText)])
+    if (opts.export !== undefined || opts.adopt !== undefined) return stop(1, [driftOrderLine(dir, drift, authorityText)])
     try {
-      await syncPhaseIndex(dir, round, opts.phases)
+      await syncPhaseIndex(dir, round, authority.phases)
     } catch (error) {
       return stop(1, [`phase-index re-sync failed: ${error instanceof Error ? error.message : String(error)}`])
     }
-    return stop(0, [resyncLine(dir, drift)])
+    return stop(0, [resyncLine(dir, drift, authorityText)])
   }
   // Row 4.
   if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
@@ -649,41 +658,43 @@ function driftPairs(drift: PhaseTailDrift): string {
 }
 
 // Row 3's stop line (D34): what the re-sync changed, then the same
-// review-and-commit gate a round setup stops at.
-function resyncLine(dir: string, drift: PhaseTailDrift): string {
+// review-and-commit gate a round setup stops at. `from` names the authority
+// re-synced to — config phases, or the roadmap line that moved (plans/0101
+// D5).
+function resyncLine(dir: string, drift: PhaseTailDrift, from: string): string {
   const { bin } = shellProfile()
   return (
-    `✓ phase index of round ${roundDirName(drift.round)} re-synced to config phases (${driftPairs(drift)}); ` +
+    `✓ phase index of round ${roundDirName(drift.round)} re-synced to ${from} (${driftPairs(drift)}); ` +
     `review ${phaseIndexPath(drift.round)}, commit, then re-run: ${bin} plan ${dir}`
   )
 }
 
 // Row 3's input refusal (D5): the re-synced tail must be reviewed and
 // committed before anything plans into it.
-function driftInputLine(dir: string, drift: PhaseTailDrift): string {
+function driftInputLine(dir: string, drift: PhaseTailDrift, from: string): string {
   const { bin } = shellProfile()
   return (
-    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
     `run ${bin} plan ${dir} without input to re-sync it, commit the change, then pass the input.`
   )
 }
 
 // Row 3's --new-task refusal: same gate, adapted tail — the re-synced tail
 // must be reviewed and committed before a task lands in its phases.
-function driftNewTaskLine(dir: string, drift: PhaseTailDrift): string {
+function driftNewTaskLine(dir: string, drift: PhaseTailDrift, from: string): string {
   const { bin } = shellProfile()
   return (
-    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
     `run ${bin} plan ${dir} without --new-task to re-sync it, commit the change, then add the task again.`
   )
 }
 
 // Row 3's work-order refusal: same gate — the re-synced tail must be
 // reviewed and committed before a unit of its phases is rendered or adopted.
-function driftOrderLine(dir: string, drift: PhaseTailDrift): string {
+function driftOrderLine(dir: string, drift: PhaseTailDrift, from: string): string {
   const { bin } = shellProfile()
   return (
-    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
     `run ${bin} plan ${dir} without --export / --adopt to re-sync it, commit the change, then take the work order again.`
   )
 }
@@ -762,16 +773,17 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 // failure or block leaves no round state and the re-run retries everything,
 // and a crash between the two leaves only content-neutral branches (a branch
 // at HEAD changes no file), which the idempotent skips finish.
-// Since plans/0084 the stop also renders the AGENTS.md round-preparation
-// guidance (the assisted half of this gate) and, when a released analysis's
-// roadmap recommends a different phases value for this round, the exact
-// amend command — advisory, never blocking: the person follows it before
-// committing the setup (the re-run re-establishes under the new value) or
-// diverges on purpose.
+// Since plans/0101 D5 the round's phases come from the released roadmap's
+// line for it, config `phases` the fallback (resolveRoundPhases); the stop
+// names source and value — application is visible, the round-start commit
+// remains the person's veto, and later boundaries are better-evidenced
+// amendment points. Since plans/0084 the stop also renders the AGENTS.md
+// round-preparation guidance (the assisted half of this gate).
 async function establish(dir: string, round: number, opts: { phases: string; isolate?: string[]; testByDriver?: boolean }, before: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
   const name = roundDirName(round)
-  const phases = opts.phases
+  const resolved = await resolveRoundPhases(dir, round, opts.phases)
+  const phases = resolved.phases
   const branch = `auto/${name}`
   let isolated: string[] = []
   if (opts.isolate?.length) {
@@ -789,6 +801,24 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
     }
     isolated = result.isolated
   }
+  // A roadmap line whose types the pack no longer ships fails strictly here,
+  // through the ordinary establishment validation, naming the line (D5): the
+  // release checked it against the types of its day, and this is where the
+  // changed pack meets the released document.
+  if (resolved.roadmap) {
+    try {
+      const types = loadPhaseTypes(dir)
+      if (resolvePhases(phases, types) === null) {
+        return stop(1, [
+          ...before,
+          `⏸ the roadmap of ${ANALYSIS_DOC} plans ${name} with "${phases}", which this project cannot establish: ${phasesProblem(phases, types)}; ` +
+            `fix the roadmap line (or the phase types it names), then re-run: ${bin} plan ${dir}`,
+        ])
+      }
+    } catch {
+      // a broken custom-type table surfaces through establishRound's own path below
+    }
+  }
   let state: PhaseState | undefined
   try {
     await establishRound(dir, { phases, round })
@@ -800,7 +830,11 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
   // The isolation line rides both G1 shapes: the round's commits land on the
   // round branch, the original branch never moves.
   const isolatedLine = isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []
-  const advice = await roadmapAdvice(dir, round, phases)
+  // The D5 sourced line: the roadmap's value was applied, config's would have
+  // been different. Its goal names the line's round class.
+  const sourceSuffix = resolved.roadmap
+    ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(resolved.roadmap.goal)}"; config default was "${opts.phases}")`
+    : ""
   await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name } })
   const guideLine = `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`
   if (phases === "m") {
@@ -808,7 +842,6 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
       ...before,
       `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
       ...isolatedLine,
-      ...(advice ? [advice] : []),
       `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(units[0]!)} by hand, ` +
         `or run: ${bin} plan ${dir} -p <text> | --file <path>`,
       guideLine,
@@ -816,28 +849,18 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
   }
   return stop(0, [
     ...before,
-    `✓ round ${name} established: ${units.map(phaseLabel).join(", ")}`,
+    `✓ round ${name} established: ${units.map(phaseLabel).join(", ")}${sourceSuffix}`,
     ...isolatedLine,
-    ...(advice ? [advice] : []),
     `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
       `then run: ${bin} plan ${dir} to plan ${phaseRefText(units[0]!)} (or run to plan and execute)`,
     guideLine,
   ])
 }
 
-// The roadmap's phases advice for one round (plans/0084): the released
-// analysis's `## Roadmap` recommends a phases value for this round; when it
-// differs from the config's, the establish stop names the exact amend
-// command. Advisory by construction — no released analysis, no line; a
-// matching recommendation, no line; the person diverging on purpose simply
-// commits the setup as established.
-async function roadmapAdvice(dir: string, round: number, phases: string): Promise<string | undefined> {
-  const { bin } = shellProfile()
-  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
-  if (raw === undefined) return undefined
-  const recommended = roadmapPhases(raw, round)
-  if (recommended === undefined || recommended === phases) return undefined
-  return `ℹ the roadmap of ${ANALYSIS_DOC} recommends phases "${recommended}" for this round, config has "${phases}"; to follow it run ${bin} amend ${dir} --phases ${recommended} before committing the setup, then ${bin} plan ${dir} again`
+// A roadmap line's goal as the sourced line's round class: capped so a long
+// goal cannot swallow the stop line.
+function truncateGoal(goal: string): string {
+  return goal.length > 60 ? `${goal.slice(0, 60)}…` : goal
 }
 
 // The phase a planning input would be planned into on a phased plan or

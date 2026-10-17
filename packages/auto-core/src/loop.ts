@@ -16,7 +16,8 @@ import { writeLaneReport, type LaneReport } from "./lanes"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { anyCodeWork, resolvePhases } from "./phases/registry"
 import { loadPhaseTypes } from "./phases/custom"
-import { roundDirName } from "./docpaths"
+import { resolveRoundPhases } from "./analysis"
+import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { logRunRouting, routingFacts } from "./routing"
@@ -147,6 +148,14 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // the phase, and the lane entry routes for its one unit after the
     // services are up.
     const phases = opts.phases ?? "m"
+    // The phases value in force for the current round (plans/0101 D5): the
+    // released roadmap's line for it over config — the same resolution plan's
+    // establishment applies, so a roadmap-established round is never drift
+    // against config here, and the derived codeWork fact judges the round's
+    // true phases. Computed once above the lane/dryrun branch: the lane
+    // worker reads the same roadmap from its worktree snapshot.
+    const liveRound = await currentRound(directory)
+    const authority = await resolveRoundPhases(directory, liveRound, phases)
     if (!opts.dryrun && !opts.lane) {
       const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
       if (pre.type === "blocked") {
@@ -154,21 +163,22 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
         emitStatus({ type: "failure", message: `phase flow blocked: ${pre.reason}` })
         return 1
       }
-      // A phase-index drift (plans/0053 D34): the phases value (config
-      // `phases`) changed after the round was established, so the index's
-      // unstarted tail no longer matches it. run does not re-sync (Q4): the
-      // sync is a lifecycle step, and lifecycle belongs to plan — a silent
-      // re-sync here would start work on a phase list nobody reviewed. A
-      // value the sync would refuse (dropping a completed phase, a directory
-      // that holds work) stops the same way, with plannedPhaseUnits's own
-      // error.
+      // A phase-index drift (plans/0053 D34): the phases value in force (the
+      // roadmap line, else config `phases`) changed after the round was
+      // established, so the index's unstarted tail no longer matches it. run
+      // does not re-sync (Q4): the sync is a lifecycle step, and lifecycle
+      // belongs to plan — a silent re-sync here would start work on a phase
+      // list nobody reviewed. A value the sync would refuse (dropping a
+      // completed phase, a directory that holds work) stops the same way,
+      // with plannedPhaseUnits's own error.
       const { bin } = shellProfile()
       const sides = (units: readonly PhaseUnit[]) => units.map(phaseLabel).join(", ")
       try {
-        const drift = await phaseTailDrift(directory, await currentRound(directory), phases)
+        const drift = await phaseTailDrift(directory, liveRound, authority.phases)
         if (drift) {
           log(
-            `⏸ the phase index of round ${roundDirName(drift.round)} (${sides(drift.index)}) differs from config phases (${sides(drift.planned)}): ` +
+            `⏸ the phase index of round ${roundDirName(drift.round)} (${sides(drift.index)}) differs from ` +
+              `${authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"} (${sides(drift.planned)}): ` +
               `run ${bin} plan ${directory} to re-sync its unstarted phases`,
           )
           return 1
@@ -193,13 +203,15 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       interactive: typeof opts.interactive === "boolean" ? opts.interactive : opts.interactive === undefined ? undefined : true,
       registry,
       // The test channel's run-level derived fact (plans/0083 D9): whether
-      // the phases value includes a code-producing type — the --test-by-driver
-      // steer clamp reads it, so a run over non-code phases only never errors
-      // on a steer-less agent. The resolve cannot fail here (the preflight
-      // and the drift check above already refused a bad phases value), and a
-      // null still counts as code work (the clamp stays conservative).
+      // the phases value in force (the D5 resolution — the roadmap's line
+      // for the current round, else config) includes a code-producing type —
+      // the --test-by-driver steer clamp reads it, so a run over non-code
+      // phases only never errors on a steer-less agent. The resolve cannot
+      // fail here (the preflight and the drift check above already refused a
+      // bad phases value), and a null still counts as code work (the clamp
+      // stays conservative).
       ...(opts.testByDriver
-        ? { codeWork: anyCodeWork(resolvePhases(phases, loadPhaseTypes(directory))) }
+        ? { codeWork: anyCodeWork(resolvePhases(authority.phases, loadPhaseTypes(directory))) }
         : {}),
     })
     server = started.pool

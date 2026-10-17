@@ -5,7 +5,16 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { analysisProblems, analysisText, ANALYSIS_SECTIONS, renderAnalysisStub, roadmapPhases, roadmapRounds } from "../src/analysis"
+import {
+  analysisProblems,
+  analysisText,
+  ANALYSIS_SECTIONS,
+  releasedRoadmapPhases,
+  renderAnalysisStub,
+  resolveRoundPhases,
+  roadmapPhases,
+  roadmapRounds,
+} from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
 
@@ -156,6 +165,34 @@ describe("the project analysis document (plans/0084)", () => {
       expect(text).toContain("Ship the port with the protocol intact.")
       expect(text).toContain("- R-01 adm — port the core and its tests")
       expect(text).not.toContain("<!--")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("resolveRoundPhases: the released line wins, the fallback carries no roadmap, unreleased never rules, m mode never consults (plans/0101 D5)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "analysis-resolve-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // No document: config's value, no roadmap riding along.
+      expect(await resolveRoundPhases(dir, 1, "am")).toEqual({ phases: "am" })
+      // A filled but unreleased roadmap is not the person's decision yet.
+      await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("\nClarified: yes", ""))
+      expect(await resolveRoundPhases(dir, 1, "am")).toEqual({ phases: "am" })
+      expect(await releasedRoadmapPhases(dir, 1)).toBeUndefined()
+      // Released: the line for the round wins over the fallback, and rides
+      // along for the sourced stop line; a round beyond the lines falls back.
+      await Bun.write(join(dir, "docs/analysis.md"), RELEASED)
+      expect(await resolveRoundPhases(dir, 1, "am")).toEqual({
+        phases: "adm",
+        roadmap: { round: 1, phases: "adm", goal: "port the core and its tests" },
+      })
+      expect(await resolveRoundPhases(dir, 3, "am")).toEqual({ phases: "am" })
+      expect(await releasedRoadmapPhases(dir, 2)).toBe("mtv")
+      // m mode has no phased roadmap: whatever the document plans, the
+      // fallback stands (the guard lives in the resolution itself).
+      await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("- R-01 adm —", "- R-01 amt —"))
+      expect(await resolveRoundPhases(dir, 1, "m")).toEqual({ phases: "m" })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
