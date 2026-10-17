@@ -143,6 +143,13 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
     expect(out.lines.some((line) => line.includes("the project analysis is open"))).toBe(true)
     expect(out.lines.some((line) => line.includes("re-run: opencode-auto transfer"))).toBe(true)
     expect(existsSync(join(dir, "docs/R-01"))).toBe(false)
+    // The AGENTS.md guidance state carries the phased rhythm (plans/0101
+    // D7): its next-lines name transfer, never plan's dispatch word.
+    const agents = await Bun.file(join(dir, "AGENTS.md")).text()
+    expect(agents).toContain("written by `transfer`")
+    expect(agents).toContain("the next `transfer` installs the approved brief")
+    expect(agents).toContain("The commands bracket the boundaries")
+    expect(agents).not.toContain("the next `plan` installs")
   })
 
   test("an unreleased analysis awaits the person (exit 2); grammar problems hold the release", async () => {

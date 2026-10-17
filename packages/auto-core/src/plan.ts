@@ -266,7 +266,7 @@ export async function planPrelude(dir: string, opts: {
     if (raw === undefined) {
       await mkdir(join(dir, "docs"), { recursive: true })
       await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
       return stop(0, [
         `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
         `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
@@ -281,7 +281,7 @@ export async function planPrelude(dir: string, opts: {
     }
     const problems = analysisProblems(raw, types)
     if (problems.length) {
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
       return stop(2, [
         `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
         ...problems.map((problem) => `  ${problem}`),
@@ -289,7 +289,7 @@ export async function planPrelude(dir: string, opts: {
       ])
     }
     if (!clarifiedMark(raw)) {
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
       const forks = surveyForks(raw)
       return stop(2, [
         `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
@@ -463,7 +463,7 @@ export async function planPrelude(dir: string, opts: {
     const brief = join(dir, roundBriefPath(round))
     if (!(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))
     const filled = (await roundBriefText(dir, round)) !== undefined
-    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: roundDirName(round) } })
+    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: roundDirName(round), manual } })
     // The continue pointer follows the boundary grammar (plans/0101 D4):
     // phased continues with transfer (the construct reads the filled brief
     // and stops for review), m mode with plan as before.
@@ -514,6 +514,7 @@ export async function planPrelude(dir: string, opts: {
         phase: phaseKey(target.phase).id,
         inputPath,
         scaffold: scaffold ?? "(the active intent pack carries no planning-input scaffold — free-form markdown)",
+        manual,
       },
     })
     const existing = await readPlanInput(dir, target.phase)
@@ -889,7 +890,7 @@ export async function establishRoundSetup(
   } catch (error) {
     return { type: "error", error: error instanceof Error ? error.message : String(error) }
   }
-  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name } })
+  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name, manual: opts.phases === "m" } })
   return { type: "ok", round, state: state!, units: state!.phases, isolated, resolved, branch }
 }
 

@@ -302,9 +302,12 @@ describe("constitution drift ratchet", () => {
     expect(GUIDANCE.ANALYSIS_STATE).toContain("one machine-parsed line per round")
     expect(GUIDANCE.ANALYSIS_STATE).toContain("does not parse")
     for (const guidance of [
-      { kind: "analysis" },
-      { kind: "round", round: "R-01" },
-      { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "- What this step is for" },
+      { kind: "analysis", manual: true },
+      { kind: "round", round: "R-01", manual: true },
+      { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "- What this step is for", manual: true },
+      { kind: "analysis", manual: false },
+      { kind: "round", round: "R-01", manual: false },
+      { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "- What this step is for", manual: false },
     ] as const) {
       const rendered = renderAgentsBlock({ guidance })
       expect(rendered.startsWith(`${AGENTS_BLOCK_START}\nThis directory is driven by opencode-auto.`)).toBe(true)
@@ -313,13 +316,41 @@ describe("constitution drift ratchet", () => {
       expect(rendered).toContain(GUIDANCE.ASSIST_RULE)
       expect(rendered.length).toBeGreaterThan(renderAgentsBlock().length)
     }
-    expect(renderAgentsBlock({ guidance: { kind: "analysis" } })).toContain(GUIDANCE.ANALYSIS_STATE)
-    expect(renderAgentsBlock({ guidance: { kind: "round", round: "R-02" } })).toContain("round R-02 preparation")
-    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s" } })).toContain(
+    expect(renderAgentsBlock({ guidance: { kind: "analysis", manual: true } })).toContain(GUIDANCE.ANALYSIS_STATE)
+    expect(renderAgentsBlock({ guidance: { kind: "round", round: "R-02", manual: true } })).toContain("round R-02 preparation")
+    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s", manual: true } })).toContain(
       "phase R-01.P02 preparation",
     )
-    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s" } })).toContain(
+    expect(renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P02", inputPath: "docs/R-01/P02-design/plan-input.md", scaffold: "s", manual: true } })).toContain(
       "docs/R-01/P02-design/plan-input.md",
     )
+    // The next-lines carry the mode's command rhythm (plans/0101 D7): a
+    // phased state names transfer's construct → review → plan → run, an m-mode
+    // state keeps plan alone (D8) — the branch cannot silently collapse to
+    // one wording.
+    expect(renderAgentsBlock({ guidance: { kind: "analysis", manual: false } })).toContain(GUIDANCE.ANALYSIS_STATE_PHASED)
+    expect(GUIDANCE.ANALYSIS_STATE_PHASED).toContain("written by `transfer`")
+    expect(GUIDANCE.ANALYSIS_STATE_PHASED).toContain("the next `transfer` installs the approved brief")
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("the next `plan` installs the approved brief")
+    expect(GUIDANCE.ANALYSIS_STATE_PHASED).not.toContain("the next `plan` installs")
+    const phasedRound = renderAgentsBlock({ guidance: { kind: "round", round: "R-01", manual: false } })
+    expect(phasedRound).toContain("run `transfer` again — it constructs the first phase's plan task")
+    expect(phasedRound).not.toContain("it plans the round's first phase")
+    const manualRound = renderAgentsBlock({ guidance: { kind: "round", round: "R-01", manual: true } })
+    expect(manualRound).toContain("run `plan` again — it plans the round's first phase")
+    expect(manualRound).not.toContain("run `transfer` again")
+    const phasedPhase = renderAgentsBlock({
+      guidance: { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "s", manual: false },
+    })
+    expect(phasedPhase).toContain("run `transfer` — it reads the input as written into the phase's plan task")
+    expect(phasedPhase).not.toContain("the planning session consumes it as written")
+    expect(
+      renderAgentsBlock({ guidance: { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "s", manual: true } }),
+    ).toContain("the planning session consumes it as written")
+    // The primer carries the boundary grammar once for both modes, the m-mode
+    // exception as a parenthetical (D7).
+    expect(GUIDANCE.DRIVER_PRIMER).toContain("The commands bracket the boundaries")
+    expect(GUIDANCE.DRIVER_PRIMER).toContain("re-derives it before constructing")
+    expect(GUIDANCE.DRIVER_PRIMER).toContain("no boundary vocabulary")
   })
 })

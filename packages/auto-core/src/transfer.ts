@@ -256,7 +256,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
     if (raw === undefined) {
       await mkdir(join(directory, "docs"), { recursive: true })
       await Bun.write(join(directory, ANALYSIS_DOC), renderAnalysisStub())
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
       log(`✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`)
       log(`next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`)
       log(`then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} transfer ${directory} — the approved brief is installed and round R-01 opens`)
@@ -271,14 +271,14 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
     }
     const problems = analysisProblems(raw, types)
     if (problems.length) {
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
       log(`⏸ ${ANALYSIS_DOC} has problems that hold its release:`)
       for (const problem of problems) log(`  ${problem}`)
       log(`fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} transfer ${directory}`)
       return 2
     }
     if (!clarifiedMark(raw)) {
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis" } })
+      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
       const forks = surveyForks(raw)
       log(
         `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +

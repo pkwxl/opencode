@@ -82,7 +82,8 @@ export const CONSTITUTION = {
   REFS_SPEC,
 } as const
 
-// —— Preparation guidance (plans/0084) ——
+// —— Preparation guidance (plans/0084; the next-lines re-keyed to the
+// boundary grammar by plans/0101 D7) ——
 //
 // The block is also the delivery surface for preparation states: between
 // commands — while a round setup, a phase's planning input or the first-run
@@ -95,16 +96,27 @@ export const CONSTITUTION = {
 // state text naming the document of the moment and its spec. The guidance
 // never renders during a run (the execution state is the constitution alone,
 // byte-identical to before — the ratchet's floor), and the state flips only
-// at command boundaries: plan's preparation stops set it, run's preflight
-// renders it away. AGENTS.md is local-only, so the flips leave no git noise.
+// at command boundaries: a preparation stop sets it, run's preflight renders
+// it away. AGENTS.md is local-only, so the flips leave no git noise. Since
+// plans/0101 the states carry the mode their stop renders under: phased
+// projects advance through transfer's construct → review → plan → run
+// rhythm, and the state's next-lines name those commands; m mode keeps
+// plan/run alone (D8 — no boundary vocabulary applies), and its states keep
+// the older wording — the `manual` flag on each Guidance variant picks the
+// branch, the callers being mode-fixed by construction (plan's analysis rows
+// and single-phase establishment are m-mode-only since D4; transfer refuses
+// m mode outright).
 
 // The primer: the tool's working model in one paragraph, distilled for
 // preparation work — the unit hierarchy, the lifecycle, the phase vocabulary,
 // the gates' marks, and where a round's phase list comes from. An agent that
 // understands this proposes roadmaps and round briefs the machinery can
 // actually execute (plans/0084 D4: the analysis must deeply understand
-// opencode-auto's mechanisms to formulate a long-term plan that fits).
-const DRIVER_PRIMER = `How opencode-auto works — the model a preparation plan must fit: work runs in rounds, one permanent \`docs/R-NN/\` directory per round. A round holds phases (\`docs/R-NN/P<nn>-<type>/\`, from the configured phases value — builtin types a analysis, d design, m implement, t test, v acceptance, k knowledge, plus custom types in \`.opencode/auto/phases/\`), each phase holds tasks (\`docs/T-NNN/\`, planned by the driver's planning session from the phase's \`plan-input.md\`), and a task may decompose into subtasks (\`docs/T-NNN/S<nn>/\`). Progress is the \`todo.md\` → \`done.md\` rename, made by DRIVER alone; \`phases.md\` and \`tasks.md\` are membership indexes DRIVER ticks. \`plan\` establishes rounds and runs the planning sessions; \`run\` executes — one session per unit, DRIVER commits everything after each session (an AI session never commits). A phase ends with a distilled \`handover.md\` for the next; gates hold for the person's mark where the phase type declares one (\`Clarified: yes\` on a survey, \`Accepted: yes\` on acceptance, a \`Result: PASS|FAIL\` verdict), and a round closes only with its \`round.md\` \`## Close\` section and its \`report-for-user.md\` in place. The phase list of every round comes from the config phases value — set it per round with \`amend --phases\` before the round opens; tasks may carry \`Depends:\`/\`Touches:\` fields to shape their order; everything under \`docs/T-*\`, \`docs/R-*\` and \`.auto/\` is process record the deliverable never references (P1).`
+// opencode-auto's mechanisms to formulate a long-term plan that fits). The
+// command rhythm is the boundary grammar (plans/0101 D7): transfer advances,
+// plan dispatches, run executes to the boundary — one primer for both modes,
+// the manual single-phase exception carried as a parenthetical.
+const DRIVER_PRIMER = `How opencode-auto works — the model a preparation plan must fit: work runs in rounds, one permanent \`docs/R-NN/\` directory per round. A round holds phases (\`docs/R-NN/P<nn>-<type>/\`, from the round's phases value — builtin types a analysis, d design, m implement, t test, v acceptance, k knowledge, plus custom types in \`.opencode/auto/phases/\`), each phase holds tasks (\`docs/T-NNN/\`, planned by the phase's plan task — the formulation unit \`transfer\` constructs from the round brief and the phase's \`plan-input.md\`, dispatched by \`plan\` after your review), and a task may decompose into subtasks (\`docs/T-NNN/S<nn>/\`). Progress is the \`todo.md\` → \`done.md\` rename, made by DRIVER alone; \`phases.md\` and \`tasks.md\` are membership indexes DRIVER ticks. The commands bracket the boundaries: \`transfer\` advances one boundary step — it establishes the round from the released roadmap (or closes the finished phase and constructs the next one's plan task), always stopping for the person's review; \`plan\` dispatches the reviewed plan task, the planning session running under it; \`run\` executes — one session per unit, DRIVER commits everything after each session (an AI session never commits) — and stops at the phase's clean end, the next boundary. (The manual single-phase mode carries no boundary vocabulary: \`plan\` and \`run\` alone drive it.) A phase ends with a distilled \`handover.md\` for the next; gates hold for the person's mark where the phase type declares one (\`Clarified: yes\` on a survey, \`Accepted: yes\` on acceptance, a \`Result: PASS|FAIL\` verdict), and a round closes only with its \`round.md\` \`## Close\` section and its \`report-for-user.md\` in place. The phase list of every round comes from the released \`## Roadmap\` line of \`docs/analysis.md\` when one covers the round, else the config phases value; \`amend --phases\` changes the config value, and at a phase boundary the change reshapes the round's unstarted tail — the next \`transfer\` re-derives it before constructing (started phases are immutable). Tasks may carry \`Depends:\`/\`Touches:\` fields to shape their order; everything under \`docs/T-*\`, \`docs/R-*\` and \`.auto/\` is process record the deliverable never references (P1).`
 
 // The assist rule: the interactive-determination discipline every preparation
 // state shares — enumerate the missing information, ask, propose, record the
@@ -118,42 +130,68 @@ const ASSIST_RULE = `Assisted preparation rule: in this state your job is to hel
 // and the release mark. The roadmap line is taught as a machine grammar, not
 // just named: a decorated bullet (`- **R-01 (import) — goal**`) reads like the
 // format but never parses, and a session given only the shape's name has no
-// standard to fix by.
-const ANALYSIS_STATE = `Current state — project analysis (before round R-01 exists): the goals of the engagement are not fixed yet, so no round is open; the document to produce is \`docs/analysis.md\` (a stub with section hints is in place). Read the tool's own surfaces first — \`.opencode/auto/config.json\` (the phases value and switches as they stand), the active intent pack's planning-input scaffold (\`plan --scaffold\` prints it), \`.opencode/auto/phases/\` for the project's custom types — and the project's own material (README, docs/, the source tree; an existing codebase gets a real inventory). Then help the person fill the sections: \`## Analysis\` (the thorough, evidence-based analysis of the project), \`## Goals\` (the overall goals in the project's own terms), one \`Fork:\` line per open decision, \`## Project brief\` (the project's constants — goal, inputs, deliverable target, binding constraints; installed verbatim into \`.opencode/auto/brief.md\` on release), and \`## Roadmap\` — the long-term plan for the next few rounds, one machine-parsed line per round: \`- R-NN <phases> — <goal>\`, the round id, the phases value and an em dash (or \`--\`) in exactly that order with nothing else between them — decoration before the dash (\`- **R-01 (import) — goal**\`) does not parse, and a line that does not parse, or whose phases value does not resolve, is a problem \`plan\` reports and the release waits on. \`<phases>\` is the value \`amend --phases\` sets for that round: a letter preset (a subsequence of \`admtvk\` containing \`m\`) or a comma-separated list of phase type ids — the builtins plus the project's custom types in \`.opencode/auto/phases/\`. Each round's key work at task granularity, its acceptance posture, its dependencies and the risks it resolves go under the line as ordinary prose, never inside it. The bar: done thoroughly, this analysis determines the key work of the rounds that follow — later rounds should need little new deciding. The person releases it by adding the whole line \`Clarified: yes\` and committing; the next \`plan\` installs the approved brief and opens round R-01.`
+// standard to fix by. The next-lines carry the mode's command (plans/0101
+// D7): phased advances through transfer (the stub's writer, the grammar's
+// reporter, the release's installer), m mode keeps plan.
+function analysisState(manual: boolean): string {
+  const advance = manual ? "plan" : "transfer"
+  return `Current state — project analysis (before round R-01 exists): the goals of the engagement are not fixed yet, so no round is open; the document to produce is \`docs/analysis.md\` (a stub with section hints is in place, written by \`${advance}\`). Read the tool's own surfaces first — \`.opencode/auto/config.json\` (the phases value and switches as they stand), the active intent pack's planning-input scaffold (\`plan --scaffold\` prints it), \`.opencode/auto/phases/\` for the project's custom types — and the project's own material (README, docs/, the source tree; an existing codebase gets a real inventory). Then help the person fill the sections: \`## Analysis\` (the thorough, evidence-based analysis of the project), \`## Goals\` (the overall goals in the project's own terms), one \`Fork:\` line per open decision, \`## Project brief\` (the project's constants — goal, inputs, deliverable target, binding constraints; installed verbatim into \`.opencode/auto/brief.md\` on release), and \`## Roadmap\` — the long-term plan for the next few rounds, one machine-parsed line per round: \`- R-NN <phases> — <goal>\`, the round id, the phases value and an em dash (or \`--\`) in exactly that order with nothing else between them — decoration before the dash (\`- **R-01 (import) — goal**\`) does not parse, and a line that does not parse, or whose phases value does not resolve, is a problem \`${advance}\` reports and the release waits on. \`<phases>\` is the value \`amend --phases\` sets for that round: a letter preset (a subsequence of \`admtvk\` containing \`m\`) or a comma-separated list of phase type ids — the builtins plus the project's custom types in \`.opencode/auto/phases/\`. Each round's key work at task granularity, its acceptance posture, its dependencies and the risks it resolves go under the line as ordinary prose, never inside it. The bar: done thoroughly, this analysis determines the key work of the rounds that follow — later rounds should need little new deciding. The person releases it by adding the whole line \`Clarified: yes\` and committing; the next \`${advance}\` installs the approved brief and opens round R-01${manual ? "" : ", stopping at the round-start gate for the setup's review and commit"}.`
+}
+
+// The m-mode wording is the historical constant (the pinning surface's name
+// kept); the phased variant rides beside it in GUIDANCE.
+const ANALYSIS_STATE = analysisState(true)
 
 // The round-preparation state: the round-start gate's document and where its
-// content comes from. The m-mode caveat keeps the text honest where no stub
-// was written at establishment.
-function roundState(round: string): string {
-  return `Current state — round ${round} preparation (the round-start gate): the round's setup is on disk; the document to fill is \`docs/${round}/round.md\`, whose sections are \`## Goal\` (what this round must achieve, in the project's own terms), \`## Acceptance criteria\` (how a reviewer tells it was met) and \`## Release criteria\` (what must hold before the round closes); \`## Close\` stays empty until the round ends — the round-close gate requires it then. Derive the content from the project brief (\`.opencode/auto/brief.md\`), this round's line and key work in \`docs/analysis.md\`, and the previous round's \`report-for-user.md\` and \`## Close\` listing; settle anything still open with the person before it lands. When the sections hold the person's real intent, review together, commit, and run \`plan\` again — it plans the round's first phase. (In the manual single-phase mode the round brief is not stubbed at establishment; create the file before the round closes — its \`## Close\` is required there too.)`
+// content comes from. The closing line carries the mode's command (plans/0101
+// D7): phased continues with transfer (the construct and its review stop), m
+// mode with plan. The m-mode caveat stays in the m branch alone — a phased
+// establishment stubs the brief.
+function roundState(round: string, manual: boolean): string {
+  return `Current state — round ${round} preparation (the round-start gate): the round's setup is on disk; the document to fill is \`docs/${round}/round.md\`, whose sections are \`## Goal\` (what this round must achieve, in the project's own terms), \`## Acceptance criteria\` (how a reviewer tells it was met) and \`## Release criteria\` (what must hold before the round closes); \`## Close\` stays empty until the round ends — the round-close gate requires it then. Derive the content from the project brief (\`.opencode/auto/brief.md\`), this round's line and key work in \`docs/analysis.md\`, and the previous round's \`report-for-user.md\` and \`## Close\` listing; settle anything still open with the person before it lands. ${
+    manual
+      ? "When the sections hold the person's real intent, review together, commit, and run `plan` again — it plans the round's first phase. (The round brief is not stubbed at establishment in this mode; create the file before the round closes — its `## Close` is required there too.)"
+      : "When the sections hold the person's real intent, review together, commit, and run `transfer` again — it constructs the first phase's plan task and stops for your review (`plan` dispatches it, `run` executes the phase)."
+  }`
 }
 
 // The phase-preparation state: the next phase's planning input, its scaffold
 // (the active intent pack's own `## planning-input` section, pre-rendered by
-// the caller), and its anchors.
-function phaseState(phase: string, inputPath: string, scaffold: string): string {
+// the caller), and its anchors. The consumption line carries the mode's
+// command (plans/0101 D7): phased constructs through transfer (the review
+// stop between construction and dispatch), m mode plans as before.
+function phaseState(phase: string, inputPath: string, scaffold: string, manual: boolean): string {
   return [
-    `Current state — phase ${phase} preparation: the next step is this phase's planning session, and it reads the person's planning input. The document to fill is \`${inputPath}\` — the driver commits it unchanged before the session runs; free-form markdown, completed per the active intent pack's scaffold:`,
+    manual
+      ? `Current state — phase ${phase} preparation: the next step is this phase's planning session, and it reads the person's planning input. The document to fill is \`${inputPath}\` — the driver commits it unchanged before the session runs; free-form markdown, completed per the active intent pack's scaffold:`
+      : `Current state — phase ${phase} preparation: the next step is this phase's plan task — the formulation unit \`transfer\` constructs and \`plan\` dispatches after your review — and it reads the person's planning input. The document to fill is \`${inputPath}\` — the driver commits it unchanged before the construction runs; free-form markdown, completed per the active intent pack's scaffold:`,
     scaffold,
-    `Anchor it in the round brief (\`docs/R-NN/round.md\`), this round's roadmap line in \`docs/analysis.md\`, and the previous phase's \`handover.md\`; settle open points with the person — a \`Fork:\` line in the input is legitimate when a decision must stay open. When the file holds the person's intent, run \`plan\` — the planning session consumes it as written.`,
+    `Anchor it in the round brief (\`docs/R-NN/round.md\`), this round's roadmap line in \`docs/analysis.md\`, and the previous phase's \`handover.md\`; settle open points with the person — a \`Fork:\` line in the input is legitimate when a decision must stay open. ${
+      manual
+        ? "When the file holds the person's intent, run `plan` — the planning session consumes it as written."
+        : "When the file holds the person's intent, run `transfer` — it reads the input as written into the phase's plan task and stops for your review (`plan` dispatches the task, `run` executes the phase)."
+    }`,
   ].join("\n\n")
 }
 
 // The guidance a preparation stop renders: which state, plus the data only
 // the caller knows (the round name; the target phase, its input path and the
-// pack's scaffold).
+// pack's scaffold) and the mode the stop renders under (plans/0101 D7 — the
+// next-lines' commands: phased transfer/plan/run, m mode plan alone).
 export type Guidance =
-  | { kind: "analysis" }
-  | { kind: "round"; round: string }
-  | { kind: "phase"; phase: string; inputPath: string; scaffold: string }
+  | { kind: "analysis"; manual: boolean }
+  | { kind: "round"; round: string; manual: boolean }
+  | { kind: "phase"; phase: string; inputPath: string; scaffold: string; manual: boolean }
 
 // The static guidance texts as one exported record — the pinning surface for
 // the tests, in CONSTITUTION's shape (the state texts with data are reached
-// through renderAgentsBlock).
+// through renderAgentsBlock). The analysis state's two mode variants both
+// ride here (the m-mode one under its historical name).
 export const GUIDANCE = {
   DRIVER_PRIMER,
   ASSIST_RULE,
   ANALYSIS_STATE,
+  ANALYSIS_STATE_PHASED: analysisState(false),
 } as const
 
 // The guidance's paragraphs, in block order: the primer, the assist rule,
@@ -161,10 +199,10 @@ export const GUIDANCE = {
 function guidanceParagraphs(guidance: Guidance): string[] {
   const state =
     guidance.kind === "analysis"
-      ? ANALYSIS_STATE
+      ? analysisState(guidance.manual)
       : guidance.kind === "round"
-        ? roundState(guidance.round)
-        : phaseState(guidance.phase, guidance.inputPath, guidance.scaffold)
+        ? roundState(guidance.round, guidance.manual)
+        : phaseState(guidance.phase, guidance.inputPath, guidance.scaffold, guidance.manual)
   return [DRIVER_PRIMER, ASSIST_RULE, state]
 }
 
