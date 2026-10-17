@@ -93,7 +93,7 @@ the working tree for review.
 | templates-6 | P3 | Unreachable-by-construction templates/sections (decompose.md fallback, decompose-k family) — registry symmetry, harmless | RECORD |
 | templates-7 | P3 | Agent contract role list omits whole-task ("decompose / single subtask / wrap-up") | FIX(F) |
 | templates-8 | P3 | _partials.md header prose cites the retired phase-plan template | FIX(F) |
-| templates-9 | P3 | Shipped opencode.json: `"bash": {"*": "allow"}` contradicts README's escalation claim + pins a concrete local model | RECORD (ruling needed on security posture) |
+| templates-9 | P3 | Shipped opencode.json: `"bash": {"*": "allow"}` contradicts README's escalation claim + pins a concrete local model | RESOLVED 2026-10-18 by ruling: Option A — the wildcard kept as full-trust-by-design (posture documented in templates/README.md and the shell README; the false escalation claim had already been removed by stage F's rewrite) and the model pin deleted (the only one on the template surface); affects new inits only |
 | templates-10 | P3 | Designed-floor asymmetries across packs — deliberate minimalism | RECORD |
 | templates-11 | P3 | Partial-extraction candidates (precedence ×5, handover-content ×4) | RECORD (golden churn outweighs) |
 
@@ -207,6 +207,8 @@ invariants 9 · shell 15. Dispositions: ~75 FIX across stages A–I; ~33 RECORD.
 1. **templates-9** — shipped `templates/opencode.json` allows all bash (`"*": "allow"`) while its
    README claims escalation, and pins `model: local-vllm/qwen3-coder-next`. Security posture +
    whether a default model belongs in the shipped copy are owner calls.
+   — **RESOLVED 2026-10-18**: Option A ruled (wildcard kept, full-trust-by-design documented in
+   both READMEs) + the model pin deleted; no other template pins a model.
 2. **invariants-4** — fix/sync/models "findings present" exit 1 vs the constitution's exit-2
    wording: deliberate grep-style convention; changing it breaks scripts.
 3. **deadcode-5** — a sweep dropping the `export` keyword on 215 file-local symbols (mechanically
@@ -337,3 +339,9 @@ run twice** (order-stable); shell `bun typecheck` clean, suite **125 pass / 8 li
 0 fail**. Working tree: 85 files modified + 8 added (this document, 4 new src modules, 3 test
 fixtures/files, ...), net **−771 lines**. All changes left uncommitted for review. Baseline was
 core 2664 pass / shell 124 pass; the +2 are new coverage (format unit tests, refusal/gate pins).
+
+Addendum 2026-10-18 (post-commit ruling): templates-9 resolved per the maintainer's decision —
+Option A (the `bash: {"*": "allow"}` wildcard kept as the documented full-trust-by-design
+posture; both READMEs now say so and name the real containment layers) and every model pin
+deleted from the template surface (`templates/opencode.json` carried the only one). New inits
+only; existing targets keep their person-owned copy (`fix` never overwrites an existing file).

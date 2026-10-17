@@ -84,6 +84,16 @@ it differs from the built-in template, so the agent contract is the latest versi
 [The advance command (transfer)](#the-advance-command-transfer) and
 [Planning and the round lifecycle (plan)](#planning-and-the-round-lifecycle-plan)).
 
+The generated `opencode.json` is full-trust by design: the bash permission table ships
+`{"*": "allow"}` and no model is pinned (session models come from the driver's own routing and
+the model registry layers; a fresh project simply inherits your opencode default). Driver runs
+are unattended and a permission request blocks the run (exit 2) rather than guarding it, so
+containment lives in branch isolation (`--isolate`), the clean-tree gates and the unified
+commit's SHA audit — not the bash table. The narrower patterns listed beside the wildcard
+(`bun`/`npm test*`, `git status*`/`diff*`/`log*`, …) are the ready-made starting point for a
+person who deletes the wildcard and wants a tighter posture; the file is yours after init
+(`fix` never overwrites an existing copy).
+
 The semantics of `init` writing `.opencode/auto/config.json` are a **stateless full overwrite**: the output
 is decided solely by the arguments passed to this invocation; keys not given always fall back to the built-in
 defaults, with no incremental merge against the old config on disk. So "run a no-argument `init` in a clean

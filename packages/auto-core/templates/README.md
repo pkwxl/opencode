@@ -5,7 +5,13 @@ target project (init writes them); the rest are embedded into the binary at comp
 rendered or materialized by the tool:
 
 - `opencode.json` — permission allowlist: the execution agent's bash/edit permission rules
-  (person-editable after init; `fix` restores it only when it is missing).
+  (person-editable after init; `fix` restores it only when it is missing). The shipped copy is
+  full-trust by design — the bash table's `"*": "allow"` wildcard with no model pin (session
+  models come from the driver's own routing and the model registry layers): driver runs are
+  unattended and a permission request blocks the run rather than guarding it, so containment
+  lives in branch isolation, the clean-tree gates and the unified commit, not the bash table.
+  The narrower patterns beside the wildcard are the ready-made starting point for a person who
+  deletes it and wants a tighter posture.
 - `.opencode/agent/auto.md` — the non-interactive execution agent contract (same init-copy and
   restore rule).
 - `prompts/` — session prompt templates, embedded via the `with { type: "file" }` imports in
