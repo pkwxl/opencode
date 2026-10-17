@@ -176,3 +176,37 @@ without weakening assertions or acceptance criteria; add regression coverage for
 fix; record deferred issues with their rationale. Critical failures and unresolved
 mandatory requirements are never reported as passed; the final assessment distinguishes
 verified, failed, blocked and deferred.
+
+### verify-plan-acceptance
+
+The acceptance plan must render the round's formal verdict from evidence on disk, re-running
+every deciding check itself: a prior phase's green report is context, never the verdict.
+Independently inspect the round's requirements, analysis and design artifacts, the behavior
+baseline the analysis phase distilled (the reference observed), the implementation and test
+changes, and the round's recorded deviations, deferrals and open findings, and derive the
+plan's verdict structure from these — never invent criteria. The plan is an item-by-item
+adjudication, never a summary: each criterion the round's documents state appears as its own
+verdict entry with its evidence citation, and no criterion is accepted on prose, merged, or
+silently dropped. Explicitly address:
+
+- **Negative scope** — the plan's first deliverable states what this round does not deliver:
+  every deferred, descoped or postponed item with the record that owns it, so a passing
+  verdict cannot read as the whole mission being complete;
+- **Re-run, never cite** — every entry names the command, check or committed artifact that
+  decides it, re-executed at acceptance on the final tree; recorded counts, registers and
+  deviation ledgers the round kept are re-derived from the tree, and drift is a finding,
+  never an edit;
+- **Parity judgment** — how the verdict weighs observed behavior against the baseline and
+  rules on each recorded deviation: kept and still-marked, eliminated with its record closed,
+  or newly found and blocking;
+- **Gap disposition** — every open finding and deferred item makes an explicit contribution
+  to the verdict: blocking, or accepted with its recorded rationale and the condition that
+  reopens it; nothing passes by silence;
+- **Evidence and limitations** — the verdict distinguishes verified, failed, blocked and
+  deferred, and a person can re-execute the deciding checks from the recorded command lines
+  and artifacts alone.
+
+Acceptance verifies, it never re-implements: a defect found at acceptance is a named finding
+for the repair path, and the plan re-opens no decision the round recorded. The verdict
+follows the findings — Result: PASS only when every criterion's evidence holds, Result: FAIL
+with the reason naming what does not, never optimism.

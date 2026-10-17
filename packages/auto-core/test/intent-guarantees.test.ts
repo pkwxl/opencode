@@ -256,6 +256,37 @@ describe("the per-phase charter channel (plans/0097 D1; keys canonicalized to ty
       }
     }
   })
+
+  // The closing-phase charters (the acceptance phase's plan quality bar): the
+  // faithful family keys its builtin acceptance type by id, cleanroom its
+  // custom audit type by id — the same family verify-plan-test established.
+  test("the shipped bundles declare the closing phase's charter under its id key (acceptance for the faithful family, audit for cleanroom)", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const b = await stamped(name)
+      try {
+        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type))).toBeUndefined()
+        const closing = b.entries.at(-1)!
+        const resolved = resolvedVerifyPlan(b.pack, closing)
+        expect(resolved.global).toBeDefined()
+        expect(resolved.phase).toBeDefined()
+        // The id is canonical — a builtin's letter never keys a shipped charter.
+        expect(resolved.phaseKey).toBe(closing.type)
+        // The shared spine's non-negotiables: evidence re-run by this phase,
+        // criteria derived never invented, the item-by-item adjudication, the
+        // honest boundary statement, and the verdict following the findings.
+        expect(resolved.phase).toContain("never invent criteria")
+        expect(resolved.phase).toContain("Negative scope")
+        expect(resolved.phase).toContain("Re-run, never cite")
+        expect(resolved.phase).toContain("Gap disposition")
+        expect(resolved.phase).toContain("follows the findings")
+        expect(resolved.phase).not.toContain("migration")
+        // The activation consequence: the composed charter names the key.
+        expect(verifyPlanCharterText(resolved)).toContain(`(verify-plan-${closing.type})`)
+      } finally {
+        rmSync(b.dir, { recursive: true, force: true })
+      }
+    }
+  })
 })
 
 // The stage-A ratchet (plans/0100 stage A): no shipped bundle declares a

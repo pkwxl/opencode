@@ -322,7 +322,9 @@ describe("the detection sites (plans/0100 D3)", () => {
       expect(state.state).toBe("stale")
       if (state.state === "stale") {
         expect(state.direction).toBe("binary-newer")
-        expect(state.added).toEqual(["### verify-plan-test"])
+        // The aged pack predates the whole per-phase charter family: the
+        // running binary's bundle carries both closing-phase sections.
+        expect(state.added).toEqual(["### verify-plan-test", "### verify-plan-acceptance"])
       }
       const line = provenanceNoticeLine(comparison!)
       expect(line).toContain("intent bundle faithful")

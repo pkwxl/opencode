@@ -230,7 +230,7 @@ describe("formatSyncPlan", () => {
       await Bun.write(join(dir, ".opencode/auto/phases/my-review.md"), "# My review\n")
       const plan = await planSync(dir)
       const text = formatSyncPlan(plan)
-      expect(text).toContain(`→ ${PACK_PATH}: fast-forward to the running bundle (adds ### verify-plan-test)`)
+      expect(text).toContain(`→ ${PACK_PATH}: fast-forward to the running bundle (adds ### verify-plan-test, ### verify-plan-acceptance)`)
       expect(text).toContain(`= ${SURVEY_PATH}: current`)
       expect(text).toContain(`⚠ .opencode/auto/phases/my-review.md: not named by the running bundle`)
     } finally {
