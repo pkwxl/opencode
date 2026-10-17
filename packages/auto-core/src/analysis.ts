@@ -152,6 +152,19 @@ export async function releasedRoadmapPhases(dir: string, round: number): Promise
   return (await releasedRoadmapRound(dir, round))?.phases
 }
 
+// The released roadmap's lines as a set (plans/0101 D2 shape 4): undefined
+// when no analysis exists, when it is unreleased, or when it plans no line at
+// all — such a project never promised a roadmap, so its rounds keep falling
+// back to config `phases` forever. A roadmap that plans any line governs the
+// sequence's end: the round past its last line meets transfer's
+// roadmap-exhausted stop, not a silent config round.
+export async function releasedRoadmapRounds(dir: string): Promise<RoadmapRound[] | undefined> {
+  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+  if (raw === undefined || !clarifiedMark(raw)) return undefined
+  const rounds = roadmapRounds(raw)
+  return rounds.length ? rounds : undefined
+}
+
 export type RoundPhasesResolution = { phases: string; roadmap?: RoadmapRound }
 
 // Roadmap-driven establishment (plans/0101 D5): the released roadmap's line

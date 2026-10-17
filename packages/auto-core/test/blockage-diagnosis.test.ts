@@ -350,7 +350,10 @@ describe("the write-time handover check (plans/0082 §10 D14a)", () => {
     await writeFile(join(f.dir, "docs/T-001/done.md"), "# T-001: task T-001\nPhase: R-01.P01\n\nbody\n\n<!-- auto: eof -->\n")
     await f.commit("round setup")
     try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      // boundary flow (plans/0101 D1): the continuous crossing the
+      // write-time check's choreography pins — plain run now stops at the
+      // phase boundary ahead of the distillation it exercises here.
+      const { code, lines } = await f.run({ intent: "verify", routing: routing(), boundary: "flow" })
       expect(code).toBe(2)
       // One re-distill: two distillation sessions, two verifier calls, then
       // the fail-closed line and the blockage document.

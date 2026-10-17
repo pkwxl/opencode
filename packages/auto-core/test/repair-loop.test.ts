@@ -209,8 +209,10 @@ describe("repair (task level, m mode)", () => {
 
 describe("repair (phase level: a held verdict gate)", () => {
   test("a FAIL verdict with budget appends repair tasks, re-verifies, and the phase closes on the rewritten verdict", async () => {
+    // boundary flow (plans/0101 D1): the verdict-gate repair rides the
+    // continuous crossing; plain run now stops at the boundary ahead of it.
     const f = await fixture("mv", gateTurns())
-    const { code, lines } = await f.run({ repair: 1 })
+    const { code, lines } = await f.run({ repair: 1, boundary: "flow" })
     expect(code).toBe(0)
     expect(lines.some((line) => line.includes("repair round 1/1") && line.includes("verdict gate"))).toBe(true)
     // The acceptance phase distilled twice: the first verdict (FAIL) held the
@@ -224,8 +226,10 @@ describe("repair (phase level: a held verdict gate)", () => {
   })
 
   test("no budget: the held gate stops for the human with the rework ways listed", async () => {
+    // boundary flow as above: the held-gate stop the no-budget run meets
+    // past the boundary.
     const f = await fixture("mv", gateTurns())
-    const { code, lines } = await f.run()
+    const { code, lines } = await f.run({ boundary: "flow" })
     expect(code).toBe(2)
     expect(lines.some((line) => line.includes("repair round"))).toBe(false)
     expect(lines.some((line) => line.includes("is held by its gate"))).toBe(true)

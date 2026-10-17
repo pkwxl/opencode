@@ -198,13 +198,28 @@ export type RunAllOpts = {
   // or a held verdict gate may drive before blocking for the human, modeled
   // on the bounded-recovery precedents (/exit, failover). Absent/0 = today's
   // behavior: the first FAIL blocks (exit 2). Run-side width, never a config
-  // key; not in force under lanes or under plan's stop condition (the serial
-  // run path, v1).
+  // key; not in force under lanes or under a stop condition — the serial run
+  // path alone (plan and transfer carry no budget, and since plans/0101 D1
+  // the verdict gates they meet sit past run's boundary stop).
   repair?: number
   // plan's stop condition (plans/0053 D6): the run stops once a planning step
   // has succeeded, or where an execute route would start, and prints what to
-  // review. Absent = run: the loop goes on through execution.
-  stopBefore?: "execute"
+  // review. Absent = run: the loop goes on through execution. "formulate"
+  // (plans/0101 D2) is transfer's stop point: the loop advances boundaries
+  // (the handover, the phase close, the round close) but stops after a
+  // formulation todo is constructed, before the session is dispatched — the
+  // review seam between construction and dispatch.
+  stopBefore?: "execute" | "formulate"
+  // --boundary (plans/0101 D1): run's phase-boundary shape, a run-side width
+  // in the 0079 §4 precedent — never a config key, and deliberately no
+  // OPENCODE_AUTO_* switch (the boundary shape is interaction grammar, not an
+  // experiment). "stop" (the default, also the reading of absent): the run
+  // ends at the current phase's clean end — every unit done, lanes and doc
+  // lanes landed — before the handover distillation; the stop names transfer,
+  // the advance command that owns everything after it. "flow": today's
+  // continuous crossing. Meaningful to plain run only — under a stopBefore
+  // (plan, transfer) the loop follows its own stop condition and ignores it.
+  boundary?: "stop" | "flow"
   // The planning input plan hands the run (plans/0053 D9): the first planning
   // step persists it to its phase's plan-input.md and plans against it.
   planInput?: PlanInput
@@ -298,14 +313,15 @@ export async function preflight(
   // render facts are built per render call by the callers
   // (src/prompt-facts.ts); preflight builds one itself so an invalid intent
   // pack still exits here as a usage error, and the parallelism check below
-  // reads the same pack. Its humanQuestions flag is plan's stop condition —
-  // a person attends plan, so its sessions' questions wait for the human
+  // reads the same pack. Its humanQuestions flag is the stop condition's —
+  // a person attends plan (stopBefore "execute") and transfer (plans/0101
+  // D2, "formulate"), so those runs' sessions' questions wait for the human
   // with no timeout and never get an AUTO-RESOLVE proxy answer (the driver
   // side of the same rule is Opts.humanQuestions, watch.ts).
   let renderFacts: PromptFacts | undefined
   try {
     usePromptLibrary(directory)
-    renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore === "execute", intent: opts.intent })
+    renderFacts = promptFacts({ dir: directory, humanQuestions: opts.stopBefore !== undefined, intent: opts.intent })
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
     customTypes = custom

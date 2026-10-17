@@ -31,6 +31,7 @@ import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./p
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
+import { shellProfile } from "./shell"
 import { statsDigest } from "./stats"
 import { stepPause } from "./step"
 import { estimateTokens } from "./usage"
@@ -61,10 +62,11 @@ export async function phaseState(directory: string): Promise<PhaseState> {
 export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
 
 // The planning renders' facts (E2): the bypass sessions' human-questions mode
-// is plan's stop condition — the same rule sessionOpts applies to every
-// bypass site, so a planning prompt renders the question-rule's human-answer
-// branch exactly when its session would wait for the human.
-const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore === "execute", intent: ctx.opts.intent })
+// is the stop condition's — the same rule sessionOpts applies to every bypass
+// site, so a planning prompt renders the question-rule's human-answer branch
+// exactly when its session would wait for the human (plan and transfer,
+// plans/0101 D2, both attend).
+const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, humanQuestions: ctx.opts.stopBefore !== undefined, intent: ctx.opts.intent })
 
 // A phase type's duty paragraph for the append prompt (E2): prompt-plan's
 // planDutyText — the type's own `## plan duties` (custom types), then — the
@@ -467,6 +469,25 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         await recordSynthDigest(directory, landed.id, composed.digest)
         id = landed.id
         log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
+      }
+      // transfer's review stop (plans/0101 D2/D3): construction is the
+      // advance's last write — the formulation session's dispatch is plan's
+      // (the reviewed todo is the seam between the two commands), so under
+      // stopBefore "formulate" the step ends here, exit 0 with the todo
+      // named. A rejected todo is fixed through its inputs by re-running
+      // transfer: construction is idempotent rewrite-on-diff (plans/0095),
+      // and the digest-keep above preserves a pending todo whose floor is
+      // unchanged (plans/0097 D6).
+      if (opts.stopBefore === "formulate") {
+        const { bin } = shellProfile()
+        log(
+          `⏸ review stop: the formulation todo of ${id} (docs/${id}/todo.md — driver-owned, fix its inputs, never the todo) awaits your review`,
+        )
+        log(
+          `next: dispatch it with ${bin} plan ${directory} (the formulation session runs, the batch review follows), or fix the inputs ` +
+            `(${roundBriefPath(await currentRound(directory))}, ${planInputPath(phase)}, the project brief, the roadmap line) and re-run: ${bin} transfer ${directory}`,
+        )
+        return 0
       }
       // The formulation task runs as the phase's first ordinary unit — the
       // serial path by design (plans/0095 D5: a phase's only ready unit, its

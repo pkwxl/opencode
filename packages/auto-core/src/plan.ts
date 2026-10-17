@@ -12,7 +12,7 @@
 import { join } from "node:path"
 import { mkdir } from "node:fs/promises"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, renderAnalysisStub, resolveRoundPhases } from "./analysis"
+import { analysisProblems, renderAnalysisStub, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
 import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { log } from "./log"
@@ -757,6 +757,62 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
   ]
 }
 
+// The mechanical half of round establishment — extracted for plans/0101 D2,
+// transfer being the second caller: branch isolation, the roadmap line's
+// strict validation (D5), the establishment write and the AGENTS.md
+// round-preparation pointer. No lines of its own: every stop outcome carries
+// what the caller needs to render its own (plan's G1 stop names plan's
+// rhythm, transfer's names the construct-and-review one). The establishment
+// stays uncommitted for the round-start gate either way — committing it is
+// the person's review of the round.
+export type EstablishSetup =
+  | { type: "dirty"; repos: { rel: string; files: string[] }[] }
+  | { type: "failed"; error: string }
+  | { type: "invalid"; problem: string }
+  | { type: "error"; error: string }
+  | { type: "ok"; round: number; state: PhaseState; units: PhaseUnit[]; isolated: string[]; resolved: RoundPhasesResolution; branch: string }
+
+export async function establishRoundSetup(
+  dir: string,
+  round: number,
+  opts: { phases: string; isolate?: string[]; testByDriver?: boolean },
+): Promise<EstablishSetup> {
+  const name = roundDirName(round)
+  const resolved = await resolveRoundPhases(dir, round, opts.phases)
+  const phases = resolved.phases
+  const branch = `auto/${name}`
+  let isolated: string[] = []
+  if (opts.isolate?.length) {
+    const result = await isolateRound(dir, opts.isolate, branch)
+    if (result.type === "dirty") return { type: "dirty", repos: result.repos }
+    if (result.type === "failed") return { type: "failed", error: result.error }
+    isolated = result.isolated
+  }
+  // A roadmap line whose types the pack no longer ships fails strictly here,
+  // through the ordinary establishment validation, naming the line (D5): the
+  // release checked it against the types of its day, and this is where the
+  // changed pack meets the released document.
+  if (resolved.roadmap) {
+    try {
+      const types = loadPhaseTypes(dir)
+      if (resolvePhases(phases, types) === null) {
+        return { type: "invalid", problem: `the roadmap of ${ANALYSIS_DOC} plans ${name} with "${phases}", which this project cannot establish: ${phasesProblem(phases, types)}` }
+      }
+    } catch {
+      // a broken custom-type table surfaces through establishRound's own path below
+    }
+  }
+  let state: PhaseState | undefined
+  try {
+    await establishRound(dir, { phases, round })
+    state = await readPhases(dir, round)
+  } catch (error) {
+    return { type: "error", error: error instanceof Error ? error.message : String(error) }
+  }
+  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name } })
+  return { type: "ok", round, state: state!, units: state!.phases, isolated, resolved, branch }
+}
+
 // Establish a round (no AI, left uncommitted for the round-start gate G1)
 // and print the G1 lines (plans/0053 D15). Branch isolation (plans/0074 §2.2)
 // happens here — the natural point where round-scoped state is created: each
@@ -782,51 +838,25 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 async function establish(dir: string, round: number, opts: { phases: string; isolate?: string[]; testByDriver?: boolean }, before: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
   const name = roundDirName(round)
-  const resolved = await resolveRoundPhases(dir, round, opts.phases)
-  const phases = resolved.phases
-  const branch = `auto/${name}`
-  let isolated: string[] = []
-  if (opts.isolate?.length) {
-    const result = await isolateRound(dir, opts.isolate, branch)
-    if (result.type === "dirty") {
-      return stop(2, [
-        ...before,
-        `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
-          `handle it manually (commit/clean) and re-run:`,
-        ...result.repos.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
-      ])
-    }
-    if (result.type === "failed") {
-      return stop(1, [...before, `branch isolation failed, nothing was written: ${result.error}; fix the repository and re-run: ${bin} plan ${dir}`])
-    }
-    isolated = result.isolated
+  const setup = await establishRoundSetup(dir, round, opts)
+  if (setup.type === "dirty") {
+    return stop(2, [
+      ...before,
+      `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
+        `handle it manually (commit/clean) and re-run:`,
+      ...setup.repos.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
+    ])
   }
-  // A roadmap line whose types the pack no longer ships fails strictly here,
-  // through the ordinary establishment validation, naming the line (D5): the
-  // release checked it against the types of its day, and this is where the
-  // changed pack meets the released document.
-  if (resolved.roadmap) {
-    try {
-      const types = loadPhaseTypes(dir)
-      if (resolvePhases(phases, types) === null) {
-        return stop(1, [
-          ...before,
-          `⏸ the roadmap of ${ANALYSIS_DOC} plans ${name} with "${phases}", which this project cannot establish: ${phasesProblem(phases, types)}; ` +
-            `fix the roadmap line (or the phase types it names), then re-run: ${bin} plan ${dir}`,
-        ])
-      }
-    } catch {
-      // a broken custom-type table surfaces through establishRound's own path below
-    }
+  if (setup.type === "failed") {
+    return stop(1, [...before, `branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${bin} plan ${dir}`])
   }
-  let state: PhaseState | undefined
-  try {
-    await establishRound(dir, { phases, round })
-    state = await readPhases(dir, round)
-  } catch (error) {
-    return stop(1, [...before, `round establishment failed: ${error instanceof Error ? error.message : String(error)}`])
+  if (setup.type === "invalid") {
+    return stop(1, [...before, `⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${bin} plan ${dir}`])
   }
-  const units = state!.phases
+  if (setup.type === "error") {
+    return stop(1, [...before, `round establishment failed: ${setup.error}`])
+  }
+  const { units, isolated, resolved, branch } = setup
   // The isolation line rides both G1 shapes: the round's commits land on the
   // round branch, the original branch never moves.
   const isolatedLine = isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []
@@ -835,9 +865,8 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
   const sourceSuffix = resolved.roadmap
     ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(resolved.roadmap.goal)}"; config default was "${opts.phases}")`
     : ""
-  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name } })
   const guideLine = `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`
-  if (phases === "m") {
+  if (resolved.phases === "m") {
     return stop(0, [
       ...before,
       `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
@@ -858,8 +887,9 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
 }
 
 // A roadmap line's goal as the sourced line's round class: capped so a long
-// goal cannot swallow the stop line.
-function truncateGoal(goal: string): string {
+// goal cannot swallow the stop line. Shared with transfer's establish stop
+// (plans/0101 D2).
+export function truncateGoal(goal: string): string {
   return goal.length > 60 ? `${goal.slice(0, 60)}…` : goal
 }
 

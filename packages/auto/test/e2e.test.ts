@@ -1968,6 +1968,110 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
 
 })
 
+// transfer and run --boundary (auto-core plans/0101 D1/D2): the CLI surface
+// of the person-bracketed boundaries — the command's usage refusals and its
+// session-free project-start shapes; the boundary flag's parse and its
+// exclusions. The advance's session halves are the core suites' (the loop
+// under stopBefore "formulate").
+describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => {
+  test("transfer refuses m mode, run's execution options and the planning input; an uninitialized directory refuses", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const manual = await runCli(["transfer", dir])
+      expect(manual.code).toBe(1)
+      expect(manual.out).toContain("transfer applies to phased projects")
+      expect(manual.out).toContain("execute with opencode-auto run")
+      for (const args of [["--dryrun"], ["--boundary", "flow"]] as const) {
+        const refused = await runCli(["transfer", dir, ...args])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain("transfer does not accept it")
+      }
+      const input = await runCli(["transfer", dir, "--file", "x.md"])
+      expect(input.code).toBe(1)
+      expect(input.err).toContain("transfer takes no planning input")
+      // An uninitialized directory loads the config defaults (m mode), so
+      // the m-mode refusal answers it — exit 1 either way, nothing written.
+      const fresh = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        const uninit = await runCli(["transfer", fresh])
+        expect(uninit.code).toBe(1)
+        expect(uninit.out).toContain("transfer applies to phased projects")
+        expect(await Bun.file(join(fresh, "docs/analysis.md")).exists()).toBe(false)
+      } finally {
+        await rm(fresh, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("transfer on a fresh phased project opens the assisted analysis itself, the stop naming transfer's rhythm", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
+      const stubbed = await runCli(["transfer", dir])
+      expect(stubbed.code).toBe(0)
+      expect(stubbed.out).toContain("the project analysis is open")
+      expect(stubbed.out).toContain("re-run: opencode-auto transfer")
+      expect(await Bun.file(join(dir, "docs/analysis.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/R-01")).exists().catch(() => false)).toBe(false)
+      // A complete but unreleased analysis awaits the person through
+      // transfer too (the release-gate stop, plans/0084 row 0c's shape).
+      await Bun.write(
+        join(dir, "docs/analysis.md"),
+        [
+          "# Project analysis",
+          "",
+          "## Analysis",
+          "",
+          "A CLI tool of three modules; the retry ladder is the risk area.",
+          "",
+          "## Goals",
+          "",
+          "Ship the port with the protocol intact.",
+          "",
+          "## Project brief",
+          "",
+          "A faithful port of the core into the monorepo, tests included.",
+          "",
+          "## Roadmap",
+          "",
+          "- R-01 mt — port the core and its tests",
+          "",
+        ].join("\n"),
+      )
+      const awaiting = await runCli(["transfer", dir])
+      expect(awaiting.code).toBe(2)
+      expect(awaiting.out).toContain("the project analysis awaits you")
+      expect(awaiting.out).toContain("re-run: opencode-auto transfer")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("run --boundary takes stop or flow (bare and invalid refuse); plan refuses the flag", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
+      for (const value of ["crossing", "1"]) {
+        const invalid = await runCli(["run", dir, "--boundary", value])
+        expect(invalid.code).toBe(1)
+        expect(invalid.err).toContain("--boundary takes stop or flow")
+      }
+      const bare = await runCli(["run", dir, "--boundary"])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain("--boundary takes stop or flow")
+      const plan = await runCli(["plan", dir, "--boundary", "flow"])
+      expect(plan.code).toBe(1)
+      expect(plan.err).toContain("--boundary is a run option")
+      expect(plan.err).toContain("plan does not accept it")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // init's git bootstrap and identity resolution (auto-core plans/0073, ruled
 // 2026-10-04): a non-git target directory is bootstrapped into a real
 // repository in one go — git init (init.defaultBranch when the person set
@@ -2320,15 +2424,16 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
   })
 })
 
-// `continue` retired (auto-core plans/0053 D33): plan owns the rounds — its
-// prelude runs the round-close checks and opens the next round once the
-// current one is complete — so the dedicated subcommand is a usage error. The
-// notice is the one answer whatever follows the command; the routes it used
-// to serve (the previous round's completeness re-check, the round-close gate,
-// establishing the next round) are plan's, covered by the plan describe.
+// `continue` retired (auto-core plans/0053 D33; the advance command since
+// plans/0101 D2 is transfer): the round-close checks and the next round's
+// opening are the advance command's — transfer's — so the dedicated
+// subcommand is a usage error. The notice is the one answer whatever follows
+// the command; the routes it used to serve (the previous round's completeness
+// re-check, the round-close gate, establishing the next round) are covered by
+// the plan and transfer describes.
 describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
   const NOTICE =
-    "continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run opencode-auto plan <dir> — it runs the round-close checks and opens the next round\n"
+    "continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run opencode-auto transfer <dir> — it runs the round-close checks and opens the next round\n"
 
   test("--continue is not an option: appearing on init/run/plan points at plan", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
@@ -2336,18 +2441,18 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
       const init = await runCli(["init", dir, "--continue"])
       expect(init.code).toBe(1)
       expect(init.err).toContain("--continue is not an option")
-      expect(init.err).toContain("run opencode-auto plan <dir> (it runs the round-close checks and opens the next round)")
+      expect(init.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
       expect(init.err).not.toContain("continue is retired")
       const run = await runCli(["run", dir, "--continue"])
       expect(run.code).toBe(1)
       expect(run.err).toContain("--continue is not an option")
-      expect(run.err).toContain("run opencode-auto plan <dir> (it runs the round-close checks and opens the next round)")
+      expect(run.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
       // plan shares run's option machinery (refuseFrozenFlags), so its
-      // --continue message names plan the same way.
+      // --continue message names transfer the same way.
       const plan = await runCli(["plan", dir, "--continue"])
       expect(plan.code).toBe(1)
       expect(plan.err).toContain("--continue is not an option")
-      expect(plan.err).toContain("run opencode-auto plan <dir> (it runs the round-close checks and opens the next round)")
+      expect(plan.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

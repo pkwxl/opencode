@@ -32,6 +32,9 @@ export const REPO_LANE: readonly string[] = [
   // harness's freshRepo fixtures); the pure halves stay in the unit lane.
   "test/blockage-diagnosis.test.ts",
   "test/blockage-executor.test.ts",
+  // run's boundary stop (plans/0101 D1): the loop harness over real git
+  // repositories — the boundary state's commits and handover documents.
+  "test/boundary.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
   // Doc lanes (plans/0099): the loop-shape cases drive real git repositories
@@ -82,6 +85,10 @@ export const REPO_LANE: readonly string[] = [
   // The survey phase and the human clarification gate (plans/0081 D14/D15):
   // the unit-suites lane like the repair loop it extends.
   "test/survey-gate.test.ts",
+  // transfer, the single advance command (plans/0101 D2): real git
+  // repositories — establish leaves the round setup uncommitted, the brief
+  // install commits, the advance's loop harness rides freshRepo.
+  "test/transfer.test.ts",
   "test/reset.test.ts",
   "test/resolve.test.ts",
   "test/run-status.test.ts",

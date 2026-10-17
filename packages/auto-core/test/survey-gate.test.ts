@@ -116,12 +116,14 @@ async function fixture(analysisBlocks: string[] = []): Promise<LoopFixture> {
   return f
 }
 
-describe("the survey phase and the human clarification gate (plans/0081 D14/D15)", () => {
-  test("a recorded fork holds the phase awaiting the person; Clarified: yes releases it and installs the approved brief", async () => {
+describe("the survey phase and the human clarification gate (plans/0081 D14/D15; the boundary rhythm of plans/0101 D1/D2)", () => {
+  test("a recorded fork holds the phase at run's boundary stop (no session past it); Clarified: yes releases it and transfer's advance installs the approved brief", async () => {
     const analysisBlocks: string[] = []
     const f = await fixture(analysisBlocks)
-    // The survey task's session wrote survey.md with one open fork: the
-    // handover distills, then the gate holds (exit 2, done.md waits).
+    // The survey task's session wrote survey.md with one open fork: the run
+    // completes the phase's work and stops at its boundary (plans/0101 D1)
+    // where the human gate is checked — exit 2, done.md waits, and no
+    // distillation session runs ahead of the person's decision.
     const held = await f.run()
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
@@ -132,14 +134,20 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15)
     expect(held.lines.some((line) => line.includes("it accepts every line's `Recommend:` default"))).toBe(true)
     expect(held.lines.some((line) => line.includes("without a `Recommend:` default"))).toBe(false)
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/handover.md"))).toBe(false)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
     // The person's release: the release line beside the fork, committed like
     // any hand edit.
     const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
     writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
     await f.commit("clarify the survey")
-    const released = await f.run()
-    expect(released.code).toBe(0)
+    // transfer's advance (plans/0101 D2, the loop under stopBefore
+    // "formulate"): it absorbs what the run re-entry did — the gate
+    // re-check, the release's install — closes the phase, and constructs the
+    // next phase's plan task, stopping at the review seam without
+    // dispatching it.
+    const advanced = await f.run({ stopBefore: "formulate" })
+    expect(advanced.code).toBe(0)
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
     // The approved `## Project brief` section is installed verbatim, in its
     // own commit (D15.2; the install names its source document since
@@ -149,15 +157,85 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15)
     expect(brief).toContain("rule separation")
     expect(brief).not.toContain("Fork:")
     expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
-    // The round completed and its report stands (the final m phase's
+    // The next phase's plan task stands constructed and reviewed — the
+    // implementation formulation was NOT dispatched by the advance: the
+    // index holds the formulation line alone, no planned task beside it.
+    const implement = (await f.phase(1)).dir
+    const index = (await Bun.file(join(f.dir, implement, "tasks.md")).text()).trim().split("\n")
+    expect(index.filter((line) => /^\- \[ \] T-\d+/.test(line))).toHaveLength(1)
+    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    // plan dispatches the reviewed task (its stop condition's formulation
+    // route), the batch review follows.
+    const dispatched = await f.run({ stopBefore: "execute" })
+    expect(dispatched.code).toBe(0)
+    expect(dispatched.lines.some((line) => line.includes("✓ phase planning complete"))).toBe(true)
+    // run executes the implement phase and stops at the round's last
+    // boundary — the stop names the round close.
+    const executed = await f.run()
+    expect(executed.code).toBe(0)
+    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
+    expect(executed.lines.some((line) => line.includes("✓ phase boundary: P02-implement Implementation complete"))).toBe(true)
+    expect(executed.lines.some((line) => line.includes("closes the phase and the round"))).toBe(true)
+    // The round-close advance: the report self-heal (plans/0081 D4) fires
+    // inside the handover — its appended report task is execute work, so the
+    // advance stops naming run (transfer executes nothing), run executes it,
+    // and the next advance closes the phase and the round, stopping with the
+    // report named — the round-close-then-stop split (plans/0101 D2 shape 3).
+    const healed = await f.run({ stopBefore: "formulate" })
+    expect(healed.code).toBe(2)
+    expect(healed.lines.some((line) => line.includes("appending one report task"))).toBe(true)
+    expect(healed.lines.some((line) => line.includes("transfer does not execute tasks"))).toBe(true)
+    const reported = await f.run()
+    expect(reported.code).toBe(0)
+    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
+    // The closing advance refuses while the round's own restatement listing
+    // is an unfilled stub (G8's close listing — the person's act), then the
+    // filled ## Close lets it close the round and stop with the report
+    // named — the round-close-then-stop split (plans/0101 D2 shape 3).
+    const unfilled = await f.run({ stopBefore: "formulate" })
+    expect(unfilled.code).toBe(2)
+    expect(unfilled.lines.some((line) => line.includes("does not pass its round-close checks"))).toBe(true)
+    expect(unfilled.lines.some((line) => line.includes("close listing"))).toBe(true)
+    const roundDoc = join(f.dir, "docs/R-01/round.md")
+    writeFileSync(roundDoc, (await Bun.file(roundDoc).text()).replace("## Close", "## Close\n\n- The survey's fork decision is restated in the project brief; nothing accepted as lost."))
+    await f.commit("fill the round's close listing")
+    const closed = await f.run({ stopBefore: "formulate" })
+    expect(closed.code).toBe(0)
+    expect(existsSync(join(f.dir, "docs/R-01/P02-implement/done.md"))).toBe(true)
+    expect(closed.lines.some((line) => line.includes("✓ round close checks passed"))).toBe(true)
+    expect(closed.lines.some((line) => line.includes("then open the next round with: opencode-auto transfer"))).toBe(true)
+    expect((await f.git("status", "--porcelain")).trim()).toBe("")
+    // The approved analysis reached the survey's planning session alone
+    // (plans/0085 A1): the human-gated phase reads the person's settled
+    // decisions; the implement phase that followed did not.
+    expect(analysisBlocks).toEqual(["survey"])
+  })
+
+  test("--boundary flow keeps the continuous crossing: the distillation runs while the gate holds, and the release flows into the completed round", async () => {
+    const analysisBlocks: string[] = []
+    const f = await fixture(analysisBlocks)
+    // Flow (plans/0101 D1's lift): today's shape — the handover distills
+    // first, then the gate holds (exit 2, done.md waits).
+    const held = await f.run({ boundary: "flow" })
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/handover.md"))).toBe(true)
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
+    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
+    await f.commit("clarify the survey")
+    const released = await f.run({ boundary: "flow" })
+    expect(released.code).toBe(0)
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
+    expect(brief).toContain("a clean-room reimplementation of the core")
+    expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
+    // The round completed and its report stands (the final phase's
     // self-healed report task): the conclusion names the report path.
     expect(released.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)
     expect(released.lines.some((line) => line.includes("round report for the person: docs/R-01/report-for-user.md"))).toBe(true)
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
-    // The approved analysis reached the survey's planning session alone
-    // (plans/0085 A1): the human-gated phase reads the person's settled
-    // decisions; the implement phase that followed did not.
     expect(analysisBlocks).toEqual(["survey"])
   })
 })

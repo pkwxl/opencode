@@ -416,7 +416,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // is the driver's own mechanism, and the appended tasks are planned work.
     // Any refusal (explicit dependents without cascade, a dirty tree) or a
     // spent budget falls through to today's block.
-    if (outcome.repair !== undefined && ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs) {
+    if (outcome.repair !== undefined && ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs) {
       ctx.repairs++
       const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}`
       const closed = await closeUnit(directory, task.id, { reason, phases: ctx.phases, acceptanceGate: ctx.opts.acceptanceGate })
@@ -1128,7 +1128,7 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // today's block exactly as the serial world's does. Returns true when
     // scheduling may continue (the repair round), false when the run stops.
     const finishBlocked = async (task: Task, blocked: { question: string; repair?: { reason?: string } }): Promise<boolean> => {
-      if (blocked.repair !== undefined && opts.stopBefore !== "execute" && (opts.repair ?? 0) > ctx.repairs) {
+      if (blocked.repair !== undefined && opts.stopBefore === undefined && (opts.repair ?? 0) > ctx.repairs) {
         await waitQuiet()
         ctx.repairs++
         const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${blocked.repair.reason ? ` (${blocked.repair.reason})` : ""}`

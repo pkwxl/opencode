@@ -308,7 +308,7 @@ export type SessionCtx = {
     newSession?: boolean
     wrapup?: boolean
     scanExempt?: string[]
-    stopBefore?: "execute"
+    stopBefore?: "execute" | "formulate"
     // The width facts of plans/0068 (D10/D18/S5): the level and the slot
     // count decide whether the decompose-side guidance rides the execution
     // options, and the lane scope marks a lane worker (the lead's split
@@ -392,12 +392,13 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       git: ctx.git,
       // present only when the fleet cannot fork
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
-      // plan's stop condition makes its sessions' questions the human's
-      // (plans/0095 D4: the formulation task is the only task session that
-      // ever runs under stopBefore — every other execute route stops — so
-      // the bypass era's rule carries onto the task site with the same
-      // key: absent under run, the byte-identical floor)
-      ...(ctx.opts.stopBefore === "execute" ? { humanQuestions: true } : {}),
+      // a stop condition in force (plans/0095 D4: under plan the formulation
+      // task is the only task session that ever runs — every other execute
+      // route stops; under transfer, plans/0101 D2, none runs at all, the
+      // stop preceding the dispatch) makes its sessions' questions the
+      // human's, with the same key: absent under run, the byte-identical
+      // floor
+      ...(ctx.opts.stopBefore !== undefined ? { humanQuestions: true } : {}),
       // present only under real width (the level beside it)
       ...(width && ctx.opts.parallel !== undefined ? { parallel: ctx.opts.parallel } : {}),
       // present only inside a lane worker
@@ -407,8 +408,9 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
     }
   }
   // the bypass sessions (numbering restore, planning, appending, handover
-  // distillation, knowledge extraction) share one set: plan's stop condition
-  // makes their questions the human's, and they carry no task-execution
+  // distillation, knowledge extraction) share one set: a stop condition in
+  // force (plan's, transfer's) makes their questions the human's, and they
+  // carry no task-execution
   // fields — the sessions they feed take no test protocol, no wrap-up, no
   // subtask pipeline. idleMs and mode ride on every site per the ruled
   // merge (the probe interval follows the configured idleTime; mode reaches
@@ -419,7 +421,7 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
     dir: ctx.directory,
     verbose: ctx.opts.verbose,
     waitAnswer: ctx.opts.waitAnswer,
-    humanQuestions: ctx.opts.stopBefore === "execute",
+    humanQuestions: ctx.opts.stopBefore !== undefined,
     contextLimit: ctx.opts.contextLimit,
     permission: ctx.opts.permission,
     interactive: ctx.repl,

@@ -355,6 +355,11 @@ const CLASSIFIED: Record<string, Domain> = {
   opts: "driver",
   // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
   plan: "driver",
+  // transfer, the single advance command (plans/0101 D2): the
+  // person-bracketed boundaries — shape resolution and stops beside plan's
+  // row machinery (which it shares through establishRoundSetup), delegating
+  // the advance's sessions to runAll.
+  transfer: "driver",
   // The planning input plan-input.md: read, persist, commit (plans/0053 D9).
   "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
@@ -625,6 +630,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // git's kernel primitives and the runtime config/shell only.
   land: "pipeline",
   plan: "pipeline",
+  // transfer, the single advance command (plans/0101 D2): pipeline — the
+  // runAll it delegates to is the pipeline's top, and its shape resolution
+  // reads the same round/phase machinery plan's rows do.
+  transfer: "pipeline",
   "plan-input": "pipeline",
   // The pre-round project analysis docs/analysis.md (plans/0084): stub and
   // grammar of the analysis route — pipeline beside plan, its only consumer;

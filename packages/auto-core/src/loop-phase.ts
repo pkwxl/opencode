@@ -2,6 +2,9 @@
 // handoverWithStep) and the phase routing loop (runPhaseLoop), runAll's former
 // closures as top-level functions with their captures made explicit as LoopCtx
 // (defined in ./loop-task). Phase planning lives in ./loop-plan (plans/0053 A2).
+// Since plans/0101 D1/D2 the loop also owns run's boundary stop and shapes
+// transfer's advance (stopBefore "formulate") — the two command grammars that
+// bracket the phase boundaries.
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S16, pure move). Does not depend on loop.ts.
 import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -9,7 +12,7 @@ import { requireArtifact } from "./artifact"
 import { briefProposal, installBriefProposal } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { reportForUserPath } from "./docpaths"
+import { reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { isFormulation } from "./formulate"
@@ -263,7 +266,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       return 2
     }
     if (hold.kind === "held") {
-      if (ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs) {
+      if (ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs) {
         ctx.repairs++
         log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the regression gate holds ${phaseTitle(phase)} — appending repair tasks over the red receipts`)
         ctx.input = {
@@ -303,7 +306,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     // done the phase distills again and the gate re-checks the rewritten
     // verdict. Acceptance gates never repair — `Accepted: yes` is the human's
     // alone; a failed append falls through to the gate stop.
-    if (ctx.opts.stopBefore !== "execute" && (ctx.opts.repair ?? 0) > ctx.repairs && gated.some((problem) => problem.startsWith("verdict"))) {
+    if (ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs && gated.some((problem) => problem.startsWith("verdict"))) {
       ctx.repairs++
       log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the verdict gate holds ${phaseTitle(phase)} — appending repair tasks over the gate evidence`)
       ctx.input = {
@@ -370,8 +373,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
 // and the next run re-checks. The human's ways on — sign, rework through an
 // append, or close without the gate — are spelled out here as commands: the
 // append removes the stale handover itself (plans/0053 D25) and replans the
-// distillation after the fix tasks.
-function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
+// distillation after the fix tasks. Exported since plans/0101 D1/D2: run's
+// boundary stop and transfer's phase-boundary refusal check the human gate
+// ahead of any session and print this same awaiting shape.
+export function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
   const { bin } = shellProfile()
   const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
   const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
@@ -394,6 +399,52 @@ function logGateStop(directory: string, phase: PhaseUnit, problems: string[], ac
       `(the stale handover is removed and distilled again after them)`,
   )
   log(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
+}
+
+// Whether run's boundary-stop shape is in force (plans/0101 D1): plain run
+// with --boundary not restoring the flow. A stop condition in force (plan's
+// "execute", transfer's "formulate") runs its own grammar and never this
+// stop; the lane worker never routes phases.
+const boundaryHolds = (opts: LoopCtx["opts"]): boolean => opts.stopBefore === undefined && opts.boundary !== "flow" && opts.lane === undefined
+
+// The boundary stop's lines (plans/0101 D1): the phase's planned work is done
+// at a clean end — every unit done, lanes and doc lanes landed (the route
+// itself guarantees it: runTaskLoop returns 0 only past the landings) — and
+// everything after (the handover distillation, the phase close, the round
+// close, the next formulation) is transfer's. The stop names the command,
+// and names the round close too when the phase just finished was the round's
+// last — the person knows the next transfer closes the round and stops with
+// its report.
+async function boundaryStopLines(ctx: LoopCtx, phase: PhaseUnit): Promise<string[]> {
+  const { bin } = shellProfile()
+  const state = await phaseState(ctx.directory)
+  const last = state.phases.at(-1)?.id === phase.id
+  return [
+    `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
+    `next: ${bin} transfer ${ctx.directory} — it distills the handover, closes the phase${last ? " and the round (stopping with the round's report for your review)" : ""}, ` +
+      `and constructs the next phase's plan task for your review`,
+  ]
+}
+
+// Run's tail since plans/0101 D1: the run ends at the current phase's clean
+// end, before the handover distillation. The human gate is checked first,
+// ahead of any session spending its tokens: a survey with open forks stops
+// exit 2 in today's awaiting shape (F10's discipline unchanged — the person
+// learns of the forks from the run itself), and the distillation waits for
+// the release on the transfer side. Any other gate (verdict, acceptance) is
+// the handover path's own, checked after the distillation inside transfer's
+// advance — never run's.
+async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+  const gates = phaseGates(phase, ctx.opts.acceptanceGate)
+  if (gates.includes("human")) {
+    const problems = await phaseGateProblems(ctx.directory, phase, ["human"])
+    if (problems.length) {
+      logGateStop(ctx.directory, phase, problems, undefined)
+      return 2
+    }
+  }
+  for (const line of await boundaryStopLines(ctx, phase)) log(line)
+  return 0
 }
 
 // The brief install on survey release (plans/0081 D15.2): the person's
@@ -474,6 +525,14 @@ async function ensureRoundReport(ctx: LoopCtx, phase: PhaseUnit, state: Awaited<
 // plans/0053 D6): it goes through handovers and knowledge phases as run does,
 // and stops after a successful planning step or where an execute route would
 // start, printing what to review; the complete route adds the next step (D8).
+// transfer (plans/0101 D2) runs it under stopBefore "formulate": it advances
+// whatever boundaries the state holds (the handover, the phase close, the
+// round close at the complete route) and stops at the construction's review
+// seam inside the planning step — never dispatching a task session.
+// run's boundary stop (plans/0101 D1): plain run (no stop condition, boundary
+// not "flow") ends at each clean phase end — before the handover — naming
+// transfer; mid-phase autonomy and interruption recovery keep today's shapes
+// (an interrupted handover is finished by the re-entry below, then stops).
 export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, repl } = ctx
   const code = await handoverPhase(ctx, phase)
@@ -527,11 +586,27 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       if (lines) for (const line of lines) log(line)
       // Round-close report (plans/0049 G8, anchor a): the checks the next
       // round's start enforces, reported on every complete run; the exit code
-      // is unaffected.
-      for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build, scanExempt: opts.scanExempt }))) log(line)
+      // is unaffected — for run and plan. transfer (plans/0101 D2 shape 3)
+      // is the one command that performs the round close: the checks gate
+      // its stop (exit 2 naming them), and the passing stop is the person's
+      // moment with the round's report before the next round opens.
+      const { bin } = shellProfile()
+      const close = await roundCloseProblems(directory, state.round, { build: opts.build, scanExempt: opts.scanExempt })
+      if (opts.stopBefore === "formulate") {
+        if (close.problems.length) {
+          log(`⏸ round ${roundDirName(state.round)} does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run: ${bin} transfer ${directory}`)
+          for (const line of roundCloseLines(close)) log(line)
+          return 2
+        }
+        for (const line of roundCloseLines(close)) log(line)
+        log(`next: review round ${roundDirName(state.round)}'s account for the person (${reportForUserPath(state.round)}), then open the next round with: ${bin} transfer ${directory}`)
+        return 0
+      }
+      for (const line of roundCloseLines(close)) log(line)
       // plan does not open the next round here (plans/0053 D8): the round's
       // ## Close cannot be filled in yet, so the round-close checks would fail.
       if (opts.stopBefore === "execute") log(roundCompleteNext(directory, state.round))
+      else if (boundaryHolds(opts)) log(`next: the round is complete — close it with: ${bin} transfer ${directory}`)
       return 0
     }
     // the phase-switch hook point (STATS_PLAN §3): a change of the
@@ -593,7 +668,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         if (open.step === "phase-append") {
           banner(`${phaseTitle(route.phase)} task append`)
           const code = await appendWithStep(ctx, route.phase)
-          if (code !== 0 || opts.stopBefore === "execute") return code
+          if (code !== 0 || opts.stopBefore !== undefined) return code
           continue
         }
         // handover re-entry only when file routing is handover too (this
@@ -604,6 +679,11 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         if (route.type === "handover") {
           const code = await handoverWithStep(ctx, route.phase)
           if (code !== 0) return code
+          // The boundary stop (plans/0101 D1): the re-entry finished the
+          // interrupted handover — interruption recovery keeps today's
+          // shape — and the phase reached its clean end; the loop stops
+          // here instead of crossing into the next phase.
+          if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
           continue
         }
         log(
@@ -628,7 +708,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     if (ctx.input !== undefined && route.type !== "plan" && (ctx.append || ctx.manual)) {
       banner(`${phaseTitle(route.phase)} task append`)
       const code = await appendWithStep(ctx, route.phase)
-      if (code !== 0 || opts.stopBefore === "execute") return code
+      if (code !== 0 || opts.stopBefore !== undefined) return code
       continue
     }
     // manual mode (no phases): with no task to run it wraps up — an empty
@@ -705,38 +785,57 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
               `fix the issue, then retry separately per the manual rollback procedure (rename the knowledge phase's done.md back to todo.md and delete its kb.md). Block details:\n${extracted.question}`,
           )
         }
+        // The boundary stop (plans/0101 D1) lands after the phase's work —
+        // here the knowledge extraction — and before its handover: the
+        // distillation is transfer's.
+        if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
         const code = await handoverWithStep(ctx, route.phase)
         if (code !== 0) return code
         continue
       }
       banner(`${phaseTitle(route.phase)} phase planning`)
       const code = await planWithStep(ctx, route.phase)
-      // plan's stop condition (plans/0053 D6): a planning step that succeeded
-      // is where plan stops; planWithStep printed the summary.
-      if (code !== 0 || opts.stopBefore === "execute") return code
+      // A stop condition in force (plans/0053 D6; transfer's, plans/0101
+      // D2/D3): a planning step that succeeded is where the command stops —
+      // plan after the formulation session, transfer at the construction's
+      // review stop inside it.
+      if (code !== 0 || opts.stopBefore !== undefined) return code
       continue
     }
     if (route.type === "execute") {
-      // plan's stop condition (plans/0053 D6, D7): an execute route this run
-      // did not plan (planning stops the run itself), e.g. a next phase whose
-      // tasks were listed by hand. An input left over is plan's usage error.
-      // The one exception (plans/0095 D4): a phase whose remaining work is
-      // only its formulation task is still planning — plan finishes what it
-      // started (an interrupted formulation runs to completion here, the
-      // task-pipeline re-entry of the former openStep precedence).
-      if (opts.stopBefore === "execute") {
+      // A stop condition in force (plans/0053 D6, D7): an execute route this
+      // run did not plan (planning stops the run itself), e.g. a next phase
+      // whose tasks were listed by hand. The one exception (plans/0095 D4):
+      // a phase whose remaining work is only its formulation task is still
+      // planning — plan finishes what it started (an interrupted formulation
+      // runs to completion here, the task-pipeline re-entry of the former
+      // openStep precedence), and transfer (plans/0101 D2) re-enters the
+      // same step for the idempotent reconstruct, ending at its review stop.
+      if (opts.stopBefore !== undefined) {
         const remaining = route.plan.tasks.filter((task) => task.status !== "done")
         if (remaining.length && remaining.every((task) => isFormulation(task, route.phase))) {
           banner(`${phaseTitle(route.phase)} phase planning`)
           return await planWithStep(ctx, route.phase)
         }
+        if (opts.stopBefore === "execute") {
+          for (const line of executeNotice(directory, route, ctx.manual)) log(line)
+          return ctx.input ? 1 : 0
+        }
+        // transfer's backstop — its own pre-check refuses this state before
+        // runAll starts: execute work pending belongs to run.
         for (const line of executeNotice(directory, route, ctx.manual)) log(line)
-        return ctx.input ? 1 : 0
+        log(`⏸ transfer does not execute tasks — run: ${shellProfile().bin} run ${directory}`)
+        return 2
       }
       const code = await runTaskLoop(ctx, route.phase)
       if (code !== 0) return code
       continue
     }
+    // The boundary stop (plans/0101 D1): the phase's last task unit closed
+    // and the loop routed to its handover — run ends here, everything from
+    // the distillation on is transfer's. Under --boundary flow (or a stop
+    // condition's own grammar) the crossing continues as before.
+    if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
     const code = await handoverWithStep(ctx, route.phase)
     if (code !== 0) return code
   }
