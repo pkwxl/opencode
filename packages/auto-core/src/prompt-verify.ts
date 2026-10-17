@@ -22,7 +22,10 @@
 // that can be slept through is not a guarantee; flakiness surfaces loudly.
 // The token cost of the two calls is not booked to a stats bucket in v1 (one
 // cheap call per planning step; noted in plans/0080 §5's explicitly-not).
+import { join } from "node:path"
 import { classifierEntry, oneShot } from "./classify"
+import type { GitOps } from "./git"
+import { log } from "./log"
 import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { packSubsection } from "./intent/load"
 import type { PhaseTypeEntry } from "./phases/registry"
@@ -134,6 +137,43 @@ export function verifyAuditEntry(step: string, outcome: Exclude<PlanVerifyOutcom
           ? `FAILED — ${outcome.reason}`
           : `skipped — ${outcome.reason}`
   return `- ${stamp} ${step}: ${verdict}`
+}
+
+// The round's prompt-audit append (plans/0080 §5, the 0102 complexity-17
+// dedup): the one write+commit behind every audit entry — the verifier
+// verdicts (loop-plan's verifyPlanStep, loop-phase's handover write-time
+// gate), the admission warns, the synthesis records and the diagnosis
+// fail-closeds all append through here. The previous text decides the
+// preamble: an empty audit opens with the record's header line, anything
+// else appends after the trimmed tail. The entry commits on its own ahead
+// of whatever it documents (stage prompt-audit, the savePlanInput pattern):
+// the wall discipline — the record survives a session that never runs, and
+// the next unit's entry clean gate finds a committed tree. The caller
+// composes the entry text, passes the commit's task title, the subject's
+// tail after the shared `PLAN prompt-audit` prefix, and its exact failure
+// line over the joined failure detail (the sites' wordings are pinned);
+// false = the commit failed, the failure logged. audit is the audit file's
+// repository-relative path — the phase sites derive it beside the phase
+// directory (dirname(phase.dir)/prompt-audit.md), the blockage fail-closed
+// from its round.
+export async function appendAudit(
+  dir: string,
+  audit: string,
+  entry: string,
+  commit: GitOps["commitTree"],
+  title: string,
+  tail: string,
+  failLine: (failures: string) => string,
+): Promise<boolean> {
+  const previous = await Bun.file(join(dir, audit)).text().catch(() => "")
+  await Bun.write(
+    join(dir, audit),
+    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${entry}\n`,
+  )
+  const settled = await commit(dir, { id: "PLAN", title }, { stage: "prompt-audit", subject: `PLAN prompt-audit ${tail}` })
+  if (settled.ok) return true
+  log(failLine(settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")))
+  return false
 }
 
 // —— the record-time charter check (plans/0082 §10 D12, closing RC2) ——//

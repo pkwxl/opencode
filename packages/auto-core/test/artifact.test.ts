@@ -12,6 +12,7 @@ import { changedFiles, unitBaseline } from "../src/git"
 import { readPlanInput, savePlanInput } from "../src/plan-input"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import { git } from "./fixtures/runner"
 
 // ---- Phase-step recovery points (requireArtifact spec.step: session recovery takes precedence over file-based derivation) ----
 
@@ -249,13 +250,6 @@ describe("requireArtifact standalone unit gate (spec.unitStart)", () => {
     collect: async () => "output",
   }
 
-  async function git(dir: string, ...args: string[]) {
-    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-    if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-    return out
-  }
-
   test("dirty worktree before start (human edits) → dirty, no session opened", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
@@ -392,14 +386,6 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     [SWITCH_ENV.retryWaits]: "0,0",
     [SWITCH_ENV.recoveryWait]: "0",
   })
-
-
-  async function git(dir: string, ...args: string[]) {
-    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-    if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-    return out
-  }
 
   // A temp repository with a recorded phase-step recovery point: seed commit + active step record (baseline/model given by the arguments).
   async function seeded(record: { model?: string; withBaseline?: boolean } = {}) {

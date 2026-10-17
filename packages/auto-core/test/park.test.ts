@@ -28,6 +28,7 @@ import { clampSwitches, SWITCH_ENV } from "../src/switches"
 import { ev, fakeAgent, type FakeAgentOptions, type TurnScript } from "./fixtures/agent"
 import { planOf } from "./fixtures/units"
 import { artifactTurns, loopFixture, phaseDirId, promptPhaseDir, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { git } from "./fixtures/runner"
 import { establishRound } from "../src/phases"
 
 // —— the directive's parse (pure) ——
@@ -304,13 +305,6 @@ describe("executeWhole's park verdict (off mode reads it too; the kill switch of
 })
 
 // —— the park commit and the release note's re-merge surface (real git) ——
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
-}
 
 describe("the park commit and the release note (real repositories)", () => {
   const dirs: string[] = []

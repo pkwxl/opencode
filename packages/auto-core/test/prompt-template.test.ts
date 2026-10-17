@@ -390,7 +390,7 @@ describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
     expect(text).not.toContain("nested .git sub-repositories")
     // Role naming, the AGENTS.md note and problem handling stay (the
     // contract's own layer, D1/D2 of the 0072 mapping)
-    expect(text).toContain("names your role for this turn (decompose / single subtask / wrap-up)")
+    expect(text).toContain("names your role for this turn (whole task / decompose / subtask or stream / wrap-up / fix)")
     expect(text).toContain("How to handle problems")
   })
 })

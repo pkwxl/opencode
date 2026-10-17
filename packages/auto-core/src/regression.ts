@@ -28,20 +28,21 @@
 // (.auto/regression.json) only the liveness pointer. A pack without
 // regression-cost rows is the byte-identical floor: nothing here launches,
 // gates or writes.
-import { existsSync, statSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { basename, join, relative, resolve } from "node:path"
 import { latestRegressionSeq, regressionReceiptDoc } from "./docpaths"
 import { roleOf } from "./document/roles"
-import { changedFiles, pendingChanges, probeReflink, rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, taskChangedPaths, type GitOps, type ScriptGuardViolation } from "./git"
-import { laneTouches, parseLaneReceipt, parseTestLanes, type TestLane } from "./intent/test-lanes"
+import { changedFiles, pendingChanges, rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, taskChangedPaths, type GitOps, type ScriptGuardViolation } from "./git"
+import { probeReflink } from "./git-worktree"
+import { laneTouches, parseTestLanes, type TestLane } from "./intent/test-lanes"
 import { log } from "./log"
 import { codeWork } from "./phases/registry"
 import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
 import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, LANE_LOG_DIR, readLaneVerdict, writeLaneReceipt, type LaneRun } from "./script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, LANE_LOG_DIR, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
@@ -59,23 +60,18 @@ export function roundNumberOf(unit: { round: string }): number {
   return Number(/^R-(\d+)$/.exec(unit.round)?.[1] ?? 0)
 }
 
-// One green receipt's machine facts: its target-relative path, the tree HEADs
-// its verdict vouches for, and its End time (the newest-green ordering key).
-export type GreenReceipt = { path: string; heads: { root: string; sha: string }[]; end: string }
+// One green receipt's machine facts — the shared scan basis, defined beside
+// script.ts's newestGreenReceipt and re-exported for this module's consumers.
+export type { GreenReceipt }
 
-// The lane's newest green receipt, round-scoped (docs/R-NN/regression/).
+// The lane's newest green receipt, round-scoped (docs/R-NN/regression/) —
+// the shared scan (script.ts newestGreenReceipt) over this round's receipts.
 // Unparsable, headless and red receipts are not carry basis — the laneCarry
 // discipline verbatim; a red receipt still matters to the hold as evidence,
 // which reads the same scan through regressionStatus below.
 export async function newestGreenReceipt(dir: string, round: number, lane: string): Promise<GreenReceipt | undefined> {
-  let best: GreenReceipt | undefined
   const stem = `R-${String(round).padStart(2, "0")}`
-  for await (const file of new Bun.Glob(join("docs", stem, "regression", `*-${lane}.md`)).scan({ cwd: dir, onlyFiles: true })) {
-    const receipt = parseLaneReceipt(await Bun.file(join(dir, file)).text().catch(() => ""))
-    if (!receipt || receipt.verdict !== "green" || !receipt.heads.length) continue
-    if (!best || (receipt.end ?? "") > best.end) best = { path: file, heads: receipt.heads, end: receipt.end ?? "" }
-  }
-  return best
+  return scanGreenReceipts(dir, join("docs", stem, "regression", `*-${lane}.md`))
 }
 
 // The complete-pass predicate (D3): covered = the newest green receipt's
@@ -90,7 +86,7 @@ export async function regressionCovered(dir: string, round: number, lane: TestLa
   if (!receipt) return { covered: false }
   const changed = await rangeChangedFiles(dir, receipt.heads)
   if (changed === undefined) return { covered: false, receipt }
-  const covered = changed.length === 0 || !laneTouches(lane.surfaces, changed)
+  const covered = receiptCovered(lane, changed)
   return { covered, receipt, ...(covered ? {} : { changed }) }
 }
 
@@ -172,16 +168,6 @@ async function materializeCopy(dir: string, reflink: boolean): Promise<string> {
   return dest
 }
 
-// statSync rather than async stat: avoids racing the next tick inside the
-// watchdog poll (the runScript note). A missing log counts as 0.
-function sizeOf(path: string): number {
-  try {
-    return statSync(path).size
-  } catch {
-    return 0
-  }
-}
-
 // One regression lane's run (the runner both sites share): isolate = the
 // background copy (no guard — the copy is disposable, the receipt records
 // the MAIN tree's HEADs the clean-tree copy materialized); isolate = false =
@@ -219,32 +205,7 @@ export async function runRegressionLane(
     stdout: "ignore",
     stderr: "ignore",
   })
-  let timedOut = false
-  let timeoutReason: "idle" | "max" | undefined
-  let outSize = 0
-  let lastProgress = Date.now()
-  const timer = setInterval(() => {
-    const size = sizeOf(logPath)
-    if (size > outSize) {
-      outSize = size
-      lastProgress = Date.now()
-    }
-    if (timedOut) return
-    const now = Date.now()
-    if (maxMs > 0 && now - started.getTime() >= maxMs) {
-      timedOut = true
-      timeoutReason = "max"
-      proc.kill()
-      return
-    }
-    if (now - lastProgress >= idleMs) {
-      timedOut = true
-      timeoutReason = "idle"
-      proc.kill()
-    }
-  }, pollMs)
-  await proc.exited
-  clearInterval(timer)
+  const { timedOut, timeoutReason } = await watchProcess({ proc, logPath, start: started.getTime(), maxMs, idleMs, pollMs })
   const text = await Bun.file(logPath).text().catch(() => "")
   const { code, verdict } = readLaneVerdict(text, timedOut)
   const violation = opts.isolate ? undefined : await scriptGuardCheck(dir, guard)

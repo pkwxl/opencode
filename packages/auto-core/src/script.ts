@@ -99,12 +99,44 @@ export async function runScript(
     stdout: "ignore",
     stderr: "ignore",
   })
+  const { timedOut, timeoutReason } = await watchProcess({ proc, logPath: outPath, start, maxMs, idleMs, pollMs })
+  const out = await Bun.file(outPath).text()
+  const violation = await scriptGuardCheck(dir, guard)
+  if (violation) logGuardViolation("a driver-run script", violation)
+  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, out, ...(violation ? { violation } : {}) }
+}
+
+// The single-process idle-progress watchdog runScript and the regression
+// lane's background slot share (plans/0098's runner grew a second copy of
+// runScript's shape; one watchdog, one drift surface for the kill
+// semantics): every pollMs the log's size is polled, growth counts as
+// progress and resets the idle clock, and only idleMs without growth kills
+// the process (idle); maxMs > 0 adds an absolute cap measured from start,
+// the caller's run-start epoch (max). Resolves once the process exited and
+// the timer cleared, with the timeout fact the caller's result carries. The
+// multi-lane batch form (runLaneBatch) keeps its own single timer over many
+// logs. Only the direct child is killed (the runScript limitation).
+export async function watchProcess({
+  proc,
+  logPath,
+  start,
+  maxMs,
+  idleMs,
+  pollMs,
+}: {
+  proc: ReturnType<typeof Bun.spawn>
+  logPath: string
+  start: number
+  maxMs: number
+  idleMs: number
+  pollMs: number
+}): Promise<{ timedOut: boolean; timeoutReason?: "idle" | "max" }> {
   let timedOut = false
   let timeoutReason: "idle" | "max" | undefined
   let outSize = 0
   let lastProgress = start
   const timer = setInterval(() => {
-    const out = sizeOf(outPath)
+    const out = sizeOf(logPath)
     if (out > outSize) {
       outSize = out
       lastProgress = Date.now()
@@ -125,10 +157,7 @@ export async function runScript(
   }, pollMs)
   await proc.exited
   clearInterval(timer)
-  const out = await Bun.file(outPath).text()
-  const violation = await scriptGuardCheck(dir, guard)
-  if (violation) logGuardViolation("a driver-run script", violation)
-  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, out, ...(violation ? { violation } : {}) }
+  return { timedOut, timeoutReason }
 }
 
 // The side-effect guard's log lines (plans/0083 D11), shared by the serial
@@ -278,6 +307,33 @@ export async function runTestLanes(
   return { runs, ...(violation ? { violation } : {}) }
 }
 
+// One green receipt's machine facts — the carry rule's and the regression
+// coverage's shared basis: its target-relative path, the tree HEADs its
+// verdict vouches for, and its End time (the newest-green ordering key).
+export type GreenReceipt = { path: string; heads: { root: string; sha: string }[]; end: string }
+
+// The newest-green-with-heads receipt scan (plans/0096 D5's carry rule and
+// plans/0098 D3's coverage share it): every receipt the glob pattern matches
+// — the lane gate's task-scoped testhands, the regression hold's round-scoped
+// receipts — is parsed, and the newest green one with recorded HEADs wins by
+// its End time. Unparsable, headless and red receipts are not carry basis.
+export async function newestGreenReceipt(dir: string, pattern: string): Promise<GreenReceipt | undefined> {
+  let best: GreenReceipt | undefined
+  for await (const file of new Bun.Glob(pattern).scan({ cwd: dir, onlyFiles: true })) {
+    const receipt = parseLaneReceipt(await Bun.file(join(dir, file)).text().catch(() => ""))
+    if (!receipt || receipt.verdict !== "green" || !receipt.heads.length) continue
+    if (!best || (receipt.end ?? "") > best.end) best = { path: file, heads: receipt.heads, end: receipt.end ?? "" }
+  }
+  return best
+}
+
+// The coverage predicate the two scans share: a lane is covered by a green
+// receipt when the changed paths since that receipt's tree miss its
+// surfaces — an empty diff covers every lane.
+export function receiptCovered(lane: TestLane, changed: readonly string[]): boolean {
+  return changed.length === 0 || !laneTouches(lane.surfaces, changed)
+}
+
 // The carry-forward rule's decision (D5): the lane's last green receipt —
 // searched across the worktree's testhands directories, this task's own and
 // previous tasks' alike (committed receipts are the phase's durable evidence;
@@ -285,17 +341,10 @@ export async function runTestLanes(
 // when the changed paths since that receipt's tree miss the lane's surfaces.
 // Returns the receipt's path, or undefined = the lane must run.
 async function laneCarry(dir: string, lane: TestLane): Promise<string | undefined> {
-  let best: { path: string; heads: { root: string; sha: string }[]; end: string } | undefined
-  for await (const file of new Bun.Glob(join("docs", "*", "testhands", `${lane.name}.md`)).scan({ cwd: dir, onlyFiles: true })) {
-    const receipt = parseLaneReceipt(await Bun.file(join(dir, file)).text().catch(() => ""))
-    // Unparsable or headless receipts and red ones are not carry basis; the
-    // newest green receipt by its End time wins.
-    if (!receipt || receipt.verdict !== "green" || !receipt.heads.length) continue
-    if (!best || (receipt.end ?? "") > best.end) best = { path: file, heads: receipt.heads, end: receipt.end ?? "" }
-  }
+  const best = await newestGreenReceipt(dir, join("docs", "*", "testhands", `${lane.name}.md`))
   if (!best) return undefined
   const changed = await rangeChangedFiles(dir, best.heads)
-  if (changed === undefined || (changed.length > 0 && laneTouches(lane.surfaces, changed))) return undefined
+  if (changed === undefined || !receiptCovered(lane, changed)) return undefined
   return best.path
 }
 

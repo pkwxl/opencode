@@ -12,6 +12,7 @@ import { addTask } from "../src/task-add"
 import { readNextTask, writeNextTask } from "../src/numbering"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import { renderTaskIndex, renderTaskTodo, taskStatePaths } from "../src/tasks"
+import { git } from "./fixtures/runner"
 
 let dir: string
 let phase: PhaseUnit
@@ -109,13 +110,6 @@ const resultId = (result: Awaited<ReturnType<typeof addTask>>): string => {
 }
 
 // —— git fixtures: the commits ——
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
 
 async function commitAll(dir: string) {
   await git(dir, "init", "-q")

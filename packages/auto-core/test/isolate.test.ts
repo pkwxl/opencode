@@ -8,14 +8,16 @@
 // the standing acceptance — the existing commit / baseline / close-out /
 // rollback machinery runs unchanged against an isolated branch, with the
 // original branch never moving.
-import { beforeAll, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { formatProjectConfig, isolateProblem, loadProjectConfig, saveProjectConfig, CONFIG_DEFAULTS } from "../src/config"
-import { commitTree, isolateRound, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
+import { commitTree, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
+import { isolateRound } from "../src/git-land"
 import { planPrelude } from "../src/plan"
 import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
+import { git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
 // The analysis switch (plans/0084) off for this file: its establishment tests
 // run on fresh dirs, which the analysis flow would intercept; the memo reset
@@ -25,23 +27,15 @@ beforeAll(() => {
   setSwitchModelRegistry(undefined)
 })
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-isolate-"))
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
+// The whole suite shares one process: this file's plant must not leak the
+// analysis switch into later files, so the file's own tests always re-plant
+// through their beforeAll and we delete the env var once at the end.
+afterAll(() => {
+  delete process.env[SWITCH_ENV.analysis]
+  setSwitchModelRegistry(undefined)
+})
 
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
+const withDir = withDirFactory("auto-isolate-")
 
 // A nested repository under the target directory: initialized, with identity
 // and one commit, on whatever branch git's defaults give (read back by

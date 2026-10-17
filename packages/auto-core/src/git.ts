@@ -11,6 +11,12 @@ import type { PhaseKey } from "./phases/registry"
 // the audit trail of AI changes (granularity of tracing and rollback =
 // session). A session never runs git commit (constrained in sync by the
 // AGENTS.md commit-principles block and the agent contract).
+//
+// Split (plans/0102 E-α2): the lane-worktree family lives in
+// src/git-worktree.ts, the branch-isolation/landing family in
+// src/git-land.ts — leaves importing this module's spawn helper and the
+// shared merge vocabulary; this file keeps the commit-boundary core and the
+// git service seam.
 
 // Commit boundary (plans/0021-commit-boundary-design.md): a git commit is part
 // of the completion condition of an execution unit (task/subtask/hidden task)
@@ -24,8 +30,8 @@ import type { PhaseKey } from "./phases/registry"
 //   (external-commit detection);
 // - commitPending: the hidden-task idempotent entry's "artifacts on disk but
 //   uncommitted → a backfill commit completes it" (③).
-// Under --commit false / dryrun / a non-git environment the gates are wholly
-// inactive.
+// Under dryrun (and under the test-only no-commit double in git-ops.ts) the
+// gates are wholly inactive.
 
 // Commit message: an English subject line (for humans, since M0.6) + machine-
 // readable trailers (so scripts can locate rollback points). Auto-Task carries
@@ -42,7 +48,7 @@ import type { PhaseKey } from "./phases/registry"
 // body (plans/0053 D21): optional multi-line commit body between the subject
 // and the trailers (the close commit lists the units it closed). Absent, the
 // message is byte-identical to the bodyless format every existing commit uses.
-function message(subject: string, task: { id: string }, stage: string, nested: { rel: string; sha: string }[] = [], body?: string): string {
+export function message(subject: string, task: { id: string }, stage: string, nested: { rel: string; sha: string }[] = [], body?: string): string {
   return [
     subject,
     "",
@@ -439,7 +445,7 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scop
     // falls inside the range).
     // --ignore-submodules=all: a nested repository is a single gitlink in the
     // outer one; its inner files are listed separately by that repository's
-    // own diff (the same reasoning as gitDiffFiles/statusEntries).
+    // own diff (the same reasoning as statusEntries).
     const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", ...(scope ?? ["."])])
     if (diff.code !== 0) continue
     for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
@@ -727,499 +733,57 @@ export async function commitPending(
   return commitTree(dir, task, info)
 }
 
-// —— Lane worktrees (plans/0068 §6.5, D1/D16) ——
-
-// The result of a lane-worktree operation: ok, or the error's first line (the
-// caller logs it and decides between blocking and keeping the scene).
-export type WorktreeResult = { ok: boolean; error?: string }
-
-// Create a lane worktree at path (the park, `.auto/worktrees/<task-id>`,
-// gitignored with the rest of `.auto/`) on the new branch `auto-lane/<task-id>`
-// at the repository's current HEAD (plans/0068 D1: the lane's commit boundary
-// — beginUnit's clean gate, the SHA baseline, commitTree and unitViolations —
-// then holds per worktree by construction). path and branch are the caller's
-// protocol strings (src/lanes.ts builds them); nothing here knows task ids.
+// —— The split modules' shared vocabulary (plans/0102 E-α2) ——
 //
-// sparse (plans/0096 D9, tier 1) switches the working materialization to the
-// cheap one: `--no-checkout` registers the worktree without populating it, the
-// cone directories are copied in from the base checkout by
-// `cp -a --reflink=always` (byte-shared until divergence — the CoW capability
-// the `auto` probe established; a per-file failure here fails the dispatch,
-// never a silent full write), the index is populated by `read-tree` + a stat
-// refresh so git sees the copied files as already materialized, and
-// cone-mode `sparse-checkout set` then applies the patterns without rewriting
-// them — every file outside the cone stays unmaterialized behind a
-// skip-worktree bit. The landing machinery is untouched: skip-worktree entries
-// ride the index unchanged, so the lane's commits record the FULL tree and the
-// merge lands exactly as under tier 2; sparse affects only the working
-// materialization, per D9's own words.
-// The hazard the cheapness buys (named once, D11's register): a session that
-// writes a path outside its unit's declared `Touches:` meets git's sparse
-// guard — `git add -A` refuses such paths ("outside of your sparse-checkout
-// definition") — so a wrong declaration surfaces as a dirty worktree and a
-// failing unified commit, never as silently unlanded work.
-export async function addWorktree(dir: string, path: string, branch: string, sparse?: readonly string[]): Promise<WorktreeResult> {
-  if (sparse === undefined) {
-    const added = await git(dir, ["worktree", "add", "-b", branch, path])
-    if (added.code === 0) return { ok: true }
-    return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
-  }
-  const added = await git(dir, ["worktree", "add", "--no-checkout", "-b", branch, path])
-  if (added.code !== 0) return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
-  // The cone set by reflink: each declared directory recursively, plus every
-  // tracked root file (cone mode always materializes the root; `git ls-files`
-  // lists the index, and the dispatch-time clean gate makes index and disk
-  // agree). Root dotfiles included — .gitignore rides along exactly as the
-  // scaffolding copy would need it to.
-  const copied = await copyConeByReflink(dir, path, sparse)
-  if (copied !== undefined) return { ok: false, error: copied }
-  // Populate the index from HEAD without touching the worktree, then refresh
-  // the stat cache: the copied cone files are recorded as already
-  // materialized, so the sparse apply below rewrites nothing. The refresh
-  // reports the not-yet-copied outside-cone files as "needs update" (they are
-  // absent, and not yet behind skip-worktree bits) — expected at this point
-  // in the sequence, and its exit code is deliberately ignored.
-  if ((await git(path, ["read-tree", "HEAD"])).code !== 0) return { ok: false, error: "populating the sparse worktree's index failed (git read-tree HEAD)" }
-  await git(path, ["update-index", "--refresh"])
-  if ((await git(path, ["sparse-checkout", "init", "--cone"])).code !== 0) return { ok: false, error: "enabling cone-mode sparse checkout failed (git sparse-checkout init --cone)" }
-  const applied = await git(path, ["sparse-checkout", "set", ...sparse])
-  if (applied.code !== 0) return { ok: false, error: firstLine(applied.err || applied.out) || `git sparse-checkout set exit code ${applied.code}` }
-  // The consistency guard, fail-closed: an empty status is the proof the
-  // materialized cone matches HEAD (a copy that missed a file, or drifted,
-  // shows here instead of surfacing mid-lane).
-  const status = await git(path, ["status", "--porcelain"])
-  if (status.code !== 0 || status.out.trim() !== "") {
-    return { ok: false, error: `the sparse worktree is not clean after materialization${status.out.trim() ? ` (${firstLine(status.out)})` : ""}; remove ${path} manually and re-run` }
-  }
-  return { ok: true }
-}
+// The lane-worktree family lives in src/git-worktree.ts and the branch-
+// isolation/landing family in src/git-land.ts — leaves beside this module,
+// importing the spawn helper and the builders exported here (git,
+// firstLine, identityArgs, message). The merge vocabulary below stays at
+// this common root on purpose: both split families and the GitOps seam
+// reference these types, and the type-counted import graph keeps git.ts
+// importing from neither split module (each imports this one), so a type
+// either side named would close a cycle the direction suite rejects.
 
-// Copy the cone set of a fresh `--no-checkout` worktree by reflink from the
-// base checkout (tier 1's materialization core): the declared directories
-// recursively (`cp -a` preserves modes and timestamps, `--reflink=always`
-// shares the bytes), every tracked root file individually. Returns the error
-// that failed the dispatch, or undefined. A reflink failure here is a real
-// one — the probe established the capability moments earlier — so it blocks
-// the dispatch (the caller fails and names the path) rather than degrading
-// to a full write the tier never asked for.
-async function copyConeByReflink(dir: string, worktree: string, cone: readonly string[]): Promise<string | undefined> {
-  const reflink = async (src: string, dst: string, recursive: boolean): Promise<string | undefined> => {
-    await mkdir(dirname(dst), { recursive: true })
-    const copied = Bun.spawn(["cp", ...(recursive ? ["-a"] : []), "--reflink=always", src, dst], { stdout: "ignore", stderr: "pipe" })
-    const err = await new Response(copied.stderr!).text().catch(() => "")
-    const code = await copied.exited
-    if (code !== 0) return `copying ${relative(dir, src).replaceAll("\\", "/")} into the lane worktree by reflink failed: ${firstLine(err) || `cp exit code ${code}`}`
-    return undefined
-  }
-  for (const rel of cone) {
-    const failed = await reflink(join(dir, rel), join(worktree, rel), true)
-    if (failed !== undefined) return failed
-  }
-  const listed = await git(dir, ["ls-files", "-z"])
-  if (listed.code !== 0) return undefined // no root files to copy; the set step still applies
-  for (const rel of listed.out.split("\0")) {
-    if (!rel || rel.includes("/")) continue
-    const dst = join(worktree, rel)
-    if (await stat(dst).then(() => true, () => false)) continue
-    const failed = await reflink(join(dir, rel), dst, false)
-    if (failed !== undefined) return failed
-  }
-  return undefined
-}
-
-// The working tree's size in MB (plans/0096 D10's probe input): the sum of
-// the tracked files' sizes — the per-lane disk cost of a worktree, since git
-// already shares the object store between linked worktrees (D8's cost model;
-// untracked state never materializes in one). Read-only, never a seam member.
-// undefined = not a git environment (no tree to weigh; the budget check
-// passes vacuously — there is nothing to materialize).
-export async function workingTreeMB(dir: string): Promise<number | undefined> {
-  const listed = await git(dir, ["ls-files", "-z"]).catch(() => undefined)
-  if (!listed || listed.code !== 0) return undefined
-  let bytes = 0
-  for (const rel of listed.out.split("\0")) {
-    if (!rel) continue
-    bytes += (await stat(join(dir, rel)).catch(() => undefined))?.size ?? 0
-  }
-  return bytes / (1024 * 1024)
-}
-
-// Whether `cp --reflink=always` clones here: one small file under the target's
-// own `.auto/` — the same filesystem the lane park and the regression copy
-// (plans/0098 D4) materialize on, so the probe measures exactly the copy that
-// would run — cloned and removed again. Any failure (no cp, no reflink, a
-// read-only tree) reads as incapable, which is the fall-through answer; the
-// probe file is cleaned up either way and is driver state `.auto/` already
-// gitignores. Shared by the preflight tier probe (plans/0096 D9) and the
-// regression lane's copy gate, which is why it lives beside the tree
-// primitives instead of the preflight.
-export async function probeReflink(dir: string): Promise<boolean> {
-  const root = join(dir, ".auto")
-  const src = join(root, "reflink-probe")
-  const dst = join(root, "reflink-probe.copy")
-  try {
-    await mkdir(root, { recursive: true })
-    await Bun.write(src, "reflink probe\n")
-    const copied = Bun.spawn(["cp", "--reflink=always", src, dst], { stdout: "ignore", stderr: "ignore" })
-    return (await copied.exited) === 0
-  } catch {
-    return false
-  } finally {
-    await rm(src, { force: true }).catch(() => {})
-    await rm(dst, { force: true }).catch(() => {})
-  }
-}
-
-// The teardown retry schedule (plans/0068 §10's Windows hardening): attempt 1
-// plain, attempts 2..N with `--force`, a short wait between attempts — a
-// removal that races an antivirus scanner or a transient file lock usually
-// succeeds a moment later, and the force pass covers leftover ignored state.
-export type WorktreeTeardown = { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void> }
-
-export const WORKTREE_TEARDOWN: WorktreeTeardown = { attempts: 3, delayMs: 250 }
-
-const teardownSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
-// Remove a lane worktree (D7's landing step ⑤): the retry schedule above,
-// best-effort — the worktree is clean by then, the landing verification
-// passed, so a failure is environmental (AV, a lock), not a fact about the
-// work. The terminal failure keeps the scene and names the path in the error
-// (the caller blocks or warns with it; never a silent loss).
-export async function removeWorktree(dir: string, path: string, retry: WorktreeTeardown = WORKTREE_TEARDOWN): Promise<WorktreeResult> {
-  let last: { code: number; out: string; err: string } | undefined
-  const attempts = Math.max(1, Math.floor(retry.attempts))
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    if (attempt > 1) await (retry.sleep ?? teardownSleep)(retry.delayMs)
-    const removed = await git(dir, attempt === 1 ? ["worktree", "remove", path] : ["worktree", "remove", "--force", path])
-    if (removed.code === 0) return { ok: true }
-    last = removed
-  }
-  const reason = firstLine(last!.err || last!.out) || `git worktree remove exit code ${last!.code}`
-  return { ok: false, error: `${reason} (after ${attempts} attempt${attempts === 1 ? "" : "s"}; the worktree is kept at ${path} — remove it manually with \`git worktree remove --force ${path}\` and re-run)` }
-}
-
-// `git worktree prune`: drop the administrative entries of worktrees whose
-// directories are gone (the park-straggler cleanup primitive; which straggler
-// may be pruned is D14's orphan scan's to decide, not this one's).
-export async function pruneWorktrees(dir: string): Promise<WorktreeResult> {
-  const pruned = await git(dir, ["worktree", "prune"])
-  if (pruned.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(pruned.err || pruned.out) || `git worktree prune exit code ${pruned.code}` }
-}
-
-// The short SHA of the merge base of two revisions (D7's landing step ① needs
-// the lane branch's creation point — where the lane worktree forked the main
-// tree's history — as the unitViolations baseline; the main tree's HEAD may
-// have moved past it through sibling landings). undefined when either side
-// cannot be resolved. The full SHA is cut to the 7-character form the
-// baselines elsewhere carry (rev-parse --short's floor).
-export async function mergeBaseSha(dir: string, a: string, b: string): Promise<string | undefined> {
-  const base = await git(dir, ["merge-base", a, b]).catch(() => undefined)
-  const sha = base?.code === 0 ? base.out.trim() : ""
-  return sha ? sha.slice(0, 7) : undefined
-}
-
-// The short SHAs of the commits in `<sha>..HEAD` (the lane report's `commits`
-// list, D8: what the lane worker's run posted since it started — an empty
-// baseline sha lists the whole history). Read-only; never a seam member.
-export async function commitsSince(dir: string, sha: string): Promise<string[]> {
-  const listed = await git(dir, ["log", "--format=%h", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])]).catch(() => undefined)
-  if (!listed || listed.code !== 0) return []
-  return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
-}
-
-// Delete a lane branch (D7's landing step ⑤; called only after the branch
-// merged, so -d would do — -D keeps a decided teardown from failing on a
-// hand-moved ref and silently keeping park state alive).
-export async function deleteBranch(dir: string, branch: string): Promise<WorktreeResult> {
-  const deleted = await git(dir, ["branch", "-D", branch])
-  if (deleted.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(deleted.err || deleted.out) || `git branch -D exit code ${deleted.code}` }
-}
-
-// The landing merge (D7's step ②): `git merge --no-ff <branch>` in the main
-// tree, the merge commit carrying `Auto-Task: <task>` / `Auto-Stage: landing`
-// so the parent's own close-outs see a trailer-bearing range. Conflict
-// detection leaves the main tree clean again (`git merge --abort`): the caller
-// keeps the lane's worktree and branch for the conflict protocol.
-// `own` names the parent-exclusive files (D6: the phase index) the caller
-// re-derives at landing (syncIndexTicks): a conflict over exactly those is
-// not a lane conflict — concurrent lanes tick adjacent index lines, which no
-// textual merge survives — so the merge resolves them onto the main tree's
-// side and concludes; the re-derivation right after sets the true ticks. Any
-// other conflicted path is a real conflict and aborts.
+// The result of the landing/repair merges (landBranch and mergeLaneUpstream
+// in git-worktree.ts; squashOnto and mergeNoFf in git-land.ts): ok, a
+// conflict (the merge aborted back to a clean state, kept for the caller's
+// conflict protocol), or the raw failure.
 export type LandResult = { type: "ok" } | { type: "conflict"; detail: string } | { type: "failed"; error: string }
 
-export async function landBranch(dir: string, branch: string, task: { id: string; title: string }, own: readonly string[] = []): Promise<LandResult> {
-  const subject = message(commitTitle(`${task.id} landing ${task.title}`), task, "landing")
-  // The identity fallback applies to the merge commit like any other.
-  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", subject, branch])
-  if (merged.code === 0) return { type: "ok" }
-  // A conflicted merge leaves MERGE_HEAD and conflicted entries; aborting
-  // restores the pre-merge state (a merge refused before starting — dirty
-  // tree, unknown revision — has no MERGE_HEAD and needs no abort).
-  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
-  if (!conflict) return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
-  // The parent-owned files: resolve onto the main tree's side and conclude
-  // the merge — but only when the conflict set is exactly them (a conflict
-  // that also touches anything else stays a real conflict).
-  const conflicted = (await git(dir, ["diff", "--relative", "--name-only", "--diff-filter=U"])).out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-  if (conflicted.length && conflicted.every((path) => own.includes(path))) {
-    // Only the actually-conflicted subset: an `own` entry a lane never
-    // touched (a task without a checklist, an index line moved) matches no
-    // pathspec and would leave the merge unmerged (S5's checklist entry
-    // exposed the shape).
-    for (const path of conflicted) await git(dir, ["checkout", "--ours", "--", path])
-    await git(dir, ["add", "--", ...conflicted])
-    const concluded = await git(dir, [...(await identityArgs(dir)), "commit", "-m", subject])
-    if (concluded.code === 0) return { type: "ok" }
-    const aborted = await git(dir, ["merge", "--abort"])
-    return { type: "failed", error: `concluding the landing merge over ${own.join(", ")} failed: ${firstLine(concluded.err || concluded.out)} (git merge --abort exit code ${aborted.code}); the main tree must be handled manually` }
-  }
-  const aborted = await git(dir, ["merge", "--abort"])
-  if (aborted.code === 0 && !(await changedFiles(dir)).length) {
+// The conflict classifier every landing/repair merge shares: git's own
+// wording for a conflicted or un-mergeable state (across its versions and
+// translations, hence the alternation).
+export function isConflict(out: string, err: string): boolean {
+  return /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${out}\n${err}`)
+}
+
+// The abort tail of a conflicted real merge (landBranch, mergeLaneUpstream,
+// mergeNoFf): `git merge --abort` restores the pre-merge state, which the
+// clean check verifies — a clean abort reports the conflict (the caller's
+// protocol keeps the branch for manual resolution), a dirty or failed abort
+// is beyond the tool. `merged` is the failed merge itself (its first line is
+// the conflict detail); `whose` names who must handle the dirty case.
+export async function abortToLandResult(root: string, merged: { code: number; out: string; err: string }, whose: string): Promise<LandResult> {
+  const aborted = await git(root, ["merge", "--abort"])
+  if (aborted.code === 0 && !(await changedFiles(root)).length) {
     return { type: "conflict", detail: firstLine(merged.err || merged.out) }
   }
-  return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the main tree must be handled manually` }
+  return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); ${whose} must be handled manually` }
 }
 
-// The branch name HEAD of dir is on (plans/0068 D7's conflict path: the
-// "parent's current main branch" a repair merge names). undefined when HEAD is
-// detached or unreadable — the caller blocks rather than guessing a branch.
-export async function currentBranch(dir: string): Promise<string | undefined> {
-  const named = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined)
-  const branch = named?.code === 0 ? named.out.trim() : ""
-  return branch && branch !== "HEAD" ? branch : undefined
-}
-
-// The repair merge of D7's conflict path (plans/0068 S3): merge the parent's
-// current main branch into the lane branch, inside the lane's worktree, as one
-// of the lane's own commits — the merge commit carries the `Auto-Stage:
-// merge-repair` trailer so the landing verification (unitViolations over the
-// merge-base baseline) still sees a driver-only range; the base the merge
-// brings in is the sibling landings' own trailer-bearing history. A conflict
-// aborts the merge and leaves the worktree clean (the caller reports it — the
-// semantic resolution a session would do is not this merge's to invent).
-export async function mergeLaneUpstream(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult> {
-  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} merge repair ${task.title}`), task, "merge-repair"), branch])
-  if (merged.code === 0) return { type: "ok" }
-  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
-  if (conflict) {
-    const aborted = await git(dir, ["merge", "--abort"])
-    if (aborted.code === 0 && !(await changedFiles(dir)).length) {
-      return { type: "conflict", detail: firstLine(merged.err || merged.out) }
-    }
-    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the worktree must be handled manually` }
-  }
-  return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
-}
-
-// —— Branch isolation (plans/0074 §2.2, U-L1) ——
-//
-// Round-establishment isolation: each repository the config's isolate key
-// designates gets the round branch (auto/R-NN, the caller's protocol string)
-// created from its current HEAD and checked out, so every later per-session
-// unified commit, rollback, SHA baseline and foreign-commit check lands on
-// that branch unchanged — commitTree, rollbackUnit and the baseline functions
-// above are untouched by design; only which branch is checked out differs,
-// which is why repoRoots walking, the init gitignore's nested-repo entries
-// and the Auto-Nested lines keep working. The original branch never moves.
-
-// One isolation attempt's outcome: ok lists the repositories now on the round
-// branch (repository-relative paths); dirty names the designated repositories
-// that are not clean — a precondition of the same class as the run-start
-// clean gate, so the caller blocks for human attention listing each repo's
-// uncommitted paths (relative to the target directory); failed carries one
-// repository's git error (branch creation or checkout), with nothing written
-// by this function on that path beyond the branches already switched (a
-// branch at HEAD changes no file content, so the scene stays recoverable —
-// the re-run's idempotent skips finish the rest).
-export type IsolationResult =
-  | { type: "ok"; isolated: string[] }
-  | { type: "dirty"; repos: { rel: string; files: string[] }[] }
-  | { type: "failed"; error: string }
-
-// Isolate every designated repository onto the round branch. Idempotent: a
-// repository already on the branch (an interrupted establishment re-run) is
-// counted as isolated without touching git; a branch left by an earlier
-// attempt of the same round is checked out as it is (its commits are this
-// round's recoverable state, plans/0074 §4). Dirty repositories are all
-// reported in one refusal; branch operations start only when every designated
-// repository is clean.
-export async function isolateRound(dir: string, isolate: readonly string[], branch: string): Promise<IsolationResult> {
-  const dirty: { rel: string; files: string[] }[] = []
-  const clean: string[] = []
-  for (const rel of isolate) {
-    // The designated path is a repository root (the config validated a .git
-    // entry), so its own status — the same porcelain pass changedFiles runs
-    // per repoRoot — covers it whole; paths relative to the target directory.
-    const files = (await statusEntries(dir, join(dir, rel))).map((entry) => entry.rel)
-    if (files.length) dirty.push({ rel, files })
-    else clean.push(rel)
-  }
-  if (dirty.length) return { type: "dirty", repos: dirty }
-  const isolated: string[] = []
-  for (const rel of clean) {
-    const root = join(dir, rel)
-    try {
-      if ((await currentBranch(root)) === branch) {
-        isolated.push(rel)
-        continue
-      }
-      const exists = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])
-      if (exists.code !== 0) {
-        const created = await git(root, ["branch", branch])
-        if (created.code !== 0) {
-          return { type: "failed", error: `${rel}: ${firstLine(created.err || created.out) || `git branch exit code ${created.code}`}` }
-        }
-      }
-      const checkedOut = await git(root, ["checkout", branch])
-      if (checkedOut.code !== 0) {
-        return { type: "failed", error: `${rel}: ${firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}`}` }
-      }
-      isolated.push(rel)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : String(error)
-      return { type: "failed", error: `${rel}: ${firstLine(text)}` }
-    }
-  }
-  return { type: "ok", isolated }
-}
-
-// —— Branch-isolation landing (plans/0074 §2.3, U-L2) ——
-//
-// The `land` command's git half (the orchestration, refusal lines and exit
-// semantics live in src/land.ts): read-only inspection primitives plus the
-// two landing operations. All of them operate on one repository root the
-// caller names — like isolateRound above, they know nothing of rounds or
-// task ids. The landing commit deliberately carries no Auto-Stage trailer:
-// it is the deliverable's own history entry (the person's to curate —
-// plans/0074 §2's audit-trail trade-off), not a driver session commit, and
-// no unit close-out ever scans the original branch's new range (the round's
-// checks ran on the isolation branch).
-
-// The repository's local branch names (refs/heads, short form). The caller
-// filters the families: the round branches (auto/R-*) and the lane branches
-// (auto-lane/*, which live inside whichever branch is checked out,
-// plans/0074 §2.4) are never a repository's original branch.
-export async function localBranches(root: string): Promise<string[]> {
-  const listed = await git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
-  return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
-}
-
-// The full SHA of one revision (a branch name, HEAD, `<rev>^{tree}` …),
-// undefined when it does not resolve.
-export async function revSha(root: string, ref: string): Promise<string | undefined> {
-  const got = await git(root, ["rev-parse", "--verify", "--quiet", ref]).catch(() => undefined)
-  const sha = got?.code === 0 ? got.out.trim() : ""
-  return sha || undefined
-}
-
-// The full SHA of the merge base of two revisions, undefined when either side
-// does not resolve. The landing's isolation point: round-establishment
-// created auto/R-NN from the original branch's then-tip, so the merge base is
-// exactly where the fork happened — the anchor both refusal checks of `land`
-// (the moved original, the foreign-commit range) measure from.
-export async function mergeBaseFull(root: string, a: string, b: string): Promise<string | undefined> {
-  const base = await git(root, ["merge-base", a, b]).catch(() => undefined)
-  const sha = base?.code === 0 ? base.out.trim() : ""
-  return sha || undefined
-}
-
-// The commits of `<base>..<branch>`, newest first, each with its full commit
-// and tree SHA: the round branch's history since the isolation point. The
-// landing walks it to recognize a previous landing (a mid-round `--keep` land
-// left the original branch at a squash commit whose tree equals one of these
-// trees) and to count the commits one landing folds.
-export async function branchCommits(root: string, branch: string, base: string): Promise<{ sha: string; tree: string }[]> {
-  const log = await git(root, ["log", "--format=%H %T", `${base}..${branch}`]).catch(() => undefined)
-  if (!log || log.code !== 0) return []
-  return log.out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [sha = "", tree = ""] = line.split(" ")
-      return { sha, tree }
-    })
-}
-
-// Whether branch is fully contained in the repository's current HEAD
-// (merge-base --is-ancestor): a leftover round branch that holds no commit
-// HEAD lacks is merged — preflight's leftover report (plans/0074 §4) reports
-// only the unmerged ones, the true recoverable state.
-export async function mergedIntoHead(root: string, branch: string): Promise<boolean> {
-  const check = await git(root, ["merge-base", "--is-ancestor", branch, "HEAD"]).catch(() => undefined)
-  return check?.code === 0
-}
-
-// Check out a branch in the repository (the landing's move onto the original
-// branch, and --keep's move back onto the round branch). Same shape as the
-// worktree operations: ok, or git's first error line.
-export async function checkoutBranch(root: string, branch: string): Promise<WorktreeResult> {
-  const checkedOut = await git(root, ["checkout", branch])
-  if (checkedOut.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}` }
-}
-
-// The default landing (plans/0074 §5.3): `git merge --squash <branch>` —
-// never a commit of its own — followed by one commit under subject, so the
-// round's net change reaches the original branch as exactly one commit. The
-// guards in src/land.ts (the original branch at the isolation point or a
-// previous landing's tree) make the squash conflict-free by construction; a
-// conflict that still happens is aborted (the tree was clean before the
-// merge — the guards' precondition — so a hard reset to HEAD restores
-// exactly the pre-merge state; a conflicted squash carries no MERGE_HEAD,
-// which `git merge --abort` requires) and reported for manual landing.
-export async function squashOnto(root: string, branch: string, subject: string): Promise<LandResult> {
-  const squashed = await git(root, ["merge", "--squash", branch])
-  if (squashed.code !== 0) return squashFailure(root, squashed, "git merge --squash")
-  const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", subject])
-  if (committed.code === 0) return { type: "ok" }
-  // The squash is staged but would not conclude: undo it to the clean
-  // pre-merge state so the caller's scene stays describable.
-  await git(root, ["reset", "--hard", "HEAD"])
-  return { type: "failed", error: `${firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`} (the staged squash was reset away; the worktree is back to its pre-merge state)` }
-}
-
-// The explicit alternative landing (plans/0074 §5.3): `git merge --no-ff` —
-// the round's commits enter the original branch's history as themselves,
-// under one merge commit. Conflict handling mirrors landBranch: abort the
-// merge (a real merge carries MERGE_HEAD) and report.
-export async function mergeNoFf(root: string, branch: string, subject: string): Promise<LandResult> {
-  const merged = await git(root, [...(await identityArgs(root)), "merge", "--no-ff", "-m", subject, branch])
-  if (merged.code === 0) return { type: "ok" }
-  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${merged.out}\n${merged.err}`)
-  if (conflict) {
-    const aborted = await git(root, ["merge", "--abort"])
-    if (aborted.code === 0 && !(await changedFiles(root)).length) return { type: "conflict", detail: firstLine(merged.err || merged.out) }
-    return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); the repository must be handled manually` }
-  }
-  return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }
-}
-
-// A failed squash's common tail: a conflict aborts back to the clean
-// pre-merge state (see squashOnto), anything else is the raw failure.
-async function squashFailure(root: string, failed: { code: number; out: string; err: string }, what: string): Promise<LandResult> {
-  const conflict = /conflict|CONFLICT|Automatic merge failed|could not be fast-forwarded/i.test(`${failed.out}\n${failed.err}`)
-  if (conflict) {
-    const reset = await git(root, ["reset", "--hard", "HEAD"])
-    if (reset.code === 0 && !(await changedFiles(root)).length) return { type: "conflict", detail: firstLine(failed.err || failed.out) }
-    return { type: "failed", error: `resetting the conflicted squash failed (git reset --hard exit code ${reset.code}: ${firstLine(reset.err || reset.out)}); the repository must be handled manually` }
-  }
-  return { type: "failed", error: `${firstLine(failed.err || failed.out) || `${what} exit code ${failed.code}`}` }
-}
+// The result of a lane-worktree operation: ok, or the error's first line (the
+// caller logs it and decides between blocking and keeping the scene). Shared
+// by git-worktree.ts's worktree operations and git-land.ts's checkoutBranch.
+export type WorktreeResult = { ok: boolean; error?: string }
 
 // —— The git service (the run services' commit-side seam) ——
 
 // The run's git service: the commit-side operations the kernel and the
 // session-driving engine call, behind one seam so the strategy is
 // switchable per run — the production instance (createGitOps,
-// src/git-ops.ts) delegates to the free functions above, committing
-// always on, while a test installs the no-commit double (noCommitGit) and
+// src/git-ops.ts) delegates to the free functions of this module and the
+// lane-worktree family (src/git-worktree.ts), committing always on, while
+// a test installs the no-commit double (noCommitGit) and
 // the engine runs with committing off, answering exactly what the gates
 // these functions used to carry under `commit: false` answered then (the
 // commit halves are gone; the double is the off path now). The free
@@ -1521,13 +1085,13 @@ export async function writeLocalIdentity(dir: string, identity: { name: string; 
 // --name/--email written as local config by writeLocalIdentity above, or
 // refusal) — the root's history is the audit trail of AI changes and keeps a
 // real name; opencode-auto@local is deliberately never auto-written at init.
-async function identityArgs(root: string): Promise<string[]> {
+export async function identityArgs(root: string): Promise<string[]> {
   const email = await git(root, ["config", "user.email"])
   if (email.code === 0 && email.out.trim()) return []
   return ["-c", "user.name=opencode-auto", "-c", "user.email=opencode-auto@local"]
 }
 
-async function git(root: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
+export async function git(root: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
   // GIT_OPTIONAL_LOCKS=0 (plans/0099 D4): read-shaped commands (`git status`,
   // `git diff`) opportunistically take the index lock to refresh the stat
   // cache; under doc lanes those reads run beside the decorator's serialized
@@ -1553,49 +1117,8 @@ export async function physicalDir(dir: string): Promise<string> {
   return await realpath(dir).catch(() => dir)
 }
 
-function firstLine(text: string): string {
+export function firstLine(text: string): string {
   return text.trim().split("\n")[0]!.slice(0, 200)
-}
-
-// The document side: the target directory's own docs/ — changes there do not
-// affect test results and do not trigger a handover retest (the test-handover
-// front-loading design D5). All other tracked files (source code and scripts
-// under test/, files inside nested repositories included) always count.
-function documentOnly(rel: string): boolean {
-  return rel === "docs" || rel.startsWith(`docs${sep}`)
-}
-
-// The list of **tracked** files changed since HEAD (= the handover freeze
-// commit), relative to the target directory, excluding the document side.
-// Untracked additions do not count (D5) — a newly created file that takes
-// part in compilation slips through; that is the known trade-off, buying
-// "documents/artifacts the session wrote at its end do not trigger a
-// registration for nothing". The test handover's concurrent mode registers
-// drift by this: non-empty means "the frozen snapshot this test ran on and
-// the tree about to be posted are not the same"; it records the fact and
-// takes no action (E3). A non-git environment returns the empty array.
-export async function trackedSourceChanges(dir: string): Promise<string[]> {
-  const lists = await Promise.all((await repoRoots(dir)).map((root) => gitDiffFiles(dir, root)))
-  return lists.flat().filter((rel) => !documentOnly(rel))
-}
-
-// git diff --name-only -z HEAD -- .: tracked files' changes against HEAD
-// (staged and unstaged merged, untracked excluded), paths relative to the
-// repository root, converted to relative to the target directory. Before the
-// first commit (no HEAD) and in a non-git directory, returns empty.
-async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
-  const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
-  const toplevel = top?.code === 0 ? top.out.trim() : ""
-  if (!toplevel) return []
-  const phys = await physicalDir(dir)
-  // --ignore-submodules=all: a nested repository is a single gitlink in the
-  // outer one; changes to its inner files are listed separately by that
-  // repository's own diff; not ignoring it would report the whole nested
-  // directory once more (the same reasoning as gitStatusFiles skipping
-  // collapsed directory entries).
-  const diff = await git(root, ["diff", "--name-only", "-z", "--ignore-submodules=all", "HEAD", "--", "."]).catch(() => undefined)
-  if (!diff || diff.code !== 0) return []
-  return diff.out.split("\0").filter(Boolean).map((path) => relative(phys, join(toplevel, path)))
 }
 
 // The paths changed between each repository's recorded sha and HEAD

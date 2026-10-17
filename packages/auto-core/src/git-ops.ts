@@ -28,15 +28,11 @@
 // This mirrors exit.ts (the control service's home) and router.ts: the
 // service's home keeps its factory.
 import {
-  addWorktree,
   beginUnit,
   changedFiles,
   commitPending,
   commitTree,
   driverStateFile,
-  landBranch,
-  pruneWorktrees,
-  removeWorktree,
   unitBaseline,
   unitViolations,
   withinScopes,
@@ -45,6 +41,7 @@ import {
   type UnitBaseline,
   type UnitGate,
 } from "./git"
+import { addWorktree, landBranch, pruneWorktrees, removeWorktree } from "./git-worktree"
 import { clampRecordedResolves } from "./charter-clamp"
 import { log, vlog } from "./log"
 import { currentRound } from "./phases"

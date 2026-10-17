@@ -336,8 +336,8 @@ export type Switches = {
   // record and verifies them at recovery (a foreign commit mixed in goes dirty; model
   // mismatch / dead session / --new-session rolls back to the unit baseline and reruns),
   // converges the reused session's recovery note to a single continue sentence, and
-  // rolls back on the first invalid handover document. With the gates off (--commit
-  // false/dryrun) the runner side idles it entirely (the record carries no new fields).
+  // rolls back on the first invalid handover document. With the gates off (dryrun /
+  // the no-commit test double) the runner side idles it entirely (the record carries no new fields).
   strictResume: boolean
   // Hibernation window (avoiding LLM high-tariff hours, plans/0027-hibernate-design.md,
   // default undefined = no hibernation, zero change from the status quo):

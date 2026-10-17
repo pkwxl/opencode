@@ -29,7 +29,7 @@ import { candidateList } from "./model-route"
 import { nextOpening, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute } from "./models-schema"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
-import type { ModelPolicy, ModelRole } from "./switches"
+import type { ModelPolicy, ModelRole, Switches } from "./switches"
 
 // A down mark; `until` (epoch ms) is the instant a reset time named, absent
 // = the mark clears at the failback-scope boundaries. `classifier` = the
@@ -143,6 +143,46 @@ export const EMPTY_MODEL_POLICY: ModelPolicy = { byLetter: {}, byType: {}, byRol
 // must not also replace its lists; the /failback override still applies).
 export function selectionPolicy(registry: Pick<ModelRegistry, "implicit">, policy: ModelPolicy): ModelPolicy {
   return registry.implicit ? EMPTY_MODEL_POLICY : policy
+}
+
+// The selection context of one dispatch, built from the run facts — the one
+// home of the builder router.ts's routeContext and routing.ts's selectContext
+// grew as byte-identical twins (the router cannot value-import routing
+// without closing a cycle the import-direction DAG check counts, so the
+// builder lives here, below both). The facts parameter is the structural
+// intersection of their facts types — router.ts's RouteFacts and
+// routing.ts's RoutingFacts both satisfy it; the router field names only the
+// three reads the context makes, not the Router type, for the same
+// DAG reason that keeps DownMark here. The volatile run state (the policy of
+// OPENCODE_AUTO_MODEL, the /failback override, the down marks, the key
+// rings' usable-key predicate) is read per call; `limits` carries the live
+// context windows only where the site holds them.
+export function selectContextOf(
+  facts: {
+    registry: ModelRegistry
+    agentFilter: string | undefined
+    defaultAgent: string
+    router: {
+      failbackOverride(): { wildcard: string; fallback: string[] } | undefined
+      downMarks(): ReadonlyMap<string, DownMark>
+      ringHasUsableKey(provider: string, now: number): boolean
+    }
+  },
+  switches: Switches,
+  cap: number,
+  limits?: ReadonlyMap<string, number>,
+): SelectContext {
+  return {
+    registry: facts.registry,
+    cap,
+    agentFilter: facts.agentFilter,
+    defaultAgent: facts.defaultAgent,
+    policy: selectionPolicy(facts.registry, switches.model),
+    override: facts.router.failbackOverride(),
+    marks: facts.router.downMarks(),
+    ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
+    ...(limits !== undefined ? { limits } : {}),
+  }
 }
 
 // The candidate list of a dispatch (§6.1): route, tier and list from

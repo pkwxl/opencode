@@ -62,7 +62,7 @@ import { services } from "../src/services"
 import { setSwitchModelRegistry } from "../src/switches"
 import { singleHost } from "../src/agent-pool"
 import type { AgentHost } from "../src/agent/types"
-import { fakeClient } from "./fixtures/runner"
+import { fakeClient, git } from "./fixtures/runner"
 import { EOF_MARK } from "../src/doccheck"
 
 // —— Hand-built plans ——
@@ -329,13 +329,7 @@ describe("the failure matrix (§6.2)", () => {
 
 // —— The dispatch and landing choreography (§6.5, stage S2) over real git ——
 
-// git over the fixture dir, asserting exit 0.
-async function git(root: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
-}
+// git over the fixture dir, asserting exit 0 (the fixtures/runner.ts helper).
 
 // Whether a directory exists (Bun.file targets files; a directory answers
 // false — the park assertions need the real thing).

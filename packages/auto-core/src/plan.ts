@@ -20,7 +20,7 @@ import { ensurePointer } from "./agents-block"
 import { analysisProblems, renderAnalysisStub, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
 import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
-import { log } from "./log"
+import { dirtyStopLines, log } from "./log"
 import type { ModeSpec } from "./mode"
 import { loadIntents } from "./intent/load"
 import { planningInputScaffold } from "./intent/load"
@@ -31,6 +31,7 @@ import {
   currentRound,
   establishRound,
   legacyLayoutProblem,
+  phaseFlowBlockedLine,
   phaseIndexPath,
   phaseKey,
   phaseLabel,
@@ -49,7 +50,8 @@ import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
 import { awaitingFormulation } from "./formulate"
-import { commitTree, isolateRound } from "./git"
+import { commitTree } from "./git"
+import { isolateRound } from "./git-land"
 import { renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
@@ -262,51 +264,17 @@ export async function planPrelude(dir: string, opts: {
         `no phase exists yet: the project analysis comes first — run ${bin} plan ${dir}, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\`, and round R-01 opens`,
       ])
     }
-    const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
-    if (raw === undefined) {
-      await mkdir(join(dir, "docs"), { recursive: true })
-      await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
-      return stop(0, [
-        `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
-        `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
-        `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} plan ${dir} — the approved brief is installed and round R-01 opens`,
-      ])
-    }
-    let types: ReturnType<typeof loadPhaseTypes>
-    try {
-      types = loadPhaseTypes(dir)
-    } catch (error) {
-      return stop(1, [`⏸ ${error instanceof Error ? error.message : String(error)}`])
-    }
-    const problems = analysisProblems(raw, types)
-    if (problems.length) {
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
-      return stop(2, [
-        `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
-        ...problems.map((problem) => `  ${problem}`),
-        `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} plan ${dir}`,
-      ])
-    }
-    if (!clarifiedMark(raw)) {
-      await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual } })
-      const forks = surveyForks(raw)
-      return stop(2, [
-        `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
-          (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
-          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
-        `then re-run: ${bin} plan ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
-      ])
-    }
-    // Row 0d, the release: install the approved brief proposal (the survey
-    // release's mechanism, D15.2 generalized), then establish R-01 like row
-    // 1 — the released roadmap's line for the round is its phase list,
-    // applied and named in establish's stop (plans/0101 D5; the round-start
-    // commit remains the person's veto).
-    const lines: string[] = []
-    const proposal = briefProposal(raw)
-    if (proposal !== undefined) lines.push(...(await installBriefProposal(dir, ANALYSIS_DOC, proposal, commitTree)))
-    return establish(dir, 1, opts, lines)
+    // The walkthrough itself is shared with transfer's projectStart
+    // (analysisGate): the command token and the manual flag are the only
+    // differences between the two callers.
+    const gate = await analysisGate(dir, "plan", { testByDriver: opts.testByDriver, manual })
+    if (gate.type === "stop") return stop(gate.code, gate.lines)
+    // Row 0d, the release: the approved brief proposal is installed (the
+    // survey release's mechanism, D15.2 generalized), then R-01 establishes
+    // like row 1 — the released roadmap's line for the round is its phase
+    // list, applied and named in establish's stop (plans/0101 D5; the
+    // round-start commit remains the person's veto).
+    return establish(dir, 1, opts, gate.lines)
   }
   // Row 1: no docs/R-NN/, or its phase index is missing (an interrupted
   // round start, plans/0049 G6). m mode only since plans/0101 D4 — the
@@ -336,7 +304,7 @@ export async function planPrelude(dir: string, opts: {
     lines.push(...(await planningNotices(dir, undefined, opts.input)))
     return establish(dir, round, opts, lines)
   }
-  const route = await routePhase(dir, { loadPlan, bin })
+  const route = await routePhase(dir, { loadPlan, bin, phases: opts.phases ?? "m" })
   // Row 2 (plans/0101 D4): a phased complete round is transfer's — the round
   // close (shape 3) and the next round's opening (shape 4) refuse here naming
   // the advance command. m mode never gets past this guard's else (its single
@@ -400,27 +368,29 @@ export async function planPrelude(dir: string, opts: {
   // tail nobody has reviewed yet. A value the sync refuses (dropping a
   // completed phase, a directory that holds work) surfaces as the error
   // plannedPhaseUnits throws.
-  const authority = await resolveRoundPhases(dir, round, opts.phases)
-  const authorityText = authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"
-  let drift: PhaseTailDrift | undefined
-  try {
-    drift = await phaseTailDrift(dir, round, authority.phases)
-  } catch (error) {
-    return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
-  }
-  if (drift) {
-    if (opts.input) return stop(1, [driftInputLine(dir, drift, authorityText)])
-    if (opts.newTask !== undefined) return stop(1, [driftNewTaskLine(dir, drift, authorityText)])
-    if (opts.export !== undefined || opts.adopt !== undefined) return stop(1, [driftOrderLine(dir, drift, authorityText)])
-    try {
-      await syncPhaseIndex(dir, round, authority.phases)
-    } catch (error) {
-      return stop(1, [`phase-index re-sync failed: ${error instanceof Error ? error.message : String(error)}`])
-    }
-    return stop(0, [resyncLine(dir, drift, authorityText)])
-  }
+  // The resolve → drift → sync sequence is shared with transfer's
+  // rederiveTail (applyTailDrift); plan's D5 flag refusals ride the
+  // hook so input is still refused before any write, and the uncommitted
+  // review stop below stays plan's own.
+  const applied = await applyTailDrift(
+    dir,
+    round,
+    opts.phases,
+    (drift, from) =>
+      opts.input
+        ? driftRefusal(dir, drift, from, "input", "pass the input")
+        : opts.newTask !== undefined
+          ? driftRefusal(dir, drift, from, "--new-task", "add the task again")
+          : opts.export !== undefined || opts.adopt !== undefined
+            ? driftRefusal(dir, drift, from, "--export / --adopt", "take the work order again")
+            : undefined,
+  )
+  if (applied.type === "blocked") return stop(1, [phaseFlowBlockedLine(applied.reason)])
+  if (applied.type === "refused") return stop(1, [applied.line])
+  if (applied.type === "sync-failed") return stop(1, [`phase-index re-sync failed: ${applied.error}`])
+  if (applied.type === "applied") return stop(0, [resyncLine(dir, applied.drift, applied.from)])
   // Row 4.
-  if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
+  if (route.type === "blocked") return stop(1, [phaseFlowBlockedLine(route.reason)])
   // The advisory notices (plans/0081 D11.3/D12.3): the plan route is where a
   // planning session is imminent — m mode's row 8 included (route.type is
   // "plan" there too). Phased refuses the route below (plans/0101 D4), so the
@@ -434,7 +404,7 @@ export async function planPrelude(dir: string, opts: {
   // closed out.
   if (opts.newTask !== undefined) {
     const open = await openStep(dir)
-    if (open) return stop(1, [openStepNewTaskLine(dir, open)])
+    if (open) return stop(1, [openStepRefusal(dir, open, "add the task with --new-task")])
   }
   // Rows 12–13's open-step refusal: the same reasoning as --new-task's —
   // the step's snapshot and resume machinery own the phase's index until it
@@ -442,14 +412,14 @@ export async function planPrelude(dir: string, opts: {
   // both (returning the loop here would silently ignore the flag).
   if (opts.export !== undefined || opts.adopt !== undefined) {
     const open = await openStep(dir)
-    if (open) return stop(1, [openStepOrderLine(dir, open)])
+    if (open) return stop(1, [openStepRefusal(dir, open, "export or adopt the unit")])
   }
   // The assisted-preparation flags' open-step refusal (plans/0084), the same
   // reasoning as --new-task's: returning the loop here would silently ignore
   // the flag, so the person hears the step first.
   if (opts.round || opts.phase) {
     const open = await openStep(dir)
-    if (open) return stop(1, [openStepAssistLine(dir, open)])
+    if (open) return stop(1, [openStepRefusal(dir, open, "run the preparation flag again")])
   }
   if (await openStep(dir)) return { type: "loop" }
   // Row 14 (--round, plans/0084): the assisted round-brief preparation stop.
@@ -497,7 +467,7 @@ export async function planPrelude(dir: string, opts: {
     try {
       target = manual ? { phase: route.phase, listed: false } : await planTarget(dir, route)
     } catch (error) {
-      return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+      return stop(1, [phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
     }
     if (!target) return stop(1, [`no phase is left to plan in round ${roundDirName(round)}; --phase would prepare nothing`])
     if (target.listed) {
@@ -544,7 +514,7 @@ export async function planPrelude(dir: string, opts: {
     if (mid) return stop(1, [midPipelineLine(mid)])
     const added = await addTask(dir, route.phase, opts.newTask, { autoNumber: opts.autoNumber })
     if (added.type === "dirty") {
-      return stop(2, [`⏸ worktree not clean before adding the task; handle it manually (commit/clean) and re-run:`, ...added.files.map((file) => `  ${file}`)])
+      return stop(2, dirtyStopLines("worktree not clean before adding the task", added.files))
     }
     if (added.type === "failed") return stop(2, [`⏸ ${added.question}`])
     return stop(0, addedLines(dir, added))
@@ -699,7 +669,7 @@ async function previousRoundClose(dir: string, round: number, gate: { build?: st
   try {
     state = await readPhases(dir, round)
   } catch (error) {
-    return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+    return stop(1, [phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
   }
   const pending = state && currentPhase(state)
   if (!state || pending) {
@@ -717,12 +687,7 @@ async function previousRoundClose(dir: string, round: number, gate: { build?: st
 // G8 failed: the next round waits for the human work the checks name, hence
 // exit 2 (plans/0053 D4; continue exited 1).
 function closeRefusal(dir: string, round: number, close: RoundClose): string[] {
-  const { bin } = shellProfile()
-  return [
-    `⏸ round ${roundDirName(round)} does not pass its round-close checks, so round ${roundDirName(round + 1)} cannot open yet`,
-    ...roundCloseLines(close),
-    `next: fix them, commit, then re-run: ${bin} plan ${dir}`,
-  ]
+  return roundCloseRefusalLines(dir, round, round + 1, close, "plan")
 }
 
 // The re-sync line's drift pairs (row 3, D34): each position of the unstarted
@@ -750,68 +715,31 @@ function resyncLine(dir: string, drift: PhaseTailDrift, from: string): string {
   )
 }
 
-// Row 3's input refusal (D5): the re-synced tail must be reviewed and
-// committed before anything plans into it.
-function driftInputLine(dir: string, drift: PhaseTailDrift, from: string): string {
+// Row 3's drift refusals (D5): the re-synced tail must be reviewed and
+// committed before anything plans into it — one gate, three channels.
+// `flag` names the input form this route refuses (the person re-runs plan
+// without it to re-sync), `action` the channel's own resumption once the
+// change is committed.
+function driftRefusal(dir: string, drift: PhaseTailDrift, from: string, flag: string, action: string): string {
   const { bin } = shellProfile()
   return (
     `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
-    `run ${bin} plan ${dir} without input to re-sync it, commit the change, then pass the input.`
+    `run ${bin} plan ${dir} without ${flag} to re-sync it, commit the change, then ${action}.`
   )
 }
 
-// Row 3's --new-task refusal: same gate, adapted tail — the re-synced tail
-// must be reviewed and committed before a task lands in its phases.
-function driftNewTaskLine(dir: string, drift: PhaseTailDrift, from: string): string {
-  const { bin } = shellProfile()
-  return (
-    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
-    `run ${bin} plan ${dir} without --new-task to re-sync it, commit the change, then add the task again.`
-  )
-}
-
-// Row 3's work-order refusal: same gate — the re-synced tail must be
-// reviewed and committed before a unit of its phases is rendered or adopted.
-function driftOrderLine(dir: string, drift: PhaseTailDrift, from: string): string {
-  const { bin } = shellProfile()
-  return (
-    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
-    `run ${bin} plan ${dir} without --export / --adopt to re-sync it, commit the change, then take the work order again.`
-  )
-}
-
-// Row 11's open-step refusal: the step's snapshot and resume machinery own
-// the phase's index until closeStep; a hand-add under them would bypass both.
-function openStepNewTaskLine(dir: string, open: { step: string; unit: string }): string {
+// The open-step refusals (row 5's hand-add, rows 12–13's work orders,
+// rows 14–15's preparation flags): the step's snapshot and resume machinery
+// own the phase's index until closeStep, and anything rendered or added
+// under them would bypass both — returning the loop would silently ignore
+// the flag, so the step is named and finished first; `tail` is the
+// channel's own resumption after it.
+function openStepRefusal(dir: string, open: { step: string; unit: string }, tail: string): string {
   const { bin } = shellProfile()
   const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
   return (
     `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
-    `finish it first (run: ${bin} plan ${dir}), then add the task with --new-task`
-  )
-}
-
-// The assisted-preparation flags' open-step refusal (plans/0084), rows 14–15:
-// returning the loop under the flags would silently ignore them, so the step
-// is named instead.
-function openStepAssistLine(dir: string, open: { step: string; unit: string }): string {
-  const { bin } = shellProfile()
-  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
-  return (
-    `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
-    `finish it first (run: ${bin} plan ${dir}), then run the preparation flag again`
-  )
-}
-
-// Rows 12–13's open-step refusal (plans/0076): the same ownership as
-// --new-task's — the step owns the phase's index until it closes, and a work
-// order rendered or adopted under it would read or close a moving index.
-function openStepOrderLine(dir: string, open: { step: string; unit: string }): string {
-  const { bin } = shellProfile()
-  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
-  return (
-    `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
-    `finish it first (run: ${bin} plan ${dir}), then export or adopt the unit`
+    `finish it first (run: ${bin} plan ${dir}), then ${tail}`
   )
 }
 
@@ -894,6 +822,193 @@ export async function establishRoundSetup(
   return { type: "ok", round, state: state!, units: state!.phases, isolated, resolved, branch }
 }
 
+// —— The 0101 rendering helpers (plans/0102, the complexity-5 dedup) ——
+// plan's rows and transfer's shapes used to maintain twin renderings of the
+// same outcomes — identical by discipline, not by construction. The four
+// helpers below are the shared vocabulary: the command token
+// ("plan" | "transfer") and each caller's own line compositions are the only
+// interpolations, so every stop stays byte-identical to the twins they
+// replaced (plan.test.ts and transfer.test.ts pin them).
+
+// The establishment stop lines (plan's establish and transfer's
+// establishStop): every rendering of establishRoundSetup's outcome — the
+// dirty-repo refusal, the branch-isolation failure, the roadmap validation
+// problem, the plain error, and the G1 success block — with the two
+// caller-specific renderings passed in: `established` is the phase text of
+// the ✓ line (plan's m mode names the single phase; transfer lists the
+// phases with the roadmap source suffix) and `next` is the caller's own
+// rhythm line (plan's dispatch, transfer's construct-and-review), placed
+// between the isolation line and the guidance line as both callers print
+// it. The failure arms ignore both.
+export function establishStopLines(
+  dir: string,
+  round: number,
+  setup: EstablishSetup,
+  command: "plan" | "transfer",
+  established: string,
+  next: string,
+): { code: number; lines: string[] } {
+  const { bin } = shellProfile()
+  const name = roundDirName(round)
+  if (setup.type === "dirty") {
+    return {
+      code: 2,
+      lines: [
+        `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
+          `handle it manually (commit/clean) and re-run:`,
+        ...setup.repos.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
+      ],
+    }
+  }
+  if (setup.type === "failed") {
+    return { code: 1, lines: [`branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${bin} ${command} ${dir}`] }
+  }
+  if (setup.type === "invalid") {
+    return { code: 1, lines: [`⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${bin} ${command} ${dir}`] }
+  }
+  if (setup.type === "error") {
+    return { code: 1, lines: [`round establishment failed: ${setup.error}`] }
+  }
+  const { isolated, branch } = setup
+  // The isolation line rides both G1 shapes: the round's commits land on the
+  // round branch, the original branch never moves.
+  return {
+    code: 0,
+    lines: [
+      `✓ round ${name} established: ${established}`,
+      ...(isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []),
+      next,
+      `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`,
+    ],
+  }
+}
+
+// The analysis-flow walkthrough (plan's rows 0a–0c and transfer's
+// projectStart, plans/0084): the stub write with its AGENTS.md guidance, the
+// grammar-problems hold, the awaits-you shape, and the Clarified release
+// installing the approved brief proposal — the command token and the
+// guidance's manual flag are the only differences between the two callers,
+// whose flag-specific pre-refusals stay caller-side. The release returns the
+// install's lines for the caller to carry into its establishment stop.
+export type AnalysisGateOutcome = { type: "stop"; code: number; lines: string[] } | { type: "released"; lines: string[] }
+
+export async function analysisGate(
+  dir: string,
+  command: "plan" | "transfer",
+  opts: { testByDriver?: boolean; manual: boolean },
+): Promise<AnalysisGateOutcome> {
+  const { bin } = shellProfile()
+  const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
+  if (raw === undefined) {
+    await mkdir(join(dir, "docs"), { recursive: true })
+    await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
+    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
+    return {
+      type: "stop",
+      code: 0,
+      lines: [
+        `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
+        `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
+        `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} ${command} ${dir} — the approved brief is installed and round R-01 opens`,
+      ],
+    }
+  }
+  let types: ReturnType<typeof loadPhaseTypes>
+  try {
+    types = loadPhaseTypes(dir)
+  } catch (error) {
+    return { type: "stop", code: 1, lines: [`⏸ ${error instanceof Error ? error.message : String(error)}`] }
+  }
+  const problems = analysisProblems(raw, types)
+  if (problems.length) {
+    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
+    return {
+      type: "stop",
+      code: 2,
+      lines: [
+        `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
+        ...problems.map((problem) => `  ${problem}`),
+        `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} ${command} ${dir}`,
+      ],
+    }
+  }
+  if (!clarifiedMark(raw)) {
+    await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
+    const forks = surveyForks(raw)
+    return {
+      type: "stop",
+      code: 2,
+      lines: [
+        `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
+          (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
+          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
+        `then re-run: ${bin} ${command} ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
+      ],
+    }
+  }
+  // The release (row 0d's shape): the approved brief proposal installs
+  // verbatim (the survey release's mechanism, D15.2 generalized); the caller
+  // establishes R-01 under the roadmap's line (plans/0101 D5 — the
+  // round-start commit remains the person's veto).
+  const proposal = briefProposal(raw)
+  const lines: string[] = []
+  if (proposal !== undefined) lines.push(...(await installBriefProposal(dir, ANALYSIS_DOC, proposal, commitTree)))
+  return { type: "released", lines }
+}
+
+// The round-close refusal (plan's closeRefusal and transfer's two arms): the
+// closed round's checks block the next round's opening; `command` names the
+// re-run. plan renders closed=round/open=round+1; transfer's projectStart
+// arm closes round-1 to open round, its roundOpen arm round to round+1.
+export function roundCloseRefusalLines(dir: string, closed: number, open: number, close: RoundClose, command: "plan" | "transfer"): string[] {
+  const { bin } = shellProfile()
+  return [
+    `⏸ round ${roundDirName(closed)} does not pass its round-close checks, so round ${roundDirName(open)} cannot open yet`,
+    ...roundCloseLines(close),
+    `next: fix them, commit, then re-run: ${bin} ${command} ${dir}`,
+  ]
+}
+
+// The drift-apply sequence (plan's row-3 re-sync and transfer's rederiveTail,
+// plans/0053 D34 / 0101 D6): resolve the authority, read the unstarted-tail
+// drift, and — when one exists and no refusal intervened — sync the index to
+// it. The optional `refuse` hook is plan's D5 discipline (input is refused
+// before the write; transfer applies unconditionally); it receives the drift
+// and the authority text (`from`) the refusal lines and both callers' own
+// stop lines name. What follows a successful sync stays caller-side: plan's
+// uncommitted review stop, transfer's committed phase-sync.
+export type ApplyTailDrift =
+  | { type: "blocked"; reason: string } // phaseTailDrift threw — the phase-flow-blocked line
+  | { type: "clean" } // no drift, the common case
+  | { type: "refused"; line: string } // the refuse hook answered
+  | { type: "sync-failed"; error: string } // syncPhaseIndex threw — the caller words it
+  | { type: "applied"; drift: PhaseTailDrift; from: string }
+
+export async function applyTailDrift(
+  dir: string,
+  round: number,
+  phases: string,
+  refuse?: (drift: PhaseTailDrift, from: string) => string | undefined,
+): Promise<ApplyTailDrift> {
+  const authority = await resolveRoundPhases(dir, round, phases)
+  const from = authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"
+  let drift: PhaseTailDrift | undefined
+  try {
+    drift = await phaseTailDrift(dir, round, authority.phases)
+  } catch (error) {
+    return { type: "blocked", reason: error instanceof Error ? error.message : String(error) }
+  }
+  if (!drift) return { type: "clean" }
+  const refusal = refuse?.(drift, from)
+  if (refusal !== undefined) return { type: "refused", line: refusal }
+  try {
+    await syncPhaseIndex(dir, round, authority.phases)
+  } catch (error) {
+    return { type: "sync-failed", error: error instanceof Error ? error.message : String(error) }
+  }
+  return { type: "applied", drift, from }
+}
+
 // Establish a round (no AI, left uncommitted for the round-start gate G1)
 // and print the G1 lines (plans/0053 D15). Branch isolation (plans/0074 §2.2)
 // happens here — the natural point where round-scoped state is created: each
@@ -910,61 +1025,33 @@ export async function establishRoundSetup(
 // failure or block leaves no round state and the re-run retries everything,
 // and a crash between the two leaves only content-neutral branches (a branch
 // at HEAD changes no file), which the idempotent skips finish.
-// Since plans/0101 D5 the round's phases come from the released roadmap's
-// line for it, config `phases` the fallback (resolveRoundPhases); the stop
-// names source and value — application is visible, the round-start commit
-// remains the person's veto, and later boundaries are better-evidenced
-// amendment points. Since plans/0084 the stop also renders the AGENTS.md
-// round-preparation guidance (the assisted half of this gate).
+// Establishment through plan is m-mode-only since plans/0101 D4 — every
+// phased not-established state is transfer's shape 1 (refused before any
+// write), so resolveRoundPhases always short-circuits "m" here and the
+// phased D5 rendering (the roadmap's sourced line, config `phases` the
+// fallback) lives in transfer.ts's establishStop — both renderings compose
+// through establishStopLines below, the shared outcome vocabulary (the
+// caller's next line and the established text are the only interpolations).
+// Since plans/0084 the stop also renders the AGENTS.md round-preparation
+// guidance (the assisted half of this gate).
 async function establish(dir: string, round: number, opts: { phases: string; isolate?: string[]; testByDriver?: boolean }, before: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
-  const name = roundDirName(round)
   const setup = await establishRoundSetup(dir, round, opts)
-  if (setup.type === "dirty") {
-    return stop(2, [
-      ...before,
-      `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
-        `handle it manually (commit/clean) and re-run:`,
-      ...setup.repos.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
-    ])
-  }
-  if (setup.type === "failed") {
-    return stop(1, [...before, `branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${bin} plan ${dir}`])
-  }
-  if (setup.type === "invalid") {
-    return stop(1, [...before, `⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${bin} plan ${dir}`])
-  }
-  if (setup.type === "error") {
-    return stop(1, [...before, `round establishment failed: ${setup.error}`])
-  }
-  const { units, isolated, resolved, branch } = setup
-  // The isolation line rides both G1 shapes: the round's commits land on the
-  // round branch, the original branch never moves.
-  const isolatedLine = isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []
-  // The D5 sourced line: the roadmap's value was applied, config's would have
-  // been different. Its goal names the line's round class.
-  const sourceSuffix = resolved.roadmap
-    ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(resolved.roadmap.goal)}"; config default was "${opts.phases}")`
-    : ""
-  const guideLine = `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`
-  if (resolved.phases === "m") {
-    return stop(0, [
-      ...before,
-      `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
-      ...isolatedLine,
-      `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(units[0]!)} by hand, ` +
-        `or run: ${bin} plan ${dir} -p <text> | --file <path>`,
-      guideLine,
-    ])
-  }
-  return stop(0, [
-    ...before,
-    `✓ round ${name} established: ${units.map(phaseLabel).join(", ")}${sourceSuffix}`,
-    ...isolatedLine,
-    `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
-      `then run: ${bin} plan ${dir} to plan ${phaseRefText(units[0]!)} (or run to plan and execute)`,
-    guideLine,
-  ])
+  const ok = setup.type === "ok" ? setup : undefined
+  // m mode only (the phased establishment is transfer's, above): the
+  // single-phase rendering, no roadmap source suffix.
+  const lines = establishStopLines(
+    dir,
+    round,
+    setup,
+    "plan",
+    ok ? `single phase ${phaseLabel(ok.units[0]!)}` : "",
+    ok
+      ? `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(ok.units[0]!)} by hand, ` +
+        `or run: ${bin} plan ${dir} -p <text> | --file <path>`
+      : "",
+  )
+  return stop(lines.code, [...before, ...lines.lines])
 }
 
 // A roadmap line's goal as the sourced line's round class: capped so a long

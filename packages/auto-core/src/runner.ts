@@ -814,75 +814,112 @@ export async function runTask(
         // is sometimes genuine new knowledge).
         for (const warn of await inversionWarnings(dir, phase)) log(`⚠ ${warn}`)
       }
-      // Wrap-up session: skipped entirely when config.wrapup=false
-      // (--no-wrapup, default true). Since plans/0083 (D1–D5) the wrap-up
-      // session is the verification session, and a FAIL verdict opens the
-      // bounded fix loop inside runWrapup (verify → gaps.md → fix → re-verify,
-      // at most FIX_ROUNDS rounds, then today's ladder); the report.md and
-      // gaps.md shape gates live inside it too. The loop is lane-local (D8):
-      // it sits here in runTask's tail, so every lane runs it without parent
-      // involvement.
-      if (opts.wrapup ?? true) {
-        const stopped = await runWrapup(client, plan, task, opts, chain, {
-          solo: mode !== "true",
-          label: "wrapup session",
-          // D7: the fix rounds this task has already spent (a round counts
-          // once it opens, so a resumed run never re-runs a spent round).
-          round: resume?.kind === "wrapup" ? (resume.round ?? 0) : 0,
-          persist: persistStage,
-          baseline: unitStart,
-          // plans/0099 D7/D9/D11: a doc lane's unit threads its effective scope
-          // (the charter's path-limited range), the quiet-tree drain the
-          // wrap-up's lane gate awaits, and the concurrency clause's render
-          // fact; every serial unit passes none of them.
-          ...(input.scope !== undefined ? { scope: input.scope } : {}),
-          ...(input.drain !== undefined ? { drain: input.drain } : {}),
-          ...(input.docLane ? { docLane: true } : {}),
-        })
-        if (stopped) return stopped
-      }
     }
-    // Result line of the task report (FAIL stops the run): the report and the
-    // work are already committed by the wrap-up session, so a FAIL only has
-    // to block — the loop's blocked path marks it blocked and commits the
-    // interruption scene. Under the verification loop (plans/0083 D6) this
-    // closeout read is the --no-wrapup path's own: a task-written report is
-    // still read here unchanged, and every loop-exiting verdict was already
-    // acted on inside runWrapup (a loop PASS re-reads as PASS, a loop FAIL
-    // never reaches this line). A person then decides: `close` accepts the
-    // result (the Closed: field records why); `plan --force-close … --append
-    // -p` replaces the task with a better one; listing fix tasks before it in
-    // tasks.md gets the gap fixed first (a hand-added checklist item is
-    // illegal subtask state in true mode, so fixes are planned as tasks).
-    // The phase is rewound to wrapup, so re-running the task itself only
-    // re-runs the wrap-up, which rewrites the result line. No report or no
-    // result line = no stop.
-    await persistStage({ kind: "closeout" })
-    const result = await reportResult(dir, task)
-    if (result?.type === "fail") {
-      // Per-model protocol-drift counter (plans/0055 §10 item 3): the FAIL
-      // verdict was written by the wrap-up session, whose selected entry the
-      // chain still holds.
-      await statsModelEvent(dir, chain.modelEntry, "fail")
-      const { bin } = shellProfile()
-      enterPhase(chain, { kind: "wrapup" })
-      return {
-        type: "blocked",
-        // The repair fact (plans/0079 §4): this block is a FAIL verdict —
-        // the one block a run with a --repair budget may trade for a bounded
-        // repair round (the task loop closes the task and appends rework)
-        // instead of stopping for the human.
-        repair: { reason: result.reason },
-        question:
-          `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
-          `accept the result with ${bin} close ${task.id} --reason <text>; ` +
-          `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
-          `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
-      }
-    }
-    await markDone(plan, task.id)
-    return { type: "completed" }
+    // The closeout phase (0044's completion side, plans/0083): the wrap-up
+    // verification session and the report-result mapping — runCloseout
+    // beside runTask, a pure move of the tail this pipeline used to carry
+    // inline.
+    return runCloseout(client, plan, task, opts, chain, {
+      dir,
+      ...(resume !== undefined ? { resume } : {}),
+      solo: mode !== "true",
+      persist: persistStage,
+      baseline: unitStart,
+      ...(input.scope !== undefined ? { scope: input.scope } : {}),
+      ...(input.drain !== undefined ? { drain: input.drain } : {}),
+      ...(input.docLane ? { docLane: true } : {}),
+    })
   }
+}
+
+// The closeout phase runTask's pipeline ends in (0044's completion side,
+// 0083's verification loop; the 0102 complexity-13 extraction): the wrap-up
+// session (the FIX_ROUNDS fix loop lives inside runWrapup), then the task
+// report's result line and the outcome mapping — the FAIL block with its
+// repair fact, or markDone and the completed outcome. Pure move: the
+// sequencing, the comments and every string are the tail verbatim; only what
+// the tail read as runTask closures became parameters (dir, the resume
+// marker, the resolved mode's solo fact, the stage persister, the charter
+// baseline and the doc-lane facts). resume drives the two resume shapes the
+// tail holds: a record at "wrapup" re-enters the fix rounds at its recorded
+// round, a record at "closeout" skips the wrap-up entirely (only the result
+// check and the completion remain).
+async function runCloseout(
+  client: ClientSource,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  chain: SessionChain,
+  input: { dir: string; resume?: Phase; solo: boolean; persist: (phase: Phase) => Promise<void>; baseline: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; docLane?: boolean },
+): Promise<Outcome> {
+  // Wrap-up session: skipped entirely when config.wrapup=false
+  // (--no-wrapup, default true) — or by a closeout resume (the wrap-up
+  // already finished before the interruption; only the result check and the
+  // completion remain). Since plans/0083 (D1–D5) the wrap-up session is the
+  // verification session, and a FAIL verdict opens the bounded fix loop
+  // inside runWrapup (verify → gaps.md → fix → re-verify, at most FIX_ROUNDS
+  // rounds, then today's ladder); the report.md and gaps.md shape gates live
+  // inside it too. The loop is lane-local (D8): it sits in the closeout tail,
+  // so every lane runs it without parent involvement.
+  if (input.resume?.kind !== "closeout" && (opts.wrapup ?? true)) {
+    const stopped = await runWrapup(client, plan, task, opts, chain, {
+      solo: input.solo,
+      label: "wrapup session",
+      // D7: the fix rounds this task has already spent (a round counts
+      // once it opens, so a resumed run never re-runs a spent round).
+      round: input.resume?.kind === "wrapup" ? (input.resume.round ?? 0) : 0,
+      persist: input.persist,
+      baseline: input.baseline,
+      // plans/0099 D7/D9/D11: a doc lane's unit threads its effective scope
+      // (the charter's path-limited range), the quiet-tree drain the
+      // wrap-up's lane gate awaits, and the concurrency clause's render
+      // fact; every serial unit passes none of them.
+      ...(input.scope !== undefined ? { scope: input.scope } : {}),
+      ...(input.drain !== undefined ? { drain: input.drain } : {}),
+      ...(input.docLane ? { docLane: true } : {}),
+    })
+    if (stopped) return stopped
+  }
+  // Result line of the task report (FAIL stops the run): the report and the
+  // work are already committed by the wrap-up session, so a FAIL only has
+  // to block — the loop's blocked path marks it blocked and commits the
+  // interruption scene. Under the verification loop (plans/0083 D6) this
+  // closeout read is the --no-wrapup path's own: a task-written report is
+  // still read here unchanged, and every loop-exiting verdict was already
+  // acted on inside runWrapup (a loop PASS re-reads as PASS, a loop FAIL
+  // never reaches this line). A person then decides: `close` accepts the
+  // result (the Closed: field records why); `plan --force-close … --append
+  // -p` replaces the task with a better one; listing fix tasks before it in
+  // tasks.md gets the gap fixed first (a hand-added checklist item is
+  // illegal subtask state in true mode, so fixes are planned as tasks).
+  // The phase is rewound to wrapup, so re-running the task itself only
+  // re-runs the wrap-up, which rewrites the result line. No report or no
+  // result line = no stop.
+  await input.persist({ kind: "closeout" })
+  const result = await reportResult(input.dir, task)
+  if (result?.type === "fail") {
+    // Per-model protocol-drift counter (plans/0055 §10 item 3): the FAIL
+    // verdict was written by the wrap-up session, whose selected entry the
+    // chain still holds.
+    await statsModelEvent(input.dir, chain.modelEntry, "fail")
+    const { bin } = shellProfile()
+    enterPhase(chain, { kind: "wrapup" })
+    return {
+      type: "blocked",
+      // The repair fact (plans/0079 §4): this block is a FAIL verdict —
+      // the one block a run with a --repair budget may trade for a bounded
+      // repair round (the task loop closes the task and appends rework)
+      // instead of stopping for the human.
+      repair: { reason: result.reason },
+      question:
+        `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
+        `accept the result with ${bin} close ${task.id} --reason <text>; ` +
+        `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
+        `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
+    }
+  }
+  await markDone(plan, task.id)
+  return { type: "completed" }
 }
 
 // The subtask loop's entry prechecks, parameterized into one helper for both

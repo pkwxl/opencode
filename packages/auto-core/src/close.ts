@@ -38,6 +38,7 @@ import { forgetHandover, peekHandover } from "./handover"
 import {
   currentRound,
   legacyLayoutProblem,
+  phaseFlowBlockedLine,
   PHASE_INDEX_NAME,
   phaseGates,
   phaseHandoverDoc,
@@ -119,7 +120,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
   try {
     state = await readPhases(dir, round)
   } catch (error) {
-    return refused([`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+    return refused([phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
   }
   if (!state && !taskMatch) {
     return refused([`round ${roundDirName(round)} is not established (${join("docs", roundDirName(round), PHASE_INDEX_NAME)} is missing); nothing to close`])
@@ -137,7 +138,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
       try {
         plan = await loadPlan(dir, unit)
       } catch (error) {
-        return refused([`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+        return refused([phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
       }
       if (plan.tasks.some((task) => task.id === id)) {
         owner = { unit, plan }
@@ -180,7 +181,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     try {
       plan = await loadPlan(dir, unit)
     } catch (error) {
-      return refused([`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+      return refused([phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
     }
     closingPhases.push({ unit, plan, tasks: openTasks(plan, reason) })
     closingTasks = [...closingPhases.flatMap((phase) => phase.tasks)]
@@ -197,7 +198,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
       try {
         plan = await loadPlan(dir, unit)
       } catch (error) {
-        return refused([`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+        return refused([phaseFlowBlockedLine(error instanceof Error ? error.message : String(error))])
       }
       closingPhases.push({ unit, plan, tasks: openTasks(plan, reason) })
     }
@@ -297,7 +298,16 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
   }
   const { bin } = shellProfile()
   lines.push(`to undo before anything else runs: git revert ${await headSha(dir)}`)
-  lines.push(`next: ${bin} run ${dir} to continue, or ${bin} plan ${dir}`)
+  // The closing pointer (plans/0101 D4): a task close continues with run or
+  // plan in both modes; a phase or round close — phased only, m mode refuses
+  // those targets above — points at transfer, which owns the boundary and
+  // constructs the next phase's plan task (plan's rows refuse those states
+  // naming it).
+  lines.push(
+    taskMatch
+      ? `next: ${bin} run ${dir} to continue, or ${bin} plan ${dir}`
+      : `next: ${bin} run ${dir} to continue, or ${bin} transfer ${dir} — it advances the boundary and constructs the next phase's plan task`,
+  )
   return { type: "closed", lines }
 }
 

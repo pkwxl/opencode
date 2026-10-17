@@ -9,8 +9,8 @@
 // phase-planning session (plans/0006-phases-design.md §E, consumed from P2);
 // exec → the notes section of execution-class prompts (decompose / whole task /
 // subtask / wrapup).
-import { readFileSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync } from "node:fs"
+import { overlayMarkdownFiles } from "./overlay"
 import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
 
 export type ModeSpec = {
@@ -31,32 +31,16 @@ const SECTIONS = ["init", "exec"]
 // file written before the retirement still loads; their bodies are ignored.
 const RETIRED_SECTIONS = ["final: audit", "final: validate", "final: finalize"]
 
-// Mode name constraint: lowercase letter followed by letters/digits/hyphens
-// (same rule as the CLI value).
-const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
-
 // Load all modes: the built-in registry plus the target directory's
-// .opencode/auto/modes/<name>.md (a same-named file overrides the built-in).
-// Invalid files throw (the CLI turns this into an exit-1 usage error). With dir
-// omitted, only the built-ins are loaded.
+// .opencode/auto/modes/<name>.md (a same-named file overrides the built-in;
+// the shared overlay loader reads the directory and enforces the name
+// grammar). Invalid files throw (the CLI turns this into an exit-1 usage
+// error). With dir omitted, only the built-ins are loaded.
 export function loadModes(dir?: string): Record<string, ModeSpec> {
   const modes: Record<string, ModeSpec> = { migrate: parseModeFile("migrate", readFileSync(builtinMigrate, "utf8")) }
   if (!dir) return modes
-  const overlayDir = join(dir, ".opencode", "auto", "modes")
-  let files: string[] = []
-  try {
-    files = readdirSync(overlayDir)
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String(error.code) : ""
-    if (code !== "ENOENT" && code !== "ENOTDIR") throw error
-  }
-  for (const file of files.sort()) {
-    if (!file.endsWith(".md")) continue
-    const name = file.slice(0, -3)
-    if (!NAME_PATTERN.test(name)) {
-      throw new Error(`mode file name ${join(".opencode", "auto", "modes", file)} is invalid: must be a lowercase letter followed by letters/digits/hyphens`)
-    }
-    modes[name] = parseModeFile(name, readFileSync(join(overlayDir, file), "utf8"))
+  for (const file of overlayMarkdownFiles(dir, "modes", "mode")) {
+    modes[file.name] = parseModeFile(file.name, file.text)
   }
   return modes
 }

@@ -51,12 +51,11 @@ import { HIBERNATE_JITTER_MS } from "./hibernate"
 import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
 import { log } from "./log"
 import { formatWindowState, isoInZone } from "./model-window"
-import { implicitRegistry } from "./models"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models-schema"
 import type { PhaseKey } from "./phases/registry"
 import type { Phase } from "./resume"
-import { candidateKey, candidatesOf, recoveryAt, select, selectionPolicy, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
-import { autoSwitches, type FailbackScope, type ModelRole, type Switches } from "./switches"
+import { candidateKey, candidatesOf, recoveryAt, select, selectContextOf, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
+import type { FailbackScope, ModelRole, Switches } from "./switches"
 import type { Usage } from "./stats"
 
 // The run-time model-order override a parameterized /failback leaves behind:
@@ -918,24 +917,6 @@ export function createRouter(): Router {
 // marks those decisions read and write), and the record-side remainder —
 // the fork base's agent and role verdicts — as the free functions below.
 
-// The routing facts of a call that never knew them (a bare options literal
-// below the loop, a test's): the implicit registry over the env switches,
-// the holderless router fallback exactly as unit-commit's opts-unwrapping
-// sites resolve theirs, and the system now as the timeline (a run always
-// carries its own facts; this is the never-knew-routing corner, not a
-// second path). AUTO-DECISION: the agent follows OPENCODE_AUTO_AGENT alone here, without the shell profile's agent (router.ts must not import the shell module — the shell may register adapters that reach back here — and the fallback serves literals without a run, where the env-derived agent is the same one the run's facts would carry)
-export function implicitFacts(router: Router | undefined): RouteFacts {
-  const agent = autoSwitches().agent ?? "opencode"
-  return {
-    registry: implicitRegistry(agent, autoSwitches().model),
-    agentFilter: autoSwitches().agent,
-    defaultAgent: agent,
-    runAgent: agent,
-    router: router ?? createRouter(),
-    clock: { now: () => Date.now() },
-  }
-}
-
 // The structural slice of the run's routing facts the decisions read. The
 // run's RoutingFacts (src/routing.ts) satisfies it field for field; this
 // module cannot name that type: routing carries the Router type, so an
@@ -962,24 +943,16 @@ export type RouteFacts = {
 }
 
 // The selection context the routing decisions build from the facts — the
-// twin of routing.ts's selectContext, optional `limits` included: a call
-// that holds live context windows passes them (the failover's clipping and
-// selection read them), the others select without. The down marks, the
-// /failback override and the key rings are the live run state behind the
-// facts' router, read exactly as selectContext reads them.
+// router-side wrapper of select.ts's selectContextOf (routing.ts's
+// selectContext is the other wrapper; the build itself lives below both, in
+// select.ts), optional `limits` included: a call that holds live context
+// windows passes them (the failover's clipping and selection read them), the
+// others select without. The down marks, the /failback override and the key
+// rings are the live run state behind the facts' router, read exactly as
+// selectContext reads them.
 // AUTO-DECISION: the decisions' selections carry no context windows except where the site holds them (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the retired env-switch path either, so the comparison keeps its shape
 function routeContext(facts: RouteFacts, switches: Switches, cap: number, limits?: ReadonlyMap<string, number>): SelectContext {
-  return {
-    registry: facts.registry,
-    cap,
-    agentFilter: facts.agentFilter,
-    defaultAgent: facts.defaultAgent,
-    policy: selectionPolicy(facts.registry, switches.model),
-    override: facts.router.failbackOverride(),
-    marks: facts.router.downMarks(),
-    ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
-    ...(limits !== undefined ? { limits } : {}),
-  }
+  return selectContextOf(facts, switches, cap, limits)
 }
 
 // The wait payload of a wait decision (the model that opens first, its

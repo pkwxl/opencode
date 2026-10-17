@@ -140,7 +140,7 @@ export function roadmapPhases(text: string, round: number): string | undefined {
 // exists, when it is not released yet (no whole-line `Clarified: yes` — an
 // unreleased roadmap is not the person's decision and never rules), or when
 // the roadmap plans no line for the round.
-export async function releasedRoadmapRound(dir: string, round: number): Promise<RoadmapRound | undefined> {
+async function releasedRoadmapRound(dir: string, round: number): Promise<RoadmapRound | undefined> {
   const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
   if (raw === undefined || !clarifiedMark(raw)) return undefined
   return roadmapRounds(raw).find((entry) => entry.round === round)

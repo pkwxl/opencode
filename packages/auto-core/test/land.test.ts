@@ -10,29 +10,15 @@
 // round commits are made by the real commitTree, so the branch carries the
 // Auto-Stage trailers the foreign-commit check reads.
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { commitTree, isolateRound } from "../src/git"
+import { commitTree } from "../src/git"
+import { isolateRound } from "../src/git-land"
 import { landUnit, leftoverIsolationLines } from "../src/land"
+import { git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-land-"))
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
+const withDir = withDirFactory("auto-land-")
 
 // A nested repository under the target directory: initialized, with identity
 // and one commit, on whatever branch git's defaults give (read back by

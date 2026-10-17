@@ -37,11 +37,8 @@
 // re-enters it per process), the plan --force-close precedent; the
 // clean-tree refusals are preflight's (the advance runs only on a committed
 // state — establishment deliberately does not, its G1 stop is the point).
-import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import { ensurePointer } from "./agents-block"
-import { analysisProblems, releasedRoadmapRounds, renderAnalysisStub, resolveRoundPhases } from "./analysis"
-import { briefProposal, installBriefProposal } from "./brief"
+import { releasedRoadmapRounds } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { commitTree } from "./git"
@@ -51,23 +48,26 @@ import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
 import {
-  CLARIFIED_MARK,
-  clarifiedMark,
   currentRound,
   legacyLayoutProblem,
+  phaseFlowBlockedLine,
   phaseGates,
   phaseGateProblems,
   phaseIndexPath,
   phaseLabel,
-  phaseTailDrift,
-  type PhaseTailDrift,
   roundRoot,
   routePhase,
-  surveyForks,
-  syncPhaseIndex,
 } from "./phases"
-import { loadPhaseTypes } from "./phases/custom"
-import { driftPairs, establishRoundSetup, phaseRefText, truncateGoal } from "./plan"
+import {
+  analysisGate,
+  applyTailDrift,
+  driftPairs,
+  establishRoundSetup,
+  establishStopLines,
+  phaseRefText,
+  roundCloseRefusalLines,
+  truncateGoal,
+} from "./plan"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
@@ -111,9 +111,9 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   // / resumed establishment (the switch off, a later round, an interrupted
   // round start).
   if (!(await Bun.file(join(directory, phaseIndexPath(round))).exists())) return await projectStart(directory, round, opts)
-  const route = await routePhase(directory, { loadPlan, bin })
+  const route = await routePhase(directory, { loadPlan, bin, phases: opts.phases ?? "m" })
   if (route.type === "blocked") {
-    log(`⏸ phase flow blocked: ${route.reason}`)
+    log(phaseFlowBlockedLine(route.reason))
     return 1
   }
   // Shape 4: the round closed — the round-close gate, then the next round
@@ -181,22 +181,21 @@ async function advanceToReview(directory: string, round: number, opts: RunAllOpt
 // advance must stop, undefined when it may proceed (no drift is the common
 // case — the value in force and the index agree).
 async function rederiveTail(directory: string, round: number, opts: RunAllOpts): Promise<number | undefined> {
-  const authority = await resolveRoundPhases(directory, round, opts.phases!)
-  let drift: PhaseTailDrift | undefined
-  try {
-    drift = await phaseTailDrift(directory, round, authority.phases)
-  } catch (error) {
-    log(`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`)
+  // The resolve → drift → sync sequence is shared with plan's row 3
+  // (applyTailDrift); transfer passes no refusal hook — the advance applies
+  // the person's amendment unconditionally — and commits the rewrite itself.
+  const applied = await applyTailDrift(directory, round, opts.phases!)
+  if (applied.type === "blocked") {
+    log(phaseFlowBlockedLine(applied.reason))
     return 1
   }
-  if (!drift) return undefined
-  try {
-    await syncPhaseIndex(directory, round, authority.phases)
-  } catch (error) {
-    log(`⏸ the unstarted tail cannot be re-derived: ${error instanceof Error ? error.message : String(error)}`)
+  if (applied.type === "clean") return undefined
+  if (applied.type === "sync-failed") {
+    log(`⏸ the unstarted tail cannot be re-derived: ${applied.error}`)
     return 1
   }
-  const from = authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"
+  if (applied.type === "refused") return 1 // unreachable: no refusal hook rode along
+  const { drift, from } = applied
   const settled = await commitTree(
     directory,
     { id: "PLAN", title: `phase tail re-derived (${roundDirName(round)})` },
@@ -229,7 +228,7 @@ export async function amendPhasesHold(directory: string, phases: string): Promis
   if (phases === "m") return undefined
   const { bin } = shellProfile()
   if (!(await Bun.file(join(directory, phaseIndexPath(await currentRound(directory)))).exists())) return undefined
-  const route = await routePhase(directory, { loadPlan, bin }).catch(() => undefined)
+  const route = await routePhase(directory, { loadPlan, bin, phases }).catch(() => undefined)
   if (route === undefined || route.type !== "execute" || awaitingFormulation(route.plan.tasks, route.phase)) return undefined
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
   return (
@@ -243,7 +242,6 @@ export async function amendPhasesHold(directory: string, phases: string): Promis
 // rhythm. OPENCODE_AUTO_ANALYSIS=off degrades to direct establishment from
 // config, no analysis machinery (D8).
 async function projectStart(directory: string, round: number, opts: RunAllOpts): Promise<number> {
-  const { bin } = shellProfile()
   let analysisOn: boolean
   try {
     analysisOn = autoSwitches().analysis
@@ -252,57 +250,24 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
     return 1
   }
   if (analysisOn && round === 1 && !(await roundRoot(directory, 1))) {
-    const raw = await Bun.file(join(directory, ANALYSIS_DOC)).text().catch(() => undefined)
-    if (raw === undefined) {
-      await mkdir(join(directory, "docs"), { recursive: true })
-      await Bun.write(join(directory, ANALYSIS_DOC), renderAnalysisStub())
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
-      log(`✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`)
-      log(`next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`)
-      log(`then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} transfer ${directory} — the approved brief is installed and round R-01 opens`)
-      return 0
+    // The walkthrough itself is shared with plan's rows 0a–0d (analysisGate):
+    // the command token and the manual flag are the only differences.
+    const gate = await analysisGate(directory, "transfer", { testByDriver: opts.testByDriver, manual: false })
+    if (gate.type === "stop") {
+      for (const line of gate.lines) log(line)
+      return gate.code
     }
-    let types: ReturnType<typeof loadPhaseTypes>
-    try {
-      types = loadPhaseTypes(directory)
-    } catch (error) {
-      log(`⏸ ${error instanceof Error ? error.message : String(error)}`)
-      return 1
-    }
-    const problems = analysisProblems(raw, types)
-    if (problems.length) {
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
-      log(`⏸ ${ANALYSIS_DOC} has problems that hold its release:`)
-      for (const problem of problems) log(`  ${problem}`)
-      log(`fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} transfer ${directory}`)
-      return 2
-    }
-    if (!clarifiedMark(raw)) {
-      await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
-      const forks = surveyForks(raw)
-      log(
-        `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
-          (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
-          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
-      )
-      log(`then re-run: ${bin} transfer ${directory} — the approved \`## Project brief\` proposal is installed and round R-01 opens`)
-      return 2
-    }
-    // The release (row 0d's shape): the approved brief proposal installs
-    // verbatim, then R-01 establishes under the D5 resolution — the sourced
-    // G1 stop names the line that ruled.
-    const proposal = briefProposal(raw)
-    if (proposal !== undefined) for (const line of await installBriefProposal(directory, ANALYSIS_DOC, proposal, commitTree)) log(line)
-    return establishStop(directory, 1, opts, [])
+    // The release (row 0d's shape): the approved brief proposal installed,
+    // R-01 establishes under the D5 resolution — the sourced G1 stop names
+    // the line that ruled.
+    return establishStop(directory, 1, opts, gate.lines)
   }
   // The switch off, a later round, or an interrupted establishment (row 1's
   // shape): the previous round's round-close check, then the establishment.
   if (round > 1) {
     const close = await roundCloseProblems(directory, round - 1, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) {
-      log(`⏸ round ${roundDirName(round - 1)} does not pass its round-close checks, so round ${roundDirName(round)} cannot open yet`)
-      for (const line of roundCloseLines(close)) log(line)
-      log(`next: fix them, commit, then re-run: ${bin} transfer ${directory}`)
+      for (const line of roundCloseRefusalLines(directory, round - 1, round, close, "transfer")) log(line)
       return 2
     }
   }
@@ -315,46 +280,26 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
 // is transfer (the construction and its review stop), not plan's dispatch.
 async function establishStop(directory: string, round: number, opts: RunAllOpts, before: string[]): Promise<number> {
   const { bin } = shellProfile()
-  const name = roundDirName(round)
   const setup = await establishRoundSetup(directory, round, { phases: opts.phases!, isolate: opts.isolate, testByDriver: opts.testByDriver })
-  if (setup.type === "dirty") {
-    for (const line of before) log(line)
-    log(
-      `⏸ round ${name} cannot open yet: a repository designated by config isolate is not clean, and branch isolation requires clean repositories; ` +
-        `handle it manually (commit/clean) and re-run:`,
-    )
-    for (const { rel, files } of setup.repos) {
-      log(`  ${rel}:`)
-      for (const file of files) log(`    ${file}`)
-    }
-    return 2
-  }
-  if (setup.type === "failed") {
-    for (const line of before) log(line)
-    log(`branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${bin} transfer ${directory}`)
-    return 1
-  }
-  if (setup.type === "invalid") {
-    for (const line of before) log(line)
-    log(`⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${bin} transfer ${directory}`)
-    return 1
-  }
-  if (setup.type === "error") {
-    for (const line of before) log(line)
-    log(`round establishment failed: ${setup.error}`)
-    return 1
-  }
-  const { units, isolated, resolved, branch } = setup
-  const sourceSuffix = resolved.roadmap ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(resolved.roadmap.goal)}"; config default was "${opts.phases}")` : ""
-  for (const line of before) log(line)
-  log(`✓ round ${name} established: ${units.map(phaseLabel).join(", ")}${sourceSuffix}`)
-  if (isolated.length) log(`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`)
-  log(
-    `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
-      `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`,
+  const ok = setup.type === "ok" ? setup : undefined
+  const name = roundDirName(round)
+  // The D5 sourced suffix (plans/0101 D5): a roadmap-established round names
+  // the line that ruled, beside the config default it displaced.
+  const sourceSuffix = ok?.resolved.roadmap ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(ok.resolved.roadmap.goal)}"; config default was "${opts.phases}")` : ""
+  const lines = establishStopLines(
+    directory,
+    round,
+    setup,
+    "transfer",
+    ok ? `${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}` : "",
+    ok
+      ? `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
+        `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`
+      : "",
   )
-  log(`ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`)
-  return 0
+  for (const line of before) log(line)
+  for (const line of lines.lines) log(line)
+  return lines.code
 }
 
 // Shape 4 (plans/0101 D2): the round closed. The round-close checks gate the
@@ -368,9 +313,7 @@ async function roundOpen(directory: string, round: number, opts: RunAllOpts): Pr
   const { bin } = shellProfile()
   const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
   if (close.problems.length) {
-    log(`⏸ round ${roundDirName(round)} does not pass its round-close checks, so round ${roundDirName(round + 1)} cannot open yet`)
-    for (const line of roundCloseLines(close)) log(line)
-    log(`next: fix them, commit, then re-run: ${bin} transfer ${directory}`)
+    for (const line of roundCloseRefusalLines(directory, round, round + 1, close, "transfer")) log(line)
     return 2
   }
   const roadmap = await releasedRoadmapRounds(directory)

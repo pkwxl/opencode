@@ -16,13 +16,7 @@ import { appendExecuted } from "../src/blockage-execute"
 import { planPrelude } from "../src/plan"
 import { establishRound } from "../src/phases"
 import { autoSwitches, clampSwitches } from "../src/switches"
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
+import { git } from "./fixtures/runner"
 
 async function repo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "auto-remediate-"))

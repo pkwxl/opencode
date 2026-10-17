@@ -8,7 +8,7 @@
 // end-to-end through typed events only — run-start, unit/task transitions,
 // the question lifecycle pair, run-end with the correct exit code — with no
 // prose parsed anywhere (the assertions read typed event objects alone).
-import { describe, expect, test, spyOn } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -20,8 +20,8 @@ import { questionsConcern } from "../src/engine/concerns/questions"
 import { addStatusSink, emitStatus, endRunStatus, RUN_STATUS_FILE, startRunStatus, stopRunStatus, type StatusSink } from "../src/run-status"
 import { RUN_STATUS_EVENT_TYPES, type RunStatusEvent } from "../src/run-status-schema"
 import { SERVICE_ENTRIES } from "../src/services"
-import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { defaultTurn, ev, fakeAgent, type TurnScript } from "./fixtures/agent"
+import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
 import { seedUnits } from "./fixtures/units"
 import { fakeTurnFx, turnContext, viewOver } from "./fixtures/turn"
@@ -235,19 +235,11 @@ const REPORT = [
 ].join("\n")
 
 // Scrub the ambient OPENCODE_AUTO_* layer around a run and capture the
-// terminal (the fixtures/loop.ts convention; the deliverables doc's
-// driver-environment rule).
-async function withQuietConsole<T>(run: () => Promise<T>): Promise<T> {
-  const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
-  for (const [key] of saved) delete process.env[key]
-  const printed = spyOn(console, "log").mockImplementation(() => {})
-  try {
-    return await run()
-  } finally {
-    printed.mockRestore()
-    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-  }
-}
+// terminal (the fixtures/capture.ts wrapper; the deliverables doc's
+// driver-environment rule). Its finally carries the switch-snapshot reset
+// this suite documented: the run freezes the snapshot at its fleet start,
+// and every later clamp in this process would throw on a frozen memo.
+const withQuietConsole = captureRun
 
 describe("the subscriber e2e (one fixture run through typed events only)", () => {
   test("a run with a question: run-start, the unit/task transitions, the question pair, run-end with the code — all typed, no prose parsed", async () => {
@@ -271,7 +263,7 @@ describe("the subscriber e2e (one fixture run through typed events only)", () =>
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "baseline")
     try {
-      const code = await withQuietConsole(() => runAll(dir, { managed: host }))
+      const { code } = await withQuietConsole(() => runAll(dir, { managed: host }))
       expect(code).toBe(0)
       const events = seen.map((s) => s.event)
 
@@ -314,13 +306,6 @@ describe("the subscriber e2e (one fixture run through typed events only)", () =>
     } finally {
       off()
       stopRunStatus()
-      // The run froze the switch snapshot at its fleet start (the run's own
-      // invariant); this is the first in-process test that drives a run
-      // through that point, so it re-parses the facts back to an unfrozen
-      // snapshot — the documented reset (test/services.test.ts's frozen-
-      // snapshot pair) — or every later clamp in this process throws.
-      setSwitchModelRegistry(undefined)
-      autoSwitches()
       await rm(dir, { recursive: true, force: true })
     }
   }, 120_000)

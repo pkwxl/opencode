@@ -21,7 +21,7 @@ import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, type RunAllO
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
 import { services } from "../src/services"
-import { autoSwitches } from "../src/switches"
+import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { setShellProfile } from "../src/shell"
 import { flushStats } from "../src/stats"
 import { fakeAgent } from "./fixtures/agent"
@@ -500,6 +500,13 @@ describe("the run-start composition order (the services stage)", () => {
     expect(Object.isFrozen(autoSwitches())).toBe(true)
     expect(autoSwitches().steer).toBe(false)
     expect(services()).toBe(before)
+    // The run froze the switch snapshot at its fleet start (the run's own
+    // invariant); the assertions above have read the frozen state, so this
+    // re-parses the facts back to an unfrozen snapshot — the documented
+    // reset (test/run-status.test.ts's pair) — or every later clamp in this
+    // process throws.
+    setSwitchModelRegistry(undefined)
+    autoSwitches()
   })
 })
 

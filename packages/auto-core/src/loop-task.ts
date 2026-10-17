@@ -24,8 +24,8 @@ import { closeUnit } from "./close"
 import type { Control } from "./exit"
 import { parseUnitDoc } from "./document/unit"
 import { subtaskStateSpec } from "./document/spec"
-import { currentBranch, changedFiles, driverStateFile, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
-import { mergeLaneUpstream } from "./git"
+import { changedFiles, driverStateFile, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
+import { currentBranch, mergeLaneUpstream } from "./git-worktree"
 import { createDocLaneGit, createDocLaneRegistry, type DocLaneRegistry } from "./git-ops"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
@@ -33,7 +33,7 @@ import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
 import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
-import { banner, formatDuration, log } from "./log"
+import { banner, dirtyStopLines, formatDuration, log } from "./log"
 import { sessionOpts } from "./opts"
 import { block, loadPlan, next, requireTask, strandedParks, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
 import { phaseKey, routePhase, type PhaseUnit } from "./phases"
@@ -203,17 +203,9 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   const { directory } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
-    const task = next(plan)
-    if (!task) {
-      const stranded = strandedParks(plan)
-      if (stranded.length) {
-        log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
-        emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
-        return 2
-      }
-      log("✓ all tasks complete")
-      return 0
-    }
+    const done = exhausted(plan)
+    if (done !== undefined) return done
+    const task = next(plan)!
     const code = await runSerialUnit(ctx, phase, plan, task)
     if (code !== 0) return code
     // The background regression boundary (plans/0098 D4): after the unit's
@@ -224,6 +216,23 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
 }
 
 // —— The shared loop scaffolding (0069 §2.2 D5's merge) —— //
+
+// The pick-exhaustion tail every loop shape shares (0069's serial, isolation
+// and lane loops, 0099's doc lanes): with no ready unit left, the stranded
+// parks report mutual park (exit 2) or the phase is complete (exit 0);
+// undefined means a next unit exists and the caller keeps looping (re-deriving
+// it with next(plan) — the second pass over the loaded plan is pure).
+function exhausted(plan: Plan): number | undefined {
+  if (next(plan)) return undefined
+  const stranded = strandedParks(plan)
+  if (stranded.length) {
+    log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
+    emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
+    return 2
+  }
+  log("✓ all tasks complete")
+  return 0
+}
 
 // The task bracket (P2b, src/run-status.ts) every loop shape opens at its
 // unit's start, with the task-switch hook point (STATS_PLAN §3) beside it:
@@ -332,6 +341,78 @@ async function handleLaneExit(ctx: LoopCtx, phase: PhaseUnit, task: Pick<Task, "
   return outcome.kind === "land" ? { kind: "land", report: outcome.report } : { kind: "orphan" }
 }
 
+// The repair round's shared mechanics (plans/0079 §4; the 0102 complexity-3
+// dedup): the budget check, the counter bump, the site's log/status lines,
+// and the append input carrying the evidence with the pack's repair
+// discipline (plans/0080 §6) as its intent paragraph — one home where four
+// repair sites used to keep hand-maintained copies (runSerialUnit's blocked
+// arm and the doc loop's finishBlocked below, loop-phase's regression hold
+// and verdict-gate repair). What stays caller-side: the eligibility that
+// names the evidence a repair may trade on (a blocked outcome's repair fact,
+// a verdict-prefixed gate problem) and, on the two gate sites, the append
+// driving itself (appendPlan lives in loop-plan, above this module in the
+// import direction — the input this helper sets is what that append
+// consumes).
+//   "task": closeUnit the failed task (done for scheduling, the Closed:
+// field recording the round), then hand the phase loop the evidence as an
+// append input (ctx.append — the loop's re-route drives the append).
+// `quiet` is the doc loop's waitQuiet: closeUnit refuses a dirty tree, so
+// the round first waits for the sibling lanes' pipelines to settle — only
+// after the budget check passed, exactly where the serial copy never had it.
+//   "regression"/"verdict": log the gate hold (the site selects the wording)
+// and set the input over the caller's evidence text, a function of the round
+// number — the verdict evidence quotes it, and the number exists only once
+// the counter bumped.
+// Returns "appended" = the round opened (task site: the task is closed and
+// the input set; gate sites: the hold logged and the input set); "block" =
+// a stop condition holds, the budget is spent, or closeUnit refused (the
+// refusal logged) — the caller falls through to today's block or gate stop.
+export async function repairRoundAppend(
+  ctx: LoopCtx,
+  site:
+    | { kind: "task"; task: Pick<Task, "id">; reason?: string; quiet?: () => Promise<void> }
+    | { kind: "regression" | "verdict"; title: string; text: (round: number) => string },
+): Promise<"appended" | "block"> {
+  const { directory, opts } = ctx
+  if (opts.stopBefore !== undefined || (opts.repair ?? 0) <= ctx.repairs) return "block"
+  if (site.kind === "task") {
+    if (site.quiet) await site.quiet()
+    ctx.repairs++
+    const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${site.reason ? ` (${site.reason})` : ""}`
+    const closed = await closeUnit(directory, site.task.id, { reason, phases: ctx.phases, acceptanceGate: opts.acceptanceGate })
+    for (const line of closed.lines) log(`  ${line}`)
+    if (closed.type === "closed") {
+      emitStatus({ type: "task-end", task: site.task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${opts.repair})` })
+      log(`↻ ${site.task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${opts.repair})`)
+      ctx.input = {
+        text:
+          `Repair round ${ctx.repairs}: the task ${site.task.id} was closed — its report docs/${site.task.id}/report.md concluded ` +
+          `Result: FAIL${site.reason ? ` (${site.reason})` : ""}. Read that report and the task's documents for what it ` +
+          `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
+          `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
+          // The pack's repair discipline (plans/0080 §6): the boundary that
+          // keeps a repair from re-architecting.
+          withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
+      }
+      ctx.append = true
+      ctx.ran++
+      return "appended"
+    }
+    log(`⏸ the repair round could not close ${site.task.id}; blocking as usual`)
+    return "block"
+  }
+  ctx.repairs++
+  log(`↻ repair round ${ctx.repairs}/${opts.repair}: the ${site.kind === "regression" ? "regression" : "verdict"} gate holds ${site.title} — appending repair tasks over the ${site.kind === "regression" ? "red receipts" : "gate evidence"}`)
+  ctx.input = {
+    text:
+      site.text(ctx.repairs) +
+      // The pack's repair discipline (plans/0080 §6): the boundary that
+      // keeps a repair from re-architecting.
+      withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
+  }
+  return "appended"
+}
+
 // One unit through today's serial path (the main-tree execution the task loop
 // has always run, and D4's serial degrade for a unit that cannot be isolated
 // — a lane-ineligible `Touches` declaration under the scheduler). Pure move
@@ -365,8 +446,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     } else {
       const gate = await ctx.git.beginUnit(directory, opts, task)
       if (gate.type === "dirty") {
-        log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
-        for (const file of gate.files) log(`  ${file}`)
+        for (const line of dirtyStopLines(`${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline`, gate.files)) log(line)
         emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
         return 2
       }
@@ -388,8 +468,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // Unit-startup clean gate failure (runTask inner layer): no state
     // write, no sweep-up commit — the git state decision belongs to the
     // human (plans/0021-commit-boundary-design.md).
-    log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
-    for (const file of outcome.files) log(`  ${file}`)
+    for (const line of dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
     emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
     return 2
   }
@@ -415,31 +494,10 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // stays the driver's — the verdict was parsed from the report, the close
     // is the driver's own mechanism, and the appended tasks are planned work.
     // Any refusal (explicit dependents without cascade, a dirty tree) or a
-    // spent budget falls through to today's block.
-    if (outcome.repair !== undefined && ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs) {
-      ctx.repairs++
-      const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}`
-      const closed = await closeUnit(directory, task.id, { reason, phases: ctx.phases, acceptanceGate: ctx.opts.acceptanceGate })
-      for (const line of closed.lines) log(`  ${line}`)
-      if (closed.type === "closed") {
-        emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${ctx.opts.repair})` })
-        log(`↻ ${task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${ctx.opts.repair})`)
-        ctx.input = {
-          text:
-            `Repair round ${ctx.repairs}: the task ${task.id} was closed — its report docs/${task.id}/report.md concluded ` +
-            `Result: FAIL${outcome.repair.reason ? ` (${outcome.repair.reason})` : ""}. Read that report and the task's documents for what it ` +
-            `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
-            `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
-            // The pack's repair discipline (plans/0080 §6): the boundary that
-            // keeps a repair from re-architecting.
-            withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: ctx.opts.intent }))),
-        }
-        ctx.append = true
-        ctx.ran++
-        return 0
-      }
-      log(`⏸ the repair round could not close ${task.id}; blocking as usual`)
-    }
+    // spent budget falls through to today's block (repairRoundAppend's
+    // "block" above).
+    const repaired = outcome.repair !== undefined ? await repairRoundAppend(ctx, { kind: "task", task, reason: outcome.repair.reason }) : "block"
+    if (repaired === "appended") return 0
     await block(directory, task.id)
     log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
     // the proxy-answer highlight block (plans/0020-auto-resolve-design.md
@@ -575,17 +633,9 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   const { directory, opts, repl } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
-    const task = next(plan)
-    if (!task) {
-      const stranded = strandedParks(plan)
-      if (stranded.length) {
-        log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
-        emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
-        return 2
-      }
-      log("✓ all tasks complete")
-      return 0
-    }
+    const done = exhausted(plan)
+    if (done !== undefined) return done
+    const task = next(plan)!
     // no wait before the first lane; pause between lanes only when a
     // successor exists (the boundary granularity is the lane, §6.2).
     if (ctx.ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
@@ -876,17 +926,9 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         return stop ?? 0
       }
       const plan = await loadPlan(directory, phase)
-      const task = next(plan)
-      if (!task) {
-        const stranded = strandedParks(plan)
-        if (stranded.length) {
-          log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
-          emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
-          return 2
-        }
-        log("✓ all tasks complete")
-        return 0
-      }
+      const done = exhausted(plan)
+      if (done !== undefined) return done
+      const task = next(plan)!
       // D4's serial degrade: with the slots free and nothing lane-eligible
       // ready, the ready units are exactly the not-isolable ones (a declared
       // `Touches` reach under a nested-repo root, D15). The first runs in the
@@ -1122,37 +1164,16 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     }
 
     // The blocked outcome's finisher, in the loop's single-threaded landing
-    // continuation: runSerialUnit's two arms verbatim, with one drain — the
-    // repair path first waits the other lanes quiet (closeUnit refuses a
-    // dirty tree), and any refusal or a spent budget falls through to
-    // today's block exactly as the serial world's does. Returns true when
-    // scheduling may continue (the repair round), false when the run stops.
+    // continuation: runSerialUnit's two arms — the repair round through the
+    // shared repairRoundAppend (its task site, the quiet wait handed in as
+    // the drain: closeUnit refuses a dirty tree, so the round first waits
+    // the other lanes' pipelines to settle), then today's block. Any refusal
+    // or a spent budget falls through to the block exactly as the serial
+    // world's does. Returns true when scheduling may continue (the repair
+    // round), false when the run stops.
     const finishBlocked = async (task: Task, blocked: { question: string; repair?: { reason?: string } }): Promise<boolean> => {
-      if (blocked.repair !== undefined && opts.stopBefore === undefined && (opts.repair ?? 0) > ctx.repairs) {
-        await waitQuiet()
-        ctx.repairs++
-        const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${blocked.repair.reason ? ` (${blocked.repair.reason})` : ""}`
-        const closed = await closeUnit(directory, task.id, { reason, phases: ctx.phases, acceptanceGate: opts.acceptanceGate })
-        for (const line of closed.lines) log(`  ${line}`)
-        if (closed.type === "closed") {
-          emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${opts.repair})` })
-          log(`↻ ${task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${opts.repair})`)
-          ctx.input = {
-            text:
-              `Repair round ${ctx.repairs}: the task ${task.id} was closed — its report docs/${task.id}/report.md concluded ` +
-              `Result: FAIL${blocked.repair.reason ? ` (${blocked.repair.reason})` : ""}. Read that report and the task's documents for what it ` +
-              `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
-              `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
-              // The pack's repair discipline (plans/0080 §6): the boundary that
-              // keeps a repair from re-architecting.
-              withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-          }
-          ctx.append = true
-          ctx.ran++
-          return true
-        }
-        log(`⏸ the repair round could not close ${task.id}; blocking as usual`)
-      }
+      const repaired = blocked.repair !== undefined ? await repairRoundAppend(ctx, { kind: "task", task, reason: blocked.repair.reason, quiet: waitQuiet }) : "block"
+      if (repaired === "appended") return true
       await block(directory, task.id)
       log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${blocked.question}`)
       // the proxy-answer highlight block (plans/0020 §H-②, H5), pinned above
@@ -1292,17 +1313,9 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           return stop ?? 0
         }
         const plan = await loadPlan(directory, phase)
-        const task = next(plan)
-        if (!task) {
-          const stranded = strandedParks(plan)
-          if (stranded.length) {
-            log(`⏸ mutual park: ${stranded.map((unit) => `${unit.id} parks on ${unit.parked}`).join(", ")} — nothing is ready with parked units remaining; reorder the tasks or close one of them, then re-run`)
-            emitStatus({ type: "task-end", task: stranded[0]!.id, outcome: "parked", detail: "mutual park — nothing ready" })
-            return 2
-          }
-          log("✓ all tasks complete")
-          return 0
-        }
+        const done = exhausted(plan)
+        if (done !== undefined) return done
+        const task = next(plan)!
         // D9's serial degrade, silent per D2's floor (unlike the worktree
         // loop's degrade line): with the slots free and nothing doc-admissible
         // ready, the first ready unit runs through today's serial path —
@@ -1374,8 +1387,7 @@ async function runDocUnit(
     } else {
       const gate = await ctx.git.beginUnit(directory, opts, task)
       if (gate.type === "dirty") {
-        log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
-        for (const file of gate.files) log(`  ${file}`)
+        for (const line of dirtyStopLines(`${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline`, gate.files)) log(line)
         emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
         return { kind: "stop", code: 2 }
       }
@@ -1397,8 +1409,7 @@ async function runDocUnit(
     ...(input.siblingScopes !== undefined ? { siblingScopes: input.siblingScopes } : {}),
   })
   if (outcome.type === "dirty") {
-    log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
-    for (const file of outcome.files) log(`  ${file}`)
+    for (const line of dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
     emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
     return { kind: "stop", code: 2 }
   }
@@ -1541,7 +1552,7 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     log(`↻ ${unit} is already complete in this worktree; the lane has nothing to run`)
     return 0
   }
-  const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
+  const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases: ctx.phases })
   if (route.type !== "execute") {
     log(`⏸ lane worker: the worktree routes to ${route.type}, so the unit ${unit} cannot run here; re-dispatch it from the parent`)
     return 1
@@ -1566,8 +1577,7 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     { baseline: taskBaseline },
   )
   if (outcome.type === "dirty") {
-    log(`⏸ ${unit} worktree not clean before the execution unit starts; handle it manually (commit/clean) and re-run:`)
-    for (const file of outcome.files) log(`  ${file}`)
+    for (const line of dirtyStopLines(`${unit} worktree not clean before the execution unit starts`, outcome.files)) log(line)
     emitStatus({ type: "task-end", task: unit, outcome: "dirty", detail: outcome.files.join("; ") })
     return 2
   }

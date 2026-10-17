@@ -873,16 +873,6 @@ export async function forgetUnits(dir: string, ids: readonly string[]): Promise<
 // tickIndexLine (markDone's index tick) moved to document/unit (0061 E3),
 // the shared index machinery beside parseIndex.
 
-// Ids of every task directory under docs/ (T-NNN with a state file or not).
-export async function taskDirs(dir: string): Promise<string[]> {
-  const out: string[] = []
-  for await (const path of new Bun.Glob(join("docs", "T-*", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    const id = path.split(/[\\/]/)[1]!
-    if (/^T-\d+$/.test(id) && !out.includes(id)) out.push(id)
-  }
-  return out.sort()
-}
-
 // —— Planning output check (plans/0047 L3) ——
 
 // Problems of what a planning session wrote for a phase (empty = accepted): a

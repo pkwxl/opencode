@@ -330,9 +330,6 @@ export function locateEditSpan(lines: readonly string[], edit: RemediationEdit):
 
 // —— the blockage document (D6) ——
 
-export const CHOICE_LINE = "Choice:"
-export const EXECUTED_LINE = "Executed:"
-
 // The driver-parsed marks of one blockage document: the person's choice and
 // the driver's execution record (the last of each wins, like the other
 // protocol lines).

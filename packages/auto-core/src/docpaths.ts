@@ -95,16 +95,6 @@ export function testHandoffFile(task: { id: string }, subtask?: number): string 
   return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
 }
 
-// Subtask output file (relative to the target directory): the standalone
-// write-out file for document/analysis/design-type subtasks, mechanically
-// named by the driver (two-digit increment, avoiding slug-cleaning
-// ambiguity) with the title on the file's first line; code-type outputs
-// land directly in the source tree and are not duplicated as documents
-// (fork-decompose design §4.7).
-export function subtaskOutputFile(task: { id: string }, index: number): string {
-  return subtaskDoc(task.id, index, "index")
-}
-
 // A test lane's receipt (relative to the target directory):
 // docs/T-003/testhands/lint.md (plans/0096 D3/D5). The lane id doubles as the
 // file name (the table's grammar keeps it filename-safe), free content inside

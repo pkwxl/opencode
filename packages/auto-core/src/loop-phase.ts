@@ -16,14 +16,15 @@ import { reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
-import { banner, log } from "./log"
+import { banner, dirtyStopLines, log } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
-import { runTaskLoop, type LoopCtx } from "./loop-task"
+import { repairRoundAppend, runTaskLoop, type LoopCtx } from "./loop-task"
 import {
   CLARIFIED_MARK,
   completePhase,
   phaseAcceptanceDoc,
+  phaseFlowBlockedLine,
   phaseGateProblems,
   phaseGates,
   phaseHandoverDoc,
@@ -40,8 +41,7 @@ import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
 import { renderPhaseHandover } from "./prompt"
-import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
-import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
+import { appendAudit, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
 import { REPORT_TASK_TITLE, reportAppendInput } from "./round-report"
 import { emitStatus } from "./run-status"
@@ -125,13 +125,15 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     // The round's audit sits beside the phase directory (loop-plan's
     // convention): dirname(phase.dir) is the round root docs/R-NN.
     const audit = join(dirname(phase.dir), "prompt-audit.md")
-    const previous = await Bun.file(join(directory, audit)).text().catch(() => "")
-    await Bun.write(
-      join(directory, audit),
-      `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${verifyAuditEntry(`handover ${phaseKey(phase).id}`, outcome)}\n`,
+    await appendAudit(
+      directory,
+      audit,
+      verifyAuditEntry(`handover ${phaseKey(phase).id}`, outcome),
+      ctx.git.commitTree,
+      `handover verification (${phaseTitle(phase)})`,
+      `handover ${phaseKey(phase).id}`,
+      (failures) => `⚠ the handover charter-check record could not be committed: ${failures}; commit ${audit} manually`,
     )
-    const settled = await ctx.git.commitTree(directory, { id: "PLAN", title: `handover verification (${phaseTitle(phase)})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit handover ${phaseKey(phase).id}` })
-    if (!settled.ok) log(`⚠ the handover charter-check record could not be committed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}; commit ${audit} manually`)
     return outcome.kind === "inconsistent"
       ? `the charter check found the handover inconsistent with the intent charter: ${outcome.evidence}`
       : `the charter check could not judge the handover: ${outcome.reason}`
@@ -216,8 +218,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     )
     if (distilled !== true) {
       if (distilled.type === "dirty") {
-        log(`⏸ worktree not clean before starting the handover distillation session; handle it manually (commit/clean) and re-run:`)
-        for (const file of distilled.files) log(`  ${file}`)
+        for (const line of dirtyStopLines("worktree not clean before starting the handover distillation session", distilled.files)) log(line)
       } else if (collectIssue !== undefined) {
         // Fail-closed after one re-distill (D14a): Part I's remediation owns
         // the decision instead of a raw blockage.
@@ -266,16 +267,12 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       return 2
     }
     if (hold.kind === "held") {
-      if (ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs) {
-        ctx.repairs++
-        log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the regression gate holds ${phaseTitle(phase)} — appending repair tasks over the red receipts`)
-        ctx.input = {
-          text:
-            regressionRepairInput(phase, hold.lanes) +
-            // The pack's repair discipline (plans/0080 §6): the boundary that
-            // keeps a repair from re-architecting.
-            withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-        }
+      // Under a --repair budget the shared repairRoundAppend opens the round
+      // (the hold logged, the receipts' remediation input set with the pack's
+      // repair discipline) and the append runs here; without one — or when
+      // the append did not complete — the gate stop below names the receipts,
+      // the suspects and the person's ways.
+      if ((await repairRoundAppend(ctx, { kind: "regression", title: phaseTitle(phase), text: () => regressionRepairInput(phase, hold.lanes) })) === "appended") {
         const code = await appendPlan(ctx, phase)
         ctx.input = undefined
         if (code === 0) return 0
@@ -300,24 +297,24 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   if (gated.length) {
     // The repair round (plans/0079 §4): a held verdict gate with budget left
     // appends repair tasks over the gate evidence instead of stopping — the
-    // appending session runs here (appendPlan: the stale handover this
-    // distillation just wrote is removed per 0053 D25), the loop then
+    // shared repairRoundAppend opens the round (verdict problems only;
+    // acceptance gates never repair — `Accepted: yes` is the human's alone)
+    // and the appending session runs here (appendPlan: the stale handover
+    // this distillation just wrote is removed per 0053 D25); the loop then
     // re-derives the execute route for the appended tasks, and when they are
     // done the phase distills again and the gate re-checks the rewritten
-    // verdict. Acceptance gates never repair — `Accepted: yes` is the human's
-    // alone; a failed append falls through to the gate stop.
-    if (ctx.opts.stopBefore === undefined && (ctx.opts.repair ?? 0) > ctx.repairs && gated.some((problem) => problem.startsWith("verdict"))) {
-      ctx.repairs++
-      log(`↻ repair round ${ctx.repairs}/${ctx.opts.repair}: the verdict gate holds ${phaseTitle(phase)} — appending repair tasks over the gate evidence`)
-      ctx.input = {
-        text:
-          `Repair round ${ctx.repairs}: the phase ${phaseTitle(phase)} is held by its verdict gate — ${gated.join("; ")}. ` +
+    // verdict. A failed append falls through to the gate stop.
+    if (
+      gated.some((problem) => problem.startsWith("verdict")) &&
+      (await repairRoundAppend(ctx, {
+        kind: "verdict",
+        title: phaseTitle(phase),
+        text: (round) =>
+          `Repair round ${round}: the phase ${phaseTitle(phase)} is held by its verdict gate — ${gated.join("; ")}. ` +
           `The verdict document docs/${phaseVerdictDoc(phase)} records why. Read it, then append repair tasks that fix what it found and ` +
-          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.` +
-          // The pack's repair discipline (plans/0080 §6): the boundary that
-          // keeps a repair from re-architecting.
-          withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-      }
+          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.`,
+      })) === "appended"
+    ) {
       const code = await appendPlan(ctx, phase)
       ctx.input = undefined
       if (code === 0) return 0
@@ -387,8 +384,12 @@ export function logGateStop(directory: string, phase: PhaseUnit, problems: strin
     // The human gate (plans/0081 D14.3): a designed awaiting-person pause, the
     // acceptance gate's control point — done.md waits, and the person's
     // release simultaneously approves the proposed project brief (D15.2).
+    // The next phase's planning input is named by its home (plans/0101 D4):
+    // `plan --file` on this route is refused ("after the advance"), so the
+    // pointer stays on the phase's plan-input.md, which the next transfer
+    // construct reads. Human gates are phased-only, so no mode branch.
     const survey = phaseSurveyDoc(phase)
-    log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
+    log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override; the next phase's planning input is its \`plan-input.md\` — write it there; the next \`transfer\` construct reads it)`)
     log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
     // The reshape channel (plans/0101 D6): the survey's findings are the
     // round's best evidence of what it should still do — where they
@@ -577,9 +578,9 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
 async function phaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   for (;;) {
-    const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
+    const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases: ctx.phases })
     if (route.type === "blocked") {
-      log(`⏸ phase flow blocked: ${route.reason}`)
+      log(phaseFlowBlockedLine(route.reason))
       return 1
     }
     if (route.type === "complete") {
@@ -614,7 +615,13 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // plan does not open the next round here (plans/0053 D8): the round's
       // ## Close cannot be filled in yet, so the round-close checks would fail.
       if (opts.stopBefore === "execute") log(roundCompleteNext(directory, state.round))
-      else if (boundaryHolds(opts)) log(`next: the round is complete — close it with: ${bin} transfer ${directory}`)
+      else if (boundaryHolds(opts)) {
+        // m mode keeps plan's next-round pointer (plans/0101 D8: transfer
+        // refuses m mode, and the next round opens on the next plan) — the
+        // same helper the stopBefore arm above prints.
+        if (ctx.manual) log(roundCompleteNext(directory, state.round))
+        else log(`next: the round is complete — close it with: ${bin} transfer ${directory}`)
+      }
       return 0
     }
     // the phase-switch hook point (STATS_PLAN §3): a change of the
@@ -777,8 +784,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
           // commit failure or unified commit failure) must stop for the
           // human — handing over anyway would start the next unit on an
           // unclean baseline, breaking the commit boundary.
-          log(`⏸ migration knowledge extraction could not complete or post on a clean baseline; handle it manually (commit/clean) and re-run:`)
-          for (const file of extracted.files) log(`  ${file}`)
+          for (const line of dirtyStopLines("migration knowledge extraction could not complete or post on a clean baseline", extracted.files)) log(line)
           return 2
         } else {
           if (report !== undefined) {

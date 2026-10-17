@@ -6,43 +6,19 @@
 // `## Project brief` section — which the driver installs verbatim into
 // .opencode/auto/brief.md in its own commit — and the round then flows into
 // its implement phase, whose final-phase duty self-heals the round report.
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
+import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
 import { amendPhasesHold, runTransfer } from "../src/transfer"
-import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 
 const made: LoopFixture[] = []
 afterEach(() => {
   for (const fixture of made.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
 })
-
-// runTransfer's own capture (the fixture's run wraps the loop alone): the
-// scrubbed switch layer and the terminal, the transfer.test convention.
-async function captureRun(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
-  const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
-  for (const [key] of saved) delete process.env[key]
-  setSwitchModelRegistry(undefined)
-  const lines: string[] = []
-  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map((arg) => String(arg)).join(" "))
-  })
-  try {
-    return { code: await run(), lines }
-  } finally {
-    printed.mockRestore()
-    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-    // The run froze the switch snapshot at its fleet start (the run's own
-    // invariant; the run-status suite's documented reset): re-parse the
-    // restored environment back to an unfrozen snapshot, or every later
-    // clamp in this process throws.
-    setSwitchModelRegistry(undefined)
-    autoSwitches()
-  }
-}
 
 // The re-work bundle's survey type, as `init --intent` materializes it.
 const SURVEY_TYPE = ["# Survey", "", "Gate: human", "Phase-artifacts: survey.md", "", "## plan duties", "", "Inventory-level reading only.", "", "<!-- auto: eof -->", ""].join("\n")
@@ -155,6 +131,11 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(held.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
+    // The release advice stays on the input's home (plans/0101 D4): the next
+    // phase's planning input is its plan-input.md — `plan --file` on this
+    // route is refused ("after the advance"), so the stop never names it.
+    expect(held.lines.some((line) => line.includes("the next phase's planning input is its `plan-input.md` — write it there; the next `transfer` construct reads it"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("--file <path>"))).toBe(false)
     // The release accepts the recorded defaults (plans/0085 A3): the stop
     // says so, and the fork carries its `Recommend:` clause.
     expect(held.lines.some((line) => line.includes("it accepts every line's `Recommend:` default"))).toBe(true)

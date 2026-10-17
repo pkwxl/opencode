@@ -134,7 +134,11 @@ test.skipIf(!E2E)(
         renderText(await Bun.file(templateAgent).text(), {}),
       )
 
-      expect(await runAll(dir, { phases: "mv" })).toBe(0)
+      // boundary: "flow" restores the continuous crossing these tests
+      // choreograph (plans/0101 D1 made the boundary stop run's default, so
+      // a plain runAll now ends at each clean phase end ahead of the
+      // handover).
+      expect(await runAll(dir, { phases: "mv", boundary: "flow" })).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/tasks.md")).text()).toContain("- [x] T-001")
       expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
       // Distilled handover: handover.md has all four sections; the phase's
@@ -182,7 +186,9 @@ test.skipIf(!E2E)(
 
       // P01-security-review has no pre-listed tasks.md: the phase-planning
       // session must write both the task index and the task document itself.
-      expect(await runAll(dir, { phases: "security-review,implement" })).toBe(0)
+      // boundary: "flow" as above — the continuous crossing, not the 0101
+      // boundary-stop default.
+      expect(await runAll(dir, { phases: "security-review,implement", boundary: "flow" })).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/tasks.md")).exists()).toBe(true)
       expect((await Bun.file(join(dir, "security-review.md")).text())).toContain("reviewed")
       const handover = await Bun.file(join(dir, "docs/R-01/P01-security-review/handover.md")).text()
@@ -241,7 +247,9 @@ test.skipIf(!E2E)(
       await git("add", "-A")
       await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "round baseline")
 
-      expect(await runAll(dir, { phases: "adm" })).toBe(0)
+      // boundary: "flow" as above — one runAll crossing all three phase
+      // boundaries of the round.
+      expect(await runAll(dir, { phases: "adm", boundary: "flow" })).toBe(0)
 
       // Locally numbered directories inside the round's phases plus each
       // phase's own tasks.md; task content lives permanently under docs/T-NNN/,
@@ -2027,6 +2035,52 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
       } finally {
         await rm(fresh, { recursive: true, force: true })
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("close-family and lane flags are refused on run and transfer; init refuses every foreign option outright (nothing written)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // init's whitelist (the amend pattern): run's, close's and _lane's
+      // flags are refused with a pointer at the owning command, and the
+      // refusal comes before any write — `init --dryrun` used to write
+      // everything.
+      const dryrun = await runCli(["init", dir, "--dryrun"])
+      expect(dryrun.code).toBe(1)
+      expect(dryrun.err).toContain("--dryrun is a run option")
+      expect(dryrun.err).toContain("there is no dry-run init")
+      expect(await readdir(dir)).toEqual([])
+      const server = await runCli(["init", dir, "--server", "http://localhost:1"])
+      expect(server.code).toBe(1)
+      expect(server.err).toContain("--server is a run option")
+      expect(server.err).toContain("init starts no session")
+      const lane = await runCli(["init", dir, "--unit", "T-001"])
+      expect(lane.code).toBe(1)
+      expect(lane.err).toContain("--unit is _lane's value flag")
+      expect(await readdir(dir)).toEqual([])
+      // run/transfer: the close-family flags point at close / plan
+      // --force-close; the lane value flags name the hidden _lane entry
+      // (each swallows the next token as its value, so the directory would
+      // be eaten — the refusal keeps the token meaningless instead).
+      const runReason = await runCli(["run", dir, "--reason", "x"])
+      expect(runReason.code).toBe(1)
+      expect(runReason.err).toContain("--reason is a close option: run closes nothing")
+      expect(runReason.err).toContain("opencode-auto close <ref> [dir] --reason <text>")
+      const runMerge = await runCli(["run", dir, "--merge", "auto-lane/T-001"])
+      expect(runMerge.code).toBe(1)
+      expect(runMerge.err).toContain("hidden _lane entry")
+      expect(runMerge.err).toContain("run takes no --merge")
+      const runUnit = await runCli(["run", dir, "--unit", "T-001"])
+      expect(runUnit.code).toBe(1)
+      expect(runUnit.err).toContain("run takes no --unit")
+      const transferCascade = await runCli(["transfer", dir, "--cascade"])
+      expect(transferCascade.code).toBe(1)
+      expect(transferCascade.err).toContain("--cascade is a close option: transfer closes nothing")
+      const transferUnit = await runCli(["transfer", dir, "--unit", "T-001"])
+      expect(transferUnit.code).toBe(1)
+      expect(transferUnit.err).toContain("transfer takes no --unit")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -15,21 +15,11 @@ import {
   type ResolveDoc,
   type ResolveItem,
 } from "../src/resolve"
+import { git } from "./fixtures/runner"
 
 // T-004 coverage: all of src/resolve.ts (marker parsing / ledger persistence / session
 // close-out scan / read-back / highlight block). Cases for the driver-side collection
 // wiring (H1..H4) are added in T-005's test/runner.test.ts.
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
-}
 
 function driverItem(question: string, over: Partial<ResolveItem> = {}): ResolveItem {
   return { at: 1, task: "T-001", phase: "m", round: 1, source: "driver", question, ...over }

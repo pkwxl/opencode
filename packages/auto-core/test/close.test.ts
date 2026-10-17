@@ -14,19 +14,13 @@ import { commitTree } from "../src/git"
 import { establishRound, readPhases, type PhaseUnit } from "../src/phases"
 import { loadPlan, qualifiedPhase, renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import { freshRepo, git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
 const REASON = "not needed this round"
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = await freshRepo()
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
+// The freshRepo flavor: every wrapper's directory is an initialized
+// repository (the close paths commit), made the fixtures/runner way.
+const withDir = withDirFactory(() => freshRepo())
 
 async function commitAll(dir: string, message = "setup") {
   writeFileSync(join(dir, ".gitignore"), "tmp/\n.auto/\n")
@@ -160,6 +154,11 @@ describe("closeUnit: phase and round targets (D18)", () => {
       expect(result.type).toBe("closed")
       if (result.type !== "closed") return
       expect(result.lines).toContain(`✓ closed R-01.P01 analysis: ${REASON}`)
+      // The closing pointer names transfer (plans/0101 D4): a phased phase
+      // close's next step is the advance — plan refuses those states.
+      expect(result.lines.at(-1)).toBe(
+        `next: opencode-auto run ${dir} to continue, or opencode-auto transfer ${dir} — it advances the boundary and constructs the next phase's plan task`,
+      )
       expect(result.lines).toContain("ℹ mechanical handover written: docs/R-01/P01-analysis/handover.md")
       // Both units closed; the phase index ticked.
       expect(await exists(dir, "docs/T-002/done.md")).toBe(true)
@@ -248,6 +247,10 @@ describe("closeUnit: phase and round targets (D18)", () => {
       expect(result.type).toBe("closed")
       if (result.type !== "closed") return
       expect(result.lines).toContain("✓ round R-01 counts as complete (its open phases were closed above)")
+      // The round close's pointer names transfer too (the phased boundary).
+      expect(result.lines.at(-1)).toBe(
+        `next: opencode-auto run ${dir} to continue, or opencode-auto transfer ${dir} — it advances the boundary and constructs the next phase's plan task`,
+      )
       const state = await readPhases(dir)
       expect([...state!.done].sort()).toEqual(["P01", "P02", "P03"])
       expect(await exists(dir, "docs/T-002/done.md")).toBe(true)

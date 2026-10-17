@@ -2,7 +2,7 @@
 // (§6.5) over a hand-built registry, and the dispatch-coverage refusal of
 // the run start (§6.3). The dispatch behavior these facts drive is covered
 // by test/agent-fake.test.ts; the selection core itself by test/select.test.ts.
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test"
 import { parseWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models-schema"
 import { phaseType } from "../src/phases/registry"
@@ -53,6 +53,11 @@ describe("the run-start routing block (§6.5)", () => {
     seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       printed.push(args.map((arg) => String(arg)).join(" "))
     })
+  })
+  // The suite shares one process: without this the reinstalled spy outlives
+  // the describe and swallows console.log for every later test and file.
+  afterAll(() => {
+    seen.mockRestore()
   })
 
   test("each tier with agent, window state now and ring size; routes, filter, unused and default-agent notes", () => {

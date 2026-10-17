@@ -50,8 +50,8 @@ on the existing tasks above.
 ## Authority order (intent guarantees)
 
 Where any part of this prompt — the planning input, the round brief, the project brief, the phase duties — conflicts
-with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order
-text.
+with the intent charter (the project's intent pack, its `### verify-plan` section), the charter wins. A conflict is
+never resolved by silently following the lower-order text.
 
 {{precedence}}
 

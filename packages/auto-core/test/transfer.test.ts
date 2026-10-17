@@ -11,11 +11,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { spyOn } from "bun:test"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/analysis"
 import { amendPhasesHold, runTransfer } from "../src/transfer"
-import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
@@ -24,6 +22,7 @@ import { EOF_MARK } from "../src/doccheck"
 import type { RoutingFacts } from "../src/routing"
 import { services } from "../src/services"
 import { ev, type TurnScript } from "./fixtures/agent"
+import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
 import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
 
@@ -34,32 +33,9 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
 })
 
-// Scrub the ambient OPENCODE_AUTO_* layer and capture the terminal (the
-// fixtures/loop.ts convention). The switches parse is memoized per process,
-// and earlier suites may leave a stale parse behind (plan.test's
-// analysis-off afterEach) — the reset makes this run parse the scrubbed
-// environment, the same rule every flip applies.
-async function capture(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
-  const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
-  for (const [key] of saved) delete process.env[key]
-  setSwitchModelRegistry(undefined)
-  const lines: string[] = []
-  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map((arg) => String(arg)).join(" "))
-  })
-  try {
-    return { code: await run(), lines }
-  } finally {
-    printed.mockRestore()
-    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-    // An advance through runAll freezes the switch snapshot at its fleet
-    // start (the run's own invariant; the run-status suite's documented
-    // reset): re-parse the restored environment back to an unfrozen
-    // snapshot, or a later clamp in this process throws.
-    setSwitchModelRegistry(undefined)
-    autoSwitches()
-  }
-}
+// runTransfer's own capture (the fixture's run wraps the loop alone): the
+// scrubbed switch layer and the terminal, the fixtures/capture.ts wrapper.
+const capture = captureRun
 
 async function repo(): Promise<string> {
   const dir = await freshRepo()

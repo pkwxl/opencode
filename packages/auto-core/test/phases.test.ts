@@ -28,6 +28,7 @@ import {
   routePhase,
   syncPhaseIndex,
 } from "../src/phases"
+import { withDirFactory } from "./fixtures/dir"
 
 describe("parsePhases", () => {
   const letters = (raw: string) => parsePhases(raw)?.map((entry) => entry.letter)
@@ -69,16 +70,7 @@ function tempDir() {
   return mkdtempSync(join(tmpdir(), "auto-phases-"))
 }
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = tempDir()
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
+const withDir = withDirFactory("auto-phases-")
 
 const read = (dir: string, rel: string) => Bun.file(join(dir, rel)).text()
 const exists = (dir: string, rel: string) => Bun.file(join(dir, rel)).exists()
@@ -254,8 +246,9 @@ describe("routePhase (phase routing, D.2)", () => {
     writeFileSync(join(dir, "docs/T-001", done ? "done.md" : "todo.md"), renderTaskTodo({ id: "T-001", title: "task" }))
   }
   // The driver-side inputs routePhase takes since 0061 E3: the task-index read
-  // (tasks.ts's loadPlan) and the bin name (the shell profile's).
-  const deps = { loadPlan, bin: "opencode-auto" }
+  // (tasks.ts's loadPlan), the bin name (the shell profile's) and the project's
+  // phases value (the rounds' opening command branches on it, plans/0101 D4).
+  const deps = { loadPlan, bin: "opencode-auto", phases: "m" }
   const route = async (dir: string) => {
     const r = await routePhase(dir, deps)
     return r.type === "plan" || r.type === "execute" || r.type === "handover" ? { type: r.type, phase: r.phase, tasks: r.plan.tasks.length } : r
@@ -292,6 +285,12 @@ describe("routePhase (phase routing, D.2)", () => {
     withDir(async (dir) => {
       const missing = await routePhase(dir, deps)
       expect(missing).toEqual({ type: "blocked", reason: expect.stringContaining("phase index docs/R-01/phases.md is missing") })
+      // The rounds' opening command branches on the phases value
+      // (plans/0101 D4, like status.ts's missing-index row): m mode keeps
+      // plan, a phased project names transfer.
+      if (missing.type === "blocked") expect(missing.reason).toContain("establish the round with opencode-auto plan first")
+      const phasedMissing = await routePhase(dir, { ...deps, phases: "am" })
+      if (phasedMissing.type === "blocked") expect(phasedMissing.reason).toContain("establish the round with opencode-auto transfer first")
       const [first] = await syncPhaseIndex(dir, 1, "am")
       writeFileSync(join(dir, first!.dir, "tasks.md"), "- [ ] T-001 lost\n")
       const lost = await routePhase(dir, deps)

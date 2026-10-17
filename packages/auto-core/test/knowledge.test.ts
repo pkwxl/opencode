@@ -20,17 +20,11 @@ import {
 } from "../src/knowledge"
 import { noCommitGit } from "../src/git-ops"
 import { syncPhaseIndex } from "../src/phases"
+import { git } from "./fixtures/runner"
 
 // A round established with phases "amk": the knowledge phase is P03.
 async function knowledgePhase(dir: string, round: number) {
   return (await syncPhaseIndex(dir, round, "amk")).find((unit) => unit.type === "knowledge")!
-}
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
 }
 
 describe("knowledgeFile / priorKnowledgeFile (output paths)", () => {

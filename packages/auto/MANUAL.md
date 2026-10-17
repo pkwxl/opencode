@@ -159,10 +159,13 @@ Notes:
   included) · `1` usage/environment error · `2` blocked or held for a human (open survey forks, FAIL
   verdict, gate, failed round-close) · `3` `/exit` received under `--interactive` (paused at a safe
   boundary — rerun to recover) · `130` force-terminated.
-- **Questions go to you**: during `plan` and `transfer` every session question waits for a human
-  answer without timeout; during `run` see `--wait-answer` / `--permission` / `--interactive` (or
-  accept the default proxy-answering). Repeated/undecidable questions block the run (exit 2) for you
-  to handle and re-run.
+- **Questions are recorded for you**: during `plan` and `transfer` sessions never ask non-permission
+  questions — they take the recommended option as a provisional default, record it in the affected
+  task documents, and the round report's needs-attention section (`docs/R-NN/report-for-user.md`)
+  lists every such question for your considered answer; a session that asks anyway waits for a human
+  answer without timeout and is never proxy-answered. During `run` see `--wait-answer` /
+  `--permission` / `--interactive` (or accept the default proxy-answering). Repeated/undecidable
+  questions block the run (exit 2) for you to handle and re-run.
 - **Interruption recovery**: rerun the same command; the progress record re-enters the exact interrupted
   session/step. `run --new-session` discards a stale session. Manual rollback = rename `done.md` back
   to `todo.md` (and untick index lines), rerun.
@@ -222,3 +225,4 @@ driver's unified commit is the completion condition.
 | `land [dir] [--keep \| --abandon \| --merge]` | return isolated round branches |
 | `status [dir]` | read-only progress tree |
 | `models [dir] [--probe]` | print the effective model routing |
+| `install-prompts [dir]` | resync the manual-driver prompt suite (the runbooks for a coding-agent session acting as the driver) into `prompts/` byte-identically — extras reported, never deleted; no run lock, no git (you review and commit) |

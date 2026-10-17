@@ -32,7 +32,7 @@
 // deliverables' driver-variable pattern). All of the above is why the file
 // lives in the repo lane of the test manifest: it creates worktrees and
 // merges over real git.
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -47,10 +47,12 @@ import { taskDoc } from "../src/docpaths"
 import { runTaskLoop, type LoopCtx } from "../src/loop-task"
 import type { RunAllOpts } from "../src/loop-preflight"
 import { services } from "../src/services"
-import { SWITCH_ENV, setSwitchModelRegistry } from "../src/switches"
+import { SWITCH_ENV } from "../src/switches"
 import { singleHost } from "../src/agent-pool"
 import type { AgentHost } from "../src/agent/types"
 import { fakeAgent, type FakeAgent } from "./fixtures/agent"
+import { captureRun } from "./fixtures/capture"
+import { git } from "./fixtures/runner"
 import { unitsText } from "./fixtures/units"
 import { EOF_MARK } from "../src/doccheck"
 
@@ -70,13 +72,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-// git over a directory, asserting exit 0.
-async function git(root: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
-}
+// git over a directory, asserting exit 0 (the fixtures/runner.ts helper).
 
 // The park entries that still exist (the teardown's counterpart).
 const parkEntries = async (root = dir): Promise<string[]> => readdir(join(root, ".auto", "worktrees")).catch(() => [])
@@ -217,24 +213,10 @@ function isoCtx(root: string, server: AgentHost, opts: Partial<RunAllOpts> = {})
 // layer scrubbed, the isolation switch planted explicitly (on or off — the
 // suite never depends on which ambient layer the driver exported), and the
 // switch memo reset so this pass parses the planted environment; console.log
-// captured so a case can assert the loop's own lines.
+// captured so a case can assert the loop's own lines (the
+// fixtures/capture.ts wrapper over the plant).
 async function drive(ctx: LoopCtx, phaseUnit: PhaseUnit, isolation: boolean): Promise<{ code: number; lines: string[] }> {
-  const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
-  for (const [key] of ambient) delete process.env[key]
-  process.env[SWITCH_ENV.laneIsolation] = isolation ? "on" : "off"
-  setSwitchModelRegistry(undefined)
-  const lines: string[] = []
-  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map((arg) => String(arg)).join(" "))
-  })
-  try {
-    return { code: await runTaskLoop(ctx, phaseUnit), lines }
-  } finally {
-    printed.mockRestore()
-    delete process.env[SWITCH_ENV.laneIsolation]
-    for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
-    setSwitchModelRegistry(undefined)
-  }
+  return captureRun(() => runTaskLoop(ctx, phaseUnit), { plant: { [SWITCH_ENV.laneIsolation]: isolation ? "on" : "off" } })
 }
 
 // A launcher stub that completes every unit it is handed (the happy-path

@@ -18,7 +18,7 @@ import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, ty
 import { constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
 import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
-import { formatTokens, log } from "./log"
+import { dirtyStopLines, formatTokens, log } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { REQUIRED_TYPE, phaseType, type PhaseTypeEntry } from "./phases/registry"
@@ -27,7 +27,7 @@ import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "./prompt-plan"
-import { checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
+import { appendAudit, checkTextAgainstCharter, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
@@ -101,11 +101,10 @@ async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prom
   const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: planFacts(ctx), step, prompt, entry: charterPhaseEntry(ctx, phase) })
   if (outcome.kind === "inactive") return 0
   const audit = join(dirname(phase.dir), "prompt-audit.md")
+  // The previous text feeds the block site's auditTail below (the dossier's
+  // state snapshot reads the pre-append verdict lines); appendAudit re-reads
+  // the same unchanged file for the write.
   const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
-  await Bun.write(
-    join(ctx.directory, audit),
-    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${verifyAuditEntry(step, outcome)}\n`,
-  )
   // The audit write commits on its own ahead of the session it documents: the
   // planning unit's entry clean gate demands a clean tree, so an uncommitted
   // wall document would block the very step it records (Auto-DECISION: a
@@ -113,9 +112,17 @@ async function verifyPlanStep(ctx: LoopCtx, phase: PhaseUnit, step: string, prom
   // riding the session's unified commit — §5's "written before the session"
   // stays true in git order, and the record survives a session that never
   // runs; found by the §7 session-driving coverage, T-141).
-  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `plan verification (${step})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit ${step}` })
-  if (!settled.ok) {
-    log(`⏸ prompt-audit commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The record is kept in the worktree; commit manually and re-run`)
+  if (
+    !(await appendAudit(
+      ctx.directory,
+      audit,
+      verifyAuditEntry(step, outcome),
+      ctx.git.commitTree,
+      `plan verification (${step})`,
+      step,
+      (failures) => `⏸ prompt-audit commit failed: ${failures}. The record is kept in the worktree; commit manually and re-run`,
+    ))
+  ) {
     return 2
   }
   if (outcome.kind === "skipped") {
@@ -175,16 +182,16 @@ async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step:
   if (check.kind !== "flagged") return
   log(`⚠ the planning input conflicts with the intent charter (${planInputPath(phase)}): the charter-consistent reading in force is "${check.reading}" — the run proceeds, and the composition-time gate still judges the composed whole`)
   const audit = join(dirname(phase.dir), "prompt-audit.md")
-  const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
   const stamp = new Date().toISOString()
-  await Bun.write(
-    join(ctx.directory, audit),
-    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}- ${stamp} admission ${step}: WARN — the planning input conflicts with the charter; in force: ${check.reading}\n`,
+  await appendAudit(
+    ctx.directory,
+    audit,
+    `- ${stamp} admission ${step}: WARN — the planning input conflicts with the charter; in force: ${check.reading}`,
+    ctx.git.commitTree,
+    `plan admission warn (${step})`,
+    `admission warn ${step}`,
+    (failures) => `⚠ the admission-warn record could not be committed: ${failures}; commit ${audit} manually`,
   )
-  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `plan admission warn (${step})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit admission warn ${step}` })
-  if (!settled.ok) {
-    log(`⚠ the admission-warn record could not be committed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}; commit ${audit} manually`)
-  }
 }
 
 // The phase's formulation step (plans/0095 D1): construct the formulation
@@ -217,8 +224,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   if (opts.autoNumber) {
     const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "plan-numbering" }))
     if (numbering.type === "dirty") {
-      log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
-      for (const file of numbering.files) log(`  ${file}`)
+      for (const line of dirtyStopLines("worktree not clean before restoring the numbering record", numbering.files)) log(line)
       return 2
     }
     if (numbering.type === "blocked") {
@@ -235,8 +241,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     const text = ctx.input.text
     const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
     if (saved.type === "dirty") {
-      log(`⏸ worktree not clean before saving the planning input; handle it manually (commit/clean) and re-run:`)
-      for (const file of saved.files) log(`  ${file}`)
+      for (const line of dirtyStopLines("worktree not clean before saving the planning input", saved.files)) log(line)
       return 2
     }
     if (saved.type === "failed") {
@@ -489,8 +494,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       } else {
         const landed = await constructFormulation(directory, phase, composed.todo, { autoNumber: opts.autoNumber })
         if (landed.type === "dirty") {
-          log(`⏸ worktree not clean before constructing the formulation task; handle it manually (commit/clean) and re-run:`)
-          for (const file of landed.files) log(`  ${file}`)
+          for (const line of dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
           return 2
         }
         if (landed.type === "failed") {
@@ -717,16 +721,15 @@ function floorBlocks(phase: PhaseUnit, input: string | undefined, brief: string 
 // tree). false = the commit failed; the caller blocks (the entry clean gate
 // would refuse the uncommitted wall document anyway).
 async function recordSynthesisAudit(ctx: LoopCtx, phase: PhaseUnit, lines: readonly string[]): Promise<boolean> {
-  const audit = join(dirname(phase.dir), "prompt-audit.md")
-  const previous = await Bun.file(join(ctx.directory, audit)).text().catch(() => "")
-  await Bun.write(
-    join(ctx.directory, audit),
-    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}${lines.join("\n")}\n`,
+  return appendAudit(
+    ctx.directory,
+    join(dirname(phase.dir), "prompt-audit.md"),
+    lines.join("\n"),
+    ctx.git.commitTree,
+    `formulation synthesis (${phaseKey(phase).id})`,
+    `synthesis ${phaseKey(phase).id}`,
+    (failures) => `⏸ synthesis-audit commit failed: ${failures}. The record is kept in the worktree; commit manually and re-run`,
   )
-  const settled = await ctx.git.commitTree(ctx.directory, { id: "PLAN", title: `formulation synthesis (${phaseKey(phase).id})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit synthesis ${phaseKey(phase).id}` })
-  if (settled.ok) return true
-  log(`⏸ synthesis-audit commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The record is kept in the worktree; commit manually and re-run`)
-  return false
 }
 
 // Phase planning plus the plan-review pause (plans/0049 G5): at
@@ -961,8 +964,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   if (opts.autoNumber) {
     const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "append-numbering" }))
     if (numbering.type === "dirty") {
-      log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
-      for (const file of numbering.files) log(`  ${file}`)
+      for (const line of dirtyStopLines("worktree not clean before restoring the numbering record", numbering.files)) log(line)
       return 2
     }
     if (numbering.type === "blocked") {
@@ -980,8 +982,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     const text = ctx.input.text
     const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
     if (saved.type === "dirty") {
-      log(`⏸ worktree not clean before saving the planning input; handle it manually (commit/clean) and re-run:`)
-      for (const file of saved.files) log(`  ${file}`)
+      for (const line of dirtyStopLines("worktree not clean before saving the planning input", saved.files)) log(line)
       return 2
     }
     if (saved.type === "failed") {
@@ -1103,8 +1104,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   )
   if (!Array.isArray(appended)) {
     if (appended.type === "dirty") {
-      log(`⏸ worktree not clean before starting the task-append session; handle it manually (commit/clean) and re-run:`)
-      for (const file of appended.files) log(`  ${file}`)
+      for (const line of dirtyStopLines("worktree not clean before starting the task-append session", appended.files)) log(line)
     } else {
       log(`⏸ task-append session blocked (implicit block, investigate and re-run):\n${appended.question}`)
     }

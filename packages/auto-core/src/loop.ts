@@ -11,9 +11,10 @@ import { checkTextAgainstCharter } from "./prompt-verify"
 import { runLaneUnit, type LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
-import { commitsSince, headSha } from "./git"
+import { headSha } from "./git"
+import { commitsSince } from "./git-worktree"
 import { writeLaneReport, type LaneReport } from "./lanes"
-import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
+import { currentRound, phaseFlowBlockedLine, phaseFlowBlockedText, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { anyCodeWork, resolvePhases } from "./phases/registry"
 import { loadPhaseTypes } from "./phases/custom"
 import { resolveRoundPhases } from "./analysis"
@@ -157,10 +158,10 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     const liveRound = await currentRound(directory)
     const authority = await resolveRoundPhases(directory, liveRound, phases)
     if (!opts.dryrun && !opts.lane) {
-      const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin })
+      const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases })
       if (pre.type === "blocked") {
-        log(`⏸ phase flow blocked: ${pre.reason}`)
-        emitStatus({ type: "failure", message: `phase flow blocked: ${pre.reason}` })
+        log(phaseFlowBlockedLine(pre.reason))
+        emitStatus({ type: "failure", message: phaseFlowBlockedText(pre.reason) })
         return 1
       }
       // A phase-index drift (plans/0053 D34): the phases value in force (the
@@ -184,7 +185,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
           return 1
         }
       } catch (error) {
-        log(`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`)
+        log(phaseFlowBlockedLine(error instanceof Error ? error.message : String(error)))
         return 1
       }
     }

@@ -244,7 +244,7 @@ function update(dir: string, mutate: (doc: ResolveDoc) => void): Promise<void> {
 // 去重键: source + task + 归一化 question(同一问题在同一任务内重复落账只留一条;
 // 跨任务同问题各留一条,因为它们是两次独立的代答)。
 function key(item: { source: ResolveSource; task: string; question: string }): string {
-  return `${item.source} ${item.task} ${normalize(item.question)}`
+  return `${item.source}\u0000${item.task}\u0000${normalize(item.question)}`
 }
 
 // 追加落账。已存在的同键条目不重复追加,但允许补齐信息(option/reason/file/matched
@@ -278,7 +278,10 @@ function addDecisions(doc: ResolveDoc, task: string, count: number) {
   doc.decisions = { ...doc.decisions, [task]: (doc.decisions?.[task] ?? 0) + count }
 }
 
-// 累加落账(导出供单测直驱;collectAgentResolves 内部与标记落账合并为同一次写)。
+// Test seam: accumulate-and-persist with no production caller — tests seed
+// the ledger through it directly; production books counts through the
+// private addDecisions, merged with the marker booking into one write
+// inside collectAgentResolves.
 export async function recordDecisions(dir: string | undefined, task: string, count: number): Promise<void> {
   if (!dir || !task || count <= 0) return
   await update(dir, (doc) => {
@@ -375,7 +378,7 @@ async function readScannable(path: string): Promise<string | undefined> {
   const size = await file.exists().then((ok) => (ok ? file.size : -1)).catch(() => -1)
   if (size < 0 || size > MAX_SCAN_BYTES) return undefined
   const text = await file.text().catch(() => undefined)
-  if (text === undefined || text.includes(" ")) return undefined
+  if (text === undefined || text.includes("\u0000")) return undefined
   return text
 }
 

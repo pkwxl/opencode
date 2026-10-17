@@ -41,6 +41,7 @@ import { runAll } from "../src/loop"
 import { establishRound } from "../src/phases"
 import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { defaultTurn, ev, fakeAgent, type TurnScript } from "./fixtures/agent"
+import { captureRun } from "./fixtures/capture"
 import { artifactTurns, promptPhaseDir } from "./fixtures/loop"
 import { freshRepo, git } from "./fixtures/runner"
 import { seedUnits } from "./fixtures/units"
@@ -126,27 +127,10 @@ const hostOf = (agent: ReturnType<typeof fakeAgent>): AgentHost => ({
 })
 
 // Scrub the ambient OPENCODE_AUTO_* layer around a run and capture the
-// terminal (the fixtures/loop.ts convention; the deliverables doc's
-// driver-environment rule).
-async function withQuietConsole(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
-  const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
-  for (const [key] of saved) delete process.env[key]
-  const lines: string[] = []
-  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map((arg) => String(arg)).join(" "))
-  })
-  try {
-    return { code: await run(), lines }
-  } finally {
-    printed.mockRestore()
-    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-    // The run froze the switch snapshot at its fleet start (the run's own
-    // invariant): re-parse so a later clamp in this process does not throw —
-    // the documented reset (test/services.test.ts's frozen-snapshot pair).
-    setSwitchModelRegistry(undefined)
-    autoSwitches()
-  }
-}
+// terminal, with the switch-snapshot reset in the finally (the
+// fixtures/capture.ts wrapper; the deliverables doc's driver-environment
+// rule).
+const withQuietConsole = captureRun
 
 // —— the acceptance e2e: the injected Interactive over the fake claude CLI ——
 

@@ -305,6 +305,8 @@ export function registerIntentBundle(name: string, files: IntentBundleFiles): vo
   registered.set(name, { ...files })
 }
 
+// Test seam: no production caller lists the registrations — tests assert it;
+// the shells register, resolveIntentBundle consumes.
 export function registeredIntentBundles(): string[] {
   return [...new Set([...Object.keys(builtinBundles()), ...registered.keys()])].sort()
 }

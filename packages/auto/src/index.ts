@@ -610,6 +610,34 @@ if (command === "run") {
       process.exit(1)
     }
   }
+  // The close-family flags are close's and plan --force-close's
+  // (auto-core plans/0053 D22/D28): run closes nothing, and silently
+  // ignoring a close attempt would let a person believe a unit was closed
+  // when nothing happened (the AUTO-RESOLVE rationale of plan's own refusal
+  // of the group without --force-close).
+  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is a close option: run closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
+          `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
+      )
+      process.exit(1)
+    }
+  }
+  // The lane value flags are _lane's alone (hidden, auto-core plans/0068
+  // §6.4): the parent run's lane launcher re-invokes this CLI with `_lane
+  // <dir> --unit <id> [--merge <branch>]`, never `run` — a person's run takes
+  // neither, and each swallows the next token as its value (the directory
+  // would be eaten).
+  for (const key of ["unit", "merge"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
+          `run takes no --${key}`,
+      )
+      process.exit(1)
+    }
+  }
   const session = parseSessionFlags()
   const waitBetween = parseMinutes(flags.get("wait-between"))
   if (waitBetween === null) {
@@ -997,6 +1025,33 @@ if (command === "transfer") {
     if (flags.has(key)) {
       console.error(
         `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: transfer takes no planning input. A rejected plan task is fixed through its inputs — the documents — and transfer re-runs on them`,
+      )
+      process.exit(1)
+    }
+  }
+  // The close-family flags are close's and plan --force-close's
+  // (auto-core plans/0053 D22/D28): transfer closes nothing, and silently
+  // ignoring a close attempt would let a person believe a unit was closed
+  // when nothing happened (the AUTO-RESOLVE rationale of plan's own refusal
+  // of the group without --force-close).
+  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is a close option: transfer closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
+          `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
+      )
+      process.exit(1)
+    }
+  }
+  // The lane value flags are _lane's alone (hidden, auto-core plans/0068
+  // §6.4): the lane launcher re-invokes this CLI with `_lane <dir> --unit
+  // <id> [--merge <branch>]`, never `transfer` — each swallows the next
+  // token as its value (the directory would be eaten).
+  for (const key of ["unit", "merge"]) {
+    if (flags.has(key)) {
+      console.error(
+        `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
+          `transfer takes no --${key}`,
       )
       process.exit(1)
     }
@@ -1737,6 +1792,60 @@ if (command === "init" || command === "amend") {
     console.error(`--repair is a run option (the bounded repair budget for FAIL verdicts, per run and never persisted); ${command} does not accept it`)
     process.exit(1)
   }
+  // init's option whitelist (the amend whitelist's pattern, placed after the
+  // refusals above so their pinned notices answer first): init takes its
+  // config flags, the brief pair, the identity pair and -f alone — every
+  // other known flag is refused with a pointer at its owning command rather
+  // than silently dropped (before this, `init --dryrun` wrote everything and
+  // `init --merge <dir>` swallowed the directory as the lane value). Retired
+  // flags need no entry: the RETIRED_FLAGS interception runs ahead of every
+  // command block, and the plan/transfer/land-owned flags are refused
+  // globally the same way — the generic line below is their backstop alone.
+  if (command === "init") {
+    const pointers: Record<string, string> = {
+      dryrun:
+        "--dryrun is a run option (the permission preflight: opencode-auto run <dir> --dryrun); init does not accept it — there is no dry-run init, and the refusal comes before any write",
+      server:
+        "--server is a run option (reuse a running opencode server: opencode-auto run <dir> --server <url>); init does not accept it — init starts no session",
+      verbose:
+        "--verbose is a run option (the session log level: opencode-auto run <dir> --verbose); init does not accept it — init starts no session",
+      interactive:
+        "--interactive/-i is a run option (the foreground interactive mode: opencode-auto run <dir> -i); init does not accept it — init starts no session",
+      "wait-answer":
+        "--wait-answer is a run option (the wait for a human answer inside a session); init does not accept it — init starts no session",
+      permission:
+        "--permission is a run option (the session permission preset: opencode-auto run <dir> --permission <mode>); init does not accept it — init starts no session",
+      "new-session":
+        "--new-session is a run option (skip reusing an interrupted session on resume); init does not accept it — init starts no session",
+      "wait-between":
+        "--wait-between is a run option (the pause between tasks: opencode-auto run <dir> --wait-between <minutes>); init does not accept it — init runs no task",
+      boundary:
+        "--boundary is a run option (run's phase-boundary shape: opencode-auto run <dir> --boundary stop|flow); init does not accept it — init runs no phase",
+      reason:
+        "--reason is a close option (opencode-auto close <ref> [dir] --reason <text>, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
+      cascade:
+        "--cascade is a close option (opencode-auto close <ref> [dir] --cascade, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
+      "commit-changes":
+        "--commit-changes is a close option (opencode-auto close <ref> [dir] --commit-changes, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
+      "stash-changes":
+        "--stash-changes is a close option (opencode-auto close <ref> [dir] --stash-changes, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
+      unit:
+        "--unit is _lane's value flag (the hidden lane-worker entry the parent run's lane launcher invokes, never a person's); init does not accept it",
+      merge:
+        "--merge is _lane's value flag (the hidden lane-worker entry the parent run's lane launcher invokes, never a person's) and land's landing-mode boolean (opencode-auto land <dir> --merge); init does not accept it",
+      "from-bundle":
+        "--from-bundle is a sync option (the unstamped bootstrap's overwrite assertion: opencode-auto sync <dir> --from-bundle); init does not accept it — init materializes a bundle from --intent alone",
+    }
+    const allowed = new Set([...CONFIG_FLAGS, "brief", "brief-file", "name", "email", "force"])
+    for (const key of flags.keys()) {
+      if (allowed.has(key)) continue
+      console.error(
+        pointers[key] ??
+          `--${key} is not an init option: init takes only the config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")}), --brief <text> | --brief-file <path>, --name <name> --email <email> and -f/--force`,
+      )
+      process.exit(1)
+    }
+  }
   // --name/--email (plans/0073 §2.2, init only — the amend whitelist above
   // already refused them there): the commit identity pair, written as
   // repository-local git config when the identity probe below finds no
@@ -2411,13 +2520,13 @@ if (command === "install-prompts") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow]
-  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--round | --phase] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow] [--repair [1-10]]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--round | --phase] [--export <T-NNN> | --adopt <T-NNN>] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto transfer [dir] [--resynthesize] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto land [dir] [--keep] [--abandon] [--merge]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto sync [dir] [-f|--force] [--dryrun [true|false]] [--from-bundle]
   opencode-auto reset [dir] [-f|--force]
@@ -2425,13 +2534,13 @@ console.error(`usage:
   opencode-auto models [dir] [--probe]
   opencode-auto install-prompts [dir]
 
-options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --tree-lanes, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
-       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — plan establishes them), so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
-       amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --intent, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --tree-lanes, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — transfer establishes them (plan does in m mode)), so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
+       amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with. Mid-phase — the current phase holding pending work — the amendment refuses naming the boundary (finish the phase with run or close it, amend, and the next transfer applies the value to the round's unstarted tail before constructing)
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — seed it with init/amend --brief); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset, fix and sync)
          sync upgrades a materialized intent bundle to the running binary's (auto-core plans/0100): unedited managed files (the pack, the mode, the phase files init materialized, recorded with their digests in .opencode/auto/provenance.json) fast-forward byte-identically, the stamp rewrites, and the diff is left for review — never committed, never touching config.json. Person-edited files, files the bundle retired and extras under the materialized homes are reported and never written or deleted. An unstamped project (materialized before the stamp existed) bootstraps: byte-identical files are adopted into a fresh stamp, differing ones reported with the headings delta (--from-bundle overwrites them — your assertion the pack is pristine-but-old). A round in flight only warns: later phases would plan under changed charters, your boundary call. sync --dryrun plans and prints, writes nothing (exit 0 when nothing would change, 1 when something would)
-         plan (auto-core plans/0101 D4) is the dispatch half of the person-bracketed boundary: bare plan runs the awaiting, reviewed plan task transfer constructed — the formulation session, the collect checks and the wrap-up, one session chain stopping on completion (the produced index and task documents are committed, so the second review, of the actual decomposition, is free, and run is its approval act). Every phased state that is not that dispatch refuses naming transfer: the project start and the round establishment (transfer's project-start shape), the complete round (transfer closes it and opens the next), an unplanned phase or one at its boundary (transfer constructs and stops for review). Two guards hold the seam: the round brief docs/R-NN/round.md must be filled — an untouched stub refuses exit 2 naming the fill (no planning session dispatches against an empty round brief) — and an input (-p/--prompt <text> | --file <path>, m mode's planning channel and --append's) that changes what the reviewed todo rendered refuses naming the transfer re-run, whose idempotent reconstruct absorbs it (the input's home is the phase's plan-input.md; plan --phase prepares it assisted). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between, --max-sessions and --boundary are refused. Exit codes as run's (the guards: the stub-round refusal 2, the state refusals 1)
+         plan (auto-core plans/0101 D4) is the dispatch half of the person-bracketed boundary: bare plan runs the awaiting, reviewed plan task transfer constructed — the formulation session, the collect checks and the wrap-up, one session chain stopping on completion (the produced index and task documents are committed, so the second review, of the actual decomposition, is free, and run is its approval act). Every phased state that is not that dispatch refuses naming transfer: the project start and the round establishment (transfer's project-start shape), the complete round (transfer closes it and opens the next), an unplanned phase or one at its boundary (transfer constructs and stops for review). Two guards hold the seam: the round brief docs/R-NN/round.md must be filled — an untouched stub refuses exit 2 naming the fill (no planning session dispatches against an empty round brief) — and an input (-p/--prompt <text> | --file <path>, m mode's planning channel and --append's) that changes what the reviewed todo rendered refuses naming the transfer re-run, whose idempotent reconstruct absorbs it (the input's home is the phase's plan-input.md; plan --phase prepares it assisted). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). --export <T-NNN> | --adopt <T-NNN> are the standalone work-order routes (plans/0076): --export renders a ready unit's work order to stdout (nothing persisted — run it with your own coding-agent session outside the driver, its question protocol the attended record-then-review shape), and --adopt re-checks the externally-driven unit, runs the test handover, performs the ticks and todo.md → done.md renames and lands the unified commit — the driver-side closer a hand-commit would break. The two are mutually exclusive, and each refuses -p/--file, --append, --new-task and --force-close. It takes run's session options; config options, --dryrun, --wait-between, --max-sessions, --repair and --boundary are refused. Exit codes as run's (the guards: the stub-round refusal 2, the state refusals 1)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); --phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); the existing gates check the result — the round-start gate for the brief, the construct's own input read for the input (phased: transfer reads it and stops for review; m mode: plan's session). In m mode on a fresh target (no rounds yet) the first plan opens the assisted project analysis instead — the phased project-start shape is transfer's below; OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did in m mode
          transfer [dir] is the single advance command of the person-bracketed boundaries (auto-core plans/0101): one advance per invocation, resolved by state — the project start (the assisted project analysis re-homed from plan: the stub, the release gate, the brief install, R-01 established under the released roadmap's line for the round, stopping at the round-start gate — review the setup, fill docs/R-NN/round.md, commit), the phase boundary (a survey with open forks refuses exit 2 ahead of any session until your "Clarified: yes"; released, the advance distills the handover, closes the phase — installing the approved project brief — and constructs the next phase's plan task docs/T-NNN/todo.md, stopping for your review: the todo is driver-owned, a rejection is fixed through its inputs — round.md, plan-input.md, the brief, the roadmap line — and transfer re-run), the round close (the same invocation when the closed phase was the round's last: the round-close checks gate it, and the stop is your moment with the round's report docs/R-NN/report-for-user.md), and the round open (the roadmap's next line applied, the establish stop naming its source; a released roadmap that plans no line for the next round is exhausted — extend ## Roadmap and re-run, exit 0). plan dispatches the reviewed plan task, run executes the phase and stops at its clean end. --resynthesize bypasses the digest keep of a standing plan task: the constructor session re-voices the sources under the charter and the reconstruct lands the new todo for review — the channel for a rejected synthesized ledger (a rejected input needs no flag, the plain re-run absorbs it). m mode refuses (its plan/run shapes stand); it takes run's session options only
@@ -2442,7 +2551,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. The project brief .opencode/auto/brief.md is seeded with init --brief <text> | --brief-file <path> (written verbatim; omitted writes no file) and revised with amend's --brief/--brief-file or installed from the survey phase's approved proposal — never hand-edited mid-run; every planning session reads it. State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
        reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); the project brief .opencode/auto/brief.md is kept (a seed or the analysis phase's generated brief — delete it by hand if you mean to); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
-       --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md). Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); once the current round is complete any value applies to the next round plan establishes
+       --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md). Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); a phased round's unstarted tail reshapes at the boundary instead — amend --phases there and the next transfer re-derives the tail before constructing (mid-phase the amendment refuses naming the boundary); once the current round is complete any value applies to the next round transfer establishes (plan in m mode)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
        --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
@@ -2454,11 +2563,12 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
         --isolate <rel-path> (repeatable) branch isolation of nested repositories (default none): at round establishment each designated repository — named by a repository-relative path holding a .git, never the target root — is switched onto the branch auto/R-NN, so the driver's per-session commits land there while the repository's original branch never moves; a designated repository that is not clean at establishment blocks the round for human attention. The list replaces the stored one, none removes it
         --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 requires a parallel level (init --parallel); what runs concurrently is the --tree-lanes tier's call (the default runs the tasks serially in one tree with the tests parallel; tree lanes on/auto run them as concurrent lanes in isolated worktrees); --interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)
         --boundary stop|flow run option (auto-core plans/0101): run's shape at the phase boundaries. stop (the default) ends the run at the current phase's clean end — every unit done, the lanes landed — before the handover, naming transfer as the advance command (a survey with open forks stops exit 2 awaiting your "Clarified: yes"); flow restores the continuous crossing of the boundaries, for trusted unattended stretches. A run-side width only — never a config key — and orthogonal to plan's stop condition
+        --repair [1-10] run option (auto-core plans/0079 §4): the bounded repair budget — how many automatic repair rounds a task report's Result: FAIL (or a held verdict gate) may drive before blocking for the human: the failed task is closed and an appending session adds rework tasks over the report's evidence, which then run and re-verify. Acceptance gates never auto-repair — the human's sign alone; serial runs only, never persisted
         --commit is retired: committing cannot be turned off — after any session ends the driver recursively commits all changes (git history is the audit trail of AI changes; --commit false and the old alias none were retired on 2026-09-15, and with the config key gone the flag went entirely). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value fails loading (opencode-auto fix <dir> drops the key)
         --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error
         continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} transfer <dir> — it runs the round-close checks and opens the next round
         check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings
 
-exit codes: 0 all complete; 1 usage/environment error (the same code fix --dryrun answers with configuration findings); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
+exit codes: 0 all complete (including the boundary stop of run --boundary stop and transfer's review stops); 1 usage/environment error (the same code fix --dryrun answers with configuration findings); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
 process.exit(1)

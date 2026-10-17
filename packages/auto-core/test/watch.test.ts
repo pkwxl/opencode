@@ -89,6 +89,11 @@ describe("liveness probe wiring (timer cleanup, the H7 POST abort)", () => {
     })
     const result = await runSession(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
     expect(result.type).toBe("idle")
+    // Let a probe straggler whose timer was already armed at settle fire
+    // first (one probe period plus a macrotask round), so the baseline is
+    // the true post-teardown count rather than a mid-flight capture.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 25))
     const atSettle = gets
     // Wait more than three probe periods; the probe count must not grow
     // again (settling tears the chain down; late callbacks re-arm nothing).

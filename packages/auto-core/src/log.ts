@@ -121,6 +121,18 @@ function rule(char: string, text: string) {
   log(`\n${centerTime}\n${text}`)
 }
 
+// The dirty-tree stop-line pair (plans/0102, the complexity-7 funnel): the
+// ⏸ header — `what` is the full head text naming what the caller was about
+// to do, including any task-id prefix or explaining clause — followed by
+// the unclean paths indented two spaces. One home for the copies across
+// the loop family, plan, transfer's establishment and the blockage pair,
+// so the "handle it manually (commit/clean) and re-run" instruction cannot
+// drift again (the two beginUnit-gate arms had drifted to "commit or
+// clean"; unified onto the majority form, which no test pins otherwise).
+export function dirtyStopLines(what: string, files: readonly string[]): string[] {
+  return [`⏸ ${what}; handle it manually (commit/clean) and re-run:`, ...files.map((file) => `  ${file}`)]
+}
+
 // ===== Stats/message formatters (pure functions, not interfering with the
 // output machinery above) =====
 // Serving the stats messages (plans/STATS_PLAN.md §4) and the consolidation

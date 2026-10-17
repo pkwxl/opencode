@@ -150,6 +150,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/execute-handover.test.ts",
   "test/exit.test.ts",
   "test/failback.test.ts",
+  // The pure agent-plane formatters (plans/0102 stage C): real-shaped part
+  // values asserted in memory (no repository, no spawn).
+  "test/format.test.ts",
   "test/formulate.test.ts",
   "test/formulate-synthesis.test.ts",
   "test/golden.test.ts",

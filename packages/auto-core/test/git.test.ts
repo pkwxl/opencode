@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  addWorktree,
   baselineIntact,
   beginUnit,
   bootstrapRepository,
@@ -13,35 +12,31 @@ import {
   commitTitle,
   commitTree,
   deletedFiles,
-  deleteBranch,
   fileCommitted,
   fileTracked,
-  landBranch,
-  mergeBaseSha,
   pendingChanges,
-  pruneWorktrees,
   removeIfUntracked,
-  removeWorktree,
   repoRoots,
   restoreFile,
   rollbackUnit,
   suffixedTitle,
-  trackedSourceChanges,
   unitBaseline,
   unitViolations,
   writeLocalIdentity,
   scriptGuardSnapshot,
   scriptGuardCheck,
-  WORKTREE_TEARDOWN,
 } from "../src/git"
+import {
+  addWorktree,
+  deleteBranch,
+  landBranch,
+  mergeBaseSha,
+  pruneWorktrees,
+  removeWorktree,
+  WORKTREE_TEARDOWN,
+} from "../src/git-worktree"
 import { noCommitGit } from "../src/git-ops"
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
-  return out
-}
+import { git } from "./fixtures/runner"
 
 async function fresh() {
   const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
@@ -610,63 +605,6 @@ describe("rollbackUnit (the rollback protocol when fidelity cannot be kept)", ()
       expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(bases[dir])
       expect((await git(join(dir, "pkg"), "rev-parse", "--short", "HEAD")).trim()).toBe(bases[join(dir, "pkg")])
       expect(await changedFiles(dir)).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("test-handover drift registration: trackedSourceChanges", () => {
-  test("non-git directory: no changes to speak of, returns an empty array", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
-    try {
-      await writeFile(join(dir, "src.ts"), "a")
-      expect(await trackedSourceChanges(dir)).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("only tracked non-document changes count: the document side and untracked additions are not registered", async () => {
-    const dir = await fresh()
-    try {
-      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
-      await mkdir(join(dir, "test"), { recursive: true })
-      await writeFile(join(dir, "src.ts"), "v1")
-      await writeFile(join(dir, "test", "build.sh"), "echo v1")
-      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "old")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: freeze" })
-      expect(await trackedSourceChanges(dir)).toEqual([])
-
-      // Document-side changes (docs/**) do not count.
-      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "new")
-      // Untracked additions do not count (a known trade-off).
-      await writeFile(join(dir, "fresh.ts"), "new file")
-      expect(await trackedSourceChanges(dir)).toEqual([])
-
-      // Only tracked source and test/ script changes count.
-      await writeFile(join(dir, "src.ts"), "v2")
-      await writeFile(join(dir, "test", "build.sh"), "echo v2")
-      expect((await trackedSourceChanges(dir)).sort()).toEqual([join("test", "build.sh"), "src.ts"].sort())
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("nested repositories covered too: the tracked changes of the outer and inner repositories merge into one list", async () => {
-    const dir = await fresh()
-    try {
-      await writeFile(join(dir, "src.ts"), "v1")
-      const nested = join(dir, "vendor")
-      await mkdir(nested, { recursive: true })
-      await git(nested, "init", "-q")
-      await writeFile(join(nested, "lib.ts"), "n1")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: freeze" })
-      expect(await trackedSourceChanges(dir)).toEqual([])
-
-      await writeFile(join(dir, "src.ts"), "v2")
-      await writeFile(join(nested, "lib.ts"), "n2")
-      expect((await trackedSourceChanges(dir)).sort()).toEqual(["src.ts", join("vendor", "lib.ts")].sort())
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

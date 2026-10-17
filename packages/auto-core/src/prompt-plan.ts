@@ -273,7 +273,7 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
       [
         "## Authority order (intent guarantees)",
         "",
-        "Where any part of this document — the planning input, the sources brief, the ledger, the phase duties — conflicts with the intent charter above, the charter wins. A conflict is never resolved by silently following the lower-order text.",
+        "Where any part of this document — the planning input, the sources brief, the ledger, the phase duties — conflicts with the intent charter (the pack's `### verify-plan`, restated as this document's Acceptance), the charter wins. A conflict is never resolved by silently following the lower-order text.",
         "",
         precedence.trim(),
         "",

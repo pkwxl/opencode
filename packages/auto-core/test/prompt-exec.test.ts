@@ -34,7 +34,7 @@ import {
   type TestRunInfo,
 } from "../src/prompt"
 import { promptFacts } from "../src/prompt-facts"
-import { subtaskOutputFile, taskDocPaths, testHandoffFile } from "../src/docpaths"
+import { taskDocPaths, testHandoffFile } from "../src/docpaths"
 import { prerequisites, promptViews, type Plan, type Task } from "../src/tasks"
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
 import { planOf } from "./fixtures/units"
@@ -616,13 +616,6 @@ Whole-task description.
     expect(text).toContain("You are responsible for this single subtask of the task only")
     expect(text).not.toContain("The subtask list of this task")
     expect(text).not.toContain("Artifact placement convention")
-  })
-
-  test("subtaskOutputFile: two-digit incrementing names (past two digits it naturally carries)", () => {
-    expect(subtaskOutputFile(task, 1)).toBe("docs/T-002/S01/index.md")
-    expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09/index.md")
-    expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12/index.md")
-    expect(subtaskOutputFile(task, 123)).toBe("docs/T-002/S123/index.md")
   })
 })
 

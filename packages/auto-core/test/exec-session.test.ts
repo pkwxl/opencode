@@ -4,8 +4,22 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionChain } from "../src/chain"
 import { seedPinFork } from "../src/exec-session"
-import { implicitFacts } from "../src/router"
+import { implicitRegistry } from "../src/models"
+import { createRouter, type RouteFacts } from "../src/router"
+import { parseSwitches } from "../src/switches"
 import { fakeClient } from "./fixtures/runner"
+
+// The routing facts of a layer-less run (the implicit registry over the env
+// switches): seedPinFork reads only the agent verdicts' slice of them, the
+// same shape a bare options literal below the loop resolves onto.
+const facts: RouteFacts = {
+  registry: implicitRegistry("opencode", parseSwitches({}).model),
+  agentFilter: undefined,
+  defaultAgent: "opencode",
+  runAgent: "opencode",
+  router: createRouter(),
+  clock: { now: () => 0 },
+}
 
 // Frozen-point fork (interruption recovery F5): the server's fork semantics are
 // "copy the messages **before** target", so the anchor is the message after
@@ -18,7 +32,7 @@ describe("seedPinFork (forking from the session state at the freeze moment)", ()
   test("anchor = the message after the freeze's last message; the chain switches to consuming the forked session, the recovery note cleared", async () => {
     const { client, calls } = fakeClient({ messages })
     const chain = makeChain()
-    await expect(seedPinFork(client, chain, { ...record, pinSession: "ses_pin", pinMessage: "msg_2" }, "T-028 wrap-up", implicitFacts(undefined))).resolves.toBe(true)
+    await expect(seedPinFork(client, chain, { ...record, pinSession: "ses_pin", pinMessage: "msg_2" }, "T-028 wrap-up", facts)).resolves.toBe(true)
     expect(calls.forks).toEqual(["ses_pin"])
     expect(calls.forkAnchors).toEqual(["msg_3"])
     expect(chain).toMatchObject({ id: undefined, pending: "ses_fork_1", pct: 100, used: 0, at: 0, note: undefined })
@@ -26,24 +40,24 @@ describe("seedPinFork (forking from the session state at the freeze moment)", ()
 
   test("the frozen message is the last one (the wrap-up round dropped nothing): fork the whole history", async () => {
     const { client, calls } = fakeClient({ messages })
-    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_3" }, "x", implicitFacts(undefined))).resolves.toBe(true)
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_3" }, "x", facts)).resolves.toBe(true)
     expect(calls.forkAnchors).toEqual([undefined])
   })
 
   test("the anchor is no longer in the session (message cleaned up) or the record has no anchor: fork the whole history", async () => {
     const { client, calls } = fakeClient({ messages })
-    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_gone" }, "x", implicitFacts(undefined))).resolves.toBe(true)
-    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", implicitFacts(undefined))).resolves.toBe(true)
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_gone" }, "x", facts)).resolves.toBe(true)
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", facts)).resolves.toBe(true)
     expect(calls.forkAnchors).toEqual([undefined, undefined])
   })
 
   test("no frozen session, session expired, fork failure: false in every case; the caller cold-starts", async () => {
     const { client } = fakeClient({ messages })
-    await expect(seedPinFork(client, makeChain(), record, "x", implicitFacts(undefined))).resolves.toBe(false)
+    await expect(seedPinFork(client, makeChain(), record, "x", facts)).resolves.toBe(false)
     const dead = fakeClient({ get: () => ({ error: { name: "NotFoundError" } }) })
-    await expect(seedPinFork(dead.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", implicitFacts(undefined))).resolves.toBe(false)
+    await expect(seedPinFork(dead.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", facts)).resolves.toBe(false)
     expect(dead.calls.forks).toEqual([])
     const broken = fakeClient({ messages, fork: () => ({ error: { name: "NotFoundError" } }) })
-    await expect(seedPinFork(broken.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", implicitFacts(undefined))).resolves.toBe(false)
+    await expect(seedPinFork(broken.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x", facts)).resolves.toBe(false)
   })
 })

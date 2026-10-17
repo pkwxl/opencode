@@ -352,7 +352,12 @@ describe("timeoutFetch", () => {
   })
 
   test("a synchronous prompt (POST /session/{id}/message) is not timed out as a normal request; it takes the wider turn limit", async () => {
-    const fetch = timeoutFetch({ requestMs: 20, turnMs: 120 }, hangingFetch())
+    // Wide margins on both sides of the observation point: the check at
+    // 150ms sits 3x past the normal request limit (50ms — proof that limit
+    // was not misapplied) while the turn limit (1000ms) still clears the
+    // check by ~6x, so a loaded runner delaying the turn timer cannot make
+    // it fire before the "still hanging" read.
+    const fetch = timeoutFetch({ requestMs: 50, turnMs: 1000 }, hangingFetch())
     let settled = false
     const pending = fetch(new Request("http://127.0.0.1:1/session/ses_1/message", { method: "POST" })).catch(
       (error: unknown) => {
@@ -360,8 +365,8 @@ describe("timeoutFetch", () => {
         throw error
       },
     )
-    // Still hanging after the normal request limit (20ms) — proof the normal timeout was not misapplied
-    await new Promise((resolve) => setTimeout(resolve, 60))
+    // Still hanging well past the normal request limit (50ms) — proof the normal timeout was not misapplied
+    await new Promise((resolve) => setTimeout(resolve, 150))
     expect(settled).toBe(false)
     await expect(pending).rejects.toThrow("request timed out")
   })

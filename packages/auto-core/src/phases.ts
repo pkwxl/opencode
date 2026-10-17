@@ -46,7 +46,6 @@ import {
 import { renderRoundBrief } from "./round-brief"
 import { loadPhaseTypes } from "./phases/custom"
 import {
-  PHASE_LETTERS,
   phaseType,
   resolvePhases,
   unitArtifactSpecs,
@@ -54,9 +53,6 @@ import {
   type PhaseKey,
   type PhaseTypeEntry,
 } from "./phases/registry"
-
-// The only legal preset order (registry letter order); validation and derivation share it.
-export const PHASE_ORDER = PHASE_LETTERS.join("")
 
 // Validate a phases value — a letter preset (`adm`) or a comma-separated type
 // id list (`analysis,security-review,implement`), see resolvePhases — against
@@ -421,10 +417,11 @@ export async function completePhase(dir: string, unit: PhaseUnit, gates: readonl
 // Phase routing (D.2): blocked = an environment error such as an invalid or
 // missing phase or task index (the CLI turns it into exit 1 with fix-it
 // guidance). The routes carry the current phase's plan, loaded once here
-// through the caller's read: the phases domain takes the task-index read and
-// the bin name as call inputs (0061 E3), so a driver caller passes tasks.ts's
-// loadPlan and the shell profile's bin — the reads it already does — and P is
-// the loaded plan's type, of which only the task statuses are read here.
+// through the caller's read: the phases domain takes the task-index read, the
+// bin name and the project's phases value as call inputs (0061 E3), so a
+// driver caller passes tasks.ts's loadPlan, the shell profile's bin and the
+// config's phases — the reads it already does — and P is the loaded plan's
+// type, of which only the task statuses are read here.
 export type PhaseRoute<P> =
   | { type: "complete" } // every phase done
   | { type: "plan"; phase: PhaseUnit; plan: P } // no tasks listed yet → planning session
@@ -434,7 +431,7 @@ export type PhaseRoute<P> =
 
 export async function routePhase<P extends { tasks: readonly { status: string }[] }>(
   dir: string,
-  deps: { loadPlan: (dir: string, phase: PhaseUnit) => Promise<P>; bin: string },
+  deps: { loadPlan: (dir: string, phase: PhaseUnit) => Promise<P>; bin: string; phases: string },
 ): Promise<PhaseRoute<P>> {
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
   let state: PhaseState | undefined
@@ -446,9 +443,11 @@ export async function routePhase<P extends { tasks: readonly { status: string }[
   if (!state) {
     return {
       type: "blocked",
-      // plan owns the rounds (plans/0053 D31): the pointer names it, with the
-      // bin the caller passes (the shell profile's — E3).
-      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with ${deps.bin} plan first`,
+      // The rounds' opening command (plans/0053 D31, re-keyed by plans/0101
+      // D4): phased projects advance with transfer, m mode keeps plan
+      // (transfer refuses it) — the pointer names whichever the caller's
+      // phases value runs, like status.ts's missing-index row.
+      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with ${deps.bin} ${deps.phases === "m" ? "plan" : "transfer"} first`,
     }
   }
   const phase = currentPhase(state)
@@ -462,6 +461,21 @@ export async function routePhase<P extends { tasks: readonly { status: string }[
   if (plan.tasks.some((task) => task.status !== "done")) return { type: "execute", phase, plan }
   if (plan.tasks.length) return { type: "handover", phase, plan }
   return { type: "plan", phase, plan }
+}
+
+// The blocked-flow stop vocabulary (plans/0102, the invariants-6 funnel):
+// every consumer of routePhase — and the phase machinery it fronts
+// (readPhases, loadPlan, the tail-drift guards) — prints the blocked reason
+// through these two forms, so the wording cannot drift across plan,
+// transfer, run's loop, the phase loop and close. phaseFlowBlockedLine is
+// the ⏸-prefixed terminal form; phaseFlowBlockedText is the bare message
+// the run-status failure event carries.
+export function phaseFlowBlockedText(reason: string): string {
+  return `phase flow blocked: ${reason}`
+}
+
+export function phaseFlowBlockedLine(reason: string): string {
+  return `⏸ ${phaseFlowBlockedText(reason)}`
 }
 
 // Phase progress line (run banner and status): ✓ = done, ⊘ = closed (done

@@ -22,7 +22,7 @@ import { implicitRegistry, layerLabel } from "./models"
 import type { ModelRegistry, RegistryAgentProfile } from "./models-schema"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { Router } from "./router"
-import { candidateKey, entryPassesAgentFilter, select, selectionPolicy, type Candidate, type SelectContext } from "./select"
+import { candidateKey, entryPassesAgentFilter, select, selectContextOf, type Candidate, type SelectContext } from "./select"
 import type { Clock } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
@@ -151,23 +151,15 @@ export function routingOf(
 // marks, the key rings' usable-key predicate) and the live context windows
 // when the caller has them. The marks map and the rings are live run state
 // behind the facts' router (never replaced), the override is read per call.
+// The build itself is select.ts's selectContextOf — the one home the router's
+// twin and this wrapper share.
 export function selectContext(
   facts: RoutingFacts,
   switches: Switches,
   cap: number,
   limits?: ReadonlyMap<string, number>,
 ): SelectContext {
-  return {
-    registry: facts.registry,
-    cap,
-    agentFilter: facts.agentFilter,
-    defaultAgent: facts.defaultAgent,
-    policy: selectionPolicy(facts.registry, switches.model),
-    override: facts.router.failbackOverride(),
-    marks: facts.router.downMarks(),
-    ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
-    ...(limits !== undefined ? { limits } : {}),
-  }
+  return selectContextOf(facts, switches, cap, limits)
 }
 
 // One dispatch the run can send (plans/0055 §6.3): a routing role under the

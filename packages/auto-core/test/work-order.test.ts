@@ -7,33 +7,35 @@
 // plan.test.ts shape: an established m-mode round whose phase lists tasks,
 // the worktree states simulated by hand (a standalone session writes files
 // and commits nothing — the constitution forbids it).
-import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { renderConstitutionPreamble } from "../src/agents-block"
 import { planPrelude } from "../src/plan"
 import { establishRound, phaseKey, readPhases, type PhaseUnit } from "../src/phases"
 import { loadPlan, renderTaskIndex } from "../src/tasks"
 import { workOrder } from "../src/work-order"
+import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
+import { git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-order-"))
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
+// The analysis switch (plans/0084) off for this file, the plan.test.ts
+// convention its fixtures follow: the routes here run on fresh dirs, and the
+// unestablished-round gate below asserts the direct-establishment refusal's
+// own wording — with the analysis flow on, planPrelude would route the
+// project start into it instead. The suite shares one process, so an
+// afterAll deletes the plant again (it once reached this file only through
+// plan.test.ts's leaked one).
+beforeAll(() => {
+  process.env[SWITCH_ENV.analysis] = "off"
+  setSwitchModelRegistry(undefined)
+})
+afterAll(() => {
+  delete process.env[SWITCH_ENV.analysis]
+  setSwitchModelRegistry(undefined)
+})
 
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
+const withDir = withDirFactory("auto-order-")
 
 async function commitAll(dir: string) {
   await git(dir, "init", "-q")

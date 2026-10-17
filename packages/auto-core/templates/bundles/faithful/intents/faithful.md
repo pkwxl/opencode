@@ -4,7 +4,7 @@
 
 ### decompose
 
-One requirement per item: each item implements one definite behavior or contract of the
+3. One requirement per item: each item implements one definite behavior or contract of the
 reference, toward parity with its observed behavior, declares its artifact (module/file or
 document path), and carries the way to verify it — the checks that target the item's own
 behavior against the reference's observed behavior, not the task's full suite. An item that
@@ -25,7 +25,7 @@ to pass against the reference's behavior
 
 ### a analysis
 
-Splitting and artifact criteria for this phase:
+4. Splitting and artifact criteria for this phase:
    - One item per behavior area of the reference: each item reads
      the reference implementation at the location the brief names and establishes
      one standalone area of its observed behavior — public interfaces, state and lifecycles,
@@ -37,7 +37,7 @@ Splitting and artifact criteria for this phase:
 
 ### d design
 
-Splitting and artifact criteria for this phase: design follows the reference — one item per
+4. Splitting and artifact criteria for this phase: design follows the reference — one item per
 design concern (data model, module structure, interface contracts, error handling), each
 producing one design document that maps the concern onto the reference's structure: the
 structure that carries the observed behavior is preserved unless a deviation is justified
@@ -46,7 +46,7 @@ do not contradict each other or the behavior baseline) is a closing item of its 
 
 ### m implementation
 
-Splitting and artifact criteria for this phase: implement to parity with the reference —
+4. Splitting and artifact criteria for this phase: implement to parity with the reference —
 vertical thin slices first, one observable behavior end to end per item, not horizontal
 layers; the reference implementation is the working input: its structure, naming and
 invariants carry over unless a deliberate divergence is recorded as a deviation in the task
@@ -56,7 +56,7 @@ an item completes — it compiles and existing checks do not regress.
 
 ### t testing
 
-Splitting and artifact criteria for this phase: verify parity against the behavior baseline —
+4. Splitting and artifact criteria for this phase: verify parity against the behavior baseline —
 split by verification layer or scenario family (build checks, functional tests, black-box
 acceptance against the baseline, one item per baseline behavior family); every item names the
 behavior proven and records the observed evidence, never a bare "tests passed"; keep writing
@@ -65,7 +65,7 @@ items, not mixed into the check-writing item.
 
 ### v acceptance
 
-Splitting and artifact criteria for this phase:
+4. Splitting and artifact criteria for this phase:
    - One item per parity dimension (external behavior, interface contracts, state and
      lifecycle, error semantics, structural fidelity); each item verifies the implementation
      against the reference's behavior baseline and writes its findings with evidence;
@@ -116,6 +116,18 @@ A repair task fixes the finding it is named for, adds a regression check for it,
 the verification that produced the finding; it touches nothing the finding does not name.
 Repair never re-architects: the minimal change that restores parity with the reference's
 observed behavior is the whole task.
+
+### process-references
+
+Process documents are the DRIVER's record of this work — .auto/ and the task, round and
+phase documents under docs/T-* and docs/R-*. They steer the work; they are not part of
+what it delivers. The deliverable (code, comments, build and configuration files, the
+project's own documentation) must never reference them: no process-document paths, no
+task ids as pointers. A comment needing a decision or constraint that a process document
+records restates that content itself, so the code stands on its own once the process
+documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in
+code comments, but each line carries its own question, decision and reason and never
+points at a process document.
 
 ## guarantees
 

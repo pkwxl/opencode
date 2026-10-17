@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parsePartials, promptTemplateNames, registerPartial, registerTemplate, renderText, renderTemplate, templateRenders, usePromptLibrary } from "../src/template"
+import { parsePartials, promptTemplateNames, registerPartial, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 
 // Restore built-ins only after each case, so overlay state never leaks into other test files.
@@ -543,57 +543,5 @@ describe("per-section partial registration (registerPartial, M1.3)", () => {
   test("an empty partial name / empty content is rejected", () => {
     expect(() => registerPartial("", "content")).toThrow("partial name must not be empty")
     expect(() => registerPartial("shell-empty-partial", "   ")).toThrow("partial shell-empty-partial must not be empty")
-  })
-})
-
-describe("optional slots (templateRenders, plans/0053 D11)", () => {
-  // A phase-plan override carrying every tier-1 marker but no {{input}}: one
-  // written before the planning-input slot existed.
-  const OLD_PHASE_PLAN = [
-    "Plan {{phaseId}} into {{taskIndex}}.",
-    "- [ ] T-NNN <task title>",
-    "# T-NNN: <task title>",
-    "Phase: {{phaseId}}",
-    "## Goal",
-    "## Scope",
-    "## Acceptance",
-  ].join("\n")
-
-  test("the built-in phase-append renders {{input}} (the planner's own slot retired with the phase-plan template, plans/0095)", () => {
-    expect(templateRenders("phase-append", "input")).toBe(true)
-    expect(templateRenders("phase-append", "noSuchSlot")).toBe(false)
-  })
-
-  test("an override without the slot still loads (not a tier-1 marker) and reports it missing", () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
-    try {
-      const overlay = join(dir, ".opencode", "auto", "prompts")
-      mkdirSync(overlay, { recursive: true })
-      // whole carries no tier-1 markers: an override dropping its optional
-      // {{adaptive}} slot loads, and templateRenders reports the loss.
-      writeFileSync(join(overlay, "whole.md"), "Whole-task wrapper without the adaptive clause.\n\n<!-- auto: eof -->\n")
-      usePromptLibrary(dir)
-      expect(templateRenders("whole", "adaptive")).toBe(false)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a slot rendered through a partial counts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
-    try {
-      const overlay = join(dir, ".opencode", "auto", "prompts")
-      mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "phase-plan.md"), `${OLD_PHASE_PLAN}\n{{> my-input}}`)
-      writeFileSync(join(overlay, "_partials.md"), "## my-input\n\n{{#if input}}Asked for: {{input}}{{/if}}")
-      usePromptLibrary(dir)
-      expect(templateRenders("phase-plan", "input")).toBe(true)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("an unknown template throws", () => {
-    expect(() => templateRenders("no-such-template", "input")).toThrow("unknown prompt template")
   })
 })

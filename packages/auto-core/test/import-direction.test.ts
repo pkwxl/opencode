@@ -96,6 +96,10 @@ const CLASSIFIED: Record<string, Domain> = {
   mode: "intent",
   template: "intent",
   prompt: "intent",
+  // The shared overlay-directory loader (plans/0102 D6): the
+  // .opencode/auto/<sub>/<name>.md read the mode and intent-pack
+  // registries both sit on — a leaf of the domain the two surfaces share.
+  overlay: "intent",
   // phases (plan §3: phases.ts)
   phases: "phases",
   // document (plan §3: docpaths.ts / doccheck.ts / protect.ts; the M1.0
@@ -284,6 +288,15 @@ const CLASSIFIED: Record<string, Domain> = {
   format: "driver",
   gitignore: "driver",
   git: "driver",
+  // The lane-worktree family (plans/0102 E-α2, split out of git.ts):
+  // worktree creation/teardown for the lane park, the tier-1 sparse
+  // materialization + reflink probe, the lane landing merge — a leaf beside
+  // git.ts, importing its spawn helper and shared merge vocabulary.
+  "git-worktree": "driver",
+  // The branch-isolation and landing family (plans/0102 E-α2, split out of
+  // git.ts): isolateRound and the `land` command's git half — a leaf beside
+  // git.ts, reaching into git-worktree.ts for currentBranch.
+  "git-land": "driver",
   // The git service's home (the run services' commit-side seam): the moved
   // session close-out afterSession with its marker collection, plus the
   // seam's two instances — the production delegation and the no-commit
@@ -447,6 +460,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // check; pure over the documents, below execute and runner.
   split: "driver",
   stats: "driver",
+  // The stats document's schema half (plans/0102 D7, the models-schema
+  // precedent): the types, the empty-value constructors, the lenient parsers
+  // and the copy/merge functions — pure beside the store, so a type-only
+  // importer binds no store code.
+  "stats-schema": "driver",
   status: "driver",
   step: "driver",
   stuck: "driver",
@@ -540,10 +558,18 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // what every session-driving layer stands on and reaches for its effects.
   tasks: "kernel",
   git: "kernel",
+  // The git.ts split's two leaves (plans/0102 E-α2): kernel beside git —
+  // the lane-worktree family and the branch-isolation/landing family, both
+  // importing the spawn helper and shared vocabulary from their root.
+  "git-worktree": "kernel",
+  "git-land": "kernel",
   "git-ops": "kernel",
   "unit-commit": "kernel",
   numbering: "kernel",
   stats: "kernel",
+  // The stats document's schema half (plans/0102 D7), beside the store it
+  // serves — pure shapes and parsers over the document domain's vocabulary.
+  "stats-schema": "kernel",
   resume: "kernel",
   "resume-gate": "kernel",
   handover: "kernel",

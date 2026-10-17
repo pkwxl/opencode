@@ -47,20 +47,18 @@
 import { join } from "node:path"
 import { roundDirName } from "./docpaths"
 import { CONFIG_FILE } from "./config"
+import { foreignCommits, statusEntries } from "./git"
+import { currentBranch, deleteBranch } from "./git-worktree"
 import {
   branchCommits,
   checkoutBranch,
-  currentBranch,
-  deleteBranch,
-  foreignCommits,
   localBranches,
   mergeBaseFull,
   mergeNoFf,
   mergedIntoHead,
   revSha,
   squashOnto,
-  statusEntries,
-} from "./git"
+} from "./git-land"
 import { currentRound, legacyLayoutProblem } from "./phases"
 import { shellProfile } from "./shell"
 

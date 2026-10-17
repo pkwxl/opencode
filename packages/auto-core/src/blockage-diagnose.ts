@@ -39,12 +39,13 @@ import {
 } from "./blockage"
 import { executeBlockageChoice } from "./blockage-execute"
 import type { Interactive } from "./interactive"
-import { log } from "./log"
+import { dirtyStopLines, log } from "./log"
 import type { ClientSource, Opts } from "./opts"
 import { roundDirName } from "./docpaths"
 import { currentRound } from "./phases"
 import { renderPrompt } from "./prompt"
 import { promptFacts } from "./prompt-facts"
+import { appendAudit } from "./prompt-verify"
 import { autoSwitches } from "./switches"
 import { renderTemplate } from "./template"
 import { commitTree } from "./git"
@@ -198,7 +199,7 @@ export async function openBlockage(site: BlockageSite, call: BlockageCall): Prom
   )
   if ("type" in diagnosed) {
     if (diagnosed.type === "dirty") {
-      return { status: "dirty", lines: [`⏸ worktree not clean before the blockage diagnosis session; handle it manually (commit/clean) and re-run:`, ...diagnosed.files.map((f) => `  ${f}`)] }
+      return { status: "dirty", lines: dirtyStopLines("worktree not clean before the blockage diagnosis session", diagnosed.files) }
     }
     return failClosed(site, round, file, diagnosed.question)
   }
@@ -247,16 +248,16 @@ export async function openBlockage(site: BlockageSite, call: BlockageCall): Prom
 async function failClosed(site: BlockageSite, round: number, file: string, question: string): Promise<BlockageResult> {
   await rm(join(site.directory, file), { force: true })
   const audit = join("docs", roundDirName(round), "prompt-audit.md")
-  const previous = await Bun.file(join(site.directory, audit)).text().catch(() => "")
   const stamp = new Date().toISOString()
-  await Bun.write(
-    join(site.directory, audit),
-    `${previous.trim() ? `${previous.trimEnd()}\n` : "# Prompt-audit record (plans/0080 §5): every plan-step consistency verdict of this round\n\n"}- ${stamp} blockage diagnosis ${site.step}: FAILED — the session produced no parsable remediation plan; raw tail follows\n${question.trim().split("\n").map((line) => `  ${line}`).join("\n")}\n`,
+  await appendAudit(
+    site.directory,
+    audit,
+    `- ${stamp} blockage diagnosis ${site.step}: FAILED — the session produced no parsable remediation plan; raw tail follows\n${question.trim().split("\n").map((line) => `  ${line}`).join("\n")}`,
+    commitTree,
+    `blockage diagnosis (${site.gate})`,
+    `blockage diagnosis ${site.step} (failed)`,
+    (failures) => `⏸ the diagnosis-failure audit record could not be committed: ${failures}; commit ${audit} manually`,
   )
-  const settled = await commitTree(site.directory, { id: "PLAN", title: `blockage diagnosis (${site.gate})` }, { stage: "prompt-audit", subject: `PLAN prompt-audit blockage diagnosis ${site.step} (failed)` })
-  if (!settled.ok) {
-    log(`⏸ the diagnosis-failure audit record could not be committed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}; commit ${audit} manually`)
-  }
   return {
     status: "failed",
     lines: [`⏸ blockage diagnosis failed closed (no parsable remediation plan after one retry) — the raw reply is appended to ${audit}; fix the diagnosis model or resolve the blockage by hand`],

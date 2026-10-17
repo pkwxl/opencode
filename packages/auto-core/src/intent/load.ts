@@ -20,8 +20,8 @@
 // registry's dutiesRef will point at these), `## quality` carries the
 // decompose criteria (`### decompose`) and the closing self-check sentences
 // (`### self-check-subtask` / `### self-check-whole`, M1.3).
-import { readFileSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync } from "node:fs"
+import { overlayMarkdownFiles } from "../overlay"
 import { DEFAULT_INTENT, INTENT_SECTIONS, type IntentPack, type IntentSection } from "./types"
 import builtinDefault from "../../templates/intents/default.md" with { type: "file" }
 
@@ -42,32 +42,16 @@ const SECTION_HEADINGS: Record<string, IntentSection> = {
 // File-facing headings in canonical section order (for diagnostics).
 const HEADING_LIST = INTENT_SECTIONS.map((s) => `## ${Object.keys(SECTION_HEADINGS).find((h) => SECTION_HEADINGS[h] === s)}`).join(", ")
 
-// Pack name constraint: lowercase letter followed by letters/digits/hyphens
-// (same rule as mode names, so both overlays share one naming discipline).
-const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
-
 // Load all intent packs: the built-in registry plus the target directory's
 // .opencode/auto/intents/<name>.md (a same-named file overrides the built-in
-// wholesale). Invalid files throw (the CLI turns this into an exit-1 usage
-// error). With dir omitted, only the built-ins are loaded.
+// wholesale; the shared overlay loader reads the directory and enforces the
+// name grammar). Invalid files throw (the CLI turns this into an exit-1
+// usage error). With dir omitted, only the built-ins are loaded.
 export function loadIntents(dir?: string): Record<string, IntentPack> {
   const packs: Record<string, IntentPack> = { [DEFAULT_INTENT]: parseIntentFile(DEFAULT_INTENT, readFileSync(builtinDefault, "utf8")) }
   if (!dir) return packs
-  const overlayDir = join(dir, ".opencode", "auto", "intents")
-  let files: string[] = []
-  try {
-    files = readdirSync(overlayDir)
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? String(error.code) : ""
-    if (code !== "ENOENT" && code !== "ENOTDIR") throw error
-  }
-  for (const file of files.sort()) {
-    if (!file.endsWith(".md")) continue
-    const name = file.slice(0, -3)
-    if (!NAME_PATTERN.test(name)) {
-      throw new Error(`intent pack file name ${join(".opencode", "auto", "intents", file)} is invalid: must be a lowercase letter followed by letters/digits/hyphens`)
-    }
-    packs[name] = parseIntentFile(name, readFileSync(join(overlayDir, file), "utf8"))
+  for (const file of overlayMarkdownFiles(dir, "intents", "intent pack")) {
+    packs[file.name] = parseIntentFile(file.name, file.text)
   }
   return packs
 }

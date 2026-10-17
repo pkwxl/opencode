@@ -5,15 +5,16 @@
 // D8) needs the loop harness (plans/0053 A7, B6); run's drift stop (D34)
 // lands here too — it precedes the agent pool's start, so runAll drives it without an
 // agent over the same fixtures.
-import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { completePhase, currentRound, establishRound, phaseLabel, phaseTailDrift, readPhases, type PhaseUnit } from "../src/phases"
 import { planPrelude, plannedLines, roundCompleteNext } from "../src/plan"
 import { saveProgress } from "../src/resume"
 import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
+import { git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
 const INPUT = { text: "Port the retry policy." }
 
@@ -31,24 +32,12 @@ function analysisOn() {
   setSwitchModelRegistry(undefined)
 }
 beforeAll(analysisOff)
+// The whole suite shares one process: the last describe's afterEach may leave
+// the switch planted off, which must not leak into later files — the file's
+// own beforeAll re-plants for its own tests either way.
+afterAll(analysisOn)
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-plan-"))
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-  return out
-}
+const withDir = withDirFactory("auto-plan-")
 
 async function commitAll(dir: string) {
   await git(dir, "init", "-q")

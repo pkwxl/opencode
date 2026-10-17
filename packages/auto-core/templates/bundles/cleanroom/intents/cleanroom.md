@@ -4,7 +4,7 @@
 
 ### decompose
 
-One requirement per item: each item implements one definite behavior or contract of the
+3. One requirement per item: each item implements one definite behavior or contract of the
 specification, declares its artifact (module/file or document path), and carries the way
 to verify it — the checks that target the item's own behavior, not the task's full suite.
 An item that depends on an earlier one comes after it; no close-out item of its own (the
@@ -24,7 +24,7 @@ every acceptance criterion is actually observed to pass
 
 ### spec-read
 
-Splitting and artifact criteria for this phase ({{phaseName}}):
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
    - One item per specification concern: functional scope, entities and lifecycles, public
      interface contracts, data-plane behaviors, error semantics, acceptance criteria;
    - Each item reads the reference implementation at the location the brief names and
@@ -37,7 +37,7 @@ Splitting and artifact criteria for this phase ({{phaseName}}):
 
 ### d design
 
-Splitting and artifact criteria for this phase: design from the specification notes
+4. Splitting and artifact criteria for this phase: design from the specification notes
 alone — one item per design concern (data model, public interface contracts, module
 boundaries, error handling), each producing one design document that cites the
 specification section it serves; a cross-concern consistency check (the design documents
@@ -47,7 +47,7 @@ implementation.
 
 ### m implementation
 
-Splitting and artifact criteria for this phase: implement the specification — vertical
+4. Splitting and artifact criteria for this phase: implement the specification — vertical
 thin slices first, one observable behavior end to end per item, not horizontal layers;
 each item declares the source files it changes plus its task report, and the check that
 proves the behavior it implements (a build, a targeted test, or a black-box acceptance
@@ -57,7 +57,7 @@ consistent with the public interfaces and record the assumption in the task docu
 
 ### t testing
 
-Splitting and artifact criteria for this phase: split by verification layer or scenario
+4. Splitting and artifact criteria for this phase: split by verification layer or scenario
 family — build checks, functional tests, and black-box acceptance (one item per
 acceptance criterion family, each verifying Given/When/Then against the specification)
 each become an item; every acceptance item maps the criterion to the check that proves
@@ -67,7 +67,7 @@ items, not mixed into the check-writing item.
 
 ### audit
 
-Splitting and artifact criteria for this phase ({{phaseName}}):
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
    - One item per compliance dimension (coverage, behavior, interface, scope, spec
      hygiene, clean-room independence); each item audits the implementation against the
      specification and writes its findings;

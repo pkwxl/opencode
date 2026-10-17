@@ -404,7 +404,19 @@ describe("stats level switching and reads", () => {
     expect((await statsTotals(dir, "task"))?.wallMs).toBe(4000)
     now += 4000
     expect((await statsTotals(dir, "task"))?.wallMs).toBe(8000) // open-segment extrapolation
-    await new Promise((resolve) => setTimeout(resolve, 20)) // wait for the write queue to drain
+    // Wait for the write queue to drain by polling, not a flat sleep: the
+    // fixed clock means every queued write serializes lastWriteAt = 100_000,
+    // so a parseable doc carrying it is the drained state (a fresh or torn
+    // read is not) — capped well above the expected drain time so a loaded
+    // runner cannot race it.
+    for (const deadline = Date.now() + 1000; ; ) {
+      const landed = await readDoc().then(
+        (doc) => doc.lastWriteAt === 100_000,
+        () => false,
+      )
+      if (landed || Date.now() > deadline) break
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     const doc = await readDoc() // on disk still the last flushed snapshot; the extrapolation was not booked
     expect(doc.taskB.wallMs).toBe(0)
     expect(doc.lastWriteAt).toBe(100_000)

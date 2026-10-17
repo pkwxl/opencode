@@ -16,23 +16,10 @@ import { phaseType, planDutiesPartial } from "../src/phases/registry"
 import { parsePhaseTypeFile } from "../src/phases/custom"
 import { promptFacts } from "../src/prompt-facts"
 import { renderText } from "../src/template"
+import { git } from "./fixtures/runner"
+import { withDirFactory } from "./fixtures/dir"
 
-function withDir(fn: (dir: string) => Promise<void>) {
-  return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-round-gates-"))
-    try {
-      await fn(dir)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  }
-}
-
-async function git(dir: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
-}
+const withDir = withDirFactory("auto-round-gates-")
 
 async function gitRepo(dir: string) {
   await git(dir, "init", "-q")

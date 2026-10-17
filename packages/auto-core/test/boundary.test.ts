@@ -96,6 +96,21 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     expect(again.lines.some((line) => line.includes("next: the round is complete — close it with: opencode-auto transfer"))).toBe(true)
   })
 
+  test("m mode's complete route points at plan's next round, never transfer (transfer refuses m mode)", async () => {
+    const f = await fixture("m")
+    // m mode's single phase never completes through the flow (no handover);
+    // seeded done, the route a hand-finished round meets — the same
+    // boundaryHolds shape, branched to plan's pointer.
+    const state = (await readPhases(f.dir, 1))!
+    expect(await completePhase(f.dir, state.phases[0]!, [])).toEqual([])
+    await f.commit("phase complete")
+    const again = await f.run()
+    expect(again.code).toBe(0)
+    expect(again.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)
+    expect(again.lines.some((line) => line.includes(`next: fill in ## Close of docs/R-01/round.md, commit, then run opencode-auto plan ${f.dir} to open round R-02`))).toBe(true)
+    expect(again.lines.some((line) => line.includes("close it with: opencode-auto transfer"))).toBe(false)
+  })
+
   test("a knowledge phase's boundary: its extraction is the phase's work and runs; the distillation after it is transfer's", async () => {
     const f = await fixture("mtk", (dir) => ({ turn: (ctx) => knowledgeTurn(dir)(ctx) ?? artifactTurns(dir)(ctx) }))
     // Seed the round at its knowledge phase: the earlier phases complete

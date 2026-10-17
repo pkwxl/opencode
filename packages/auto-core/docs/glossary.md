@@ -49,19 +49,21 @@ The canonical English term for each concept we discuss in Chinese. Code, comment
 | 子任务清单 | subtask checklist | `docs/T-NNN/subtasks.md` |
 | 单元 | unit | Generic for phase / task / subtask (unit model, `src/document/unit.ts`) |
 | 执行单元 | execution unit | A unit with a commit boundary: task, subtask, standalone hidden task |
-| 隐藏任务 | hidden task | Driver-created work outside the task index (phase planning, handover distillation, …); *standalone* when it is its own execution unit |
+| 隐藏任务 | hidden task | Driver-created work outside the task index (handover distillation, knowledge extraction, blockage diagnosis, …); *standalone* when it is its own execution unit |
 | 伪任务 | pseudo task | The task record a bypass session runs under |
 | 全限定编号 | qualified id | `T-068.S01`, `R-01.P02` |
 | 字段块 | field block | `Phase:` / `Depends:` / `Touches:` lines in `todo.md` |
 | 就绪 | ready | `nextReady`: first unit not done whose dependencies are done |
-| 建轮 | round establishment | `establishRound`, run by `plan`'s prelude (`plans/0053` D4) |
+| 建轮 | round establishment | `establishRound`, run by `transfer` in a phased project (under the released roadmap's line) and by `plan`'s prelude in m mode (`plans/0053` D4; 0101 D2/D4) |
+| 推进命令 | advance command | `transfer` (`plans/0101`): one person-bracketed boundary per invocation — project start, phase boundary, round close, round open |
 | 轮关闭 | round close | `src/round-close.ts` |
 | 无阶段模式 | no-phase mode | The implicit `R-01/P01-implement` |
 | 流水线 | pipeline (task pipeline) | `runTask`: decompose → subtasks or whole → wrap-up → close-out |
 | 计划流水线 | planned pipeline | `--subtask true`: a decompose session writes the checklist upfront, one session per subtask, then the wrap-up — what `auto` meant before `plans/0059` |
-| 自适应拆分 | adaptive decomposition | `--subtask auto`, the default (`plans/0059` D2–D5): one lead session; a split only where the guard finds it pays |
+| 自适应拆分 | adaptive decomposition | `--subtask auto` (the default was flipped to `off` on 2026-10-04, `plans/0059` D1's later ruling): one lead session; a split only where the guard finds it pays |
 | 阶段循环 / 任务循环 / 子任务循环 | phase loop / task loop / subtask loop | `loop-phase.ts` / `loop-task.ts` / `execute.ts` |
 | 阶段路由 | phase routing | Route values `complete` / `plan` / `execute` / `handover` / `blocked` |
+| 边界停止 | boundary stop | run's default `--boundary stop` shape: the run ends at the current phase's clean end naming `transfer`; `--boundary flow` the continuous crossing (`plans/0101` D1) |
 
 Unit and outcome states:
 
@@ -84,6 +86,8 @@ Lanes (parallel execution, `plans/0068`):
 | 工作树停放区 | park | `.auto/worktrees/` — where lane worktrees live (gitignored, skipped by the repo walk) |
 | 合入 | landing | The parent's serialized merge of a lane's branch into the main tree's branch (`Auto-Stage: landing` + `landing-sync`); **not** *merge back* (合回), which is this repository's branch flow into `auto-core` and never a target-repo operation |
 | 泳道报告 | lane report | `.auto/lane.json` in the worktree: the structured outcome the parent reads at lane exit |
+| 文档泳道 | doc lanes | Same-tree concurrency for `docs/`-scoped units (`plans/0099`): `docEligible`, the doc-scheduler branch of the task loop |
+| 回归收据 | regression receipt | `docs/R-NN/regression/<seq>-<lane>.md`: the complete-pass evidence of a `Cost: regression` lane (`plans/0098`); "receipt" alone also names a test-lane `testhands/` receipt |
 | 主进程 / 父进程 | parent | The `run` process in the target directory: preflight, phase loop, planning sessions, scheduler, landings, phase/round close |
 
 ## Phase types
@@ -119,7 +123,8 @@ Lanes (parallel execution, `plans/0068`):
 | 拆分点 | split point | `.auto/units.json` `split`: each repository's HEAD after the lead's commit, kept with the lead's final figure (`leadUsed`) |
 | 收尾 | wrap-up | The AI session that writes the task report; `wrapup.md`, `src/wrapup.ts` |
 | 收口 | close-out | The driver's mechanical checks and commit after a unit; runner `closeout` step |
-| 阶段规划 | phase planning | `phase-plan.md`; in no-phase mode `implement-plan.md` over the planning input, on the same step (`planPhase`, `plans/0053` D12) |
+| 阶段规划 | phase planning | The formulation task — the phase's first task unit (`plans/0095`): `transfer` constructs its driver-owned `docs/T-NNN/todo.md` and stops for review, `plan` dispatches the session (`planPhase`, `renderFormulationTodo`); the former `phase-plan`/`implement-plan` templates retired with it |
+| 公式化任务 | formulation task | The phase's planning as its first task unit (`plans/0095`) — see phase planning |
 | 阶段交接 | phase handover | `phase-handover.md` |
 | 交接提炼 | handover distillation | The bypass session that writes the phase handover |
 | 旁路会话 | bypass session | A session outside the task pipeline that must produce a file (`requireArtifact`) |
@@ -169,7 +174,8 @@ Lanes (parallel execution, `plans/0068`):
 | 运行期状态 | runtime state | `.auto/units.json` (status, attempts, fork base) |
 | 当前任务镜像 | current-task mirror | Retired: `CURRENT.md` is no longer written (plans/0054 D3); preflight deletes one an earlier release left |
 | 勾选 | tick | `- [x]` |
-| 台账 | ledger | Live use: the proxy-answer ledger `.auto/resolves.json`. The phase ledger is retired (the phase index replaced it) |
+| 台账 | ledger | Live uses: the proxy-answer ledger `.auto/resolves.json` and the obligation ledger of a synthesized formulation (`coverage.md` O-/C- rows, `plans/0097`). The phase ledger is retired (the phase index replaced it) |
+| 义务台账 | obligation ledger | The synthesized formulation's quote-anchored O-/C- rows in `docs/T-NNN/coverage.md` (`plans/0097`) |
 | 交接文档 | handover document | `handoff.md`, `testhandoff-<n>.md` |
 | 形检 | shape check | `src/doccheck.ts` |
 | 非平凡 | non-trivial | Shape-check criterion |
@@ -291,7 +297,7 @@ Lanes (parallel execution, `plans/0068`):
 | 实验开关 | experiment switch | `OPENCODE_AUTO_*`, environment only (`src/switches.ts`) |
 | 用法错误 | usage error | Exit 1 |
 | 严格失败 | strict failure | Bad config fails loading, no guessing |
-| 退出码 | exit code | 0 / 1 / 2 / 130 |
+| 退出码 | exit code | 0 / 1 / 2 / 130; the ⏸ glyph marks a stop under either 1 (state/environment) or 2 (awaiting-human) — read it as "stopped early", not as a code |
 | 人工介入 | human attention | |
 | 预检 | preflight | `src/loop-preflight.ts` |
 | 运行服务 | run services | `RunServices` (`src/services.ts`, 0061): the run's one service holder — the clock, the router, the control and the git service — built by preflight and installed by `runAll`; the ambient `services()` accessor's callers are held in `SERVICE_ENTRIES` (may only shrink) |
@@ -311,8 +317,8 @@ Lanes (parallel execution, `plans/0068`):
 | 运行状态日志 | run-status journal | The emitter's append-only typed-event journal (one JSON line per event, rotated per run start), which the daemon's SSE status tail reads back |
 | 交互注入 | interactive injection (the io/Interactive seam) | `RunAllOpts.interactive` (`src/interactive.ts`): today's boolean keeps the terminal sideband; an injected `Interactive` (attach/question/close) or an io `{ input, output }` factory replaces it, and every human interaction the run owns (askHuman's wait, the between-tasks pause, the step pauses) reaches the injected implementation as typed calls — the headless transport bridges through it, never by scraping prompt prose |
 | 只读保护 | read-only guard | `src/protect.ts` |
-| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan` and `close` for the whole run (`runAll` re-enters the shell's lock); `init` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
-| 生命周期命令 | lifecycle command | `plan` and `close` (with `plan --append` / `--force-close`): the commands that move a round's lifecycle (`plans/0052`, `plans/0053`) |
+| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan`, `transfer` and `close` for the whole run (`runAll` re-enters the shell's lock) and by `land` around its branch moves; `init` / `amend` / `fix` / `sync` / `reset` refuse while it is live (`fix`/`sync` exempt under `--dryrun`), `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
+| 生命周期命令 | lifecycle command | `transfer` (the advance command), `plan` (dispatch) and `close` (with `plan --append` / `--force-close`): the commands that move a round's lifecycle (`plans/0052`, `plans/0053`; re-keyed by 0101) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
 | 全量覆盖 | full overwrite | `init` (its only semantics); the baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
 | 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
@@ -324,8 +330,8 @@ Lanes (parallel execution, `plans/0068`):
 | 强制关闭 | force-close | `plan --force-close <ref> --reason <text>`: close a unit inside `plan`, then continue planning in the same process (`plans/0053` D28) |
 | 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (`closeUnit`, `src/close.ts`, `plans/0053` D16); not the same as round close or close-out |
 | 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (`src/close.ts`, `plans/0053` D18) |
-| 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: establish a round, the round-close gate, notices, input refusals; the `plan` command calls it under the run lock before `runAll` (`planPrelude`, `src/plan.ts`, `plans/0053` D4) |
-| 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: the loop stops after a successful planning step, or where an execute route would start; `plan` passes it (`src/loop-phase.ts`, `plans/0053` D6) |
+| 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: round establishment (m mode only since 0101 D4 — phased establishment and the round advance are `transfer`'s), the round-close gate, notices, input refusals; the `plan` command calls it under the run lock before `runAll` (`planPrelude`, `src/plan.ts`, `plans/0053` D4) |
+| 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute" \| "formulate"`: "execute" stops after a successful planning step or where an execute route would start (`plan`); "formulate" stops inside the planning step at the construction's review seam, never dispatching a task session (`transfer`) (`src/loop-phase.ts`, `plans/0053` D6; 0101 D2) |
 | 规划输入 | planning input | A phase's `plan-input.md` (role `planningInput`): the latest input verbatim, committed on its own before the planning unit and rendered into the planning prompt; a changed text restarts an open planning step in a new session; `plan -p` / `--file` supply it (`src/plan-input.ts`, `plans/0053` D9–D11) |
 | 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (`appendPlan`, `src/loop-plan.ts`, `plans/0053` D23–D27) |
 | 并行编排 | parallel orchestration | Landed (`plans/0068`): lanes — one worker process + worktree per unit, landed by the parent; the declaration half is `plans/0046`, the superseded executional design `plans/0036` |
@@ -333,6 +339,7 @@ Lanes (parallel execution, `plans/0068`):
 | 调度器 | scheduler | `readyUnits` over declared facts (`src/lanes.ts`, 0068 D5) |
 | 发号 | id allocation | Parent-exclusive under lanes (0068 D6) |
 | 真并发 | true concurrency | `--max-sessions ≥ 2` under a `parallel` level (0068 D10) |
+| 来源戳 | provenance (sidecar) | `.opencode/auto/provenance.json` (`plans/0100`): what init's bundle materialization wrote, three-state compared for `sync` |
 
 ## Design-document vocabulary
 
@@ -369,7 +376,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 - Artifact declaration and subtask `todo.md` headings: `Artifacts:`, `## Scope`, `## Artifacts`
 - Task report: `Result: PASS` / `Result: FAIL`
 - Phase handover sections: `## Key decisions`, `## Constraints and pitfalls`, `## Required reading for the next phase`, `## Artifact index`
-- Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`, `Reasoning: deep` / `Reasoning: simple`
+- Unit field block: `Phase: R-NN.P<nn>`, `Formulate:` (the formulation unit's marker, `plans/0095`), `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`, `Reasoning: deep` / `Reasoning: simple`
 - Knowledge-doc terminator `DONE`
 - Language-neutral: `<!-- auto: eof -->`, `- [ ]` / `- [x]`, `AUTO-RESOLVE:`, `AUTO-DECISION:`, `AUTO-FIXME:`, `[DRIVER]`, `Auto-Stage:` / `Auto-Nested:` trailers
 - File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`
@@ -396,6 +403,9 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | 阶段 | Always **phase**. "Stage" is not a term (it appears only in `Auto-Stage` and "stage-assist document"). |
 | driver / agent / session | Our program / the coding agent it drives (opencode, claude) / one AI conversation with that agent. |
 | acceptance / verify, review | **acceptance** is the live term. The completion-side `verify` / `review` / `final-review` are retired (`plans/0044`); do not reintroduce them. |
-| 台账 | Only the proxy-answer ledger is live; the phase ledger is retired. |
+| 台账 | Live: the proxy-answer ledger and the obligation ledger (`plans/0097`); the phase ledger is retired. |
+| formulation task / plan task | The same first task unit of a phase (`plans/0095`): **formulation task** in protocol and code identifiers, **plan task** in person-facing lines. |
+| transfer / advance | **transfer** is the command; one invocation is an **advance** — one person-bracketed boundary per call (`plans/0101`). |
+| 边界 | Say which one: the **phase boundary** (the person-bracketed point between phases; `transfer`'s advance crosses it) or run's **boundary stop** (`--boundary stop`, the default clean-phase-end stop). |
 
 <!-- auto: eof -->
