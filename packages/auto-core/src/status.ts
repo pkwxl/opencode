@@ -85,15 +85,16 @@ export async function renderStatus(dir: string): Promise<string[]> {
     }
     // The awaiting-clarification note (plans/0081 D14.3): a human-gated phase
     // whose tasks are all done but whose survey still records open forks —
-    // the round is waiting on the person, and status says so. Beside it the
-    // review-seam note (plans/0101 D3/D4): the current phase's plan task
-    // stands constructed and not yet run — the round waits on the person's
-    // dispatch (plan) or its rejection (fix the todo's inputs, re-run
-    // transfer).
+    // the round is waiting on the person, and status says so, naming the
+    // reshape channel beside the release (plans/0101 D6 — the held boundary
+    // is the designed amendment moment). Beside it the review-seam note
+    // (plans/0101 D3/D4): the current phase's plan task stands constructed
+    // and not yet run — the round waits on the person's dispatch (plan) or
+    // its rejection (fix the todo's inputs, re-run transfer).
     const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
     const awaitingPlan = phase === current ? awaitingFormulation(tasks, phase) !== undefined : false
     lines.push(
-      `  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`)" : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
+      `  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`; where the findings reshape the round, `amend --phases` re-derives its unstarted phases at the next transfer)" : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
     )
     for (const task of tasks) {
       const checklist = task.checklist ?? []

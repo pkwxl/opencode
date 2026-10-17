@@ -390,6 +390,14 @@ export function logGateStop(directory: string, phase: PhaseUnit, problems: strin
     const survey = phaseSurveyDoc(phase)
     log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
     log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
+    // The reshape channel (plans/0101 D6): the survey's findings are the
+    // round's best evidence of what it should still do — where they
+    // contradict its unstarted phases, this held boundary is the designed
+    // amendment moment (the findings in hand), and the next transfer applies
+    // the value to the tail before constructing (started phases untouched).
+    log(
+      `  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`,
+    )
   }
   if (acceptance) {
     log(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)

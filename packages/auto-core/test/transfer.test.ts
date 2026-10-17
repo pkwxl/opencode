@@ -14,8 +14,8 @@ import { join } from "node:path"
 import { spyOn } from "bun:test"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/analysis"
-import { runTransfer } from "../src/transfer"
-import { setSwitchModelRegistry } from "../src/switches"
+import { amendPhasesHold, runTransfer } from "../src/transfer"
+import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
@@ -52,6 +52,12 @@ async function capture(run: () => Promise<number>): Promise<{ code: number; line
   } finally {
     printed.mockRestore()
     for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
+    // An advance through runAll freezes the switch snapshot at its fleet
+    // start (the run's own invariant; the run-status suite's documented
+    // reset): re-parse the restored environment back to an unfrozen
+    // snapshot, or a later clamp in this process throws.
+    setSwitchModelRegistry(undefined)
+    autoSwitches()
   }
 }
 
@@ -518,5 +524,131 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     const settled = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
     expect(settled.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(after)
+  })
+})
+
+// The re-derivable tail (plans/0101 D6): a round's phases.md tail — every
+// phase with no directory work and no planning yet — is reshaping state the
+// person amends at a review moment and the next advance applies ahead of the
+// construction, on the driver's own commit; started and ticked phases are
+// immutable (the sync's guards); and `amend --phases` is boundary-scoped to
+// match (amendPhasesHold, the shell's amend row calls it).
+describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
+  test("the boundary advance re-derives the unstarted tail before constructing: the amended value applies on the driver's own commit, the ticked prefix untouched", async () => {
+    const f = await loopFixture("mt")
+    fixtures.push(f)
+    await Bun.write(join(f.dir, ".opencode/agent/auto.md"), "contract\n")
+    await establishRound(f.dir, { phases: "mt", round: 1 })
+    await f.commit("round setup")
+    // run executes P01's work and stops at its boundary (D1) — the review
+    // moment the person amends at (the shell's amend wrote the new config
+    // value; the hold admitted it here).
+    expect((await f.run()).code).toBe(0)
+    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    // The advance under the amended value ("mv": the tail's test phase
+    // becomes acceptance): the re-derivation replaces the unstarted tail,
+    // commits the rewrite on its own commit, and the construction that
+    // follows builds on the rewritten index in the same invocation.
+    const advanced = await capture(() => runTransfer(f.dir, { managed: host, phases: "mv" }))
+    expect(advanced.code).toBe(0)
+    expect(advanced.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (P02-test → P02-acceptance)"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("started phases are untouched, the rewrite the driver's own commit"))).toBe(true)
+    expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement\n- [ ] P02 acceptance\n")
+    expect(existsSync(join(f.dir, "docs/R-01/P02-test"))).toBe(false)
+    expect(existsSync(join(f.dir, "docs/R-01/P02-acceptance/tasks.md"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(await f.git("log", "--format=%s")).toContain("PLAN resync R-01 tail to config phases (P02-test → P02-acceptance)")
+    expect((await f.git("status", "--porcelain")).trim()).toBe("")
+    // The plain re-run under the same value keeps the landed todo (the
+    // digest-keep, plans/0097 D6): no re-derivation — the index and the
+    // value agree — and no new construction.
+    const kept = await capture(() => runTransfer(f.dir, { managed: host, phases: "mv" }))
+    expect(kept.code).toBe(0)
+    expect(kept.lines.some((line) => line.includes("re-derived"))).toBe(false)
+    expect(kept.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(true)
+    // The review stop admits a further amendment (the hold's predicate: the
+    // standing formulation), and the next advance extends the tail past the
+    // ticked prefix — the floor's report duty moving to the round's new last
+    // phase, the construction re-rendering for review.
+    expect(await amendPhasesHold(f.dir, "mvk")).toBeUndefined()
+    const extended = await capture(() => runTransfer(f.dir, { managed: host, phases: "mvk" }))
+    expect(extended.code).toBe(0)
+    expect(extended.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P03-knowledge)"))).toBe(true)
+    expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement\n- [ ] P02 acceptance\n- [ ] P03 knowledge\n")
+    expect(extended.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect((await f.git("status", "--porcelain")).trim()).toBe("")
+  })
+
+  test("mid-phase nothing reshapes: the advance refuses without re-deriving, and amendPhasesHold scopes the amendment to review moments", async () => {
+    const dir = await repo()
+    const state = await (async () => {
+      await establishRound(dir, { phases: "implement", round: 1 })
+      return (await readPhases(dir, 1))!
+    })()
+    await pendingTaskPhase(dir, "implement", state.phases[0]!)
+    // A reshaping value arriving mid-phase (a moved roadmap line — the
+    // person's document has no hold): the advance still refuses without
+    // applying it — the reshape is the boundary's, the index untouched.
+    const out = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("re-derived"))).toBe(false)
+    expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).not.toContain("analysis")
+    // The hold (the shell's amend row calls it): mid-phase the amendment is
+    // refused naming the boundary channel...
+    const hold = await amendPhasesHold(dir, "implement,analysis")
+    expect(hold).toContain("--phases cannot change mid-phase: R-01.P01 implement holds 1 pending task(s)")
+    expect(hold).toContain("the round's unstarted tail reshapes at a phase boundary")
+    expect(hold).toContain("finish the phase with opencode-auto run")
+    expect(hold).toContain("applies the value before constructing")
+    // ...while every review moment admits it: no round yet, a complete round
+    // (the value applies to the next round the roadmap else config governs),
+    // a held survey boundary (the designed first use) — and m mode never
+    // consults it (D8).
+    const fresh = await repo()
+    expect(await amendPhasesHold(fresh, "amt")).toBeUndefined()
+    const complete = await repo()
+    await completeRound(complete, "mt")
+    expect(await amendPhasesHold(complete, "mtv")).toBeUndefined()
+    const held = await repo()
+    await forkedSurvey(held)
+    expect(await amendPhasesHold(held, "survey,implement,analysis")).toBeUndefined()
+    expect(await amendPhasesHold(dir, "m")).toBeUndefined()
+  })
+
+  test("started and ticked phases are immutable: a moved roadmap line that would drop them fails naming them, nothing written", async () => {
+    // P01 ticked the way the handover path leaves it, P02's planning started
+    // (its task done, the handover route) — both guards of the sync surface
+    // through the re-derivation, the released roadmap line the moved
+    // authority (the person's document, no hold on it).
+    const dir = await repo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
+    await establishRound(dir, { phases: "mt", round: 1 })
+    const state = (await readPhases(dir, 1))!
+    await Bun.write(join(dir, state.phases[0]!.dir, "tasks.md"), "- [x] T-001 task T-001\n")
+    await mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
+    expect(await completePhase(dir, state.phases[0]!, [])).toEqual([])
+    await Bun.write(join(dir, state.phases[1]!.dir, "tasks.md"), "- [x] T-002 task T-002\n")
+    await mkdirSync(join(dir, "docs/T-002"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-002/done.md"), taskDoc("T-002", "R-01.P02"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "P01 closed, P02 done")
+    // The moved line drops the ticked P01: refused (the sync's guard), the
+    // index untouched.
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 test,implement — port the core"]))
+    const dropped = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(dropped.code).toBe(1)
+    expect(dropped.lines.some((line) => line.includes('phase flow blocked: phases "test,implement" would drop the completed phase docs/R-01/P01-implement/'))).toBe(true)
+    expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement")
+    // A line that keeps the prefix but drops the started P02 (its directory
+    // holds work — the task index planning wrote): refused the same way, the
+    // refusal surfacing through the drift check's own guards.
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 implement,analysis — port the core"]))
+    const started = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(started.code).toBe(1)
+    expect(started.lines.some((line) => line.includes('phase flow blocked: phases "implement,analysis" would drop docs/R-01/P02-test/'))).toBe(true)
+    expect(started.lines.some((line) => line.includes("it already holds work (tasks.md)"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/P02-test"))).toBe(true)
   })
 })

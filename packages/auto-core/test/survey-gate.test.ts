@@ -6,17 +6,43 @@
 // `## Project brief` section — which the driver installs verbatim into
 // .opencode/auto/brief.md in its own commit — and the round then flows into
 // its implement phase, whose final-phase duty self-heals the round report.
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { establishRound } from "../src/phases"
+import { amendPhasesHold, runTransfer } from "../src/transfer"
+import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 
 const made: LoopFixture[] = []
 afterEach(() => {
   for (const fixture of made.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
 })
+
+// runTransfer's own capture (the fixture's run wraps the loop alone): the
+// scrubbed switch layer and the terminal, the transfer.test convention.
+async function captureRun(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
+  const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
+  for (const [key] of saved) delete process.env[key]
+  setSwitchModelRegistry(undefined)
+  const lines: string[] = []
+  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "))
+  })
+  try {
+    return { code: await run(), lines }
+  } finally {
+    printed.mockRestore()
+    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
+    // The run froze the switch snapshot at its fleet start (the run's own
+    // invariant; the run-status suite's documented reset): re-parse the
+    // restored environment back to an unfrozen snapshot, or every later
+    // clamp in this process throws.
+    setSwitchModelRegistry(undefined)
+    autoSwitches()
+  }
+}
 
 // The re-work bundle's survey type, as `init --intent` materializes it.
 const SURVEY_TYPE = ["# Survey", "", "Gate: human", "Phase-artifacts: survey.md", "", "## plan duties", "", "Inventory-level reading only.", "", "<!-- auto: eof -->", ""].join("\n")
@@ -237,5 +263,44 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     expect(analysisBlocks).toEqual(["survey"])
+  })
+
+  test("the held boundary is the designed amendment moment: the stop names the reshape channel, and the released advance re-derives the tail (plans/0101 D6)", async () => {
+    const analysisBlocks: string[] = []
+    const f = await fixture(analysisBlocks)
+    // runTransfer's preflight needs the agent contract on disk (the fixture's
+    // own runs bypass preflight); committed like the round setup.
+    await Bun.write(join(f.dir, ".opencode/agent/auto.md"), "contract\n")
+    await f.commit("agent contract")
+    // run completes the survey's work and stops at its boundary where the
+    // gate holds: the awaiting lines name the reshape channel beside the
+    // release — the survey's findings in hand, F10's evidence mechanically
+    // acted on.
+    const held = await f.run()
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("to reshape the round from the findings: opencode-auto amend"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("--phases <value> — the round's unstarted phases re-derive when opencode-auto transfer"))).toBe(true)
+    // The held boundary admits the amendment (the hold's predicate is the
+    // review moment): the person moves the released roadmap's line — the
+    // authority for the round's tail — and releases the survey.
+    expect(await amendPhasesHold(f.dir, "survey,implement,test")).toBeUndefined()
+    const analysis = join(f.dir, "docs/analysis.md")
+    writeFileSync(analysis, (await Bun.file(analysis).text()).replace("- R-01 survey,implement —", "- R-01 survey,implement,test —"))
+    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
+    await f.commit("the findings reshape the round; clarified")
+    // The advance (the fixture's fake host under runTransfer's full
+    // preflight): the re-derivation applies the moved line — + P03-test on
+    // the driver's own commit — then the gate passes, the phase closes, and
+    // P02's plan task is constructed for review, all one advance.
+    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    const advanced = await captureRun(() => runTransfer(f.dir, { managed: host, phases: "survey,implement" }))
+    expect(advanced.code).toBe(0)
+    expect(advanced.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to the roadmap of docs/analysis.md (+ P03-test)"))).toBe(true)
+    expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
+    expect(await f.git("log", "--format=%s")).toContain("PLAN resync R-01 tail to the roadmap of docs/analysis.md (+ P03-test)")
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 })

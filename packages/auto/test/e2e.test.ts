@@ -4020,6 +4020,15 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
         `no reviewed plan task awaits dispatch: R-01.P01 analysis holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
           `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
       )
+      // Mid-phase the tail does not reshape (plans/0101 D6): the boundary-
+      // scoped amend refuses while the phase holds pending work, naming the
+      // boundary channel and the transfer that applies the value.
+      const midPhase = await runCli(["amend", dir, "--phases", "amt"])
+      expect(midPhase.code).toBe(1)
+      expect(midPhase.err).toContain("--phases cannot change mid-phase: R-01.P01 analysis holds 1 pending task(s)")
+      expect(midPhase.err).toContain("the round's unstarted tail reshapes at a phase boundary")
+      expect(midPhase.err).toContain(`finish the phase with opencode-auto run ${dir} (or close it), amend, and the next opencode-auto transfer ${dir} applies the value before constructing`)
+      expect(await JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })

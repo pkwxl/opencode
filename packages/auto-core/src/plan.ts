@@ -726,8 +726,10 @@ function closeRefusal(dir: string, round: number, close: RoundClose): string[] {
 
 // The re-sync line's drift pairs (row 3, D34): each position of the unstarted
 // tail as old → new; a position only the value fills shows the added phase,
-// one only the index filled the dropped phase.
-function driftPairs(drift: PhaseTailDrift): string {
+// one only the index filled the dropped phase. Shared with transfer's
+// boundary re-derivation (plans/0101 D6) — the same vocabulary for the same
+// reshape, whichever command applies it.
+export function driftPairs(drift: PhaseTailDrift): string {
   const current = drift.index.slice(drift.keep)
   const planned = drift.planned.slice(drift.keep)
   const pairs = planned.map((unit, i) => (current[i] ? `${phaseLabel(current[i]!)} → ${phaseLabel(unit)}` : `+ ${phaseLabel(unit)}`))

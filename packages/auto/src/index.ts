@@ -36,7 +36,7 @@ import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
-import { runTransfer } from "@opencode-ai/auto-core/transfer"
+import { amendPhasesHold, runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
@@ -1919,6 +1919,19 @@ if (command === "init" || command === "amend") {
           "A mid-round phases change must keep the current round's completed phases and the phase directories that hold work; " +
           "once the current round is complete, any value applies to the next round plan establishes",
       )
+      process.exit(1)
+    }
+  }
+  // Boundary-scoped --phases (auto-core plans/0101 D6): the round's unstarted
+  // tail reshapes at the advance's review moments, so the amend command
+  // refuses the key while the current phase holds pending work — the person
+  // amends at the boundary (or lets run finish the phase) and the next
+  // transfer applies the value to the tail before constructing. init keeps
+  // the prefix guard alone: its full overwrite is not the reshape channel.
+  if (amendCommand && flags.has("phases")) {
+    const hold = await amendPhasesHold(directory, config.phases)
+    if (hold) {
+      console.error(hold)
       process.exit(1)
     }
   }

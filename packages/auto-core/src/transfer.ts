@@ -29,6 +29,10 @@
 // holds pending work — run's), and the gate-held stop. Exit codes: the
 // review, round-open and exhausted stops 0; the gate-held and
 // nothing-to-advance refusals 2; usage and state errors 1.
+// Since plans/0101 D6 every construct path opens with the re-derivation of
+// the round's unstarted tail — the person's boundary amendment applied —
+// and `amend --phases` is boundary-scoped to match (amendPhasesHold, the
+// shell's amend row calls it): the reshape and its apply are one seam.
 // The lock is taken here and held across the pre-checks and the loop (runAll
 // re-enters it per process), the plan --force-close precedent; the
 // clean-tree refusals are preflight's (the advance runs only on a committed
@@ -36,7 +40,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, releasedRoadmapRounds, renderAnalysisStub } from "./analysis"
+import { analysisProblems, releasedRoadmapRounds, renderAnalysisStub, resolveRoundPhases } from "./analysis"
 import { briefProposal, installBriefProposal } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
@@ -55,12 +59,15 @@ import {
   phaseGateProblems,
   phaseIndexPath,
   phaseLabel,
+  phaseTailDrift,
+  type PhaseTailDrift,
   roundRoot,
   routePhase,
   surveyForks,
+  syncPhaseIndex,
 } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
-import { establishRoundSetup, phaseRefText, truncateGoal } from "./plan"
+import { driftPairs, establishRoundSetup, phaseRefText, truncateGoal } from "./plan"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
@@ -119,10 +126,10 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   // unchanged floor) and stops at the review seam. The predicate is the
   // shared awaiting one (plans/0101 D4): the todo wherever it sits in the
   // index, beside hand-added tasks too.
-  if (route.type === "plan") return await advanceToReview(directory, opts)
+  if (route.type === "plan") return await advanceToReview(directory, round, opts)
   if (route.type === "execute") {
     const remaining = route.plan.tasks.filter((task) => task.status !== "done")
-    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, opts)
+    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, round, opts)
     log(
       `⏸ nothing to advance: ${phaseRefText(route.phase)} still holds ${remaining.length} pending task(s) — ` +
         `execute them first: ${bin} run ${directory}; the boundary follows their completion`,
@@ -142,18 +149,93 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
       return 2
     }
   }
-  return await advanceToReview(directory, opts)
+  return await advanceToReview(directory, round, opts)
 }
 
 // The advance proper (shapes 2/3's sessions and every construction): the
-// loop under stopBefore "formulate" — the handover distillation, the phase
-// close, the round close at the complete route all run inside it, and it
-// stops at the construction's review seam inside the planning step
-// (loop-plan's stop, D3's output), never dispatching a task session.
-// preflight's gates apply unchanged (the clean tree above all: the advance
-// runs only on a committed state).
-async function advanceToReview(directory: string, opts: RunAllOpts): Promise<number> {
+// unstarted-tail re-derivation first (plans/0101 D6 — the boundary's apply,
+// the person's amendment or the moved roadmap line), then the loop under
+// stopBefore "formulate" — the handover distillation, the phase close, the
+// round close at the complete route all run inside it, and it stops at the
+// construction's review seam inside the planning step (loop-plan's stop,
+// D3's output), never dispatching a task session. preflight's gates apply
+// unchanged (the clean tree above all: the advance runs only on a committed
+// state — which is why the re-derivation commits its own rewrite).
+async function advanceToReview(directory: string, round: number, opts: RunAllOpts): Promise<number> {
+  const stop = await rederiveTail(directory, round, opts)
+  if (stop !== undefined) return stop
   return await runAll(directory, { ...opts, stopBefore: "formulate" })
+}
+
+// The unstarted-tail re-derivation (plans/0101 D6): a round's phases.md tail
+// — every phase with no directory work and no planning yet — is reshaping
+// state, not commitment. The person amends --phases (or moves the released
+// roadmap's line) at a review moment, and this — the next advance — applies
+// the D5 resolution to the tail ahead of the construction: syncPhaseIndex
+// replaces the unstarted tail, its own guards carrying the immutability (a
+// completed phase or a directory holding work throws — started planning
+// holds tasks.md and survives by that alone), and the rewrite lands on the
+// driver's own commit, unlike plan's uncommitted re-sync shape: the advance
+// needs a committed state, and the construction that follows builds on the
+// rewritten index in the same invocation. Returns the exit code when the
+// advance must stop, undefined when it may proceed (no drift is the common
+// case — the value in force and the index agree).
+async function rederiveTail(directory: string, round: number, opts: RunAllOpts): Promise<number | undefined> {
+  const authority = await resolveRoundPhases(directory, round, opts.phases!)
+  let drift: PhaseTailDrift | undefined
+  try {
+    drift = await phaseTailDrift(directory, round, authority.phases)
+  } catch (error) {
+    log(`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+  if (!drift) return undefined
+  try {
+    await syncPhaseIndex(directory, round, authority.phases)
+  } catch (error) {
+    log(`⏸ the unstarted tail cannot be re-derived: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+  const from = authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"
+  const settled = await commitTree(
+    directory,
+    { id: "PLAN", title: `phase tail re-derived (${roundDirName(round)})` },
+    { stage: "phase-sync", subject: `PLAN resync ${roundDirName(round)} tail to ${from} (${driftPairs(drift)})` },
+  )
+  if (!settled.ok) {
+    log(
+      `⏸ the re-derived tail could not be committed (${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}). ` +
+        `The rewritten ${phaseIndexPath(round)} is kept in the worktree; commit it manually and re-run`,
+    )
+    return 2
+  }
+  log(
+    `✓ unstarted tail of round ${roundDirName(round)} re-derived to ${from} (${driftPairs(drift)}); ` +
+      `started phases are untouched, the rewrite the driver's own commit`,
+  )
+  return undefined
+}
+
+// The boundary-scoped `amend --phases` guard (plans/0101 D6): the unstarted
+// tail reshapes at the advance's review moments, so the shell's amend row
+// refuses the key mid-phase — the current phase holding pending execute work
+// with no formulation awaiting review, the one state that is not a review
+// moment (the same predicate as the nothing-to-advance refusal above).
+// undefined = the amendment may proceed (no round yet, a complete round, a
+// phase boundary, a construction's review stop); m mode never consults it
+// (D8 — no boundary vocabulary applies). A state the router cannot read
+// stays quiet: the amendment's own guards judge it.
+export async function amendPhasesHold(directory: string, phases: string): Promise<string | undefined> {
+  if (phases === "m") return undefined
+  const { bin } = shellProfile()
+  if (!(await Bun.file(join(directory, phaseIndexPath(await currentRound(directory)))).exists())) return undefined
+  const route = await routePhase(directory, { loadPlan, bin }).catch(() => undefined)
+  if (route === undefined || route.type !== "execute" || awaitingFormulation(route.plan.tasks, route.phase)) return undefined
+  const pending = route.plan.tasks.filter((task) => task.status !== "done").length
+  return (
+    `--phases cannot change mid-phase: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — the round's unstarted tail reshapes at a phase boundary; ` +
+    `finish the phase with ${bin} run ${directory} (or close it), amend, and the next ${bin} transfer ${directory} applies the value before constructing`
+  )
 }
 
 // Shape 1 (plans/0101 D2): the 0084 rows 0/0a–0d re-homed from plan — today's
