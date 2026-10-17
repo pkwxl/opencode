@@ -17,7 +17,7 @@
 // suite puts it on PATH as `claude` and selects the adapter with
 // OPENCODE_AUTO_AGENT=claude, so the CLI's plan and run drive their sessions
 // end to end with no provider credentials.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 const say = (line: unknown) => console.log(JSON.stringify(line))
@@ -87,7 +87,13 @@ function act(text: string): number {
   const start = /Task numbers increment continuously from T-(\d+)/.exec(text)?.[1]
   if (!index || !phase || !start) return SMALL
   const id = writeTask(phase, start)
-  writeFileSync(index, `# Tasks (${phase})\n\n- [ ] ${id} task ${id}\n`)
+  // plans/0095: the planning session runs as the phase's formulation task —
+  // the driver's construction already landed the formulation line as the
+  // index's first line, and the planned tasks append after it; the index
+  // itself is never rewritten (the core loop fixture's same rule — a rewrite
+  // here drops the formulation line and the post-session reload crashes).
+  const current = existsSync(index) ? readFileSync(index, "utf8") : `# Tasks (${phase})\n\n`
+  writeFileSync(index, `${current.endsWith("\n") ? current : `${current}\n`}- [ ] ${id} task ${id}\n`)
   return SMALL
 }
 
