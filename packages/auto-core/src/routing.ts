@@ -22,7 +22,7 @@ import { implicitRegistry, layerLabel } from "./models"
 import type { ModelRegistry, RegistryAgentProfile } from "./models-schema"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { Router } from "./router"
-import { candidateKey, entryPassesAgentFilter, select, selectContextOf, type Candidate, type SelectContext } from "./select"
+import { entryPassesAgentFilter, select, selectContextOf, type SelectContext } from "./select"
 import type { Clock } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
@@ -315,7 +315,3 @@ export function logRunRouting(facts: RoutingFacts): void {
     log(`ℹ unused models (no tier, route list or classifier names them): ${registry.unused.join(", ")}`)
   if (registry.classifier) log(`◇ classifier: [${registry.classifier.layer} layer] ${registry.classifier.names.join(", ") || "(empty)"}`)
 }
-
-// Re-exported for the dispatch resolvers: the key a candidate is known by
-// (the internal name of an entry, the model string of a raw override value).
-export { candidateKey, type Candidate }

@@ -30,7 +30,7 @@ const ASK_PROMPT = "❓ "
 // seam (InteractiveOption) can hand a pair in — the sideband then lives on
 // streams the caller owns (a test harness, a worker's pipe) instead of the
 // process terminal.
-export type InteractiveIo = { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }
+type InteractiveIo = { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }
 
 // RunAllOpts.interactive's accepted shapes (the io/Interactive seam, the
 // headless direction's P3a — plans/0067 §二 item 3/§四 P3):
@@ -51,7 +51,7 @@ export type InteractiveOption = boolean | Interactive | (() => InteractiveIo)
 // once the fleet is ready (the sideband's own creation moment; the io factory
 // runs here, exactly once). "off" keeps the exact boolean the fleet's options
 // always saw, so false and undefined stay distinguishable to the pool.
-export type InteractiveChannel =
+type InteractiveChannel =
   | { kind: "terminal" }
   | { kind: "io"; io: InteractiveIo }
   | { kind: "injected"; interactive: Interactive }

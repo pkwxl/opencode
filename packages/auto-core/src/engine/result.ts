@@ -18,7 +18,7 @@ import type { Settle, TurnContext, TurnView } from "./contract"
 // `extended` holds the interrupted close-out's failure record (`error` is
 // set exactly when the turn settled interrupted), `blockedExtra` the test
 // protocol's blocked-exit Watch extras.
-export type ResultChannels = {
+type ResultChannels = {
   extended: { error?: string; info?: ErrorInfo }
   blockedExtra: { extra?: Partial<Watch> }
 }

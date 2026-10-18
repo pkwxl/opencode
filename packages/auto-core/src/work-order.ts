@@ -46,7 +46,7 @@ import { markDone, prerequisites, promptViews, subtasks, type Plan, type Task } 
 // reads them (plans/0076 §3: no new branches, everything from the config —
 // mode, the test-execution protocol's two switches, and the phase the route
 // names now, which keys the {{phase}} var the intent texts may read).
-export type WorkOrderOpts = {
+type WorkOrderOpts = {
   mode?: ModeSpec
   testByDriver?: boolean
   handoverTest?: boolean
@@ -113,7 +113,7 @@ export function unitNotReady(plan: Plan, task: Task): string | undefined {
 // Adopt's result: ok lines print on stdout (exit 0); a refused or failed
 // adopt carries its code (1 = refused by validation, 2 = the commit or the
 // close-out check failed — close's own convention).
-export type AdoptOutcome = { ok: boolean; code: 0 | 1 | 2; lines: string[] }
+type AdoptOutcome = { ok: boolean; code: 0 | 1 | 2; lines: string[] }
 
 // The adopt step: the driver half for a unit a standalone session executed.
 // Order (plans/0076 §2.3):

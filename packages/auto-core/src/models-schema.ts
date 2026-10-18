@@ -13,12 +13,12 @@
 
 import type { AgentRetryPolicy } from "./agent/types"
 import type { ModelWindow } from "./model-window"
-import { TIERS, type Tier } from "./phases/registry"
+import { type Tier } from "./phases/registry"
 import type { AgentChoice } from "./switches"
 
 // The tier words are declared with the phase types (a tier is a property of
 // the work, not of the fleet); the registry keys its tier lists by them.
-export { TIERS, type Tier }
+export { type Tier }
 
 // The adapters the core ships. A shell that registers another adapter passes
 // the extended list to loadModels; the default accepts every registered name

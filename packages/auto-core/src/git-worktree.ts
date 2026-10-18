@@ -163,7 +163,7 @@ export async function probeReflink(dir: string): Promise<boolean> {
 // plain, attempts 2..N with `--force`, a short wait between attempts — a
 // removal that races an antivirus scanner or a transient file lock usually
 // succeeds a moment later, and the force pass covers leftover ignored state.
-export type WorktreeTeardown = { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void> }
+type WorktreeTeardown = { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void> }
 
 export const WORKTREE_TEARDOWN: WorktreeTeardown = { attempts: 3, delayMs: 250 }
 

@@ -67,7 +67,7 @@ import { commitBlocked, wrapupResolves } from "./unit-commit"
 // rounds, then the escalation ladder of plans/0079 §4 unchanged (block with
 // the repair fact → `--repair` → the human). No CLI flag, no config key;
 // width, if ever needed, arrives run-side the way `--repair`'s did.
-export const FIX_ROUNDS = 2
+const FIX_ROUNDS = 2
 
 // report.md shape problems (empty = pass): the path is fixed and known to the
 // driver (the wrap-up template pins docs/<id>/report.md), so no declaration is
@@ -500,7 +500,7 @@ export async function runWrapup(
 // Result line of the task report (FAIL stops the run): the parser lives in the
 // document domain (roles.ts parseResult) since the phase verdict gate reads the
 // same line (M4.2, plans/0049 G7).
-export { parseResult, type ReportResult }
+export { parseResult }
 
 // Reads docs/<id>/report.md; a missing report is no verdict.
 export async function reportResult(dir: string, task: Task): Promise<ReportResult | undefined> {

@@ -54,7 +54,7 @@ export function withIntentParagraph(text: string | undefined): string {
 
 // The task fields the append prompt's existing-task lines read (the task
 // store's Task satisfies the shape structurally).
-export type ExistingTask = { id: string; title: string; status: string; closed?: string }
+type ExistingTask = { id: string; title: string; status: string; closed?: string }
 
 // The existing-task lines of the append prompt's existingTasks slot
 // (plans/0053 D27): one line per task of the current index, in index order,

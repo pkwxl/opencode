@@ -49,7 +49,7 @@ import type { Usage } from "./stats"
 // A run's call budget, the per-call timeout, the input size and the reset
 // horizon (§7.1).
 export const CLASSIFY_CALL_LIMIT = 20
-export const CLASSIFY_TIMEOUT_MS = 30_000
+const CLASSIFY_TIMEOUT_MS = 30_000
 export const CLASSIFY_INPUT_CHARS = 2_000
 export const RESET_HORIZON_MS = 7 * 86_400_000
 export const CLASSIFY_TITLE = "auto: classify error"
@@ -59,7 +59,7 @@ export const CLASSIFY_TITLE = "auto: classify error"
 // about. The union itself lives in the answer's shape (router.ts, beside the
 // answer cache it keys, so the router never imports this module); this alias
 // names it for the policies below.
-export type ClassifierClass = ClassifierAnswer["class"]
+type ClassifierClass = ClassifierAnswer["class"]
 const CLASSES: readonly string[] = ["quota", "rate", "auth", "transient", "unknown"]
 
 // ---------------------------------------------------------------------------

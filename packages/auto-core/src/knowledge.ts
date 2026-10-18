@@ -337,7 +337,7 @@ export async function priorKnowledgeDigest(dir: string): Promise<string | undefi
 
 // One document of the index form: its repository-relative path and estimated
 // token size (the same token estimate the usage source uses).
-export type DigestIndexEntry = {
+type DigestIndexEntry = {
   file: string
   tokens: number
 }

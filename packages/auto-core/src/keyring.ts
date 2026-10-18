@@ -43,7 +43,7 @@ export function buildRings(registry: ModelRegistry): Map<string, ModelReference[
 }
 
 // One key of a ring at a position: the reference and where it sits.
-export type RingKey = { ref: ModelReference; index: number; total: number }
+type RingKey = { ref: ModelReference; index: number; total: number }
 
 // The label logs use for one key of a ring: "2/3 ZHIPU_KEY_B". The position
 // is 1-based; the name is the reference's label (the variable name, or the

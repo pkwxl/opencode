@@ -41,7 +41,7 @@ import faithfulLeanSurvey from "../templates/bundles/faithful-lean/phases/survey
 import faithfulLeanPack from "../templates/bundles/faithful-lean/intents/faithful-lean.md" with { type: "file" }
 import faithfulLeanMode from "../templates/bundles/faithful-lean/modes/faithful-lean.md" with { type: "file" }
 
-export const BUNDLE_MANIFEST = "bundle.json"
+const BUNDLE_MANIFEST = "bundle.json"
 
 // A bundle as files: relative path → content. The allowed keys are
 // bundle.json, phases/<type>.md, intents/<name>.md and modes/<name>.md.

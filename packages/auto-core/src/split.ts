@@ -35,11 +35,11 @@ import { checklistProblems, scanSubtaskStates, subtaskId } from "./document/stat
 import { resolveDepends } from "./document/unit"
 import { CHECKLIST_FIELD, subtasks } from "./tasks"
 
-export const SPLIT_MIN = 2
-export const SPLIT_MAX = 5
+const SPLIT_MIN = 2
+const SPLIT_MAX = 5
 
 // One line of the lead's split.
-export type SplitItem = {
+type SplitItem = {
   // 1-based position: item n is S<nn>.
   index: number
   // The checklist item's text as written (the subtask session receives it

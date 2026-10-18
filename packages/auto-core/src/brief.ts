@@ -27,7 +27,7 @@ export const BRIEF_TARGET_HEADING = "## Target"
 // The survey's brief proposal heading (plans/0081 D15.1): the section the
 // survey phase's closing task writes beside its evidence, approved by the
 // person's `Clarified: yes` and installed verbatim on release (D15.2).
-export const BRIEF_PROPOSAL_HEADING = "## Project brief"
+const BRIEF_PROPOSAL_HEADING = "## Project brief"
 
 // The brief as planning input: undefined when the file is missing, empty or
 // holds only comments (comment-only text injects nothing — a seed or a
@@ -73,7 +73,7 @@ export function appendToSection(text: string, heading: string, body: string): st
 // git.ts and the run's git service share this shape, so the loop's install
 // (through ctx.git, the no-commit test double included) and the prelude's
 // (the free function) are one implementation.
-export type BriefCommitter = (
+type BriefCommitter = (
   dir: string,
   task: { id: string; title: string },
   info: { stage: string; subject: string },

@@ -289,7 +289,7 @@ export type PromptInput = {
   bare?: boolean
 }
 
-export type PermissionReply = "once" | "always" | "reject"
+type PermissionReply = "once" | "always" | "reject"
 
 // The thirteen calls the driver makes (today spread over attempt.ts,
 // watch.ts, session-api.ts, exec-session.ts, interactive.ts).
@@ -354,7 +354,7 @@ export type PermissionPreset = "allow" | "deny" | "block"
 // Log lines name the variables.
 export type AgentEnv = Readonly<Record<string, string | null>>
 
-export type AgentHostOptions = {
+type AgentHostOptions = {
   // An already running instance to connect to instead of starting one
   // (opencode: --server <url>); absent = the adapter starts its own.
   server?: string

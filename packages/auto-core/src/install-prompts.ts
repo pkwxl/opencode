@@ -48,7 +48,7 @@ const SUITE: readonly { readonly name: string; readonly file: string }[] = [
 ]
 export const PROMPT_SUITE: readonly string[] = SUITE.map((entry) => entry.name)
 
-export type InstallPromptsResult = {
+type InstallPromptsResult = {
   /** Suite files whose content differed and were rewritten. */
   written: string[]
   /** Suite files already byte-identical on disk, left untouched. */

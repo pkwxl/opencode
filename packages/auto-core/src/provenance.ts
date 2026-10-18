@@ -39,7 +39,7 @@ export type ProvenanceFile = { sha256: string; headings: string[] }
 // running shell re-resolves it by); bundleDigest digests the managed set
 // (sorted path + per-file sha256), so one comparison names a bundle-level
 // change before any per-file walk.
-export type ProvenanceStamp = { bundle: string; bundleDigest: string; files: Record<string, ProvenanceFile> }
+type ProvenanceStamp = { bundle: string; bundleDigest: string; files: Record<string, ProvenanceFile> }
 
 export function sha256Text(text: string): string {
   return new Bun.CryptoHasher("sha256").update(text).digest("hex")
@@ -135,7 +135,7 @@ export function parseProvenanceStamp(text: string): ProvenanceStamp | undefined 
 // running bundle does not — a binary predating the materialization disables
 // features just as silently), diverged (both). inBinary: false marks a file
 // the running bundle no longer ships at all.
-export type ProvenanceFileState =
+type ProvenanceFileState =
   | { state: "current" }
   | { state: "stale"; direction: "binary-newer" | "binary-older" | "diverged"; inBinary: boolean; added: string[]; removed: string[] }
   // added/removed: what the running bundle would change vs the on-disk file

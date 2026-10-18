@@ -44,7 +44,7 @@ import { renderText } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 
-export const CONTRACT_FILE = join(".opencode", "agent", `${CONTRACT_AGENT}.md`)
+const CONTRACT_FILE = join(".opencode", "agent", `${CONTRACT_AGENT}.md`)
 
 // The agent contract's rendered text: renders the built-in template in its two
 // testByDriver states. The shell's contract-maintenance write, fix's contract
@@ -55,7 +55,7 @@ export async function renderAgentContract(testByDriver: boolean): Promise<string
   return renderText(await Bun.file(templateAgent).text(), { testByDriver })
 }
 
-export type FixFinding = {
+type FixFinding = {
   class: "fixable" | "manual"
   // The file the finding is about, relative to the target directory.
   path: string

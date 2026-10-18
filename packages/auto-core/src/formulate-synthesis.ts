@@ -72,7 +72,7 @@ export type LedgerRow = {
 const O_ROW = /^- O-(\d+)\s+\|\s+(.+?)\s+\|\s+"([^"]+)"\s+\|\s+(.+)$/
 const C_ROW = /^- C-(\d+)\s+\|\s+(.+?)\s+\|\s+"([^"]+)"\s+\/\s+"([^"]+)"\s+\|\s+(.+)$/
 
-export const ledgerRowId = (row: Pick<LedgerRow, "kind" | "n">): string => `${row.kind}-${String(row.n).padStart(2, "0")}`
+const ledgerRowId = (row: Pick<LedgerRow, "kind" | "n">): string => `${row.kind}-${String(row.n).padStart(2, "0")}`
 
 export function renderLedgerRow(row: LedgerRow): string {
   const quotes = row.quotes.map((quote) => `"${quote}"`).join(" / ")
@@ -286,7 +286,7 @@ function planRouteEntry(routing: RoutingFacts, entry: PhaseTypeEntry | undefined
 
 // The strict output delimiters (D3): the reply carries the brief and the
 // ledger between DRIVER markers, closing with one Rationale line.
-export type ParsedSynthesis = { brief: string; ledgerBody: string; rationale: string }
+type ParsedSynthesis = { brief: string; ledgerBody: string; rationale: string }
 
 export function parseSynthesisReply(text: string): { parsed: ParsedSynthesis } | { problems: string[] } {
   const problems: string[] = []
@@ -305,12 +305,12 @@ export function parseSynthesisReply(text: string): { parsed: ParsedSynthesis } |
 // commits them); fallback carries the reason and its FALLBACK audit line;
 // off means the enhancement is deliberately not in force this run (switch
 // off, or no resolved charter — the plain floor, a log line, no audit).
-export type SynthesisOutcome =
+type SynthesisOutcome =
   | { kind: "ok"; brief: string; rows: LedgerRow[]; rationale: string; audit: string[] }
   | { kind: "fallback"; reason: string; audit: string[] }
   | { kind: "off"; reason: string }
 
-export type SynthesisInput = {
+type SynthesisInput = {
   pool: AgentPool
   routing: RoutingFacts | undefined
   facts: PromptFacts
@@ -488,7 +488,7 @@ const FIDELITY_TIMEOUT_MS = 120_000
 
 // The strict reply parser (the parseVerifyReply discipline): the last line
 // that parses wins. `Fidelity: pass` | `Fidelity: fail — <evidence>`.
-export function parseFidelityReply(text: string): { pass: boolean; evidence?: string } | undefined {
+function parseFidelityReply(text: string): { pass: boolean; evidence?: string } | undefined {
   for (const raw of text.split("\n").reverse()) {
     const line = raw.trim().replace(/^`+|`+$/g, "")
     const match = /^Fidelity:\s*(pass|fail)\b\s*(.*)$/i.exec(line)
@@ -500,7 +500,7 @@ export function parseFidelityReply(text: string): { pass: boolean; evidence?: st
   return undefined
 }
 
-export type FidelityOutcome =
+type FidelityOutcome =
   | { kind: "pass" }
   | { kind: "fail"; evidence: string }
   | { kind: "skipped"; reason: string }
@@ -564,7 +564,7 @@ async function fidelityPass(
 // the unit blocks with the row list (a re-run dispatches a fresh session
 // over the surviving files).
 
-export type CoverageRow = { row: string; target: string; note: string }
+type CoverageRow = { row: string; target: string; note: string }
 
 const COVERAGE_ROW = /^- ((?:O|C)-\d+) -> (T-\d+|deferred|conflict-recorded)(?: ?\((.*)\))?$/
 

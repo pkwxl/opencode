@@ -38,9 +38,9 @@ import type { PermissionMode, SubtaskMode } from "./opts"
 import { SWITCH_ENV, type Switches } from "./switches"
 
 // The switches a missing capability can force off.
-export type DegradedSwitches = Partial<Pick<Switches, "fork" | "steer" | "stuck" | "ask">>
+type DegradedSwitches = Partial<Pick<Switches, "fork" | "steer" | "stuck" | "ask">>
 
-export type Degradation = {
+type Degradation = {
   // Switch values in force for this run instead of the configured ones.
   switches: DegradedSwitches
   // One line per degradation, logged at run start.
@@ -57,7 +57,7 @@ export type Degradation = {
 }
 
 // The run-start options degradation reads.
-export type DegradeOpts = {
+type DegradeOpts = {
   permission?: PermissionMode
   testByDriver?: boolean
   interactive?: boolean
@@ -74,7 +74,7 @@ export type DegradeOpts = {
 
 // Whether an agent can fork a session: a copy must exist (fork not "none")
 // and the session it copies must still be resumable.
-export function forksSessions(caps: AgentCapabilities): boolean {
+function forksSessions(caps: AgentCapabilities): boolean {
   return caps.fork !== "none" && caps.resume
 }
 

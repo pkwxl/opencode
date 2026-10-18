@@ -36,7 +36,7 @@ const PROBE_INTERVAL_MS = 10 * 60_000
 // The two sources of one turn, as watch hands them out: `attach` is the
 // spine's source hook (starts the probe timer, captures the emission point,
 // answers the cleanup), `answerWith` is the classifier-answer source's feed.
-export type TurnSourceSet = {
+type TurnSourceSet = {
   attach: TurnSources
   answerWith(call: Promise<ClassifierAnswer | undefined>): void
 }

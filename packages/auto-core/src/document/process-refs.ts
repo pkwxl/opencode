@@ -36,7 +36,7 @@ const TASK_ID = /(?<![\w-])T-\d{3,}(?![\w])/
 // Per-file cap on reported hits: enough to act on, short enough for feedback.
 const MAX_HITS_PER_FILE = 3
 
-export type ProcessReferenceScan = {
+type ProcessReferenceScan = {
   // Violations: the unit's output is not acceptable until they are removed.
   problems: string[]
   // Bare task-id mentions: logged, never blocking.

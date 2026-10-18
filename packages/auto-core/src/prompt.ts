@@ -73,7 +73,7 @@ export type PhaseEntry = {
 // One checklist item as the render layer sees it: the full line text (the
 // session's own item is matched by it), the display title (tasks.ts
 // checklistTitle) and the effective done flag.
-export type ChecklistView = { text: string; title: string; done: boolean }
+type ChecklistView = { text: string; title: string; done: boolean }
 
 // The task view (tasks.ts promptViews builds it): the task fields the
 // templates read plus the plan-derived fields the render layer no longer
@@ -113,7 +113,7 @@ export type TaskDocs = {
 // structurally): only the source flag, the driver-source pairing flag and
 // the question text reach the render; the agent-source extras ride along
 // with ledger items and are ignored.
-export type ResolveEntry = {
+type ResolveEntry = {
   source: string
   question: string
   matched?: boolean
@@ -125,7 +125,7 @@ export type ResolveEntry = {
 
 // The stuck detector's hit as the render layer sees it (src/stuck.ts's
 // StuckHit satisfies it structurally).
-export type StuckHitView = {
+type StuckHitView = {
   kind: "error" | "repeat"
   tool: string
   count: number
@@ -263,7 +263,7 @@ export function renderPrompt(facts: PromptFacts, name: string, ctx: Ctx): string
 // tracked files, already restored from the pre-run snapshot (restored names
 // the paths, target-directory-relative); head = the script moved a
 // repository's HEAD — the caller blocks instead of steering.
-export type ScriptViolation =
+type ScriptViolation =
   | { kind: "tracked"; restored: string[]; unrestorable?: { path: string; error: string }[] }
   | { kind: "head"; moved: { root: string; from: string; to: string }[] }
 
@@ -285,7 +285,7 @@ export type TestRunInfo = ScriptRun & { seq: number }
 
 // One side-effect violation as one line for the steered-back result (the
 // caller-side join the template syntax has no loops for, plans/0083 D11).
-export function scriptViolationLine(violation: ScriptViolation): string {
+function scriptViolationLine(violation: ScriptViolation): string {
   if (violation.kind === "head") {
     return `the script ran a git state command and moved HEAD (${violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}) — a driver-run script is an observation, never that`
   }

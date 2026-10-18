@@ -57,7 +57,7 @@ export async function standingFormulation(dir: string, phase: PlanPhase): Promis
 // (the re-entry path — rewrite-on-diff when the session has not started);
 // `foreign` = the index lists other work (hand-listed or already formulated
 // past the first line), the formulation writer has no business here.
-export type FormulationState = { type: "none" } | { type: "pending"; id: string; inProgress: boolean } | { type: "foreign" }
+type FormulationState = { type: "none" } | { type: "pending"; id: string; inProgress: boolean } | { type: "foreign" }
 
 export async function formulationState(dir: string, phase: PlanPhase): Promise<FormulationState> {
   const text = await Bun.file(join(dir, taskIndexPath(phase))).text().catch(() => undefined)
@@ -98,7 +98,7 @@ export async function formulationNumber(dir: string, phase: PlanPhase, autoNumbe
 // and a formulation task already in_progress is never rewritten (the session
 // may have read it). numberStart of the result is the formulation number + 1
 // — the first number the formulation session's own tasks may take.
-export type ConstructedFormulation =
+type ConstructedFormulation =
   | { type: "constructed"; id: string; numberStart: number }
   | { type: "current"; id: string; numberStart: number }
   | { type: "dirty"; files: string[] }

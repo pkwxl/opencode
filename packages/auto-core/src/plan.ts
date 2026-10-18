@@ -63,7 +63,7 @@ import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths, type Plan, typ
 import { adoptUnit, unitNotReady, workOrder } from "./work-order"
 
 type PlanStop = { type: "stop"; code: number; lines: string[] }
-export type PlanPrelude = { type: "loop" } | PlanStop
+type PlanPrelude = { type: "loop" } | PlanStop
 
 // The routes the prelude decides, first match wins (plans/0053 D4; since
 // plans/0101 D4 bare plan is the dispatch half of the person-bracketed
@@ -774,7 +774,7 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 // rhythm, transfer's names the construct-and-review one). The establishment
 // stays uncommitted for the round-start gate either way — committing it is
 // the person's review of the round.
-export type EstablishSetup =
+type EstablishSetup =
   | { type: "dirty"; repos: { rel: string; files: string[] }[] }
   | { type: "failed"; error: string }
   | { type: "invalid"; problem: string }
@@ -890,7 +890,7 @@ export function establishStopLines(
 // guidance's manual flag are the only differences between the two callers,
 // whose flag-specific pre-refusals stay caller-side. The release returns the
 // install's lines for the caller to carry into its establishment stop.
-export type AnalysisGateOutcome = { type: "stop"; code: number; lines: string[] } | { type: "released"; lines: string[] }
+type AnalysisGateOutcome = { type: "stop"; code: number; lines: string[] } | { type: "released"; lines: string[] }
 
 export async function analysisGate(
   dir: string,
@@ -977,7 +977,7 @@ export function roundCloseRefusalLines(dir: string, closed: number, open: number
 // and the authority text (`from`) the refusal lines and both callers' own
 // stop lines name. What follows a successful sync stays caller-side: plan's
 // uncommitted review stop, transfer's committed phase-sync.
-export type ApplyTailDrift =
+type ApplyTailDrift =
   | { type: "blocked"; reason: string } // phaseTailDrift threw — the phase-flow-blocked line
   | { type: "clean" } // no drift, the common case
   | { type: "refused"; line: string } // the refuse hook answered

@@ -39,7 +39,7 @@ import { allowWrite, reprotect } from "./protect"
 // One executed document's result: the option id, the edits that landed
 // (paths, in order) and their commits' short SHAs; an advice option records
 // the advice it printed and executes nothing.
-export type ExecutionOk = { type: "executed"; file: string; option: string; edits: string[]; shas: string[]; advice?: string[] }
+type ExecutionOk = { type: "executed"; file: string; option: string; edits: string[]; shas: string[]; advice?: string[] }
 
 // The executor refuses or re-blocks: a dirty tree before the first write, a
 // stale old span, a commit failure mid-sequence, or an edit naming a surface
@@ -51,9 +51,9 @@ export type ExecutionOk = { type: "executed"; file: string; option: string; edit
 // re-runs its gate and re-diagnoses into a fresh, executable document. Every
 // other refusal needs the person or a clean tree before anything downstream
 // can run, and stops as before.
-export type ExecutionStop = { type: "reblocked"; file?: string; landed: string[]; reason: string; stale?: boolean }
+type ExecutionStop = { type: "reblocked"; file?: string; landed: string[]; reason: string; stale?: boolean }
 
-export type ExecutionOutcome = ExecutionOk | ExecutionStop | { type: "none" }
+type ExecutionOutcome = ExecutionOk | ExecutionStop | { type: "none" }
 
 // The prelude row's body (plans/0082 §5 D7): find the round's unexecuted
 // `Choice:` marks and execute them, oldest document first. Returns "none"
@@ -261,7 +261,7 @@ export function appendExecuted(text: string, option: string, shas: readonly stri
 
 // The stale rejection's record (D7's continuation), same placement: one line
 // under the Choice, committed like the edits.
-export function appendRejected(text: string, option: string, reason: string): string {
+function appendRejected(text: string, option: string, reason: string): string {
   return appendMarkLine(text, `Rejected: ${option} — ${reason}`)
 }
 

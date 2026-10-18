@@ -14,7 +14,7 @@
 // not import, so the prefix is restated here. test/agent-env.test.ts checks
 // that every variable the registry names matches it.
 
-export const DRIVER_ENV_PREFIX = "OPENCODE_AUTO_"
+const DRIVER_ENV_PREFIX = "OPENCODE_AUTO_"
 
 // opencode's own flags that share the driver's prefix: OPENCODE_AUTO_SHARE
 // (packages/opencode runtime flags) and OPENCODE_AUTO_HEAP_SNAPSHOT

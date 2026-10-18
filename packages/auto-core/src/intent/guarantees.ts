@@ -47,7 +47,7 @@ import { packSubsection } from "./load"
 
 // One parsed assert line. kind "must": every literal must occur in the output;
 // kind "must-not": no literal may.
-export type GuaranteeAssert = {
+type GuaranteeAssert = {
   template: string
   phase?: string
   kind: "must" | "must-not"
@@ -122,7 +122,7 @@ function parseLiterals(packName: string, body: string): string[] {
 // composer can name the key the phase charter actually came from (plans/0100
 // D11): the id when the pack keys canonically, the letter when a legacy
 // pack keys by preset letter — audit lines show which spelling was in force.
-export type ResolvedVerifyPlan = { global?: string; phase?: string; phaseKey?: string }
+type ResolvedVerifyPlan = { global?: string; phase?: string; phaseKey?: string }
 
 // Resolution (plans/0100 D9): id-first, letter-fallback — and only for
 // builtins with a preset letter; custom types resolve their id alone, as
@@ -167,7 +167,7 @@ export function verifyPlanCharterText(resolved: ResolvedVerifyPlan): string | un
 
 // The `### verify-plan-<suffix>` keys a pack declares (preflight validation
 // and the audit's charter list read them).
-export function verifyPlanKeys(pack: IntentPack): string[] {
+function verifyPlanKeys(pack: IntentPack): string[] {
   const keys: string[] = []
   for (const line of (pack.guarantees ?? "").split("\n")) {
     const heading = /^###\s+(verify-plan-\S+?)(?:\s.*)?$/.exec(line.trim())

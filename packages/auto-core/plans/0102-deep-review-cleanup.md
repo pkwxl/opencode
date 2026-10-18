@@ -153,11 +153,11 @@ the working tree for review.
 |---|---|---|---|
 | deadcode-1 | P1 | 4 exports with zero references anywhere: `CHOICE_LINE`, `EXECUTED_LINE` (blockage.ts:333-334), `PHASE_ORDER` (phases.ts:59), `taskDirs` (tasks.ts:877) | FIX(A) |
 | deadcode-2 | P2 | 6 production-dead functions kept alive by tests only; two carry doc comments claiming nonexistent callers: `trackedSourceChanges` (git.ts:1577), `templateRenders` (template.ts:406), `subtaskOutputFile` (docpaths.ts:104), `recordDecisions` (resolve.ts:282), `registeredIntentBundles` (bundle.ts:308), `implicitFacts` (router.ts:927) | FIX(A) (delete the four with no unique test-seam value; keep recordDecisions/registeredIntentBundles as commented test seams) |
-| deadcode-3 | P3 | Deliberate test hooks, production-dead: addStatusSink, stopRunStatus, decodeRunValue, resetShellAdapters, RunStatusEventType | RECORD |
+| deadcode-3 | P3 | Deliberate test hooks, production-dead: addStatusSink, stopRunStatus, decodeRunValue, resetShellAdapters, RunStatusEventType | RECORD — addStatusSink RESOLVED 2026-10-18 by ruling (removed; see Part 2 item 9), the other four stay |
 | deadcode-4 | P3 | `RunAllOpts.managed` read by core, set by no CLI front anywhere | RECORD — census corrected in stage A: 10 core-test sites inject fake AgentHosts through it (a deliberate test seam, deadcode-3 class), not dead |
-| deadcode-5 | P3 | 215 over-exported-but-alive symbols (export keyword unused) | RECORD |
+| deadcode-5 | P3 | 215 over-exported-but-alive symbols (export keyword unused) | RECORD — RESOLVED 2026-10-18 by ruling (stage J below) |
 | deadcode-6 | P3 | ~160 test-only-but-alive exports — legitimate test surface | RECORD |
-| deadcode-7 | P3 | test:unit/repo/gate lane scripts invisible to CI (CI runs plain `bun turbo test`) | RECORD |
+| deadcode-7 | P3 | test:unit/repo/gate lane scripts invisible to CI (CI runs plain `bun turbo test`) | RECORD — RESOLVED 2026-10-18 by ruling (stage J below) |
 | deadcode-8 | P3 | Literal NUL bytes in src/resolve.ts make ripgrep silently skip the file | FIX(A) (escape to `\u0000` source form) |
 | deadcode-9 | P3 | Negative results (files/deps/templates/flags all used) | — (cleared) |
 
@@ -193,7 +193,7 @@ the working tree for review.
 | shell-12 | P2 | 3 of the 8 live-agent e2e skips rotted by 0101's boundary-stop default (e2e:116/162/214 expect the continuous crossing) | FIX(I) |
 | shell-13 | P2 | Usage-text amend/--phases paragraphs predate 0101 D6 (miss the mid-phase amendPhasesHold refusal) | FIX(H) |
 | shell-14 | P2 | m-mode round-complete line prints "close it with: transfer" while transfer refuses m mode (core-owned: loop-phase.ts:617) | FIX(B) |
-| shell-15 | P3 | God-file index.ts (2464 lines) + duplicated parse blocks — table-driven refactor needs a ruling (pinned strings) | RECORD |
+| shell-15 | P3 | God-file index.ts (2464 lines) + duplicated parse blocks — table-driven refactor needs a ruling (pinned strings) | RECORD — RESOLVED 2026-10-18 by ruling (stage J below) |
 
 ### 1.3 Counts
 
@@ -213,17 +213,27 @@ invariants 9 · shell 15. Dispositions: ~75 FIX across stages A–I; ~33 RECORD.
    wording: deliberate grep-style convention; changing it breaks scripts.
 3. **deadcode-5** — a sweep dropping the `export` keyword on 215 file-local symbols (mechanically
    safe, large diff, zero behavior change).
+   — **RESOLVED 2026-10-18**: stage J — 217 symbols de-exported across 84 src files (a live
+   TypeScript-AST census over the whole consumer set; every remaining export cross-file
+   referenced).
 4. **deadcode-7** — wiring `test:gate` into CI (or naming it in CONTRIBUTING).
+   — **RESOLVED 2026-10-18**: stage J — named in the root CONTRIBUTING.md, not CI (the gate's
+   wall budget is dev-machine-measured; shared-runner CI would flake).
 5. **complexity-12 / 14-gate-pair / 15 / 16 / 18** — remaining triplicated outcome tails, the
    handover charter-gate pair, the session pumps, git.ts error formatting, preflight stage
    functions: value/risk below the autonomous bar.
 6. **shell-15** — table-driven refactor of packages/auto/src/index.ts (many pinned strings).
+   — **RESOLVED 2026-10-18**: stage J — landed; byte-identity pinned by a 103-case refusal/usage
+   corpus and the shell suite with zero pin edits.
 7. **tests-4 / 8 / 13** — repo-bootstrap dedup (pinned gitignore bytes), test-registration
    un-register hooks, runtime optimizations.
 8. **templates-6 / 10 / 11** — unreachable-by-construction template surfaces (registry symmetry),
    designed pack floors, partial-extraction candidates.
 9. **deadcode-3** — deliberate test hooks kept (addStatusSink is a designed transport seam with no
    live subscriber — worth a future wiring or removal decision).
+   — **RESOLVED 2026-10-18** (addStatusSink): stage J — removed, not wired: the daemon's SSE tail
+   consumes the journal file cross-process, which an in-process sink can never serve. The other
+   four hooks stay RECORD.
 
 ---
 
@@ -333,6 +343,7 @@ Guard: shell suite + typecheck.
 | G | core docs truth pass | done | structure.md renderer row fixed + 7 missing rows (roles/land/work-orders/run-events/run-status/format + install-prompts); AGENTS.md frozen-branch fix + 5 navigation lines + constitutional list + charter.md; glossary re-keyed (9 rows) + 7 new rows + 3 confusable pairs + Formulate: + ⏸ note; shell-contract subcommand list + §C clarifier + 2 extra fixes (lock list, suite enumeration) |
 | H | shell docs + usage | done | usage text gains --intent/--repair/--export/--adopt + D6 amend sentences + exit-0 boundary clause; README: export/adopt section, install-prompts section + usage rows, close row, question-policy rewritten to 0081 D16 (needs-attention), phase-loop boundary default, stage ladder, transfer re-keys, run-lock sync/land, --boundary refusal wording; MANUAL install-prompts row; AGENTS lists; 7 extra drift fixes; zero usage-line pins broke |
 | I | shell behavior | done | init option whitelist (16 pointer refusals + generic fallback; init --dryrun no longer writes); run/transfer refuse close-family + lane value flags (verified _lane is the only --unit/--merge user); 3 rotted live-agent skips re-keyed to boundary:"flow"; new e2e case; shell suite 125 pass / 8 skips / 0 fail |
+| J | the maintainer's four ruled RECORD items | done | deadcode-5 de-export sweep (217 symbols / 84 files, census-verified 1298/1298 remaining exports referenced); deadcode-7 test:gate named in CONTRIBUTING; deadcode-3's addStatusSink removed with tests re-keyed to the journal; shell-15 table-driven refactor of index.ts (byte-identical by corpus + suite). Core 2666/0 twice, shell 125/8/0, both typechecks clean |
 
 Close-out verification (2026-10-18): core `bun typecheck` clean, full suite **2666 pass / 0 fail,
 run twice** (order-stable); shell `bun typecheck` clean, suite **125 pass / 8 live-agent skips /
@@ -345,3 +356,51 @@ Option A (the `bash: {"*": "allow"}` wildcard kept as the documented full-trust-
 posture; both READMEs now say so and name the real containment layers) and every model pin
 deleted from the template surface (`templates/opencode.json` carried the only one). New inits
 only; existing targets keep their person-owned copy (`fix` never overwrites an existing file).
+
+Addendum 2026-10-18 (stage J — the maintainer's four further rulings, all behavior-preserving,
+left uncommitted for review like the stages before):
+
+- **deadcode-5, the de-export sweep**: 217 file-local symbols across 84 src files lost their
+  `export` — 208 keyword removals plus 9 named-list removals (models-schema's TIERS re-export,
+  wrapup's ReportResult, routing's candidateKey/Candidate re-export pair with the now-unused
+  import members dropped, config's TREE_LANES_SETTINGS/LanesConfig/LaneCacheRule/TreeLanesSetting
+  re-exports, regression's GreenReceipt re-export). Re-counted live rather than trusted: a
+  TypeScript-AST census over the full consumer set (auto-core src+test+script, packages/auto,
+  packages/auto-server) parses every import form — static, type-only, aliased, namespace/star,
+  re-exports, `import("...").Qualifier` type nodes, dynamic import calls — so 1515 exported
+  bindings became 1298 with every survivor cross-file referenced; the census re-run after the
+  sweep reports 0 de-exportable remaining. Zero behavior; core typecheck clean, full suite
+  2666/0 twice.
+- **deadcode-7, test:gate**: named in the root `CONTRIBUTING.md` (a "Testing the auto family"
+  section under Developing OpenCode: the three lane commands, the gate's budget semantics, the
+  ambient-OPENCODE_AUTO_* rule, and why the gate stays contributor-side) — not wired into CI:
+  the gate's wall-time budget is the recorded dev-machine baseline × 1.25, which shared-runner
+  CI would flake on; CI keeps plain `bun turbo test`, which runs the same suite without the
+  budget.
+- **deadcode-3's addStatusSink: removed, not wired.** The one designed consumer of the status
+  stream — the daemon's SSE tail — reads `.auto/run-status.jsonl` cross-process (auto-server
+  observe.ts), which an in-process sink can never serve, and no same-process subscriber exists;
+  wiring would have meant inventing a consumer. StatusSink/addStatusSink/the sink feed loop and
+  the seq counter it alone read are gone, the module header re-keys to the single output with a
+  line recording the ruling, and the two observing suites (run-status, lanes-scheduler) read the
+  journal instead — the identical stream, which the old tests already asserted
+  journal≡subscriber. The other four recorded test hooks (stopRunStatus, decodeRunValue,
+  resetShellAdapters, RunStatusEventType) stay.
+- **shell-15, the table-driven refactor of packages/auto/src/index.ts** (2574 → 2536 lines; the
+  remaining bulk is init/amend's single-copy logic and the pinned usage text, not duplication):
+  the nine owned-flag refusal blocks → one OWNED_FLAGS table in refusal order; the close/land
+  whitelist-ladder twins inside the flags scan → one strictOptionRefusal factory with the two
+  policies and an optionRefusal dispatch; the run/transfer mirrored refusal groups → shared
+  refusePlanInputFlags/refuseCloseFamilyFlags/refuseLaneValueFlags plus one RUN_OPTION_REFUSALS
+  table (plan/transfer differences carried in the `what` texts); the four "nothing to X"
+  missing-config checks → requireConfigFile (amend's missing "first" parameterized); the three
+  lock-acquisition tails → takeRunLock; close/land's print-and-exit tails → exitWithResult; the
+  parsePlanInput/parseBriefSeed twins → one parseTextOrFile with a message-word spec (the one
+  byte divergence between the twins — brief's names-the-file line lacking ", written verbatim" —
+  kept via a separate spec field). Verified three ways: shell typecheck clean; the full shell
+  suite 125 pass / 8 live-agent skips / 0 fail with zero pin edits; and a 103-case before/after
+  corpus over the whole refusal/usage surface (exit code + stdout + stderr byte-identical, the
+  temp-dir paths each run embeds normalized).
+- Stage-verification note: auto-server's typecheck fails on `renderProjectBrief` — verified
+  pre-existing at HEAD by a stash round-trip (the frozen shell snapshot drifts behind core; not
+  this stage's regression, and the branch model refreshes it by merge, not here).

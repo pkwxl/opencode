@@ -20,7 +20,7 @@ import { readFile } from "node:fs/promises"
 import type { AgentEnv } from "./agent/types"
 import type { ProfileEnvValue, RegistryAgentProfile } from "./models-schema"
 
-export type ResolvedProfileEnv = { env: AgentEnv } | { problems: string[] }
+type ResolvedProfileEnv = { env: AgentEnv } | { problems: string[] }
 
 // Resolves a profile's env. { env: {} } for a profile without one. A
 // reference that cannot be resolved (a variable unset or empty since the run
@@ -83,7 +83,7 @@ export function profileLine(profile: RegistryAgentProfile): string {
 // The loopback names the driver's own requests may use: the managed server
 // announces itself on 127.0.0.1, and localhost is the other common spelling of
 // an external server on the same machine.
-export const LOOPBACK_NAMES = ["127.0.0.1", "localhost"] as const
+const LOOPBACK_NAMES = ["127.0.0.1", "localhost"] as const
 
 // The preflight warning of §8.10, or undefined when the driver's own loopback
 // traffic goes direct. Measured on Bun 1.4.2 (2026-09-25; plans/0055 §8.10):

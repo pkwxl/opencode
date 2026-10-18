@@ -58,7 +58,7 @@ import { removeHandoffChain } from "./testrun"
 // root first. Absent, anything beyond driver-state leftovers is refused.
 export type CloseChanges = "commit" | "stash"
 
-export type CloseOptions = {
+type CloseOptions = {
   // The `Closed:` value and the commit subject's tail; required, one line.
   reason: string
   // Close explicit dependents too, repeating to a fixpoint (D17).
@@ -71,7 +71,7 @@ export type CloseOptions = {
   acceptanceGate?: readonly string[]
 }
 
-export type CloseResult = { type: "closed" | "refused" | "failed"; lines: string[] }
+type CloseResult = { type: "closed" | "refused" | "failed"; lines: string[] }
 
 // One task of the closing set: its close reason (a cascaded task carries the
 // unit it was cascaded from) and the task index that ticks it.

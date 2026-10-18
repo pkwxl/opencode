@@ -61,7 +61,7 @@ export function singleHost(host: AgentHost): ServerControl {
 // The pool
 // ---------------------------------------------------------------------------
 
-export type StartPoolOpts = {
+type StartPoolOpts = {
   agent?: AgentChoice
   server?: string
   permission?: PermissionMode
@@ -89,7 +89,7 @@ export type AgentPool = ServerControl & { startedAgents(): string[] }
 // leadSplit false = the fleet cannot fork, so auto's lead runs without its
 // split clause (plans/0059 D7; Degradation.leadSplit), carried to every task
 // through Opts.leadSplit.
-export type StartedPool =
+type StartedPool =
   | { pool: AgentPool; profileName: string; error?: string; leadSplit?: false }
   | { pool?: undefined; profileName?: undefined; error: string; leadSplit?: undefined }
 
@@ -345,7 +345,7 @@ function adapterCapabilities(adapter: string): AgentCapabilities {
 // Preflight's bin check (§8.7)
 // ---------------------------------------------------------------------------
 
-export const BIN_CHECK_TIMEOUT_MS = 10_000
+const BIN_CHECK_TIMEOUT_MS = 10_000
 
 // The bin preflight, one line per failing profile: each profile a candidate
 // list references runs `<bin> --version` under the profile's resolved env,
@@ -446,9 +446,9 @@ export const PROBE_PROMPT = "[DRIVER] Service availability probe: reply with jus
 
 // A probe waits for one short turn; 60 s covers a slow first model load
 // while still failing a wedged provider within the operator's patience.
-export const PROBE_TIMEOUT_MS = 60_000
+const PROBE_TIMEOUT_MS = 60_000
 
-export type ModelProbe = { name: string; agent: string; ok: boolean; line: string }
+type ModelProbe = { name: string; agent: string; ok: boolean; line: string }
 
 // Sends the recovery probe prompt to each listed model (every entry a tier
 // list, route list or the classifier names — an unused entry is not listed)

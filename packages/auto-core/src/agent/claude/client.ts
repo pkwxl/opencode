@@ -84,7 +84,7 @@ export type ClaudeProcess = {
 }
 export type ClaudeSpawn = (args: string[], options: { cwd: string; env: Record<string, string | undefined> }) => ClaudeProcess
 
-export type ClaudeAgentOptions = {
+type ClaudeAgentOptions = {
   directory: string
   permission: PermissionPreset
   bin?: string

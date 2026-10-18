@@ -69,7 +69,7 @@ export type StuckTracker = {
 }
 
 // Thresholds are injectable (for unit tests; defaults are the three constants above).
-export type StuckOptions = {
+type StuckOptions = {
   errorRepeat?: number
   sameRepeat?: number
   maxHints?: number

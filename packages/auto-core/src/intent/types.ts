@@ -99,7 +99,7 @@ export type LanesConfig = {
 // Provenance of a loaded pack. Materializes in selection/diagnostics once
 // composition grows beyond the degenerate form; frozen here so the loader
 // contract does not churn when it does.
-export type IntentSource = { kind: "builtin" | "project"; name: string }
+type IntentSource = { kind: "builtin" | "project"; name: string }
 
 // The degenerate-composition constant: the one active pack a project gets
 // without any selection surface. A project overrides it by providing

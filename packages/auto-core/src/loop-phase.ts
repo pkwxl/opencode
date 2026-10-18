@@ -67,7 +67,7 @@ import { loadPlan, resetPlanning } from "./tasks"
 // re-derives the execute route for the appended tasks and hands over again
 // when they close); 2 = the distillation session implicitly blocked, or a
 // gate holds with no budget or a refused repair.
-export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   const state = await phaseState(directory)
   const following = state.phases[state.phases.findIndex((unit) => unit.id === phase.id) + 1]
@@ -542,7 +542,7 @@ async function ensureRoundReport(ctx: LoopCtx, phase: PhaseUnit, state: Awaited<
 // not "flow") ends at each clean phase end — before the handover — naming
 // transfer; mid-phase autonomy and interruption recovery keep today's shapes
 // (an interrupted handover is finished by the re-entry below, then stops).
-export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, repl } = ctx
   const code = await handoverPhase(ctx, phase)
   if (code !== 0) return code

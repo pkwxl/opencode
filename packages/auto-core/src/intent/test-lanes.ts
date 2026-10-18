@@ -155,7 +155,7 @@ export function testLanesProblem(pack: IntentPack): string | undefined {
 // verdict vouches for — the carry-forward diff's range end (git diff
 // <heads>..HEAD); an empty list (a receipt born outside git) never carries.
 // end is the ISO end time, the "last green receipt" ordering key.
-export type LaneReceipt = {
+type LaneReceipt = {
   lane: string
   heads: { root: string; sha: string }[]
   verdict: "green" | "red"

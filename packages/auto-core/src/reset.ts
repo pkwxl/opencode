@@ -30,7 +30,7 @@ import { removePointer } from "./agents-block"
 import { BRIEF_FILE } from "./brief"
 import { removeGitignoreEntries } from "./gitignore"
 
-export type ResetAction = "remove" | "strip" | "rmdir" | "keep"
+type ResetAction = "remove" | "strip" | "rmdir" | "keep"
 
 export type ResetEntry = {
   // The path relative to the target directory, used to print the list.

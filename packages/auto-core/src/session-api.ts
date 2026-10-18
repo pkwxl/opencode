@@ -278,7 +278,7 @@ export async function sessionAlive(client: AgentClient, id: string): Promise<boo
 // counts as a failed probe, same as a request exception. Same family as
 // sessionAlive; only the timeout upper bound and the call site differ
 // (periodic in-flight probing vs a one-time check before recovery).
-export const PROBE_TIMEOUT_MS = 30_000
+const PROBE_TIMEOUT_MS = 30_000
 export async function probeSession(client: AgentClient, sessionID: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {

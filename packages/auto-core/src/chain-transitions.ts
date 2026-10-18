@@ -35,7 +35,7 @@ import type { Switches } from "./switches"
 // the session id, its accumulated context usage (the fork value, compared
 // below), and `why` — the label the log line of the picking site names the
 // source by ("failed session" / "original session").
-export type ForkSource = { id: string; used: number; why: string }
+type ForkSource = { id: string; used: number; why: string }
 
 // The fork sources of a chain, most valuable first — the one "keep the most
 // valuable session" criterion every fork-seeding site of the driver shares
@@ -170,7 +170,7 @@ export function retryOnFork(chain: SessionChain, forked: string, source: ForkSou
 // would hit the dispatch's "interruption recovery (resumed) reuses the
 // original session" branch and ignore pending, so the copy (which already
 // holds the real accumulated messages) would never be consumed.
-export function moveOnFork(chain: SessionChain, forked: string, source: ForkSource, note: string): void {
+function moveOnFork(chain: SessionChain, forked: string, source: ForkSource, note: string): void {
   chain.id = undefined
   retryOnFork(chain, forked, source, note)
 }
@@ -206,7 +206,7 @@ export function toAgent(chain: SessionChain, note: string): void {
 // it names) stops being a fork source instead of failing noisily on every
 // later round. The record is otherwise kept deliberately after a fork
 // seeding — see the FailedSession invariant in src/chain.ts.
-export function dropStaleFailed(chain: SessionChain, id: string): void {
+function dropStaleFailed(chain: SessionChain, id: string): void {
   if (chain.failed?.id === id) chain.failed = undefined
 }
 
@@ -404,7 +404,7 @@ export function coldStart(chain: SessionChain): void {
 // just-ended session) the counters stay as they are: the ended session's
 // figures are the copy's figures, and the dispatch refreshes them with
 // measured values once the round ends.
-export type ForkSeed = { used: number; agent?: string; base?: { id: string; lead?: boolean } }
+type ForkSeed = { used: number; agent?: string; base?: { id: string; lead?: boolean } }
 export function seedFork(chain: SessionChain, forked: string | undefined, seed?: ForkSeed): void {
   chain.id = undefined
   chain.pending = forked

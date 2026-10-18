@@ -14,7 +14,7 @@ import { claudeAgent, claudeEnv, type ClaudeSpawn } from "./client"
 // client reports).
 export { CLAUDE_CAPABILITIES } from "./client"
 
-export type ClaudeHostOptions = {
+type ClaudeHostOptions = {
   // The CLI to run; absent = "claude" on PATH. An agent profile's bin
   // (AgentHostOptions.bin) takes precedence.
   bin?: string

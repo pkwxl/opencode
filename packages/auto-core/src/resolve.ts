@@ -28,7 +28,7 @@ import { changedFiles } from "./git"
 
 // ===== schema(v:1,落盘 compact JSON;plans/0020-auto-resolve-design.md §F)=====
 
-export type ResolveSource = "driver" | "agent"
+type ResolveSource = "driver" | "agent"
 
 export type ResolveItem = {
   at: number
@@ -61,7 +61,7 @@ export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string
 export type ResolveEvent = { at: number; question: string; session?: string }
 
 // 落账时补齐的桶身份(collectAgentResolves 与 driver 侧共用)。
-export type ResolveCtx = { task: string; phase?: string; round?: number; session?: string }
+type ResolveCtx = { task: string; phase?: string; round?: number; session?: string }
 
 // 台账总量上限: 超出按 FIFO 淘汰最旧。上限内不会触及(一轮 24 任务 × 每任务个位数),
 // 设上限只为防异常刷屏把文件撑大。
@@ -102,7 +102,7 @@ const DECISION_MARK = /AUTO-DECISION[ \t`*]*[:：][ \t]*/
 const ARROW = /[ \t]*(?:->|→|=>)[ \t]*/
 const REASON = /[(（]([^()（）]*)[)）][\s`*]*$/
 
-export type ParsedResolve = {
+type ParsedResolve = {
   question: string
   option?: string
   reason?: string
@@ -384,7 +384,7 @@ async function readScannable(path: string): Promise<string | undefined> {
 
 // ===== 读回(resolvesOf)=====
 
-export type ResolveScope = "task" | "phase" | "round"
+type ResolveScope = "task" | "phase" | "round"
 
 // Read back filtered by bucket identity (task = T-NNN / phase = qualified id
 // R-NN.P<nn> / round = round number). Waits for this directory's write queue to
@@ -435,7 +435,7 @@ export async function recordClamp(dir: string | undefined, item: ResolveItem, cl
 
 // ===== 高亮报文(§H)=====
 
-export type HighlightOpts = {
+type HighlightOpts = {
   scope?: ResolveScope // 缺省 task
   id?: string | number // phase label P<nn>-<type> / round number (wording when scope !== "task")
   decisions?: number // 本任务 AUTO-DECISION 计数(有代答时折进末行)

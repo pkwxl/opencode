@@ -37,7 +37,7 @@ export const DEFAULT_SCRIPT_IDLE_MS = 10 * 60 * 1000
 // values, which the unit rules out of scope, and no test needs it.
 export const DEFAULT_SCRIPT_POLL_MS = 5_000
 
-export type ScriptRunResult = {
+type ScriptRunResult = {
   code: number
   ms: number
   timedOut: boolean
@@ -239,7 +239,7 @@ export type LaneRun = {
 // The whole set's outcome: every row's run (launched or carried) plus the
 // set-level guard's finding — kind "head" hard-blocks at the caller (the
 // corrupted-baseline family), kind "tracked" was already restored.
-export type LaneSetResult = {
+type LaneSetResult = {
   runs: LaneRun[]
   violation?: ScriptGuardViolation
 }

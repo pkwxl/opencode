@@ -42,7 +42,7 @@ import type { ClientSource } from "./opts"
 const VERIFY_TIMEOUT_MS = 120_000
 const VERIFY_TITLE = "auto: plan consistency check"
 
-export type PlanVerifyOutcome =
+type PlanVerifyOutcome =
   // The pack declares no charter: the check does not exist for this project —
   // the caller neither logs nor records anything (the zero-intent floor).
   | { kind: "inactive" }
@@ -199,7 +199,7 @@ export function parseDefaultCheckReply(text: string): { clamp: false } | { clamp
 }
 
 // The check's outcome for one text against the active charter.
-export type CharterCheck =
+type CharterCheck =
   // No charter declared (the zero-intent floor), no routing, or no usable
   // classifier entry: the check does not run — like the plan verifier's
   // inactive/skipped arms.

@@ -31,7 +31,7 @@ import { pendingClampItems, parseResolveLine, recordClamp, resolvesOf, sameIssue
 // The check caller the run start wires (prompt-verify's
 // checkTextAgainstCharter over the run's server and routing; structural so
 // this module reaches no policies layer).
-export type ClampCaller = (input: { dir?: string; intent?: string; label: string; text: string }) => Promise<
+type ClampCaller = (input: { dir?: string; intent?: string; label: string; text: string }) => Promise<
   { kind: "skipped" } | { kind: "consistent" } | { kind: "flagged"; reading: string }
 >
 

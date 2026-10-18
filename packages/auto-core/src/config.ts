@@ -19,7 +19,7 @@ import { phasesProblem, resolvePhases } from "./phases/registry"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { phaseTypeRoleProblems, type AgentChoice } from "./switches"
 
-export { PARALLEL_LEVELS, TREE_LANES_SETTINGS, type LanesConfig, type LaneCacheRule, type ParallelLevel, type TreeLanesSetting }
+export { PARALLEL_LEVELS, type ParallelLevel }
 
 export type ProjectConfig = {
   // Must be a name registered in loadModes(dir).
@@ -376,7 +376,7 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
 
 // agent: opencode|claude; absent and "opencode" both mean opencode (undefined),
 // so the default is never written. Any other string is a pre-M6.1 contract name.
-export function agentOf(value: unknown): AgentChoice | undefined {
+function agentOf(value: unknown): AgentChoice | undefined {
   if (value === undefined || value === "opencode") return undefined
   if (value === "claude") return value
   const rule = RETIRED_KEYS.agent!
@@ -385,7 +385,7 @@ export function agentOf(value: unknown): AgentChoice | undefined {
 
 // parallel: none|low|medium|high; absent and "none" both mean none (undefined),
 // so a config without the key and one saying "none" load the same.
-export function parallelOf(value: unknown): ParallelLevel | undefined {
+function parallelOf(value: unknown): ParallelLevel | undefined {
   if (value === undefined || value === "none") return undefined
   if (typeof value !== "string" || !(PARALLEL_LEVELS as readonly string[]).includes(value)) {
     throw new Error(`${CONFIG_FILE} parallel must be none|${PARALLEL_LEVELS.join("|")}`)
@@ -396,7 +396,7 @@ export function parallelOf(value: unknown): ParallelLevel | undefined {
 // treeLanes (plans/0096 D10): off|auto|on; absent and "off" both mean the
 // default tier (undefined, Tier 0), so a config without the key and one
 // saying "off" load the same — the parallel/"none" precedent.
-export function treeLanesOf(value: unknown): TreeLanesSetting | undefined {
+function treeLanesOf(value: unknown): TreeLanesSetting | undefined {
   if (value === undefined || value === "off") return undefined
   if (typeof value !== "string" || !(TREE_LANES_SETTINGS as readonly string[]).includes(value)) {
     throw new Error(`${CONFIG_FILE} treeLanes must be off|${TREE_LANES_SETTINGS.join("|")} (the execution tier of the lanes machinery; off is the default)`)
@@ -413,7 +413,7 @@ type LaneCacheRecord = { env?: unknown; shared?: unknown }
 // directory paths, the scanExempt shape rules). Strict like every config key:
 // a mistyped rule fails the load rather than silently not injecting. An empty
 // object loads as undefined (nothing declared), the scanExempt-[] precedent.
-export function lanesOf(value: unknown): LanesConfig | undefined {
+function lanesOf(value: unknown): LanesConfig | undefined {
   if (value === undefined) return undefined
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${CONFIG_FILE} lanes must be an object (the tier-1 knobs: caches, treeBudgetMB, sparseFloor)`)

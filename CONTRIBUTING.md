@@ -175,6 +175,16 @@ Some debug methods that can be problematic:
 
 With that said, you may want to try these methods, as they might work for you.
 
+### Testing the auto family (`packages/auto-core`, `packages/auto`)
+
+CI runs each package's plain `bun test` through `bun turbo test`. The auto-core suite is additionally split into test lanes with wall-time budgets (see `packages/auto-core/script/test-lane.ts` and `test/lanes.ts`); run them from `packages/auto-core`:
+
+- `bun run test:unit` — the pure, in-memory test files; the dev-loop gate, budgeted at 5 s.
+- `bun run test:repo` — the files that create a git repository or spawn a process; wall time printed, no budget.
+- `bun run test:gate` — both lanes in one `bun test` pass with the suite's wall-time budget (the recorded baseline × 1.25). Run this before sending core changes: a budget breach fails the lane exactly as a test failure would.
+
+The budgets are measured on a development machine, so the gate stays a contributor-side check rather than a CI step. As with plain `bun test`, run the lanes with the ambient `OPENCODE_AUTO_*` driver layer unset — those variables steer switch-reading tests. The shell package (`packages/auto`) has a single plain `bun test` suite.
+
 ## Pull Request Expectations
 
 ### Issue First Policy

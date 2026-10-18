@@ -28,7 +28,7 @@ const CANONICAL_BLOCK = /<!--\s*opencode-auto:start\s*-->[\s\S]*?<!--\s*opencode
 // Any opencode-auto block with a `:<name>:` segment — the legacy six-block
 // format (verify/test/commit/maint/refs) or any future stray marker block;
 // does not match the bare start/end canonical block above.
-export const LEGACY_BLOCK = /<!--\s*opencode-auto:([\w-]+):start\s*-->[\s\S]*?<!--\s*opencode-auto:\1:end\s*-->\n*/g
+const LEGACY_BLOCK = /<!--\s*opencode-auto:([\w-]+):start\s*-->[\s\S]*?<!--\s*opencode-auto:\1:end\s*-->\n*/g
 
 const POINTER = `This directory is driven by opencode-auto. The session prompt already inlines the task for this turn, so you normally don't need to read state files separately. A task's own documents hold its full content and progress — \`docs/T-NNN/todo.md\` (goal, scope, acceptance) and \`docs/T-NNN/subtasks.md\` (the subtask checklist): reread them if context has been compacted, or whenever you are unsure about the current task or its progress, rather than relying on session memory. The \`todo.md\` → \`done.md\` renames of phases, tasks and subtasks and the ticks in their indexes are made by DRIVER alone. AGENTS.md is not a place for notes: do not edit it — anything worth keeping belongs in \`docs/\` documents.`
 
@@ -178,7 +178,7 @@ function phaseState(phase: string, inputPath: string, scaffold: string, manual: 
 // the caller knows (the round name; the target phase, its input path and the
 // pack's scaffold) and the mode the stop renders under (plans/0101 D7 — the
 // next-lines' commands: phased transfer/plan/run, m mode plan alone).
-export type Guidance =
+type Guidance =
   | { kind: "analysis"; manual: boolean }
   | { kind: "round"; round: string; manual: boolean }
   | { kind: "phase"; phase: string; inputPath: string; scaffold: string; manual: boolean }

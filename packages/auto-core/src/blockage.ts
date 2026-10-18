@@ -25,7 +25,7 @@ import { roundDirName } from "./docpaths"
 // state, never a guess read back out of the prompt.
 export type BlockMapEntry = { block: string; source: string }
 
-export function renderBlockMap(blocks: readonly BlockMapEntry[]): string {
+function renderBlockMap(blocks: readonly BlockMapEntry[]): string {
   return blocks.map((entry) => `- ${entry.block} → ${entry.source}`).join("\n")
 }
 
@@ -34,7 +34,7 @@ export function renderBlockMap(blocks: readonly BlockMapEntry[]): string {
 // One located fragment: file and 1-based line range, or explicitly
 // unlocated. A hit is the first literal occurrence in the first source (in
 // search order) that contains the fragment.
-export type SpanHit = { fragment: string; file: string; lineStart: number; lineEnd: number } | { fragment: string; unlocated: true }
+type SpanHit = { fragment: string; file: string; lineStart: number; lineEnd: number } | { fragment: string; unlocated: true }
 
 // The fragments worth locating: the evidence's backtick spans and
 // double-quoted spans (the verifier's verdict quotes both ways), plus — for
@@ -90,7 +90,7 @@ async function readLocatable(path: string): Promise<string | undefined> {
 // The round's process documents (the locator's fallback tier): every file
 // under docs/R-NN/ plus the task documents docs/T-NNN/, the brief and the
 // materialized default pack — the surfaces a block's evidence can quote.
-export async function roundProcessDocs(dir: string, round?: number): Promise<string[]> {
+async function roundProcessDocs(dir: string, round?: number): Promise<string[]> {
   const found: string[] = []
   const walk = async (rootRel: string): Promise<void> => {
     for (const entry of await readdir(join(dir, rootRel), { withFileTypes: true }).catch(() => [])) {
@@ -109,7 +109,7 @@ export async function roundProcessDocs(dir: string, round?: number): Promise<str
 
 // —— the honest block lines (D2) ——
 
-export function locatedSpanLines(hits: readonly SpanHit[]): string[] {
+function locatedSpanLines(hits: readonly SpanHit[]): string[] {
   return hits.map((hit) =>
     "unlocated" in hit
       ? `  the span "${hit.fragment}" located no file (the verdict's evidence may paraphrase — no file is named for it)`
@@ -127,8 +127,8 @@ export function honestBlockLines(input: { intro: string; hits: readonly SpanHit[
 
 // —— the strict remediation-plan format (D5) ——
 
-export const REMEDIATION_CHANNELS = ["handover-edit", "planning-input", "brief-amend", "pack-amend", "task-doc-note", "advice"] as const
-export type RemediationChannel = (typeof REMEDIATION_CHANNELS)[number]
+const REMEDIATION_CHANNELS = ["handover-edit", "planning-input", "brief-amend", "pack-amend", "task-doc-note", "advice"] as const
+type RemediationChannel = (typeof REMEDIATION_CHANNELS)[number]
 
 export type RemediationEdit = {
   // Repository-relative path of an existing file.
@@ -306,7 +306,7 @@ function optionComplete(option: RemediationOption): boolean {
 // Position plus content is always accepted; content alone must be unique;
 // nothing found, or a trimmed pair occurring more than once, is a refusal —
 // a stale document re-blocks, never a blind overwrite.
-export type SpanLocation = { at: number } | { stale: true } | { ambiguous: true }
+type SpanLocation = { at: number } | { stale: true } | { ambiguous: true }
 
 export function locateEditSpan(lines: readonly string[], edit: RemediationEdit): SpanLocation {
   const width = edit.last - edit.first + 1
@@ -413,7 +413,7 @@ export function diagnosisSuspended(docs: readonly { seq: number; text: string }[
 
 // —— the dossier (D1) ——
 
-export type BlockageDossier = {
+type BlockageDossier = {
   gate: string
   step: string
   verdict: string

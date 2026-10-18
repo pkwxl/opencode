@@ -61,12 +61,12 @@ import type { Usage } from "./stats"
 // The run-time model-order override a parameterized /failback leaves behind:
 // the first argument is the preferred wildcard, the rest the failover
 // candidate ring.
-export type FailbackOverride = { wildcard: string; fallback: string[] }
+type FailbackOverride = { wildcard: string; fallback: string[] }
 
 // The verdict of one cache-claim observation; undefined = no claim was
 // pending, or the tokens were inconclusive (a small cacheWrite with a small
 // cacheRead says nothing either way).
-export type CacheClaim = "confirmed" | "contradiction"
+type CacheClaim = "confirmed" | "contradiction"
 
 // A parsed reply of the failure-message classifier: the class — the pattern
 // classes minus `overflow`, which the context steps and the handover own and
@@ -1118,7 +1118,7 @@ function limitPhrase(scope: LimitScope | undefined): string {
 // through setRoute (the selection state travels with the chain: model id +
 // internal entry + a reset step), and the cross-agent move's target agent
 // (undefined = keep the chain's context, a fork of the failed session).
-export type FailoverDecision = {
+type FailoverDecision = {
   from: string | undefined
   to: string
   route: ChainRoute
@@ -1130,24 +1130,24 @@ export type FailoverDecision = {
 // undefined for a ring with no key left that is not down, whose current
 // key still failed and must be marked down before the fall-through to the
 // model failover.
-export type KeyRotationPlan = { provider: string; rotation: RingRotation | undefined }
+type KeyRotationPlan = { provider: string; rotation: RingRotation | undefined }
 
 // The down marks one failure's escalation may write (the answer of
 // `downTarget`, fed to `lateReset`): the chain's selected entry, and the
 // key it ran on when its provider has an active ring — the `{ model }`
 // subset is what the probe loop's late classifier answer extends.
-export type DownTarget = { model?: string; provider?: string; key?: { ref: string; label: string } }
+type DownTarget = { model?: string; provider?: string; key?: { ref: string; label: string } }
 
 // The sleep source of one wait-and-probe round (the answer of
 // `recoverySleep`): the round's `now` (the timeline the horizon clamp and
 // the wake math share), the instant slept to (undefined = poll for
 // recoveryWait), the reason the ⏳ line renders and the model the wait is
 // for (the quota-window figure's key).
-export type RecoverySleepPlan = { now: number; at: number | undefined; reason: string | undefined; model: string }
+type RecoverySleepPlan = { now: number; at: number | undefined; reason: string | undefined; model: string }
 
 // The probe candidate of one wait-and-probe round (the answer of
 // `probeSelection`): the candidate's key (its model mark was cleared for
 // the probe and is re-marked on failure), and the provider whose ring
 // marks cleared with it (its current key is re-marked on failure;
 // undefined for a raw candidate or a ringless entry).
-export type ProbeTarget = { model: string; provider: string | undefined }
+type ProbeTarget = { model: string; provider: string | undefined }

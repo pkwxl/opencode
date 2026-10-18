@@ -18,7 +18,7 @@ import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { MODEL_ROLES, type ModelRole } from "./switches"
 import { defaultTier } from "./tier"
 
-export type CandidateList = {
+type CandidateList = {
   tier: Tier
   // The route in force; undefined = the program default tier.
   route?: ModelRoute

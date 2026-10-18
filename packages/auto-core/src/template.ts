@@ -441,7 +441,7 @@ function parseCached(key: string, text: string): Node[] {
 // Text → node tree. A block/partial tag "alone on its line" (only whitespace
 // before it and after it on the same line) swallows the whole line; an inline
 // occurrence is handled in place. The closing tag is always written {{/if}}.
-export function parseTemplate(text: string): Node[] {
+function parseTemplate(text: string): Node[] {
   const roots: Node[] = []
   const stack: Extract<Node, { kind: "block" }>[] = []
   const emit = (node: Node) => {

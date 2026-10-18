@@ -31,7 +31,7 @@ export type LockState = LockHolder | "unreadable"
 const held = new Map<string, { count: number; createdDir: boolean }>()
 let exitHook = false
 
-export type RunLock = { ok: true; release: () => void } | { ok: false; holder: LockState }
+type RunLock = { ok: true; release: () => void } | { ok: false; holder: LockState }
 
 // Acquires the lock of dir for command ("run", "plan", "close"). Re-entrant: a
 // second acquisition in this process only counts, and the file keeps naming

@@ -140,7 +140,7 @@ export type TurnSources = (emit: (input: TurnInput) => void) => (() => void) | u
 // What the spine answers with: the settle that ended the turn and the final
 // view over the slices. The caller (watch) maps them into its result
 // shapes; the spine itself knows nothing about them.
-export type TurnOutcome = { settle: Settle; view: TurnView }
+type TurnOutcome = { settle: Settle; view: TurnView }
 
 // Runs one turn: builds the slices from the roster's initials, attaches the
 // sources, drives the wrapper's queue to a settle, runs the finalize

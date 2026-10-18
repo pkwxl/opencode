@@ -39,7 +39,7 @@ export type Server = {
 
 // What a managed server is spawned with: the agent profile's executable and
 // env overlay, and the config content (OPENCODE_CONFIG_CONTENT).
-export type SpawnInputs = {
+type SpawnInputs = {
   // absent = "opencode" on PATH.
   bin?: string
   env?: AgentEnv
@@ -49,7 +49,7 @@ export type SpawnInputs = {
 
 // AgentHost plus the server URL (opencode-specific, not part of the driver's
 // interface; tests and diagnostics read it) and the spawn config content.
-export type OpencodeHost = AgentHost & {
+type OpencodeHost = AgentHost & {
   readonly url: string
   // Replaces the config content the next spawn uses; the running server
   // keeps what it was started with until restart(). Under an external server

@@ -57,7 +57,7 @@
 import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, REPORT_FOR_USER_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"
 
-export type RolePolicy = {
+type RolePolicy = {
   // Subject to the whole-unit eof terminator scan when the path is a .md
   // file changed in a unit (execute.ts subtaskArtifactProblems).
   eofScan: boolean
@@ -307,7 +307,7 @@ export function p1Scope(rel: string, exempt: readonly string[] = []): boolean {
 // (handover.ts handoffComplete), never branching on the value. Parsing still
 // accepts both values: a session that wrote `done` anyway is better treated as
 // finished than sent back to rewrite a supposedly half-written file.
-export type HandoffStatus = "continue" | "done"
+type HandoffStatus = "continue" | "done"
 
 // The last `Status: continue|done` line wins. The pre-flip `状态: 继续|完成`
 // spelling is no longer read (M3.7, root open question 17: legacy projects are

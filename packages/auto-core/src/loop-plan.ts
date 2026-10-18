@@ -207,7 +207,7 @@ async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step:
 // implicit P01-implement.
 // Returns 0 = the formulation task completed (the phase's tasks are written
 // and verified), 1 = m mode with no planning input, 2 = blocked.
-export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   // The phase loop routes m mode here only with an input, new or persisted;
   // checked first, so a missing one starts no numbering-restore session.
@@ -582,7 +582,7 @@ function previewFormulationDocument(todo: { goal: string; scope: string; accepta
 // duty and the pipeline-trimming note. The per-source health findings (the
 // missing handover documents, the expected-but-absent digest) ride along —
 // the crux's "never silence" rule.
-export type FormulationParts = {
+type FormulationParts = {
   state: PhaseState
   handovers: string
   handoverDocs: { path: string; text: string }[]

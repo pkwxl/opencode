@@ -112,7 +112,7 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
 // The usage figure a reused session's context state is measured in
 // (session-api's sessionUsage shape); errorStub feeds the ladder's own
 // error-stub rung below.
-export type LadderUsage = { used: number; pct: number; limit?: number; errorStub: boolean }
+type LadderUsage = { used: number; pct: number; limit?: number; errorStub: boolean }
 
 // The liveness probe the caller injects: sessionAlive + sessionUsage over the
 // recorded session, on its own agent's host (the record carries the agent; the
@@ -122,7 +122,7 @@ export type LadderUsage = { used: number; pct: number; limit?: number; errorStub
 export type LivenessProbe = (session: string) => Promise<{ alive: boolean; usage?: LadderUsage }>
 
 // What the ladder decided for one recalled record:
-export type RecoveryVerdict =
+type RecoveryVerdict =
   // External commits mixed into baseline..HEAD: no rollback (a rollback only
   // reclaims the driver's own changes), the dirty worktree goes to a human.
   | { kind: "dirty"; files: string[] }

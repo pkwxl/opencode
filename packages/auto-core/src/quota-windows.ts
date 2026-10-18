@@ -48,9 +48,9 @@ import type { RoutingFacts } from "./routing"
 // failure-message classifier read it; `observed` = a healthy turn's usage
 // windows (§5.2). §8's `probe` names §9's quota endpoints, which are
 // deferred (§11 item 5).
-export type WindowSource = "stated" | "classifier" | "observed"
+type WindowSource = "stated" | "classifier" | "observed"
 
-export type LearnedWindow = {
+type LearnedWindow = {
   account: string
   scope: LimitScope
   resetAt: number

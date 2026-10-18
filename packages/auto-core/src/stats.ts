@@ -420,7 +420,7 @@ export async function statsTask(dir: string | undefined, id: string): Promise<vo
   queueWrite(dir, handle)
 }
 
-export type StatsScope = "task" | "phase" | "round"
+type StatsScope = "task" | "phase" | "round"
 
 // Reading: returns a copy of the bucket's accumulations + real-time
 // extrapolation of the open segment (the unposted segment counted instantly,
@@ -524,7 +524,7 @@ export async function statsSessionBegin(dir: string | undefined, taskID: string)
 // sessionID's cross-interruption accumulation (this one included);
 // task/phase/round = copies of the three buckets' current accumulations (same
 // caliber as statsTotals).
-export type StatsSessionReport = {
+type StatsSessionReport = {
   thisAiMs: number
   session: SessionStat
   task: Bucket

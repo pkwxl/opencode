@@ -33,7 +33,7 @@ import type { Advice, Concern, TurnContext, TurnFx, TurnState, TurnView } from "
 // testHandoverInvalid — are protocol state. The concern writes them beside
 // the settle it returns and watch's result mapping reads the same cell, so
 // which exit added which extra stays a property of the exit.
-export type TestDeps = {
+type TestDeps = {
   blockedExtra: { extra?: Partial<Watch> }
 }
 

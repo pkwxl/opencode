@@ -50,7 +50,7 @@ import {
 // The materialized homes whose contents sync scans for extras.
 const HOMES = [join(".opencode", "auto", "phases"), join(".opencode", "auto", "intents"), join(".opencode", "auto", "modes")] as const
 
-export type SyncEntry =
+type SyncEntry =
   // Stamped, disk = stamp = binary: nothing to do (kept in the report so a
   // dryrun shows the whole managed set).
   | { action: "current"; path: string }
@@ -78,7 +78,7 @@ export type SyncEntry =
   // stamp: reported, never deleted.
   | { action: "extra"; path: string }
 
-export type SyncPlan = {
+type SyncPlan = {
   // The running bundle the plan syncs to; undefined on the nothing-to-do
   // paths (nothing names a bundle).
   bundle?: string
@@ -94,7 +94,7 @@ export type SyncPlan = {
   openRound?: string
 }
 
-export type SyncOpts = { fromBundle?: boolean }
+type SyncOpts = { fromBundle?: boolean }
 
 // Compute the whole plan without writing. A stamped project syncs by the
 // stamp's bundle name; an unstamped one bootstraps over the bundle the

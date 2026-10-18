@@ -19,7 +19,7 @@ import { advanceNextTask, readNextTask, taskNumberFloor } from "./numbering"
 import { phaseHandoverDoc, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { qualifiedPhase, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths } from "./tasks"
 
-export type AddedTask =
+type AddedTask =
   | { type: "added"; id: string; index: string; handoverRemoved?: string }
   | { type: "dirty"; files: string[] }
   | { type: "failed"; question: string }

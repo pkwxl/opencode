@@ -28,7 +28,7 @@ import { basename, dirname, join } from "node:path"
 // closeUnit) and carrying no eof terminator — the role exists so the path
 // never doubles as the handoff channel the driver parses a `Status:` line
 // out of.
-export type TaskRole = "context" | "shared" | "subtasks" | "report" | "gaps" | "handoff" | "testhandoff" | "coverage"
+type TaskRole = "context" | "shared" | "subtasks" | "report" | "gaps" | "handoff" | "testhandoff" | "coverage"
 
 // Subtask numbers zero-padded to two digits (S2 → S02), three digits carry
 // over naturally (matching the existing padStart(2,"0") convention).
@@ -178,7 +178,7 @@ export function priorKnowledgeDoc(round: number): string {
 // (completion = the rename on disk + the commit). Fixed name, appearing in
 // no existing-content scan (existingDistilledDocs/priorKnowledgeDigest read
 // only the formal artifact), never treated as existing knowledge.
-export const TEMP_KB_NAME = "temp-kb.md"
+const TEMP_KB_NAME = "temp-kb.md"
 
 // The intermediate artifact shares the formal artifact's directory:
 // docs/R-NN/temp-kb.md. final is the formal artifact's relative path

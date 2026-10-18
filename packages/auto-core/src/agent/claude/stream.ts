@@ -71,7 +71,7 @@ type Line = Record<string, any>
 
 type Current = { id: string; model: string | undefined; used: number | undefined; blocks: number; failed: boolean }
 
-export type ClaudeStream = {
+type ClaudeStream = {
   feed(line: Line): AgentEvent[]
 }
 

@@ -28,7 +28,7 @@
 import { rename } from "node:fs/promises"
 import { join } from "node:path"
 
-export type UnitLevel = "phase" | "task" | "subtask"
+type UnitLevel = "phase" | "task" | "subtask"
 
 // A unit by its local id plus what locates it: a phase lives in a round and
 // its directory carries its type; a task is global; a subtask lives in a task.
@@ -78,9 +78,9 @@ export function parsePhaseDir(name: string): { id: string; type: string } | unde
 
 // —— State scan (U2; generalizes the subtask scan in document/state.ts) ——
 
-export type UnitFileState = "todo" | "done" | "both" | "neither"
+type UnitFileState = "todo" | "done" | "both" | "neither"
 
-export type UnitStateScan = {
+type UnitStateScan = {
   states: { id: string; state: UnitFileState }[]
   // Both files (ambiguous) or neither (drift): surfaced for human attention.
   illegal: { id: string; kind: "both" | "neither" }[]
@@ -214,7 +214,7 @@ export function parseDecompose(value: string): DecomposeMode | undefined {
   return DECOMPOSE_MODES.includes(word as DecomposeMode) ? (word as DecomposeMode) : undefined
 }
 
-export type UnitDoc = {
+type UnitDoc = {
   title?: string
   // Field block, keys lower-cased; values raw (trimmed).
   fields: Record<string, string>

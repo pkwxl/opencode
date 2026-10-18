@@ -39,7 +39,7 @@ const TOOLS: Record<string, string[]> = {
   task: ["Task"],
 }
 
-export type ClaudePermissions = { allow: string[]; deny: string[] }
+type ClaudePermissions = { allow: string[]; deny: string[] }
 
 // opencode.json → claude permission rules. A rule value is "allow", "deny" or
 // "ask"; "ask" maps to nothing (the preset settles it, as a permission request

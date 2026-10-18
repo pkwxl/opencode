@@ -98,7 +98,7 @@ export type Candidate =
 
 // The candidate list of a dispatch after the overrides (§6.1), as
 // selection walks it and as the run-start block logs it.
-export type SelectList = {
+type SelectList = {
   tier: Tier
   // The route in force; undefined = the program default tier.
   route?: ModelRoute
@@ -110,7 +110,7 @@ export type SelectList = {
 // The decision of one dispatch (§6.2, §6.3): dispatch on the picked
 // candidate, wait for a window to open, probe for recovery, or refuse an
 // empty tier.
-export type Selection =
+type Selection =
   | { kind: "pick"; candidate: Candidate; via: "list" | "continuation" }
   // Wait until `until` (epoch ms) — the earliest opening among the
   // candidates that are not down — for the window of `candidate`.
@@ -124,7 +124,7 @@ export type Selection =
 // What an empty candidate list should say (§6.3): the tier or route that had
 // no candidate, which override replaced the list if one did, and the agent
 // filter that emptied it.
-export type EmptyTier = {
+type EmptyTier = {
   tier: Tier
   // The key of the route in force, when one is.
   route?: string
@@ -135,13 +135,13 @@ export type EmptyTier = {
 
 // The empty policy: what a selection reads when the switches carry nothing
 // (and the only form the implicit registry's selections ever see).
-export const EMPTY_MODEL_POLICY: ModelPolicy = { byLetter: {}, byType: {}, byRole: {}, fallback: [] }
+const EMPTY_MODEL_POLICY: ModelPolicy = { byLetter: {}, byType: {}, byRole: {}, fallback: [] }
 
 // The policy a selection reads (§9's OPENCODE_AUTO_MODEL override): the
 // switches' values — except under the implicit registry, whose routes and
 // tiers ARE those values (the switches are that registry's source, so they
 // must not also replace its lists; the /failback override still applies).
-export function selectionPolicy(registry: Pick<ModelRegistry, "implicit">, policy: ModelPolicy): ModelPolicy {
+function selectionPolicy(registry: Pick<ModelRegistry, "implicit">, policy: ModelPolicy): ModelPolicy {
   return registry.implicit ? EMPTY_MODEL_POLICY : policy
 }
 

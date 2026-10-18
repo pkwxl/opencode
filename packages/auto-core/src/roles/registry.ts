@@ -56,14 +56,14 @@ import { MODEL_ROLES, type ModelRole } from "../switches"
 // and subtask sessions is the "handoff" family in docpaths/testrun wording,
 // never a role).
 export const SESSION_ROLES = ["decompose", "whole", "subtask", "wrapup", "planning", "handover", "knowledge"] as const
-export type SessionRole = (typeof SESSION_ROLES)[number]
+type SessionRole = (typeof SESSION_ROLES)[number]
 
 // Which usage-driven mechanisms (src/usage.ts) a role's sessions run. The
 // flags name the mechanism families of the usage-source design; the call
 // sites read them where they decide whether to build the mechanism at all,
 // while the per-call conditions (the mode, a taken split, the switch state)
 // stay at the call site.
-export type RoleUsagePolicy = {
+type RoleUsagePolicy = {
   // The context-handover protocol (plans/0056): steer notices + the hard-wall
   // hint in turn, and the post-session handover check (usage.ts
   // sessionHandoverDue) reading the handoff document's status line.
@@ -111,7 +111,7 @@ export const COLLECT_POLICIES = [
   // confirms (document/roles.ts PRIOR_KB_DONE) — knowledge.ts.
   "document-marker",
 ] as const
-export type CollectPolicy = (typeof COLLECT_POLICIES)[number]
+type CollectPolicy = (typeof COLLECT_POLICIES)[number]
 
 // The verdict-policy vocabulary: how the role's completion is judged. The
 // axis of P-ruled doctrine is driver-owned state versus a session-written
@@ -136,7 +136,7 @@ export const VERDICT_POLICIES = [
   // non-empty the same way).
   "document-marker",
 ] as const
-export type VerdictPolicy = (typeof VERDICT_POLICIES)[number]
+type VerdictPolicy = (typeof VERDICT_POLICIES)[number]
 
 export type SessionRoleEntry = {
   // Work-kind id (SESSION_ROLES).

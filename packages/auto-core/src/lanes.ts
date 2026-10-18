@@ -232,7 +232,7 @@ export const LANE_DISPATCH_CAP = 3
 // "keep"; the preflight recovery (src/loop-preflight.ts) awaits its
 // re-dispatches through the same decision — the policy is shared, the loop
 // shapes stay the parents' own.
-export type OrphanRedispatch = { type: "again"; attempt: number } | { type: "keep"; why: string }
+type OrphanRedispatch = { type: "again"; attempt: number } | { type: "keep"; why: string }
 
 export function orphanRedispatch(attempts: number, scheduling = true): OrphanRedispatch {
   if (!scheduling) return { type: "keep", why: "scheduling already stopped; the next run's preflight recovers it" }
@@ -453,7 +453,7 @@ export async function syncIndexTicks(dir: string, phase: PlanPhase): Promise<str
 // (per-repo SHAs, recorded in the lead worktree's own coordinates and
 // re-rooted by the parent at landing); absent on a lead that took no split
 // and on every stream's own report.
-export type LaneSplit = { items: number; baseline: { root: string; sha: string }[] }
+type LaneSplit = { items: number; baseline: { root: string; sha: string }[] }
 
 export type LaneReport = {
   unit: string
@@ -624,7 +624,7 @@ export function parseLaneReport(json: string): LaneReport | undefined {
 // The orphan outcome carries nothing: D14's protocol decides await /
 // re-dispatch / block from the registry (worktree, pid) and the pid's
 // liveness, never from the exit.
-export type LaneOutcome =
+type LaneOutcome =
   | { kind: "land"; report: LaneReport }
   | { kind: "blocked"; report: LaneReport }
   | { kind: "environment"; report: LaneReport }
@@ -657,7 +657,7 @@ export function laneOutcome(code: number, report: LaneReport | undefined): LaneO
 // The stream lane unit grammar: `T-NNN.S<nn>` — the task id and the subtask
 // positional id in one scheduling key (§8's registration; it flows into the
 // branch and park grammars unchanged).
-export const streamUnitId = (task: string, index: number): string => `${task}.${subtaskId(index)}`
+const streamUnitId = (task: string, index: number): string => `${task}.${subtaskId(index)}`
 
 // The owning task and the 1-based item of a stream unit id; undefined = a
 // plain task unit.
@@ -701,7 +701,7 @@ export async function streamUnits(dir: string, task: Pick<Task, "id" | "split" |
 // of the same object store — the parent's main tree at landing, a fresh
 // stream worktree at dispatch. Every root sits under `from`, so the mapping
 // is each root's path relative to it, joined onto `to`.
-export function reRootSplit(baseline: readonly { root: string; sha: string }[], from: string, to: string): { root: string; sha: string }[] {
+function reRootSplit(baseline: readonly { root: string; sha: string }[], from: string, to: string): { root: string; sha: string }[] {
   return baseline.map(({ root, sha }) => ({ root: join(to, relative(from, root)), sha }))
 }
 
@@ -747,7 +747,7 @@ export function laneParkProblem(dir: string, unit: string, platform: NodeJS.Plat
 
 // The lane report file inside a lane's worktree (D8): written by the lane
 // entry at every exit it controls, read by the parent after process exit.
-export const laneReportFile = (): string => join(".auto", "lane.json")
+const laneReportFile = (): string => join(".auto", "lane.json")
 
 // Write the lane report (the lane entry's close-out; D8). Directory-safe:
 // the worktree's `.auto/` may not exist yet when a lane exits early.
@@ -773,7 +773,7 @@ export async function readLaneReport(dir: string): Promise<LaneReport | undefine
 // `output` is the prefix relay's full-text promise (below): the drain — and
 // the live relay — started at dispatch, before the spawn call even returned
 // to the loop.
-export type LaneDispatch =
+type LaneDispatch =
   | { type: "spawned"; worktree: string; worker: LaneWorker; fresh: boolean; output: Promise<string> }
   | { type: "failed"; error: string }
 
@@ -968,7 +968,7 @@ export async function laneExit(worker: LaneWorker, output?: Promise<string>): Pr
 // A plain drain of a worker's piped output, no relay (the pre-S4 shape, kept
 // for callers that hold a worker dispatchLane never spawned): the full text
 // of stdout then stderr.
-export function laneOutput(worker: LaneWorker): Promise<string> {
+function laneOutput(worker: LaneWorker): Promise<string> {
   const read = (stream: ReadableStream<Uint8Array> | null | undefined) => (stream ? new Response(stream).text().catch(() => "") : "")
   return Promise.all([read(worker.stdout), read(worker.stderr)]).then(([out, err]) => `${out}${err}`)
 }
@@ -1046,7 +1046,7 @@ export function pidAlive(pid: number): boolean {
 // tree clean again, the lane's scene kept for the conflict protocol), or
 // blocked (the landing refused — verification, the merge itself, or the
 // landing-sync commit; the caller stops scheduling and exits 2).
-export type Landing = { type: "landed"; teardown: boolean } | { type: "conflict"; detail: string } | { type: "blocked"; error: string }
+type Landing = { type: "landed"; teardown: boolean } | { type: "conflict"; detail: string } | { type: "blocked"; error: string }
 
 // D7's five steps, serialized in this one caller (the single-threaded await
 // of the loop above is the mutex): ① verify the lane branch — unitViolations

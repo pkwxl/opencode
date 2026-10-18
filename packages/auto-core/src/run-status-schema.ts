@@ -82,20 +82,20 @@ export type RunStatusEventType = (typeof RUN_STATUS_EVENT_TYPES)[number]
 // blocked, waiting for a human outside the session and re-run; 3 = the
 // graceful /exit pause (progress persisted, re-run resumes precisely); 130 =
 // force-killed by double Ctrl+C.
-export const RUN_EXIT_CODES = [0, 1, 2, 3, 130] as const
+const RUN_EXIT_CODES = [0, 1, 2, 3, 130] as const
 
 export type RunExitCode = (typeof RUN_EXIT_CODES)[number]
 
 // The unit levels of the unit model (UnitLevel, src/document/unit.ts).
-export const UNIT_LEVELS = ["phase", "task", "subtask"] as const
+const UNIT_LEVELS = ["phase", "task", "subtask"] as const
 
-export type StatusUnitLevel = (typeof UNIT_LEVELS)[number]
+type StatusUnitLevel = (typeof UNIT_LEVELS)[number]
 
 // The unit statuses the driver moves a unit through (STATUSES,
 // src/tasks.ts — `.auto/units.json` records in_progress/blocked, the
 // done.md rename records done, the default is pending). A transition may
 // also revert to pending.
-export const UNIT_STATUSES = ["pending", "in_progress", "blocked", "done"] as const
+const UNIT_STATUSES = ["pending", "in_progress", "blocked", "done"] as const
 
 export type UnitStatus = (typeof UNIT_STATUSES)[number]
 
@@ -106,14 +106,14 @@ export type UnitStatus = (typeof UNIT_STATUSES)[number]
 // on in other lanes). `parked` since plans/0096 D7: the whole-task session
 // parked on another task's work — the unit waits for its blocker, the run
 // keeps scheduling around it.
-export const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "parked"] as const
+const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "parked"] as const
 
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 
 // The session error classification words (ErrorClass, src/chain.ts — the
 // glossary's error classification). A failure event carries one only when
 // the failure went through the driver's session-error classifier.
-export const STATUS_ERROR_CLASSES = ["overflow", "quota", "auth", "rate", "transient", "unknown"] as const
+const STATUS_ERROR_CLASSES = ["overflow", "quota", "auth", "rate", "transient", "unknown"] as const
 
 export type StatusErrorClass = (typeof STATUS_ERROR_CLASSES)[number]
 
@@ -121,28 +121,28 @@ export type StatusErrorClass = (typeof STATUS_ERROR_CLASSES)[number]
 // task / phase / round, src/stats.ts) plus the run itself (the figures the
 // run-end bracket can close with; stats books no run bucket, the emitter
 // totals one).
-export const USAGE_SCOPES = ["session", "task", "phase", "round", "run"] as const
+const USAGE_SCOPES = ["session", "task", "phase", "round", "run"] as const
 
-export type UsageScope = (typeof USAGE_SCOPES)[number]
+type UsageScope = (typeof USAGE_SCOPES)[number]
 
 // Where a question came from: an agent's question event (answered through
 // the driver's question policy) or a driver prompt of its own (askHuman —
 // a permission wait, a plan session's human question).
-export const QUESTION_ORIGINS = ["agent", "driver"] as const
+const QUESTION_ORIGINS = ["agent", "driver"] as const
 
-export type QuestionOrigin = (typeof QUESTION_ORIGINS)[number]
+type QuestionOrigin = (typeof QUESTION_ORIGINS)[number]
 
 // How a raised question settled: the human answered, the driver answered or
 // fell back by policy (the AUTO-RESOLVE path), or no answer arrived inside
 // the wait and the policy's timeout fallback took over.
-export const QUESTION_SETTLEMENTS = ["human", "driver", "timeout"] as const
+const QUESTION_SETTLEMENTS = ["human", "driver", "timeout"] as const
 
 export type QuestionSettlement = (typeof QUESTION_SETTLEMENTS)[number]
 
 // The safe boundaries a graceful exit can take effect at (ExitRequested's
 // boundary — Boundary | "wait", src/exit.ts and src/control-types.ts: the
 // three step-mode boundaries plus the wait-and-probe loop's sleep).
-export const EXIT_BOUNDARIES = ["phase", "task", "subtask", "wait"] as const
+const EXIT_BOUNDARIES = ["phase", "task", "subtask", "wait"] as const
 
 export type ExitBoundary = (typeof EXIT_BOUNDARIES)[number]
 
@@ -156,7 +156,7 @@ export type LaneLandingOutcome = (typeof LANE_LANDING_OUTCOMES)[number]
 
 // The verdict a lane report's `result` field carries (plans/0068 D8): the
 // `Result: PASS|FAIL` semantics verbatim — no new verdict vocabulary.
-export const LANE_RESULTS = ["PASS", "FAIL"] as const
+const LANE_RESULTS = ["PASS", "FAIL"] as const
 
 export type LaneResult = (typeof LANE_RESULTS)[number]
 

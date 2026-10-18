@@ -16,7 +16,7 @@
 // degrade over the fake agent. All of that is why the file lives in the repo
 // lane of the test manifest despite its pure S1 half.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { readdirSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -43,7 +43,7 @@ import {
   type LaneReport,
   type LaneRuntime,
 } from "../src/lanes"
-import { addStatusSink, startRunStatus, stopRunStatus } from "../src/run-status"
+import { RUN_STATUS_FILE, startRunStatus, stopRunStatus } from "../src/run-status"
 import type { RunStatusEvent } from "../src/run-status-schema"
 import { changedFiles, commitTree, unitBaseline } from "../src/git"
 import { createGitOps } from "../src/git-ops"
@@ -80,6 +80,14 @@ const ids = (picked: Task[]): string[] => picked.map((item) => item.id)
 
 // The park path of a unit's lane, built rather than spelled out.
 const parkOf = (id: string): string => join(".auto", "worktrees", id)
+
+// The run-status journal's parsed lines (the observation channel for the
+// lane-event cases — the same stream the daemon's SSE tail reads).
+const journalOf = (): RunStatusEvent[] =>
+  readFileSync(join(dir, RUN_STATUS_FILE), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as RunStatusEvent)
 
 describe("the readiness predicate (D5)", () => {
   test("reduction property: at one slot, empty in-flight and nothing executing, readyUnits is exactly next()", () => {
@@ -1093,8 +1101,6 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
       "T-001": { id: "T-001", title: "the alpha module", file: "src/alpha/alpha.ts" },
       "T-002": { id: "T-002", title: "the beta module", file: "src/beta/beta.ts" },
     }
-    const events: RunStatusEvent[] = []
-    const off = addStatusSink((event) => events.push(event))
     startRunStatus(dir)
     try {
       setShellProfile({
@@ -1112,12 +1118,13 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
       expect(relayed).toHaveLength(4)
       expect(relayed.every((line) => /^\[T-00\d\] worker of T-00\d: line (one|two)$/.test(line))).toBe(true)
     } finally {
-      off()
       stopRunStatus()
       setShellProfile({ laneLauncher: undefined })
     }
     // The 0067 bus's lane identity: dispatch → exit → landing per lane, in
-    // dispatch order, typed facts only (no terminal text parsed).
+    // dispatch order, typed facts only (no terminal text parsed) — read
+    // through the journal (the daemon's own transport).
+    const events = journalOf()
     expect(events.filter((event) => event.type === "lane-dispatch").map((event) => (event as { lane: string }).lane)).toEqual(["T-001", "T-002"])
     for (const dispatch of events.filter((event) => event.type === "lane-dispatch")) {
       expect(dispatch).toMatchObject({ worktree: expect.stringContaining(join(".auto", "worktrees")), pid: 4242 })
@@ -1149,8 +1156,6 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
 
   test("a FAIL run: the exit, the landing of the committed work and the block all carry the lane identity", async () => {
     await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/broken.ts" }])
-    const events: RunStatusEvent[] = []
-    const off = addStatusSink((event) => events.push(event))
     startRunStatus(dir)
     try {
       setShellProfile({
@@ -1169,10 +1174,10 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
       const run = await runScheduler(schedulerCtx(agentHost(), { parallel: "low" }))
       expect(run.code).toBe(2)
     } finally {
-      off()
       stopRunStatus()
       setShellProfile({ laneLauncher: undefined })
     }
+    const events = journalOf()
     expect(events.filter((event) => event.type === "lane-exit")).toHaveLength(1)
     expect(events.find((event) => event.type === "lane-exit")).toMatchObject({ lane: "T-001", code: 2, report: true, result: "FAIL" })
     // Failure keeps its commit: the blocked lane's committed work lands, and

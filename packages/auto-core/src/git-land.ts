@@ -43,7 +43,7 @@ import { currentBranch } from "./git-worktree"
 // by this function on that path beyond the branches already switched (a
 // branch at HEAD changes no file content, so the scene stays recoverable —
 // the re-run's idempotent skips finish the rest).
-export type IsolationResult =
+type IsolationResult =
   | { type: "ok"; isolated: string[] }
   | { type: "dirty"; repos: { rel: string; files: string[] }[] }
   | { type: "failed"; error: string }

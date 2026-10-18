@@ -39,7 +39,7 @@ export type TurnInput =
 // The arbitration table's row keys (plans/0061 §4.5): an `event` input
 // dispatches on the event's own type (limit/part/message/question/permission/
 // error/retry/idle), the other inputs on their kind.
-export type InputKind = AgentEvent["type"] | Exclude<TurnInput["kind"], "event">
+type InputKind = AgentEvent["type"] | Exclude<TurnInput["kind"], "event">
 
 // One slice per concern; the slice key is the concern's name. A concern gets
 // its own slice mutable and every other slice read-only (TurnView), so a

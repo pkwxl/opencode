@@ -135,7 +135,7 @@ export function phaseIndexPath(round: number): string {
 const INDEX_NOTE =
   "Phase index (opencode-auto): order and membership only. A phase is complete when its directory holds done.md; the driver ticks the line when it renames todo.md."
 
-export function renderPhaseIndex(round: string, units: readonly PhaseUnit[], done: ReadonlySet<string> = new Set()): string {
+function renderPhaseIndex(round: string, units: readonly PhaseUnit[], done: ReadonlySet<string> = new Set()): string {
   const lines = units.map((unit) => `- [${done.has(unit.id) ? "x" : " "}] ${unit.id} ${unit.type}`)
   return [`# Phases (${round})`, "", INDEX_NOTE, "", ...lines, ""].join("\n")
 }
@@ -315,7 +315,7 @@ async function phaseSync(dir: string, round: number, phases: string, types: read
 // are driver protocol strings (whole-line, case-sensitive, like the other
 // gate marks); a missing survey is a gate problem, never a silent pass (§7
 // A6).
-export const SURVEY_NAME = "survey.md"
+const SURVEY_NAME = "survey.md"
 export const phaseSurveyDoc = (unit: PhaseUnit): string => join(unit.dir, SURVEY_NAME)
 
 // The person's release line in a survey (D14.3): its presence simultaneously

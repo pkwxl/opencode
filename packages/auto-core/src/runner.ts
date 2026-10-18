@@ -45,7 +45,7 @@ import { reportResult, runWrapup } from "./wrapup"
 // today's behavior, so obeying it changes nothing); whole = one whole-task
 // session to completion (ondemand's protocol); pipeline = the planned
 // decompose pipeline (true's path).
-export type DecomposeResolution = {
+type DecomposeResolution = {
   // The subtask mode the task runs under (the opts.subtask vocabulary).
   mode: SubtaskMode
   // Where the decision came from: the task document's field, auto's adaptive

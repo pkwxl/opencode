@@ -68,13 +68,13 @@ export function switchModelRegistryInfo(registry: ModelRegistry): SwitchModelReg
   return { names: new Set(registry.models.keys()), tiers }
 }
 
-export type CheckModelsOptions = Omit<LoadModelsOptions, "phaseTypes"> & {
+type CheckModelsOptions = Omit<LoadModelsOptions, "phaseTypes"> & {
   // The phase type ids a route key may name; default: the builtin types and
   // the project's custom types (loadPhaseTypes).
   phaseTypes?: readonly string[]
 }
 
-export type ModelsCheck = {
+type ModelsCheck = {
   // undefined: there is no registry, or it failed to load (problems say so).
   registry?: ModelRegistry
   // Each refusal of the run start, one line each and in its order: the
@@ -143,7 +143,7 @@ export type DescribeModelsOptions = Omit<CheckModelsOptions, "phaseTypes"> & {
   phaseTypes?: readonly PhaseTypeEntry[]
 }
 
-export type ModelsDescription = {
+type ModelsDescription = {
   // The operator layer's path, whether or not the file exists (the "no model
   // registry" line names it).
   operatorPath: string
@@ -165,17 +165,17 @@ export type ModelsDescription = {
   registry?: ModelRegistry
 }
 
-export type AgentFilter = { agent: string; source: string }
+type AgentFilter = { agent: string; source: string }
 
 // A profile env variable, by name: a literal value, a reference (its name), or
 // a removal of the inherited variable. Never the value.
-export type EnvName = { name: string } & (
+type EnvName = { name: string } & (
   | { kind: "literal" }
   | { kind: "removed" }
   | { kind: "env" | "file"; reference: string }
 )
 
-export type AgentRow = {
+type AgentRow = {
   name: string
   layer: EntryOrigin
   adapter: string
@@ -187,9 +187,9 @@ export type AgentRow = {
 
 // A candidate's state now. `reasons` says why it is not usable ([] = usable);
 // `notes` are facts that do not make it unusable.
-export type CandidateState = { usable: boolean; reasons: string[]; notes: string[] }
+type CandidateState = { usable: boolean; reasons: string[]; notes: string[] }
 
-export type ModelRow = {
+type ModelRow = {
   name: string
   layer: EntryOrigin
   agent: string
@@ -209,7 +209,7 @@ export type ModelRow = {
   state: CandidateState
 }
 
-export type RingRow = {
+type RingRow = {
   provider: string
   // Reference names in ring order.
   keys: string[]
@@ -232,9 +232,9 @@ export type RouteRow = {
 
 // An OPENCODE_AUTO_MODEL value: an internal name, or a raw provider/model
 // string that runs on the default agent without window, ring or steps (§9).
-export type OverrideRow = { value: string; model?: string; state: CandidateState }
+type OverrideRow = { value: string; model?: string; state: CandidateState }
 
-export type TypeRows = {
+type TypeRows = {
   type: string
   letter?: string
   origin: "builtin" | "project"

@@ -39,7 +39,7 @@
 // serial order is the old "first unticked item".
 import { nextReady, renameUnitDone, resolveDepends, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
 
-export type SubtaskState = { index: number; todo: boolean; done: boolean }
+type SubtaskState = { index: number; todo: boolean; done: boolean }
 
 // Positional subtask id of the 1-based item n: S01, S02, …
 export const subtaskId = (n: number): string => `S${String(n).padStart(2, "0")}`
@@ -75,7 +75,7 @@ export function checklistProblems(items: readonly DeclaredItem[]): string[] {
   return unitProblems("subtask", checklistDecls(items))
 }
 
-export type SubtaskStateScan = {
+type SubtaskStateScan = {
   // true once any state file exists for the task's subtask range.
   active: boolean
   states: SubtaskState[]

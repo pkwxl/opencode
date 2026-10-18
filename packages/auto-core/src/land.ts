@@ -62,7 +62,7 @@ import {
 import { currentRound, legacyLayoutProblem } from "./phases"
 import { shellProfile } from "./shell"
 
-export type LandOptions = {
+type LandOptions = {
   // config `isolate`: the designated repositories, by repository-relative
   // path (empty = the project runs no branch isolation; usage).
   isolate: readonly string[]
@@ -79,7 +79,7 @@ export type LandOptions = {
   merge?: boolean
 }
 
-export type LandOutcome = { type: "landed" | "usage" | "blocked"; lines: string[] }
+type LandOutcome = { type: "landed" | "usage" | "blocked"; lines: string[] }
 
 // One designated repository that passed every check: its original branch,
 // the isolation point (merge base), the commit whose tree the original

@@ -191,7 +191,7 @@ export type ModelRole = (typeof MODEL_ROLES)[number]
 // Phase letter keys (the OPENCODE_AUTO_MODEL entry list's letter-key domain = the
 // phase-type registry's preset letters, see runner's opts.phase).
 const MODEL_LETTERS = PHASE_LETTERS
-export type ModelLetter = PhaseLetter
+type ModelLetter = PhaseLetter
 
 // Shape of a phase-type key (the phase directory grammar's type part).
 const TYPE_KEY = /^[a-z][a-z0-9-]*$/
@@ -213,7 +213,7 @@ export type SwitchModelRegistry = { names: ReadonlySet<string>; tiers: string }
 
 // Role words of retired sessions (plans/0044 D1): still a strict parse failure,
 // not read as phase type ids. Custom type ids may not take them either.
-export const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"] as const
+const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"] as const
 
 // Custom (project) phase type ids that are role words (live or retired; the
 // builtin knowledge type shares its id with the knowledge role by design): as an

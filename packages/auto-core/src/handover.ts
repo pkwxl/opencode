@@ -138,7 +138,7 @@ export function handoffComplete(content: string | undefined, committed: boolean)
 // The determination looks at observables only; the record's presence does not
 // change the stage, it only decides whether the "run" step re-runs the script
 // from the record or degrades to referencing the most recent test output.
-export type HandoverStage = "none" | "wrapup" | "commit" | "test"
+type HandoverStage = "none" | "wrapup" | "commit" | "test"
 
 // The observed sequence number for recovery and the base of the next archive
 // number (anti-forgery: a session's own writing under the testhandoff-<n>.md

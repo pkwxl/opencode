@@ -118,7 +118,7 @@ function sectionBody(text: string, heading: string): string | undefined {
     .trim()
 }
 
-export type RoadmapRound = { round: number; phases: string; goal: string }
+type RoadmapRound = { round: number; phases: string; goal: string }
 
 // Every roadmap round line in the document, in order (whole-document scan).
 export function roadmapRounds(text: string): RoadmapRound[] {

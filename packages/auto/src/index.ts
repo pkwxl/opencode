@@ -259,97 +259,79 @@ if (command === "check") {
   process.exit(1)
 }
 
-// Unknown-option interception: every flag outside the whitelist is an error
-// with exit 1, so a typo is never silently ignored. Constitutional and
-// historical options have their own refusal messages on init/run/plan and are
-// waved through here for those to handle; close accepts only its four flags,
-// and everything else (constitutional options and -p/--file included) is
-// refused below in the close branch with close's own messages; status takes
-// no options at all — any flag is refused.
-// models (auto-core plans/0055 §9) joins them: it only reads and prints.
-// --append is plan's alone (auto-core plans/0053 D23): appending tasks to the
-// current phase is a plan route, so every other command refuses the flag with
-// a pointer to plan — run's -p/--file refusal pattern — before any whitelist
-// or command block runs.
-if (command !== "plan" && flags.has("append")) {
-  console.error(`--append is a plan option: ${command ?? "this command"} takes no --append. Append tasks with opencode-auto plan <dir> --append -p <text> | --file <path>`)
-  process.exit(1)
-}
-// --force-close is plan's alone too (auto-core plans/0053 D28): closing a unit
-// and continuing planning in the same process is a plan route, so every other
-// command refuses the flag with a pointer to plan — run's -p/--file refusal
-// pattern — before any whitelist or command block runs (close keeps its own
-// positional ref).
-if (command !== "plan" && flags.has("force-close")) {
-  console.error(
-    `--force-close is a plan option: ${command ?? "this command"} takes no --force-close. ` +
+// Flags one command owns: every other command refuses them with a pointer at
+// the owning invocation, before any whitelist or command block runs (run's
+// -p/--file refusal pattern, auto-core plans/0053 D23/D28). One row per
+// owning route — --append (D23, appending to the current phase), --force-close
+// (D28, closing a unit and keeping planning), --scaffold (plans/0081 D12, the
+// planning-input template), --new-task (plans/0058, the no-session task add),
+// --export/--adopt (plans/0076, the standalone work-order routes),
+// --round/--phase (plans/0084, the assisted preparation stops), transfer's
+// --resynthesize (plans/0101 D3, the advance's construct half) and land's
+// --keep/--abandon (plans/0074 §2.3, U-L2, one line for the pair) — in
+// refusal order: with several offending flags present, the first row answers.
+const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line: (key: string, command: string | undefined) => string }> = [
+  {
+    owner: "plan",
+    keys: ["append"],
+    line: (_key, command) =>
+      `--append is a plan option: ${command ?? "this command"} takes no --append. Append tasks with opencode-auto plan <dir> --append -p <text> | --file <path>`,
+  },
+  {
+    owner: "plan",
+    keys: ["force-close"],
+    line: (_key, command) =>
+      `--force-close is a plan option: ${command ?? "this command"} takes no --force-close. ` +
       `Close a unit and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>; to only close, opencode-auto close <ref> [dir] --reason <text>`,
-  )
-  process.exit(1)
-}
-// --scaffold is plan's alone too (plans/0081 D12): printing the active pack's
-// planning-input scaffold is a plan route; every other command refuses the
-// flag with a pointer to plan, the same pattern as --append above.
-if (command !== "plan" && flags.has("scaffold")) {
-  console.error(
-    `--scaffold is a plan option: ${command ?? "this command"} takes no --scaffold. Print the planning-input template with opencode-auto plan <dir> --scaffold`,
-  )
-  process.exit(1)
-}
-// --new-task is plan's alone too (auto-core plans/0058): adding a task the
-// person names, with no session, is a plan route; every other command refuses
-// the flag with a pointer to plan, the same pattern as --append above.
-if (command !== "plan" && flags.has("new-task")) {
-  console.error(`--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`)
-  process.exit(1)
-}
-
-// --export/--adopt are plan's alone too (plans/0076, T-137): the standalone
-// work-order routes — rendering a ready unit's prompt for a session outside
-// the driver, and closing that unit out — are plan prelude rows, so every
-// other command refuses the flags with a pointer to plan, the same pattern
-// as --new-task above.
-if (command !== "plan" && (flags.has("export") || flags.has("adopt"))) {
-  const flag = flags.has("export") ? "--export" : "--adopt"
-  console.error(
-    `${flag} is a plan option: ${command ?? "this command"} takes no ${flag}. ` +
+  },
+  {
+    owner: "plan",
+    keys: ["scaffold"],
+    line: (_key, command) =>
+      `--scaffold is a plan option: ${command ?? "this command"} takes no --scaffold. Print the planning-input template with opencode-auto plan <dir> --scaffold`,
+  },
+  {
+    owner: "plan",
+    keys: ["new-task"],
+    line: (_key, command) =>
+      `--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`,
+  },
+  {
+    owner: "plan",
+    keys: ["export", "adopt"],
+    line: (key, command) =>
+      `--${key} is a plan option: ${command ?? "this command"} takes no --${key}. ` +
       `Render a ready unit's standalone work order with opencode-auto plan <dir> --export <task id>, and close the externally-driven unit out with opencode-auto plan <dir> --adopt <task id>`,
-  )
-  process.exit(1)
-}
-// --round/--phase are plan's alone too (auto-core plans/0084): the assisted
-// preparation stops — pointing the AGENTS.md guidance at the round brief or
-// the next phase's planning input — are plan routes; every other command
-// refuses the flags with a pointer to plan, the same pattern as --scaffold.
-if (command !== "plan" && (flags.has("round") || flags.has("phase"))) {
-  const flag = flags.has("round") ? "--round" : "--phase"
-  console.error(
-    `${flag} is a plan option: ${command ?? "this command"} takes no ${flag}. ` +
+  },
+  {
+    owner: "plan",
+    keys: ["round", "phase"],
+    line: (key, command) =>
+      `--${key} is a plan option: ${command ?? "this command"} takes no --${key}. ` +
       `Prepare the round brief with opencode-auto plan <dir> --round, or the next phase's planning input with opencode-auto plan <dir> --phase`,
-  )
-  process.exit(1)
-}
-// --resynthesize is transfer's alone (auto-core plans/0101 D3): re-voicing a
-// rejected plan task's synthesis is the advance's construct half — the digest
-// keep it bypasses is the construction's — so every other command refuses the
-// flag with a pointer to transfer, the same pattern as --round/--phase's.
-if (command !== "transfer" && flags.has("resynthesize")) {
-  console.error(
-    `--resynthesize is a transfer option: ${command ?? "this command"} takes no --resynthesize. ` +
+  },
+  {
+    owner: "transfer",
+    keys: ["resynthesize"],
+    line: (_key, command) =>
+      `--resynthesize is a transfer option: ${command ?? "this command"} takes no --resynthesize. ` +
       `Re-voice a rejected plan task's synthesis with opencode-auto transfer <dir> --resynthesize`,
-  )
-  process.exit(1)
-}
-// --keep/--abandon are land's alone (plans/0074 §2.3, U-L2): the mid-round
-// retain and the undo path of the branch-isolation landing; every other
-// command refuses them with a pointer to land, the same pattern as --append
-// above, before any whitelist or command block runs.
-if (command !== "land" && (flags.has("keep") || flags.has("abandon"))) {
-  console.error(
-    `--keep and --abandon are land options: ${command ?? "this command"} takes neither. ` +
+  },
+  {
+    owner: "land",
+    keys: ["keep", "abandon"],
+    line: (_key, command) =>
+      `--keep and --abandon are land options: ${command ?? "this command"} takes neither. ` +
       `Land a round's isolation branches with opencode-auto land <dir> [--keep | --abandon]`,
-  )
-  process.exit(1)
+  },
+]
+for (const owned of OWNED_FLAGS) {
+  if (command === owned.owner) continue
+  for (const key of owned.keys) {
+    if (!flags.has(key)) continue
+    console.error(owned.line(key, command))
+    process.exit(1)
+  }
 }
 // Retired flags are usage errors with their own notice (the --commit false
 // retirement set the pattern; the whole flag joined the table when its config
@@ -420,72 +402,76 @@ const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-chang
 // machine surface, checked below for the swallowed-value trap). Everything
 // else is refused with a land-appropriate message, mirroring CLOSE_FLAGS.
 const LAND_FLAGS = new Set(["keep", "abandon", "merge"])
-for (const key of flags.keys()) {
+// The unknown-option interception: every flag outside its command's policy
+// below is an error with exit 1, so a typo is never silently ignored. The
+// strict commands (close, land) run their own refusal ladder; the narrow
+// readers (reset/fix/sync, models) and the flagless status/install-prompts
+// name their whole surface; everything else (init/amend/plan/transfer/run and
+// the hidden _lane) accepts the known flag vocabulary here and leaves its
+// specific refusals to its command block (the frozen config flags, the
+// planning input, the run-only options). Globally retired flags are waved
+// through for their own notices below.
+const similarOptions = (key: string): string[] => [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`)
+
+// The strict ladder close and land share (mirroring RESET_FLAGS for
+// reset/fix): the allowed set, then close's --commit swallow trap, the
+// globally retired notices (they exit below), the frozen config keys with the
+// amend hint, plan's input flags, and the unknown-option line with the
+// command's usage and the spelling suggestions.
+const strictOptionRefusal =
+  (command: "close" | "land", allowed: Set<string>, usageLine: string) =>
+  (key: string): string | undefined => {
+    if (allowed.has(key)) return undefined
+    // --commit keeps its close-specific refusal ahead of the generic
+    // retirement notice below: it takes a value, so it would swallow
+    // whatever follows it, and what a close caller means by it is the
+    // dirty-worktree pair (auto-core plans/0053 D20/F8).
+    if (command === "close" && key === "commit")
+      return "--commit is retired (committing cannot be turned off — the driver commits after every session) and it takes a value, so it would swallow whatever follows it; the close options for a dirty worktree are --commit-changes and --stash-changes"
+    // Globally retired flags keep their own notices below (they exit there);
+    // a scoped entry (init's -p) does not fire for this command, so it must
+    // not be waved through here either — the command's own refusals take it.
+    if (typeof RETIRED_FLAGS[key] === "string") return undefined
+    if (CONFIG_FLAGS.includes(key))
+      return `${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; ${command} takes no config options`
+    if (key === "prompt" || key === "file")
+      return `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); ${command} takes no planning input`
+    const similar = similarOptions(key)
+    return `--${key} is not a ${command} option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: ${usageLine}`
+  }
+const closeOptionRefusal = strictOptionRefusal(
+  "close",
+  CLOSE_FLAGS,
+  "close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)",
+)
+const landOptionRefusal = strictOptionRefusal("land", LAND_FLAGS, "land takes only --keep, --abandon and --merge (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge])")
+// One command's option policy: the refusal line for a flag, undefined to
+// accept it here. Models (auto-core plans/0055 §9) only reads and prints;
+// status and install-prompts take no options at all.
+const optionRefusal = (key: string): string | undefined => {
+  if (command === "close") return closeOptionRefusal(key)
+  if (command === "land") return landOptionRefusal(key)
   if (command === "reset" || command === "fix" || command === "sync") {
     // fix accepts --dryrun beside -f/--force (reset does not); sync adds
     // --from-bundle on top (the bootstrap overwrite's opt-in).
-    if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun") || (command === "sync" && SYNC_FLAGS.has(key))) continue
-    console.error(
-      `unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : command === "sync" ? ", -f/--force, --dryrun and --from-bundle" : " and -f/--force"}`,
-    )
-    process.exit(1)
-  }
-  if (command === "close") {
-    if (CLOSE_FLAGS.has(key)) continue
-    // --commit keeps its close-specific refusal ahead of the generic
-    // retirement notice below: it takes a value, so it would swallow whatever
-    // follows it, and what a close caller means by it is the dirty-worktree
-    // pair (auto-core plans/0053 D20/F8).
-    if (key === "commit") {
-      console.error(
-        "--commit is retired (committing cannot be turned off — the driver commits after every session) and it takes a value, so it would swallow whatever follows it; " +
-          "the close options for a dirty worktree are --commit-changes and --stash-changes",
-      )
-      process.exit(1)
-    }
-    // Globally retired flags keep their own notices below (they exit there);
-    // a scoped entry (init's -p) does not fire for close, so it must not be
-    // waved through here either — close's own refusals take it.
-    if (typeof RETIRED_FLAGS[key] === "string") continue
-    if (CONFIG_FLAGS.includes(key)) {
-      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; close takes no config options`)
-      process.exit(1)
-    }
-    if (key === "prompt" || key === "file") {
-      console.error(`${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); close takes no planning input`)
-      process.exit(1)
-    }
-    const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-    console.error(`--${key} is not a close option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)`)
-    process.exit(1)
-  }
-  if (command === "land") {
-    if (LAND_FLAGS.has(key)) continue
-    // Globally retired flags keep their own notices below (they exit there);
-    // a scoped entry (init's -p) does not fire for land, so it must not be
-    // waved through here either — land's own refusals take it.
-    if (typeof RETIRED_FLAGS[key] === "string") continue
-    if (CONFIG_FLAGS.includes(key)) {
-      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; land takes no config options`)
-      process.exit(1)
-    }
-    if (key === "prompt" || key === "file") {
-      console.error(`${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); land takes no planning input`)
-      process.exit(1)
-    }
-    const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-    console.error(`--${key} is not a land option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: land takes only --keep, --abandon and --merge (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge])`)
-    process.exit(1)
+    if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun") || (command === "sync" && SYNC_FLAGS.has(key))) return undefined
+    return `unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : command === "sync" ? ", -f/--force, --dryrun and --from-bundle" : " and -f/--force"}`
   }
   if (command === "models") {
-    if (MODELS_FLAGS.has(key)) continue
-    console.error(`unknown option --${key}: models takes only --probe (a directory argument and no other options)`)
+    if (MODELS_FLAGS.has(key)) return undefined
+    return `unknown option --${key}: models takes only --probe (a directory argument and no other options)`
+  }
+  if (FLAGLESS) return `unknown option --${key}: ${command} only accepts a directory argument, no options`
+  if (KNOWN_FLAGS.has(key)) return undefined
+  const similar = similarOptions(key)
+  return `unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}; run opencode-auto without a subcommand to see usage`
+}
+for (const key of flags.keys()) {
+  const line = optionRefusal(key)
+  if (line !== undefined) {
+    console.error(line)
     process.exit(1)
   }
-  if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
-  const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? `: ${command} only accepts a directory argument, no options` : "; run opencode-auto without a subcommand to see usage"}`)
-  process.exit(1)
 }
 for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
   if (!flags.has(key)) continue
@@ -493,6 +479,25 @@ for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
   console.error(`--${key} ${typeof entry === "string" ? entry : entry.notice}`)
   process.exit(1)
 }
+
+// The run-only options plan and transfer refuse alike (auto-core plans/0053
+// D14; transfer's rows plans/0101 D2): plan stops before any task runs and
+// transfer executes none, so run's execution shaping applies to neither. The
+// two command-specific `what` texts differ where the reason genuinely does.
+const RUN_OPTION_REFUSALS: ReadonlyArray<{ key: string; flag: string; what: (command: "plan" | "transfer") => string }> = [
+  { key: "dryrun", flag: "--dryrun", what: () => "the permission preflight: opencode-auto run <dir> --dryrun" },
+  { key: "wait-between", flag: "--wait-between", what: (command) => `the pause between tasks, and ${command} runs none` },
+  { key: "max-sessions", flag: "--max-sessions", what: () => "concurrent sessions of the task loop" },
+  { key: "repair", flag: "--repair", what: () => "the bounded repair budget for FAIL verdicts" },
+  {
+    key: "boundary",
+    flag: "--boundary",
+    what: (command) =>
+      command === "plan"
+        ? "run's phase-boundary shape (stop, the default, or flow); plan stops at its own boundary — the reviewed plan task"
+        : "run's phase-boundary shape; transfer is itself the boundary command",
+  },
+]
 
 // close (auto-core plans/0053 D22): the ref is required, so it comes first —
 // positional[0] is the unit ref (R-NN | R-NN.P<nn> | T-NNN, closeUnit's
@@ -600,44 +605,9 @@ if (command === "init" || command === "amend" || command === "reset" || (command
 
 if (command === "run") {
   refuseFrozenFlags("run")
-  // The planning input is plan's (auto-core plans/0053 D14): run never reads
-  // it, so it is refused rather than silently ignored.
-  for (const key of ["prompt", "file"]) {
-    if (flags.has(key)) {
-      console.error(
-        `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: run takes no planning input. Plan with opencode-auto plan <dir> -p <text> | --file <path>, then run`,
-      )
-      process.exit(1)
-    }
-  }
-  // The close-family flags are close's and plan --force-close's
-  // (auto-core plans/0053 D22/D28): run closes nothing, and silently
-  // ignoring a close attempt would let a person believe a unit was closed
-  // when nothing happened (the AUTO-RESOLVE rationale of plan's own refusal
-  // of the group without --force-close).
-  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
-    if (flags.has(key)) {
-      console.error(
-        `--${key} is a close option: run closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
-          `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
-      )
-      process.exit(1)
-    }
-  }
-  // The lane value flags are _lane's alone (hidden, auto-core plans/0068
-  // §6.4): the parent run's lane launcher re-invokes this CLI with `_lane
-  // <dir> --unit <id> [--merge <branch>]`, never `run` — a person's run takes
-  // neither, and each swallows the next token as its value (the directory
-  // would be eaten).
-  for (const key of ["unit", "merge"]) {
-    if (flags.has(key)) {
-      console.error(
-        `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
-          `run takes no --${key}`,
-      )
-      process.exit(1)
-    }
-  }
+  refusePlanInputFlags("run")
+  refuseCloseFamilyFlags("run")
+  refuseLaneValueFlags("run")
   const session = parseSessionFlags()
   const waitBetween = parseMinutes(flags.get("wait-between"))
   if (waitBetween === null) {
@@ -733,18 +703,7 @@ if (command === "_lane") {
 if (command === "plan") {
   refuseFrozenFlags("plan")
   // run's options for the task loop: plan stops before any task runs.
-  for (const [key, flag, what] of [
-    ["dryrun", "--dryrun", "the permission preflight: opencode-auto run <dir> --dryrun"],
-    ["wait-between", "--wait-between", "the pause between tasks, and plan runs none"],
-    ["max-sessions", "--max-sessions", "concurrent sessions of the task loop"],
-    ["repair", "--repair", "the bounded repair budget for FAIL verdicts"],
-    ["boundary", "--boundary", "run's phase-boundary shape (stop, the default, or flow); plan stops at its own boundary — the reviewed plan task"],
-  ] as const) {
-    if (flags.has(key)) {
-      console.error(`${flag} is a run option (${what}); plan does not accept it`)
-      process.exit(1)
-    }
-  }
+  refuseRunOptions("plan")
   // --force-close <ref> (auto-core plans/0053 D28): close a unit, then keep
   // planning in this process — replace a task (--force-close T-005 --reason
   // "…" --append -p "do X instead") or skip a phase into the next one
@@ -900,14 +859,7 @@ if (command === "plan") {
   // plan writes the round setup, which follows the config (phases): a
   // directory init never configured is refused rather than planned with the
   // defaults.
-  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
-    const legacy = await legacyModeFallback(directory)
-    console.error(
-      `nothing to plan: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
-        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
-    )
-    process.exit(1)
-  }
+  await requireConfigFile("plan", true)
   // --scaffold (plans/0081 D12.2): print the active pack's planning-input
   // scaffold to stdout and exit 0 — nothing written into the target, the
   // verbatim-input contract untouched (no stub file a git clean or a planning
@@ -924,11 +876,7 @@ if (command === "plan") {
     process.exit(0)
   }
   const { config, mode } = await loadRunConfig(directory)
-  const lock = acquireRunLock(directory, "plan")
-  if (!lock.ok) {
-    for (const line of lockLines(directory, lock.holder)) console.error(line)
-    process.exit(1)
-  }
+  const lock = takeRunLock("plan")
   // --force-close (auto-core plans/0053 D28): one lock held across the close
   // and the planning — the lock above, not a second one. closeUnit's lines
   // print first (stdout when closed, stderr otherwise); a refused close exits
@@ -1005,57 +953,14 @@ if (command === "plan") {
 if (command === "transfer") {
   refuseFrozenFlags("transfer")
   // run's execution options: transfer executes no task.
-  for (const [key, flag, what] of [
-    ["dryrun", "--dryrun", "the permission preflight: opencode-auto run <dir> --dryrun"],
-    ["wait-between", "--wait-between", "the pause between tasks, and transfer runs none"],
-    ["max-sessions", "--max-sessions", "concurrent sessions of the task loop"],
-    ["repair", "--repair", "the bounded repair budget for FAIL verdicts"],
-    ["boundary", "--boundary", "run's phase-boundary shape; transfer is itself the boundary command"],
-  ] as const) {
-    if (flags.has(key)) {
-      console.error(`${flag} is a run option (${what}); transfer does not accept it`)
-      process.exit(1)
-    }
-  }
+  refuseRunOptions("transfer")
   // The planning input is plan's (the dispatch half of the boundary): the
   // fix-inputs channel of a rejected plan task edits the documents
   // (round.md, plan-input.md, the brief, the roadmap line) and re-runs
   // transfer — never rides the command.
-  for (const key of ["prompt", "file"]) {
-    if (flags.has(key)) {
-      console.error(
-        `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: transfer takes no planning input. A rejected plan task is fixed through its inputs — the documents — and transfer re-runs on them`,
-      )
-      process.exit(1)
-    }
-  }
-  // The close-family flags are close's and plan --force-close's
-  // (auto-core plans/0053 D22/D28): transfer closes nothing, and silently
-  // ignoring a close attempt would let a person believe a unit was closed
-  // when nothing happened (the AUTO-RESOLVE rationale of plan's own refusal
-  // of the group without --force-close).
-  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
-    if (flags.has(key)) {
-      console.error(
-        `--${key} is a close option: transfer closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
-          `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
-      )
-      process.exit(1)
-    }
-  }
-  // The lane value flags are _lane's alone (hidden, auto-core plans/0068
-  // §6.4): the lane launcher re-invokes this CLI with `_lane <dir> --unit
-  // <id> [--merge <branch>]`, never `transfer` — each swallows the next
-  // token as its value (the directory would be eaten).
-  for (const key of ["unit", "merge"]) {
-    if (flags.has(key)) {
-      console.error(
-        `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
-          `transfer takes no --${key}`,
-      )
-      process.exit(1)
-    }
-  }
+  refusePlanInputFlags("transfer")
+  refuseCloseFamilyFlags("transfer")
+  refuseLaneValueFlags("transfer")
   const session = parseSessionFlags()
   const { config, mode } = await loadRunConfig(directory)
   startRunLog(directory, session)
@@ -1086,22 +991,11 @@ if (command === "transfer") {
 // one. Like plan, a directory without config.json is refused outright rather
 // than closing with default values.
 if (command === "close") {
-  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
-    const legacy = await legacyModeFallback(directory)
-    console.error(
-      `nothing to close: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
-        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
-    )
-    process.exit(1)
-  }
+  await requireConfigFile("close", true)
   const { config } = await loadRunConfig(directory)
   // close holds the run lock itself (D3), so it is not in the refusal list
   // above; status shows a live lock while this runs.
-  const lock = acquireRunLock(directory, "close")
-  if (!lock.ok) {
-    for (const line of lockLines(directory, lock.holder)) console.error(line)
-    process.exit(1)
-  }
+  const lock = takeRunLock("close")
   const changes: CloseChanges | undefined =
     flagOn("commit-changes") ? "commit" : flagOn("stash-changes") ? "stash" : undefined
   const result = await closeUnit(directory, closeRef!, {
@@ -1112,8 +1006,7 @@ if (command === "close") {
     acceptanceGate: config.acceptanceGate,
   })
   lock.release()
-  for (const line of result.lines) (result.type === "closed" ? console.log : console.error)(line)
-  process.exit(result.type === "closed" ? 0 : result.type === "refused" ? 1 : 2)
+  exitWithResult(result, "closed", "refused")
 }
 
 // land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5): the person-invoked
@@ -1144,14 +1037,7 @@ if (command === "land") {
     console.error("--merge is a landing mode and --abandon lands nothing: drop one of the two")
     process.exit(1)
   }
-  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
-    const legacy = await legacyModeFallback(directory)
-    console.error(
-      `nothing to land: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
-        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
-    )
-    process.exit(1)
-  }
+  await requireConfigFile("land", true)
   let config: ProjectConfig
   try {
     config = await loadProjectConfig(directory)
@@ -1161,11 +1047,7 @@ if (command === "land") {
     if (hint) console.error(hint)
     process.exit(1)
   }
-  const lock = acquireRunLock(directory, "land")
-  if (!lock.ok) {
-    for (const line of lockLines(directory, lock.holder)) console.error(line)
-    process.exit(1)
-  }
+  const lock = takeRunLock("land")
   const landed = await landUnit(directory, {
     isolate: config.isolate ?? [],
     keep: flagOn("keep"),
@@ -1173,8 +1055,7 @@ if (command === "land") {
     merge: flagOn("merge"),
   })
   lock.release()
-  for (const line of landed.lines) (landed.type === "landed" ? console.log : console.error)(line)
-  process.exit(landed.type === "landed" ? 0 : landed.type === "usage" ? 1 : 2)
+  exitWithResult(landed, "landed", "usage")
 }
 
 // The amend hint of one config flag: how a person changes a key init froze.
@@ -1190,6 +1071,99 @@ function amendHint(key: string): string {
 // close and plan --force-close argument checks and option reads.
 function flagOn(key: string): boolean {
   return flags.has(key) && flags.get(key) !== "false"
+}
+
+// The run-only options plan and transfer refuse (RUN_OPTION_REFUSALS above).
+function refuseRunOptions(command: "plan" | "transfer"): void {
+  for (const refusal of RUN_OPTION_REFUSALS) {
+    if (!flags.has(refusal.key)) continue
+    console.error(`${refusal.flag} is a run option (${refusal.what(command)}); ${command} does not accept it`)
+    process.exit(1)
+  }
+}
+
+// The planning input is plan's (auto-core plans/0053 D14): run never reads it
+// and transfer's rejected-plan-task channel edits the documents and re-runs —
+// neither takes it, so it is refused rather than silently ignored.
+function refusePlanInputFlags(command: "run" | "transfer"): void {
+  for (const key of ["prompt", "file"]) {
+    if (!flags.has(key)) continue
+    console.error(
+      `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: ${command} takes no planning input. ` +
+        (command === "run"
+          ? "Plan with opencode-auto plan <dir> -p <text> | --file <path>, then run"
+          : "A rejected plan task is fixed through its inputs — the documents — and transfer re-runs on them"),
+    )
+    process.exit(1)
+  }
+}
+
+// The close-family flags are close's and plan --force-close's (auto-core
+// plans/0053 D22/D28): neither run nor transfer closes anything, and silently
+// ignoring a close attempt would let a person believe a unit was closed when
+// nothing happened (the AUTO-RESOLVE rationale of plan's own refusal of the
+// group without --force-close).
+function refuseCloseFamilyFlags(command: "run" | "transfer"): void {
+  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
+    if (!flags.has(key)) continue
+    console.error(
+      `--${key} is a close option: ${command} closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
+        `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
+    )
+    process.exit(1)
+  }
+}
+
+// The lane value flags are _lane's alone (hidden, auto-core plans/0068 §6.4):
+// the parent run's lane launcher re-invokes this CLI with `_lane <dir> --unit
+// <id> [--merge <branch>]`, never `run` or `transfer` — a person's command
+// takes neither, and each swallows the next token as its value (the directory
+// would be eaten).
+function refuseLaneValueFlags(command: "run" | "transfer"): void {
+  for (const key of ["unit", "merge"]) {
+    if (!flags.has(key)) continue
+    console.error(
+      `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
+        `${command} takes no --${key}`,
+    )
+    process.exit(1)
+  }
+}
+
+// The missing-config refusal of the commands that need an initialized project
+// (plan, close, land and the amend command): the verb is the block's own word
+// ("nothing to plan/close/land/amend"); `first` carries the one wording
+// difference (amend's line omits "first").
+async function requireConfigFile(verb: string, first: boolean): Promise<void> {
+  if (await Bun.file(join(directory, CONFIG_FILE)).exists()) return
+  const legacy = await legacyModeFallback(directory)
+  console.error(
+    `nothing to ${verb}: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}${first ? " first" : ""}` +
+      (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+  )
+  process.exit(1)
+}
+
+// The run lock's acquisition tail plan, close and land share: each holds it
+// around its own writes (re-entered by the runAll a plan delegates to), and a
+// refusal prints the lock's lines and exits 1 — the returned lock is always
+// the acquired one.
+type AcquiredRunLock = Extract<ReturnType<typeof acquireRunLock>, { ok: true }>
+function takeRunLock(holder: string): AcquiredRunLock {
+  const lock = acquireRunLock(directory, holder)
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) console.error(line)
+    process.exit(1)
+  }
+  return lock
+}
+
+// Prints a core result's lines (stdout on the ok type, stderr otherwise) and
+// exits with the contract's codes: 0 ok, 1 the refused/usage type, 2 the rest
+// (the tail close and land share).
+function exitWithResult(result: { lines: string[]; type: string }, ok: string, refused: string): never {
+  for (const line of result.lines) (result.type === ok ? console.log : console.error)(line)
+  process.exit(result.type === ok ? 0 : result.type === refused ? 1 : 2)
 }
 
 // The options run and plan refuse alike (auto-core plans/0053 D14). Frozen
@@ -1294,76 +1268,71 @@ function parseSessionFlags(): SessionFlags {
   return { verbose, interactive, waitAnswer, permission, newSession: flags.has("new-session") && flags.get("new-session") !== "false" }
 }
 
-// plan's planning input (auto-core plans/0053 D14): the -p/--prompt text or
-// the --file contents, one of the two and non-empty; undefined when neither
-// is given. Checked before the lock, so a bad input writes nothing.
-async function parsePlanInput(): Promise<PlanInput | undefined> {
-  const text = flags.get("prompt")
-  const file = flags.get("file")
+// A text-or-file pair flag — plan's -p/--prompt | --file planning input
+// (auto-core plans/0053 D14) and init/amend's --brief | --brief-file seed
+// (plans/0081 D11): one of the two and non-empty, the file a regular
+// readable file; undefined when neither is given. Checked before the lock, so
+// a bad input writes nothing. The spec carries the pair's own message words;
+// the flag keys are passed beside it (plan's text flag is -p/--prompt).
+interface TextOrFileSpec {
+  textFlag: string // the text flag's display name
+  fileFlag: string // the file flag's display name
+  what: string // what the pair carries, singular ("planning input")
+  textWhy: string // the text-empty parenthetical
+  fileWhy: string // the requires-a-path clause's trailing words
+  namesWhy: string // the not-a-file clause's trailing words
+  emptyWhy: string // the empty-file clause
+}
+async function parseTextOrFile(spec: TextOrFileSpec, textKey: string, fileKey: string): Promise<{ text: string; source?: string } | undefined> {
+  const text = flags.get(textKey)
+  const file = flags.get(fileKey)
   if (text !== undefined && file !== undefined) {
-    console.error("-p/--prompt and --file are mutually exclusive: give the planning input one way")
+    console.error(`${spec.textFlag} and ${spec.fileFlag} are mutually exclusive: give the ${spec.what} one way`)
     process.exit(1)
   }
   if (text !== undefined) {
     if (!text.trim()) {
-      console.error("-p/--prompt requires non-empty text (the planning input)")
+      console.error(`${spec.textFlag} requires non-empty text (${spec.textWhy})`)
       process.exit(1)
     }
     return { text }
   }
   if (file === undefined) return undefined
   if (!file) {
-    console.error("--file requires a path: the file holding the planning input")
+    console.error(`${spec.fileFlag} requires a path: the file holding the ${spec.fileWhy}`)
     process.exit(1)
   }
   const path = resolve(file)
   const info = await stat(path).catch(() => undefined)
   if (!info?.isFile()) {
-    console.error(`--file ${file}: ${info ? "not a regular file" : "no such file"}; it names the file holding the planning input`)
+    console.error(`${spec.fileFlag} ${file}: ${info ? "not a regular file" : "no such file"}; it names the file holding the ${spec.namesWhy}`)
     process.exit(1)
   }
   const content = await Bun.file(path).text()
   if (!content.trim()) {
-    console.error(`--file ${file} is empty: the planning input must not be empty`)
+    console.error(`${spec.fileFlag} ${file} is empty: the ${spec.emptyWhy}`)
     process.exit(1)
   }
   return { text: content, source: path }
 }
 
-// init/amend's --brief/--brief-file (plans/0081 D11): the project brief's
-// seed (init) or revision (amend) — the text verbatim, or the file holding
-// it; one of the two and non-empty; undefined when neither is given.
-async function parseBriefSeed(): Promise<string | undefined> {
-  const text = flags.get("brief")
-  const file = flags.get("brief-file")
-  if (text !== undefined && file !== undefined) {
-    console.error("--brief and --brief-file are mutually exclusive: give the brief one way")
-    process.exit(1)
-  }
-  if (text !== undefined) {
-    if (!text.trim()) {
-      console.error("--brief requires non-empty text (the brief, written verbatim)")
-      process.exit(1)
-    }
-    return text
-  }
-  if (file === undefined) return undefined
-  if (!file) {
-    console.error("--brief-file requires a path: the file holding the brief, written verbatim")
-    process.exit(1)
-  }
-  const path = resolve(file)
-  const info = await stat(path).catch(() => undefined)
-  if (!info?.isFile()) {
-    console.error(`--brief-file ${file}: ${info ? "not a regular file" : "no such file"}; it names the file holding the brief`)
-    process.exit(1)
-  }
-  const content = await Bun.file(path).text()
-  if (!content.trim()) {
-    console.error(`--brief-file ${file} is empty: the brief must not be empty`)
-    process.exit(1)
-  }
-  return content
+// plan's planning input: the -p/--prompt text or the --file contents.
+function parsePlanInput(): Promise<PlanInput | undefined> {
+  return parseTextOrFile(
+    { textFlag: "-p/--prompt", fileFlag: "--file", what: "planning input", textWhy: "the planning input", fileWhy: "planning input", namesWhy: "planning input", emptyWhy: "planning input must not be empty" },
+    "prompt",
+    "file",
+  )
+}
+
+// init/amend's --brief/--brief-file: the project brief's seed (init) or
+// revision (amend), the text verbatim.
+function parseBriefSeed(): Promise<string | undefined> {
+  return parseTextOrFile(
+    { textFlag: "--brief", fileFlag: "--brief-file", what: "brief", textWhy: "the brief, written verbatim", fileWhy: "brief, written verbatim", namesWhy: "brief", emptyWhy: "brief must not be empty" },
+    "brief",
+    "brief-file",
+  ).then((parsed) => parsed?.text)
 }
 
 // Every run (and every plan that enters the loop) starts a fresh log file
@@ -1750,14 +1719,7 @@ if (command === "init" || command === "amend") {
       )
       process.exit(1)
     }
-    if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
-      const legacy = await legacyModeFallback(directory)
-      console.error(
-        `nothing to amend: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}` +
-          (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
-      )
-      process.exit(1)
-    }
+    await requireConfigFile("amend", false)
     if (!CONFIG_FLAGS.some((key) => flags.has(key)) && flags.get("brief") === undefined && flags.get("brief-file") === undefined) {
       console.error(
         `name at least one key to change (for example: opencode-auto amend ${directory} --phases amt), or revise the brief with --brief <text> | --brief-file <path>; ` +

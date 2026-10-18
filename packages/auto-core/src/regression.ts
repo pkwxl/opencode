@@ -52,7 +52,7 @@ import { autoSwitches } from "./switches"
 // shell's run does not set Opts.dir): both entry points take it from their
 // ctx and build the facts themselves — a project's overlay pack loads the
 // same way the lane gate's session opts load it.
-export type RegressionOpts = { intent?: string; dryrun?: boolean; testByDriver?: boolean; idleMs?: number; maxMs?: number }
+type RegressionOpts = { intent?: string; dryrun?: boolean; testByDriver?: boolean; idleMs?: number; maxMs?: number }
 
 // The round number of a phase unit's round name ("R-01" → 1) — the boundary
 // sites hold the PhaseUnit; the receipt constructors take the number.
@@ -61,8 +61,7 @@ export function roundNumberOf(unit: { round: string }): number {
 }
 
 // One green receipt's machine facts — the shared scan basis, defined beside
-// script.ts's newestGreenReceipt and re-exported for this module's consumers.
-export type { GreenReceipt }
+// script.ts's newestGreenReceipt.
 
 // The lane's newest green receipt, round-scoped (docs/R-NN/regression/) —
 // the shared scan (script.ts newestGreenReceipt) over this round's receipts.
@@ -79,7 +78,7 @@ export async function newestGreenReceipt(dir: string, round: number, lane: strin
 // diff (the attribution basis) even when covered is false; undefined = no
 // usable receipt or an unreadable range — the fail-safe direction, the lane
 // re-runs.
-export type RegressionCoverage = { covered: boolean; receipt?: GreenReceipt; changed?: string[] }
+type RegressionCoverage = { covered: boolean; receipt?: GreenReceipt; changed?: string[] }
 
 export async function regressionCovered(dir: string, round: number, lane: TestLane): Promise<RegressionCoverage> {
   const receipt = await newestGreenReceipt(dir, round, lane.name)
@@ -176,7 +175,7 @@ async function materializeCopy(dir: string, reflink: boolean): Promise<string> {
 // shared writeLaneReceipt at the round-scoped path whatever the mode; the
 // verdict is readLaneVerdict's LANE_RC rule, the same protocol the wrap-up
 // set and the sessions' own lanes speak.
-export type RegressionRun = LaneRun & { violation?: ScriptGuardViolation }
+type RegressionRun = LaneRun & { violation?: ScriptGuardViolation }
 
 export async function runRegressionLane(
   dir: string,
@@ -330,7 +329,7 @@ export async function regressionBoundary(ctx: { directory: string; git: Pick<Git
 // One held lane's facts: the red run's receipt, its log, the bounded
 // evidence and the D6 suspects — everything the repair input and the gate
 // stop name.
-export type HeldLane = { lane: string; receipt: string; log: string; evidence: string[]; suspects: { id: string; title: string }[] }
+type HeldLane = { lane: string; receipt: string; log: string; evidence: string[]; suspects: { id: string; title: string }[] }
 
 // The D6 attribution, deliberately advisory: the paths changed since the
 // lane's last green receipt (everything when none exists — the whole phase
@@ -338,7 +337,7 @@ export type HeldLane = { lane: string; receipt: string; log: string; evidence: s
 // the failing surface set; the tasks whose own commits (the Auto-Task
 // trailer scan) intersect that set are the named units. Attribution steers
 // the person's rework, never a gate — the receipt decides.
-export async function regressionSuspects(dir: string, round: number, lane: TestLane, tasks: readonly { id: string; title: string }[]): Promise<{ id: string; title: string }[]> {
+async function regressionSuspects(dir: string, round: number, lane: TestLane, tasks: readonly { id: string; title: string }[]): Promise<{ id: string; title: string }[]> {
   const coverage = await regressionCovered(dir, round, lane)
   const failing = coverage.changed === undefined ? undefined : coverage.changed.filter((path) => laneTouches(lane.surfaces, [path]))
   const suspects: { id: string; title: string }[] = []
@@ -355,7 +354,7 @@ export async function regressionSuspects(dir: string, round: number, lane: TestL
 // wrote); held = at least one lane red, its facts carried for the repair
 // append or the gate stop; corrupted = a close-time run moved HEAD, the
 // corrupted-baseline family — no phase completes over it.
-export type RegressionHold = { kind: "ok" } | { kind: "held"; lanes: HeldLane[] } | { kind: "corrupted"; moved: string[] }
+type RegressionHold = { kind: "ok" } | { kind: "held"; lanes: HeldLane[] } | { kind: "corrupted"; moved: string[] }
 
 // The hold itself, run at the phase's handover between the distillation
 // commit and the completion rename — the one window the full gate may still
@@ -467,7 +466,7 @@ async function dependencyComplete(dir: string, round: number, lane: TestLane, de
 // — or nothing strict declared, or no dependencies at all); blocked = a
 // strict lane ran red at the state the wait produced, the run's facts
 // carried for the anchor-red path; corrupted = the moved-HEAD family.
-export type StrictWait = { lane: string; deps: string[]; run: RegressionRun } | { corrupted: string[] } | undefined
+type StrictWait = { lane: string; deps: string[]; run: RegressionRun } | { corrupted: string[] } | undefined
 
 // The strict wait itself, run at the top of the wrap-up's lane gate (D7):
 // for every strict row, each of the task's effective dependencies must be

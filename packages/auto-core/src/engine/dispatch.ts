@@ -45,7 +45,7 @@ export type DispatchFacts = {
 // The route a registry pick puts the chain on (setRoute's argument; the
 // entry key and the step are always defined under a pick — a raw override
 // value steps at the base 0).
-export type PickRoute = { model?: string; entry: string; step: number }
+type PickRoute = { model?: string; entry: string; step: number }
 
 // The registry pick of a dispatch: the route (the model id sent to the
 // adapter, the entry's internal name — also the prompt's recorded model and
@@ -54,7 +54,7 @@ export type PickRoute = { model?: string; entry: string; step: number }
 // context, the tier the stats book, the agent profile the dispatch runs on,
 // and the ◈ announcement line (undefined = a continuation of the same
 // session on the same model, which the terminal was already told about).
-export type DispatchPick = {
+type DispatchPick = {
   route: PickRoute
   variant: string | undefined
   entry: ModelEntry | undefined
@@ -66,14 +66,14 @@ export type DispatchPick = {
 // The cross-agent move a pick forces (a session never crosses agents): the
 // worktree-check note the blank session on the target agent opens with, and
 // the ↻ line to log when a pre-created session is being dropped.
-export type AgentMove = { note: string; pendingLog: string | undefined }
+type AgentMove = { note: string; pendingLog: string | undefined }
 
 // The plan attempt() executes: `resumed` (after the move cancelled it, if
 // one fired), the pick or the blocked outcome of the registry selection,
 // and the move. (The session-scope failback clear once rode the plan as a
 // flag; it runs ahead of the selection now — the pick must see the cleared
 // marks — so the executor owns it.)
-export type DispatchPlan = {
+type DispatchPlan = {
   resumed: boolean
   pick?: DispatchPick
   blocked?: SessionResult

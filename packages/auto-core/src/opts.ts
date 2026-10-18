@@ -329,7 +329,7 @@ export type SessionCtx = {
 // must not pull under every importer — and, since plans/0068 S5, the stream
 // ordinal of a stream lane unit (the task pipeline runs exactly that
 // checklist item).
-export type SessionSite =
+type SessionSite =
   | { site: "task"; phase: PhaseKey; stream?: number }
   | { site: "plan-numbering" }
   | { site: "append-numbering" }

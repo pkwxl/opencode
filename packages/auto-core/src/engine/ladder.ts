@@ -74,7 +74,7 @@ export type LadderFacts = { waits: number[]; server: boolean; account?: string }
 // message formats; the escalate step's exhaustion message, in contrast,
 // names the down marks and tried candidates as they stand *after* the
 // escalation ran, which only the executor can read).
-export type Step =
+type Step =
   | { kind: "return"; result: SessionResult }
   | { kind: "window-wait"; wait: WindowWait }
   | { kind: "recover"; why: string; cause?: WaitCause }
