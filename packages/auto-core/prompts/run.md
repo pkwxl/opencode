@@ -131,7 +131,8 @@ reply a child sends you to a few lines (the companions instruct them so).
 
 - The current phase's index: config `phases: "m"` is the no-phase mode — `docs/R-01/P01-implement/tasks.md`;
   anything else is the phased mode — the latest round (the highest `docs/R-NN/` holding a `phases.md`), first
-  phase whose `phases.md` line is not marked ` (closed: …)` — an established phase; when its directory holds
+  phase whose `phases.md` line is unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion) — an
+  established phase; when its directory holds
   no `tasks.md` it is unplanned, and the loop's step 0 plans it before any task runs.
 - Unit files win over the index tick: a task with `docs/T-NNN/todo.md` is pending, with `done.md` is done
   (exactly one of the two — neither or both is an inconsistent index, stop and report). A task is ready when its
@@ -291,7 +292,7 @@ next phase and every phase after it without the stops.
 2. The human gate: a `survey`-type phase holds for the person — its `survey.md` must carry a whole-line
    `Clarified: yes` and no `Fork:` line left unanswered (a held fork without its `Recommend:` clause is the
    same problem). Missing → stop and report: the person's clarification releases the phase (the driver's
-   `plan` installs the approved brief — this suite does not replicate that write). Other phase types pass.
+   `transfer` installs the approved brief — this suite does not replicate that write). Other phase types pass.
 3. Launch the handover child session: `run-handover.md` with `<phase id>`, `<phase name>`, `<phase dir>` and
    `<next target>` filled — the next phase's "<id> <name>" from the line after this one in `phases.md`, or
    `flow complete` when this is the round's last. Then check its outcome mechanically: `<phase
@@ -306,12 +307,12 @@ next phase and every phase after it without the stops.
    handover and transition commits) and the review it waits for — the phase's handover document, its OPEN
    decisions above all, and its task reports; when this was the round's last phase, say the round is
    complete and its close (the round report, the review) is the person's. The person continues by handing
-   this file over again: the restart re-reads `phases.md`, takes the next not-closed phase exactly as
+   this file over again: the restart re-reads `phases.md`, takes the next unticked phase exactly as
    step 5 does, and the loop's step 0 plans a phase whose directory holds no `tasks.md`. Nothing but the
    phrase below keeps this session going past the boundary.
 5. The next phase — only under `phases: all`: re-read `phases.md`. No uncompleted line remains → the round
    is complete: Finish — the round's close (the round report, the person's review) is not this suite's
-   business. Otherwise, for the next not-closed phase:
+   business. Otherwise, for the next unticked phase:
    - Its directory already holds a `tasks.md` → it was planned ahead: back to the loop's step 1 on it.
    - Otherwise construct the formulation task — the phase's planning as its first task unit: pick the next
      free number (the highest existing `T-NNN` + 1), write `docs/T-NNN/todo.md` (title line `# T-NNN:

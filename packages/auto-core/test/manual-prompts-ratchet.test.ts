@@ -166,6 +166,11 @@ describe("manual-driver prompt ratchet", () => {
     expect(charter).toContain("init <dir> --brief")
     expect(charter).toContain("plan <dir> --scaffold")
     expect(charter).toContain("plan <dir> --file <path>")
+    // plans/0101 D2/D4: the phased project start is transfer's — a phased
+    // not-established state refuses plan outright, whatever route option
+    // rode along — and the analysis flow precedes any planning input, so
+    // the charter's landing names the advance command and the mode split.
+    expect(charter).toContain("transfer <dir>")
     // The brief's four constants (D11.4) and the scaffold's shape are named,
     // not paraphrased away.
     for (const literal of ["goal", "source/reference", "target", "the constraints every round must respect"]) {

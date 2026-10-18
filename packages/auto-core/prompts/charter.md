@@ -41,17 +41,25 @@ commands that exist for it, running nothing else:
 - `init <dir> --brief "<one line>"` — the seed of the project brief: what the project is, where any source
   or reference material lives (greenfield: usually none — the contract above stands in), where the
   deliverable goes. The brief's four constants — goal, source/reference, target, and
-  `the constraints every round must respect` — are what the first analysis round will propose in full; the
+  `the constraints every round must respect` — are what the project analysis will propose in full; the
   seed only points the way.
-- `plan <dir> --scaffold` — prints the planning-input template to complete: what this step is for, in scope,
-  out of scope, constraints and environment facts, priorities, what would convince you it is done. Fill it
-  into a file and pass it with the next command.
-- `plan <dir> --file <path>` — the first planning input, shaped by the scaffold.
 - The settled `init` flags (phases, intent, agent, and the rest of the constitution) ride the same `init`
   command — decide them in the discussion, not by defaults absorbed by silence.
+- The project analysis: `transfer <dir>` in the phased mode the flags settle on, `plan <dir>` in the
+  single-run mode — it stubs `docs/analysis.md` and stops. Draft its sections from this discussion (the
+  goals, the `## Project brief` proposal, one `## Roadmap` line per planned round); the person releases the
+  document with a whole-line `Clarified: yes` and a commit, and the re-run installs the approved brief and
+  opens round R-01 (the phased mode stops at the round-start gate for the round brief's review first).
+- `plan <dir> --scaffold` — prints the planning-input template to complete: what this step is for, in scope,
+  out of scope, constraints and environment facts, priorities, what would convince you it is done. Land the
+  filled input where the mode reads it: the single-run mode takes it as `plan <dir> --file <path>`; the
+  phased mode reads the first phase's `docs/R-01/P01-<type>/plan-input.md` — write the file there (the
+  driver commits it unchanged and reads it as written when it constructs the phase's plan task).
 
-After that, the driver itself takes over: `plan` establishes the round and plans its first phase; a coding
-agent can also take the driver's role through the `run.md` companion of this suite. This session's job ends
-at the landing — it does not drive the round it chartered.
+After that, the driver itself takes over: in the phased mode `transfer` constructs each phase's plan task
+and stops for the person's review, `plan` dispatches the reviewed task, and `run` executes the phase; the
+single-run mode keeps `plan` and `run` alone. A coding agent can also take the driver's role through the
+`run.md` companion of this suite. This session's job ends at the landing — it does not drive the round it
+chartered.
 
 <!-- auto: eof -->
