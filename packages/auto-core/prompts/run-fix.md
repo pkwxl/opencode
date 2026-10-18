@@ -47,8 +47,10 @@ do) — and `docs/<task id>/todo.md`, the task document, for the goal and accept
    around ten minutes, and ten minutes of silence is the kill line however long the run); checkpoint your
    work to disk as you go.
 8. Before you end, sweep every deliverable file you touched (everything outside `docs/`) for process-document
-   path references — `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/` — and reword them to the bare
-   task-id form; the verification hard-fails such references (bare task ids in comments are fine).
+   path references — `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/` — restating what each
+   pointed at; the verification hard-fails such references. Bare task ids in comments are fine in the
+   workspace tree; inside a nested repository — a shipped, self-contained deliverable such as a migration
+   destination — they fail as well, as does any path leading outside that repository's own root.
 
 End the session as soon as the gaps are closed and re-checked — or your budget hands you over — so the
 re-verification (or your successor) can start. Your final reply goes back to the master control — keep it to a

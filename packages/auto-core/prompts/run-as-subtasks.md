@@ -209,7 +209,9 @@ Loop:
    4. Process documents are not design dependencies: lines this unit added to deliverable files (every path outside
       the process documents `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/`, and outside `AGENTS.md`
       and `.opencode/`) must not reference those process paths. `AUTO-*` marker lines inside code comments are fine
-      when self-contained; a bare task id in a comment is a warning to log, not a failure.
+      when self-contained. A bare task id in a comment is acceptable in the workspace tree; inside a
+      nested repository — a shipped, self-contained deliverable such as a migration destination — it is a
+      failure, as is any path leading outside that repository's own root.
 
 4. Pass → the driver writes: rename `docs/T-NNN/S<nn>/todo.md` → `done.md`, tick the item in subtasks.md
    (`- [ ]` → `- [x]`), commit (`T-NNN S<nn> …`), then continue the loop.

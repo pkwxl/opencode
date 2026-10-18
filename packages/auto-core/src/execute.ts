@@ -26,7 +26,7 @@ import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, director
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { formatTokens } from "./format"
-import { headText, removeIfUntracked, taskChangedPaths, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { headText, nestedRepoPrefixes, removeIfUntracked, taskChangedPaths, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { pathsOverlap } from "./lanes"
 import { autobanner, log, subbanner } from "./log"
@@ -1167,8 +1167,11 @@ export async function runSubtask(
 // non-trivial + end with the terminator; exemptions derive from document roles
 // (document/roles.ts eofScanExempt); ⑥ the P1 prohibition scan (M2.3,
 // plans/0045) — lines the unit added to deliverable files must not reference
-// process documents (document/process-refs.ts; bare task ids are logged as
-// warnings only). All criteria are deterministic: a zero-write or truncated
+// process documents (document/process-refs.ts; inside a nested repository
+// the destination-containment findings — task ids, paths leading outside
+// the repository's own root — are recorded for release, never blocking,
+// plans/0103 D2, while the outer workspace names tasks freely). All
+// criteria are deterministic: a zero-write or truncated
 // "natural end" is never completion. `exempt` = the project's scan
 // exemptions (config scanExempt, plans/0059 X2): deliverable paths both ⑤ and
 // ⑥ skip, where terminator-free Markdown or process-shaped strings are
@@ -1193,8 +1196,10 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
-  const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt)
-  for (const warning of refs.warnings) log(`  ⚠ ${warning}`)
+  const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt, { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
+  // Destination containment is recorded, not blocking (plans/0103 D2): the
+  // release gate enforces it when the person is ready to ship.
+  for (const finding of refs.deferred) log(`  ⚠ ${finding}`)
   problems.push(...refs.problems)
   return problems
 }

@@ -312,6 +312,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // preflight leftover report; pipeline beside close, the person-invoked
   // command core it mirrors.
   land: "driver",
+  // The release gate (plans/0103 D2/D3): releaseCheck — per destination
+  // repository the clean-tree check and the whole-tree containment scan
+  // under the release posture; read-only beside land, the person-invoked
+  // gate it mirrors.
+  release: "driver",
   interactive: "driver",
   // Key rings of the model registry (plans/0055 §4.3): per-provider rings,
   // the ring position and the spawn config content, in memory only; sits
@@ -655,6 +660,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // close — the person-invoked return path of a round's isolation, reaching
   // git's kernel primitives and the runtime config/shell only.
   land: "pipeline",
+  // The release gate (plans/0103 D2/D3): pipeline beside land — the
+  // person-invoked read-only gate over the destination repositories,
+  // reaching git's kernel primitives and the document scan only.
+  release: "pipeline",
   plan: "pipeline",
   // transfer, the single advance command (plans/0101 D2): pipeline — the
   // runAll it delegates to is the pipeline's top, and its shape resolution

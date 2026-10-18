@@ -31,7 +31,7 @@ import { taskDoc, taskDocPaths } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, parseResult } from "./document/roles"
 import { checklistProblems, scanSubtaskStates } from "./document/state"
-import { commitTree, headText, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, unitViolations } from "./git"
+import { commitTree, headText, nestedRepoPrefixes, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, unitViolations } from "./git"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
 import { renderWhole, type PhaseEntry } from "./prompt"
@@ -198,8 +198,8 @@ export async function adoptUnit(
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
-  const refs = processReferenceScan(await unitAddedLines(dir, baseline), [...(opts.scanExempt ?? [])])
-  for (const warning of refs.warnings) log(`  ⚠ ${warning}`)
+  const refs = processReferenceScan(await unitAddedLines(dir, baseline), [...(opts.scanExempt ?? [])], { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
+  for (const finding of refs.deferred) log(`  ⚠ ${finding}`)
   problems.push(...refs.problems)
   const report = await Bun.file(join(dir, taskDoc(task.id, "report"))).text().catch(() => "")
   const result = parseResult(report)

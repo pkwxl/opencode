@@ -269,10 +269,14 @@ export function eofScanExempt(rel: string, exempt: readonly string[] = []): bool
 // they legitimately name process paths — the AGENTS.md pointer block tells
 // sessions where docs/T-NNN lives, .opencode/ holds the agent
 // contract and the project's prompt/mode/intent overlays, and the driver
-// writes `.auto/` into .gitignore (gitignore.ts). Outside P1 scope; the
-// whole-tree scan at round close (round-close.ts) would otherwise trip on them.
+// writes `.auto/` into .gitignore (gitignore.ts). The manual-driver
+// prompts/ suite (plans/0093) holds the same standing: install-prompts
+// resyncs the driver's own runbooks there, and they name process paths by
+// design — the runbooks drive the process, they are not the deliverable.
+// Outside P1 scope; the whole-tree scan at round close (round-close.ts)
+// would otherwise trip on them (plans/0103).
 function contractSurface(path: string): boolean {
-  return path === "AGENTS.md" || path === ".gitignore" || path.startsWith(".opencode/")
+  return path === "AGENTS.md" || path === ".gitignore" || path.startsWith(".opencode/") || path.startsWith("prompts/")
 }
 
 // Whether a path belongs to the deliverable side P1 protects: a non-process

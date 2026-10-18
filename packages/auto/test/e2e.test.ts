@@ -5364,3 +5364,67 @@ describe("CLI: sync (auto-core plans/0100 D4/D5)", () => {
     }
   })
 })
+
+describe("CLI: release certifies the destination standing alone (auto-core plans/0103 D2/D3)", () => {
+  test("the deferred containment findings block at release (exit 2); a clean self-contained destination certifies (exit 0); no destination and no config exit 1; options are refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-release-"))
+    const bare = await mkdtemp(join(tmpdir(), "auto-cli-release-bare-"))
+    try {
+      await mkdir(join(dir, "pkg"), { recursive: true })
+      const nested = gitOf(join(dir, "pkg"))
+      await Bun.write(join(dir, "pkg", "readme.txt"), "nested\n")
+      await nested("init", "-q")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "setup")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
+      // The recorded findings of the working rounds — a task-id citation
+      // and a path climbing out of the destination's root — block here.
+      await Bun.write(join(dir, "pkg", "src.rs"), "//! The slot (T-012 §2.2).\n")
+      await Bun.write(join(dir, "pkg", "b.txt"), 'see ../../outside\n')
+      await nested("add", "-A")
+      await nested("commit", "-qm", "work")
+      const blocked = await runCli(["release", dir])
+      expect(blocked.code).toBe(2)
+      expect(blocked.err).toContain("the destination does not stand alone yet")
+      expect(blocked.err).toContain("pkg/src.rs: 1 line(s) mention a task id (T-NNN)")
+      expect(blocked.err).toContain('pkg/b.txt:1 references "../../outside"')
+      expect(blocked.err).toContain(`next: fix them (restate in place, vendor what a path named), commit, then re-run: opencode-auto release ${dir}`)
+      // Restated away and committed: certified with the HEAD named.
+      await Bun.write(join(dir, "pkg", "src.rs"), "//! The geometry slot.\n")
+      await Bun.write(join(dir, "pkg", "b.txt"), "self-contained\n")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "scrub")
+      const ok = await runCli(["release", dir])
+      expect(ok.code).toBe(0)
+      const head = (await nested("rev-parse", "--short", "HEAD")).trim()
+      expect(ok.out).toContain(`✓ pkg @ ${head} — no process references, no task ids, no paths outside its own root`)
+      expect(ok.out).toContain("✓ release checks passed")
+      // An uncommitted state is not a releasable state.
+      await Bun.write(join(dir, "pkg", "wip.txt"), "wip\n")
+      const dirty = await runCli(["release", dir])
+      expect(dirty.code).toBe(2)
+      expect(dirty.err).toContain("pkg holds 1 uncommitted path(s)")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "wip lands")
+      // The workspace's own task-naming script never blocked it, and the
+      // outer repository's dirt (the uncommitted script below) is not the
+      // destination's business.
+      await mkdir(join(dir, "test"), { recursive: true })
+      await Bun.write(join(dir, "test", "lane.sh"), "# the T-012 lane\n")
+      const besideDirt = await runCli(["release", dir])
+      expect(besideDirt.code).toBe(0)
+      // No config / no destination: exit 1.
+      const noConfig = await runCli(["release", bare])
+      expect(noConfig.code).toBe(1)
+      expect(noConfig.err).toContain(`nothing to release: ${bare} has no`)
+      // Flagless like status: any option is a usage error.
+      const option = await runCli(["release", dir, "--force"])
+      expect(option.code).toBe(1)
+      expect(option.err).toContain("unknown option --force: release only accepts a directory argument, no options")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(bare, { recursive: true, force: true })
+    }
+  })
+})

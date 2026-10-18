@@ -161,6 +161,34 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
+    "destination containment rides as warnings, never problems (plans/0103 D2: the treatment is deferred to release)",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      await establishRound(dir, { phases: "am" })
+      writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      writeReport(dir, 1)
+      // A nested destination repository carrying exactly the recorded
+      // findings: a task-id citation and a path climbing out of its root.
+      mkdirSync(join(dir, "vendor", "src"), { recursive: true })
+      await git(join(dir, "vendor"), "init", "-q")
+      await git(join(dir, "vendor"), "config", "user.email", "t@example.com")
+      await git(join(dir, "vendor"), "config", "user.name", "t")
+      writeFileSync(join(dir, "vendor", "src", "a.rs"), "//! The slot (T-012 §2.2).\n")
+      writeFileSync(join(dir, "vendor", "src", "b.c"), 'path = "../../outside"\n')
+      await git(join(dir, "vendor"), "add", "-A")
+      await git(join(dir, "vendor"), "commit", "-qm", "destination")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round")
+      const close = await roundCloseProblems(dir, 1)
+      expect(close.problems).toEqual([])
+      expect(close.warnings).toHaveLength(3)
+      expect(close.warnings[0]).toStartWith("vendor/src/a.rs: 1 added line(s) mention a task id (T-NNN) — recorded for release")
+      expect(close.warnings[1]).toStartWith('vendor/src/b.c:1 references "../../outside" — recorded for release')
+      expect(close.warnings[2]).toBe("build: no build command configured (config `build`); the target build was not checked")
+    }),
+  )
+
+  test(
     "a clean tree, a filled close listing and a passing build pass; a failing build is a problem with its output",
     withDir(async (dir) => {
       await gitRepo(dir)

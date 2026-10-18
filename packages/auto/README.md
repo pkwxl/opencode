@@ -44,6 +44,7 @@ opencode-auto init [dir]     # initialize the project config layer: fix the proj
 opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-file <path>]   # rewrite only the given config keys, keep the rest (at least one key, or a brief revision; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
+opencode-auto release [dir]   # the release gate for a destination repository (a nested git repository): the containment findings the working rounds record but deliberately defer — task-id mentions, paths leading outside the repository's own root, process-document paths — block here beside a clean-tree check (an uncommitted state is not a release); a gate, not a scrubber — removal is content work you do with your agent, and the re-run certifies with one ✓ line per destination naming its HEAD, see "The release gate (release)"
 opencode-auto transfer [dir] [--resynthesize]   # advance one boundary, resolved by state: with no round yet the project analysis / direct establishment stopping at the round-start gate; at a phase boundary the human gate first (open survey Fork: lines refuse), then the handover distillation, the phase close and the next phase's plan task constructed and stopped for review; at a completed round the round close and the next round from the roadmap's line (one advance per invocation; m mode refuses — its plan/run shapes stand), see "The advance command (transfer)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # dispatch the reviewed plan task: the planning session runs and stops before execution for human review (m mode: also establishes rounds, stores a planning input and appends), see "Planning and the round lifecycle (plan)"
 opencode-auto run [dir] [--boundary stop|flow]   # execute the current phase's tasks one by one and stop at its clean end — the boundary — naming transfer as the advance command (--boundary flow crosses the boundaries continuously as before; agent semantics and the context budget come from the project config; the unified commit after every session is always on)
@@ -322,6 +323,34 @@ moves on, that committed surface silently predates it — detection names the dr
 - a round in flight only warns (later phases would plan under changed charters — your boundary call);
   `config.json` is never touched, nothing is committed (review and commit the diff), and `sync` refuses
   while a run lock is live (`--dryrun` reads only).
+
+### The release gate (release)
+
+`opencode-auto release [dir]` certifies that the **destination repository** — a nested git
+repository inside the target, the shipped deliverable of a migration like `aster-spi-nor` —
+**stands alone** (auto-core plans/0103). During the migration's rounds the containment
+findings are deliberately deferred: a task-id citation or an out-of-root path inside the
+destination is *recorded* (a ⚠ line at close-out, a warning at round close — the running
+ledger), because restating citations away is churn a working round should not be forced
+into. `release` is the moment the bill comes due:
+
+- every **task-id mention** (T-NNN), every **path leading outside the repository's own
+  root** (a `..` chain climbing past it, an absolute path into the workspace) and every
+  **process-document path** (`docs/T-*`, `docs/R-*`, `.auto/`) in the destination blocks;
+- each destination must hold a **clean tree** — uncommitted changes are not a releasable
+  state;
+- it is a **gate, not a scrubber**: removal is content work (restate the decision a
+  citation pointed at, vendor or rewrite what a path named) you do with your agent; fix,
+  commit, and the re-run certifies with one `✓ <destination> @ <HEAD>` line;
+- `AUTO-*` markers are self-contained content, not references — stripping them is your
+  editorial choice, never demanded;
+- the workspace's own tree is not the destination's business: `test/` scripts naming task
+  ids never blocked anything, and the outer repository's dirt does not either.
+
+Exit codes: `0` certified; `2` findings remain (fix, commit, re-run); `1` there is no
+nested repository to release or no config. Takes no options (like `status`); runs beside a
+live run (read-only — the clean-tree check makes a mid-flight certification refuse on its
+own).
 
 ### Config fix (fix)
 

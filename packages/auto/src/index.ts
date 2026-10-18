@@ -22,6 +22,7 @@ import {
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
+import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
@@ -377,9 +378,11 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent", "tree-lanes"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); status and install-prompts stay flagless.
+// agents and spends tokens); status, install-prompts and release stay
+// flagless (release certifies the destination as it stands — no options to
+// shape a read-only gate).
 const MODELS_FLAGS = new Set(["probe"])
-const FLAGLESS = command === "status" || command === "models" || command === "install-prompts"
+const FLAGLESS = command === "status" || command === "models" || command === "install-prompts" || command === "release"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skips the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
@@ -576,7 +579,7 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -2399,6 +2402,44 @@ if (command === "sync") {
   process.exit(0)
 }
 
+// The release gate (auto-core plans/0103 D2/D3): the destination repository
+// ships standalone, so the containment findings the working rounds only
+// record (close-out ⚠ lines, round-close warnings) become blocking here.
+// Read-only beside the config read — no run-lock refusal (it certifies a
+// committed state, and the clean-tree check inside makes a mid-flight tree
+// refuse on its own). Exit 0 with one ✓ line per destination naming its
+// HEAD; 2 while findings remain (fix them with your agent, commit, re-run);
+// 1 when there is no destination to release or the config is unusable.
+if (command === "release") {
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    console.error(`nothing to release: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}`)
+    process.exit(1)
+  }
+  let scanExempt: readonly string[] | undefined
+  try {
+    scanExempt = (await loadProjectConfig(directory)).scanExempt
+  } catch {
+    // An invalid config does not stop a read-only gate over the tree; the
+    // scan simply runs without the project's exemptions (a stale exemption
+    // can only over-report, never pass something the config would refuse).
+    scanExempt = undefined
+  }
+  const check = await releaseCheck(directory, { scanExempt })
+  if (check.nothing !== undefined) {
+    console.error(check.nothing)
+    process.exit(1)
+  }
+  if (check.problems.length) {
+    console.error(`⚠ release checks: the destination does not stand alone yet — these must be removed before it ships`)
+    for (const problem of check.problems) console.error(`  ✗ ${problem}`)
+    console.error(`next: fix them (restate in place, vendor what a path named), commit, then re-run: opencode-auto release ${directory}`)
+    process.exit(2)
+  }
+  for (const line of check.certified) console.log(line)
+  console.log("✓ release checks passed")
+  process.exit(0)
+}
+
 // The phase progress line (shared by run's banner and status): the current
 // round's phase index → P01-analysis✓ P02-design▶ …; a missing or invalid
 // index only yields a warning line and never blocks the caller.
@@ -2491,6 +2532,7 @@ console.error(`usage:
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
   opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto sync [dir] [-f|--force] [--dryrun [true|false]] [--from-bundle]
+  opencode-auto release [dir]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
@@ -2502,6 +2544,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — seed it with init/amend --brief); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset, fix and sync)
          sync upgrades a materialized intent bundle to the running binary's (auto-core plans/0100): unedited managed files (the pack, the mode, the phase files init materialized, recorded with their digests in .opencode/auto/provenance.json) fast-forward byte-identically, the stamp rewrites, and the diff is left for review — never committed, never touching config.json. Person-edited files, files the bundle retired and extras under the materialized homes are reported and never written or deleted. An unstamped project (materialized before the stamp existed) bootstraps: byte-identical files are adopted into a fresh stamp, differing ones reported with the headings delta (--from-bundle overwrites them — your assertion the pack is pristine-but-old). A round in flight only warns: later phases would plan under changed charters, your boundary call. sync --dryrun plans and prints, writes nothing (exit 0 when nothing would change, 1 when something would)
+         release [dir] certifies the destination repository standing alone (auto-core plans/0103): the containment findings the working rounds record but deliberately defer — inside a nested repository, task-id mentions, paths leading outside the repository's own root and process-document paths — block here, beside a clean-tree check (an uncommitted state is not a release). A gate, not a scrubber: removal is content work you do with your agent — restate the decision a citation pointed at, vendor or rewrite what a path named — and the re-run certifies the result with one ✓ line per destination naming its HEAD. AUTO-* markers are self-contained content, not references: their removal is your editorial choice, never demanded. Exit 0 certified; 2 findings remain (fix, commit, re-run); 1 no nested repository to release
          plan (auto-core plans/0101 D4) is the dispatch half of the person-bracketed boundary: bare plan runs the awaiting, reviewed plan task transfer constructed — the formulation session, the collect checks and the wrap-up, one session chain stopping on completion (the produced index and task documents are committed, so the second review, of the actual decomposition, is free, and run is its approval act). Every phased state that is not that dispatch refuses naming transfer: the project start and the round establishment (transfer's project-start shape), the complete round (transfer closes it and opens the next), an unplanned phase or one at its boundary (transfer constructs and stops for review). Two guards hold the seam: the round brief docs/R-NN/round.md must be filled — an untouched stub refuses exit 2 naming the fill (no planning session dispatches against an empty round brief) — and an input (-p/--prompt <text> | --file <path>, m mode's planning channel and --append's) that changes what the reviewed todo rendered refuses naming the transfer re-run, whose idempotent reconstruct absorbs it (the input's home is the phase's plan-input.md; plan --phase prepares it assisted). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). --export <T-NNN> | --adopt <T-NNN> are the standalone work-order routes (plans/0076): --export renders a ready unit's work order to stdout (nothing persisted — run it with your own coding-agent session outside the driver, its question protocol the attended record-then-review shape), and --adopt re-checks the externally-driven unit, runs the test handover, performs the ticks and todo.md → done.md renames and lands the unified commit — the driver-side closer a hand-commit would break. The two are mutually exclusive, and each refuses -p/--file, --append, --new-task and --force-close. It takes run's session options; config options, --dryrun, --wait-between, --max-sessions, --repair and --boundary are refused. Exit codes as run's (the guards: the stub-round refusal 2, the state refusals 1)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); --phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); the existing gates check the result — the round-start gate for the brief, the construct's own input read for the input (phased: transfer reads it and stops for review; m mode: plan's session). In m mode on a fresh target (no rounds yet) the first plan opens the assisted project analysis instead — the phased project-start shape is transfer's below; OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did in m mode

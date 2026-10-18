@@ -212,6 +212,7 @@ driver's unified commit is the completion condition.
 | `amend [dir] --<key> <value>` | rewrite only the given config keys (`--phases` at a boundary reshapes the round's unstarted tail) |
 | `fix [dir] [-f] [--dryrun]` | repair the config layer by rule |
 | `sync [dir] [-f] [--dryrun] [--from-bundle]` | upgrade a materialized intent bundle to the running binary's (never writes person-edited files, never deletes extras; `--from-bundle` overwrites differing unstamped files) |
+| `release [dir]` | the release gate: certify a destination repository (nested git repository) stands alone — the task-id/out-of-root/process-path findings the rounds recorded now block, beside a clean-tree check (read-only; fix with your agent, commit, re-run) |
 | `reset [dir] [-f]` | de-initialize (remove exactly init's artifacts) |
 | `transfer [dir] [--resynthesize]` | advance one boundary: open the round, or close the finished phase and construct the next one's plan task (stops for review) |
 | `plan [dir]` | dispatch the reviewed plan task (m mode: also establishes and plans) |

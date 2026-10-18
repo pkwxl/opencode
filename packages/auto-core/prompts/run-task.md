@@ -90,8 +90,10 @@ the session with no handover document at all also means complete; write one only
    sit waiting on a long foreground command. Checkpoint your work to disk as you go: if this session is cut
    off, its successor continues from the tree you leave.
 6. Before you end, sweep every deliverable file you touched (everything outside `docs/`) for references to
-   process-document paths — `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/` — and reword them to
-   the bare task-id form; the verification hard-fails such references (bare task ids in comments are fine).
+   process-document paths — `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/` — restating what
+   each pointed at; the verification hard-fails such references. Bare task ids in comments are fine in the
+   workspace tree; inside a nested repository — a shipped, self-contained deliverable such as a migration
+   destination — they fail as well, as does any path leading outside that repository's own root.
 
 End the session as soon as your share is done — the task complete, or the handover written — so the next
 session can start. Your final reply goes back to the master control — keep it to a few lines (what you did,

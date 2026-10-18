@@ -891,6 +891,20 @@ function depth(path: string): number {
   return path.split(sep).length
 }
 
+// The nested repositories inside the target, as directory-relative path
+// prefixes (repoRoots minus the target itself; callers pass either the
+// roots or a unit baseline's root list): each is a shipped, self-contained
+// deliverable — the destination of a migration or an isolated component —
+// and the P1 scan's destination-containment rules key on the membership
+// (document/process-refs.ts, plans/0103). Sorted longest-first so the
+// deepest prefix wins where nested repositories nest.
+export function nestedRepoPrefixes(dir: string, roots: readonly string[]): string[] {
+  return roots
+    .map((root) => relative(dir, root).replaceAll("\\", "/").replace(/\/+$/, ""))
+    .filter((prefix) => prefix.length > 0 && !prefix.startsWith(".."))
+    .sort((a, b) => b.length - a.length)
+}
+
 // The worktree's list of uncommitted changed files (paths relative to the
 // target directory): the target directory itself (possibly inside a larger
 // repository, confined to the subtree by the pathspec `-- .`) plus every

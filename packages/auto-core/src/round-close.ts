@@ -27,7 +27,7 @@ import { join } from "node:path"
 import { reportForUserPath, roundBriefPath } from "./docpaths"
 import { endsWithEof } from "./doccheck"
 import { processReferenceScan } from "./document/process-refs"
-import { repoRoots, unitAddedLines } from "./git"
+import { nestedRepoPrefixes, repoRoots, unitAddedLines } from "./git"
 import { readPhases } from "./phases"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
 
@@ -51,11 +51,16 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
   const problems: string[] = []
   const warnings: string[] = []
   // 1. Whole tree: an empty baseline per repository makes every tracked line
-  // "added"; untracked files are added whole by unitAddedLines itself.
+  // "added"; untracked files are added whole by unitAddedLines itself. The
+  // nested repositories' prefixes ride along for the containment rules
+  // (plans/0103: the destination answers rules the workspace does not).
   const roots = await repoRoots(dir)
-  const scan = processReferenceScan(await unitAddedLines(dir, roots.map((root) => ({ root, sha: "" }))), opts.scanExempt)
+  const scan = processReferenceScan(await unitAddedLines(dir, roots.map((root) => ({ root, sha: "" }))), opts.scanExempt, { nested: nestedRepoPrefixes(dir, roots), dir })
   problems.push(...scan.problems.map((problem) => `process reference: ${problem}`))
-  warnings.push(...scan.warnings)
+  // Destination containment rides as warnings: the round-close gate records
+  // it for release (plans/0103 D2) — the running ledger the person reads
+  // each round while the treatment stays deliberately delayed.
+  warnings.push(...scan.deferred)
   // 2. Build.
   if (opts.build) {
     const failure = await runBuild(dir, opts.build)

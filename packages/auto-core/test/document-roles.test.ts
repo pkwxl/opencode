@@ -134,7 +134,7 @@ describe("role-derived policies", () => {
 
   test("p1Scope: deliverable files in, process documents and agent-contract surfaces out", () => {
     for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md"]) expect(p1Scope(rel), rel).toBe(true)
-    for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
+    for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "prompts/run.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
   })
@@ -181,16 +181,16 @@ describe("scan exemptions (config scanExempt, plans/0059 X2)", () => {
     expect(eofScanExempt("README.md", globs)).toBe(false)
   })
 
-  test("processReferenceScan skips exempted files, problems and warnings alike", () => {
+  test("processReferenceScan skips exempted files", () => {
     const added = new Map<string, AddedLine[]>([
       ["test/fixtures/report.md", [{ line: 1, text: "see docs/T-003/S01/index.md (T-003)" }]],
       ["src/a.c", [{ line: 2, text: "// see .auto/progress.json" }]],
     ])
     expect(processReferenceScan(added).problems).toHaveLength(2)
+    expect(processReferenceScan(added).deferred).toEqual([])
     const scan = processReferenceScan(added, globs)
     expect(scan.problems).toHaveLength(1)
     expect(scan.problems[0]).toStartWith("src/a.c:2")
-    expect(scan.warnings).toEqual([])
   })
 })
 
@@ -239,6 +239,9 @@ describe("processReferenceScan", () => {
         ["docs/T-001/report.md", lines("see docs/T-001/S01/index.md")],
         ["AGENTS.md", lines("Read .auto/progress.json first")],
         [".opencode/auto/prompts/subtask.md", lines("read docs/{{taskId}}/context.md and docs/T-001/x")],
+        // The manual-driver suite's home (plans/0093/0103): driver runbooks
+        // name process paths by design.
+        ["prompts/run.md", lines("tail docs/T-NNN/handoff.md; .auto/run.lock holds the driver")],
       ]),
     )
     expect(problems).toEqual([])
@@ -251,10 +254,55 @@ describe("processReferenceScan", () => {
     expect(bad.problems).toHaveLength(1)
   })
 
-  test("a bare task id only warns", () => {
-    const { problems, warnings } = processReferenceScan(new Map([["src/a.c", lines("// fixed in T-012", "int T-0x;")]]))
-    expect(problems).toEqual([])
-    expect(warnings).toEqual(["src/a.c: 1 added line(s) mention a task id (T-NNN); deliverable text should not point at process records"])
+  test("a bare task id is fine in the outer workspace, recorded inside a nested repository, blocking at release (plans/0103 D2)", () => {
+    // The workspace's own scripts name tasks freely — no check runs there.
+    const outer = processReferenceScan(new Map([["test/lane.sh", lines("// fixed in T-012", "echo T-012 done")]]))
+    expect(outer.problems).toEqual([])
+    expect(outer.deferred).toEqual([])
+    // While rounds run the finding is recorded, never blocking.
+    const rounds = processReferenceScan(
+      new Map([["vendor/src/a.c", lines("// the geometry slot (T-012 §2.2)", "int T-0x;")]]),
+      [],
+      { nested: ["vendor"] },
+    )
+    expect(rounds.problems).toEqual([])
+    expect(rounds.deferred).toEqual([
+      "vendor/src/a.c: 1 added line(s) mention a task id (T-NNN) — recorded for release: the destination must shed the id before it ships",
+    ])
+    // The release posture is the enforcement moment.
+    const release = processReferenceScan(
+      new Map([["vendor/src/a.c", lines("// the geometry slot (T-012 §2.2)", "int T-0x;")]]),
+      [],
+      { nested: ["vendor"], release: true },
+    )
+    expect(release.deferred).toEqual([])
+    expect(release.problems).toEqual([
+      "vendor/src/a.c: 1 line(s) mention a task id (T-NNN) — restate the content in place and remove the id: the destination must stand alone to release",
+    ])
+  })
+
+  test("inside a nested repository, no path may lead outside its own root — recorded in rounds, blocking at release (plans/0103 D2)", () => {
+    const dir = "/work/target"
+    const added = new Map([
+      // A climb within the file's depth inside the repository stays in.
+      ["vendor/kernel/lib/a.rs", lines('include_str!("../../rust-toolchain.toml")')],
+      // Past the file's depth escapes; an absolute path under the target
+      // directory names the workspace the repository ships out of.
+      ["vendor/src/b.c", lines('path = "../../outside"', "// verified by /work/target/test/t053_ktest.sh")],
+      // /usr and friends are system paths, not workspace references.
+      ["vendor/src/c.c", lines('open("/dev/null")', '#include "/usr/include/stdio.h"')],
+    ])
+    const rounds = processReferenceScan(added, [], { nested: ["vendor"], dir })
+    expect(rounds.problems).toEqual([])
+    expect(rounds.deferred).toHaveLength(1)
+    expect(rounds.deferred[0]).toContain('vendor/src/b.c:1 references "../../outside"')
+    expect(rounds.deferred[0]).toContain('vendor/src/b.c:2 references "/work/target/test/t053_ktest.sh"')
+    expect(rounds.deferred[0]).toContain("recorded for release")
+    const release = processReferenceScan(added, [], { nested: ["vendor"], dir, release: true })
+    expect(release.deferred).toEqual([])
+    expect(release.problems).toHaveLength(1)
+    expect(release.problems[0]).toContain('vendor/src/b.c:1 references "../../outside"')
+    expect(release.problems[0]).toContain("no path may lead outside the destination's own root")
   })
 
   test("hits per file are capped in the message", () => {

@@ -134,7 +134,11 @@ task ids as pointers. A comment needing a decision or constraint that a process 
 records restates that content itself, so the code stands on its own once the process
 documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in
 code comments, but each line carries its own question, decision and reason and never
-points at a process document.
+points at a process document. Inside a nested repository — a shipped,
+self-contained deliverable such as a migration destination — the rule is
+stricter: never mention a task id at all, and never write a path that leads
+outside that repository's own root; vendor or restate in place whatever it
+pointed at.
 
 ## guarantees
 

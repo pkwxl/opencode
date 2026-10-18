@@ -93,6 +93,9 @@ export const REPO_LANE: readonly string[] = [
   "test/resolve.test.ts",
   "test/run-status.test.ts",
   "test/round-gates.test.ts",
+  // The release gate (plans/0103 D2/D3): fresh outer repositories with
+  // committed nested destinations — the clean-tree and containment checks.
+  "test/release.test.ts",
   "test/script.test.ts",
   "test/session-api.test.ts",
   "test/session.test.ts",
