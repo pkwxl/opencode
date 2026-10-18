@@ -46,6 +46,10 @@ export const REPO_LANE: readonly string[] = [
   // runTask over real git repositories (freshRepo fixtures).
   "test/decompose-field.test.ts",
   "test/document-roles.test.ts",
+  // The person-proxy brief (plans/0105): every map-row case drives a real
+  // git repository (the stop states' committed fixtures), and the live-lock
+  // case spawns a holder process for the lock to name.
+  "test/driver-helper.test.ts",
   "test/exec-session.test.ts",
   "test/git.test.ts",
   "test/gitignore.test.ts",

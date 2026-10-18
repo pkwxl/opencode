@@ -18,7 +18,7 @@ import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
 import { banner, dirtyStopLines, log } from "./log"
 import { sessionOpts } from "./opts"
-import { appendPlan, appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
+import { appendPlan, appendWithStep, phaseState, planWithStep } from "./loop-plan"
 import { repairRoundAppend, runTaskLoop, type LoopCtx } from "./loop-task"
 import {
   CLARIFIED_MARK,
@@ -30,11 +30,12 @@ import {
   phaseHandoverDoc,
   phaseKey,
   phaseSurveyDoc,
+  phaseTitle,
   phaseVerdictDoc,
   routePhase,
   type PhaseUnit,
 } from "./phases"
-import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
+import { emptyIndexNotice, executeNotice, gateStopLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 
 import { openBlockage } from "./blockage-diagnose"
@@ -372,42 +373,11 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // append removes the stale handover itself (plans/0053 D25) and replans the
 // distillation after the fix tasks. Exported since plans/0101 D1/D2: run's
 // boundary stop and transfer's phase-boundary refusal check the human gate
-// ahead of any session and print this same awaiting shape.
+// ahead of any session and print this same awaiting shape. The lines
+// compose in plan's gateStopLines (plans/0105 D3) so the person-proxy brief
+// renders the same bytes; this prints them.
 export function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
-  const { bin } = shellProfile()
-  const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
-  const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
-  log(`⏸ phase ${phaseTitle(phase)} ${awaiting ? "awaits your clarification" : waiting ? "awaits acceptance" : "is held by its gate"}:`)
-  for (const problem of problems) log(`  ${problem}`)
-  const handover = phaseHandoverDoc(phase)
-  if (awaiting) {
-    // The human gate (plans/0081 D14.3): a designed awaiting-person pause, the
-    // acceptance gate's control point — done.md waits, and the person's
-    // release simultaneously approves the proposed project brief (D15.2).
-    // The next phase's planning input is named by its home (plans/0101 D4):
-    // `plan --file` on this route is refused ("after the advance"), so the
-    // pointer stays on the phase's plan-input.md, which the next transfer
-    // construct reads. Human gates are phased-only, so no mode branch.
-    const survey = phaseSurveyDoc(phase)
-    log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override; the next phase's planning input is its \`plan-input.md\` — write it there; the next \`transfer\` construct reads it)`)
-    log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
-    // The reshape channel (plans/0101 D6): the survey's findings are the
-    // round's best evidence of what it should still do — where they
-    // contradict its unstarted phases, this held boundary is the designed
-    // amendment moment (the findings in hand), and the next transfer applies
-    // the value to the tail before constructing (started phases untouched).
-    log(
-      `  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`,
-    )
-  }
-  if (acceptance) {
-    log(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
-  }
-  log(
-    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${bin} plan ${directory} --append -p <text> ` +
-      `(the stale handover is removed and distilled again after them)`,
-  )
-  log(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
+  for (const line of gateStopLines(directory, phase, problems, acceptance)) log(line)
 }
 
 // Whether run's boundary-stop shape is in force (plans/0101 D1): plain run
@@ -423,16 +393,11 @@ const boundaryHolds = (opts: LoopCtx["opts"]): boolean => opts.stopBefore === un
 // close, the next formulation) is transfer's. The stop names the command,
 // and names the round close too when the phase just finished was the round's
 // last — the person knows the next transfer closes the round and stops with
-// its report.
+// its report. The lines compose in plan's phaseBoundaryLines (plans/0105 D3)
+// so the person-proxy brief renders the same bytes; this wrapper keeps the
+// loop's ctx-shaped call sites.
 async function boundaryStopLines(ctx: LoopCtx, phase: PhaseUnit): Promise<string[]> {
-  const { bin } = shellProfile()
-  const state = await phaseState(ctx.directory)
-  const last = state.phases.at(-1)?.id === phase.id
-  return [
-    `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
-    `next: ${bin} transfer ${ctx.directory} — it distills the handover, closes the phase${last ? " and the round (stopping with the round's report for your review)" : ""}, ` +
-      `and constructs the next phase's plan task for your review`,
-  ]
+  return await phaseBoundaryLines(ctx.directory, phase)
 }
 
 // Run's tail since plans/0101 D1: the run ends at the current phase's clean

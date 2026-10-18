@@ -22,7 +22,7 @@ import { dirtyStopLines, formatTokens, log } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { REQUIRED_TYPE, phaseType, type PhaseTypeEntry } from "./phases/registry"
-import { currentRound, phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
+import { currentRound, phaseHandoverDoc, phaseKey, phaseTitle, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
@@ -58,8 +58,11 @@ export async function phaseState(directory: string): Promise<PhaseState> {
   return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map() }
 }
 
-// the phase display name (logs/commit titles): P02-design Design
-export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
+// the phase display name (logs/commit titles): P02-design Design — lives in
+// ./phases since plans/0105 (the read-only person-proxy brief composes the
+// gate-stop and boundary lines beside the loop, through plan.ts's twins);
+// re-exported here so this module's historical importers keep one path.
+export { phaseTitle }
 
 // The planning renders' facts (E2): the bypass sessions' human-questions mode
 // is the stop condition's — the same rule sessionOpts applies to every bypass

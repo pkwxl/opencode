@@ -176,6 +176,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   confirm: "driver",
+  // The person-proxy brief (plans/0105): the read-only renderer behind the
+  // shell's flagless `driver-helper` — the six-block brief from live state,
+  // over the existing predicates and plan.ts's stop-line twins.
+  "driver-helper": "driver",
   // The manual-driver prompt suite installer (plans/0093): resyncs the
   // suite's files into a target directory; embedded copies, no rendering.
   "install-prompts": "driver",
@@ -664,6 +668,12 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // person-invoked read-only gate over the destination repositories,
   // reaching git's kernel primitives and the document scan only.
   release: "pipeline",
+  // The person-proxy brief (plans/0105): pipeline beside plan — the
+  // read-only renderer of the six-block brief over the same stop-line
+  // emitters and predicates plan/transfer/the loop print through; it
+  // deliberately sits below the loop (like plan and close), rendering
+  // through plan.ts's lines-returning twins.
+  "driver-helper": "pipeline",
   plan: "pipeline",
   // transfer, the single advance command (plans/0101 D2): pipeline — the
   // runAll it delegates to is the pipeline's top, and its shape resolution
@@ -879,6 +889,12 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "plan",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session"],
     why: "plan's prelude decides the routes that need no AI before any agent starts (plans/0053 D4); the loop imports plan for its stop lines, never the reverse",
+  },
+  // AUTO-DECISION: driver-helper gets a one-way rule beside its classification row (plans/0105 D4 — the read-only command renders the person-proxy brief and does nothing else: no writes, no lock, no services, no session)
+  {
+    from: "driver-helper",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "execute", "exec-session", "attempt", "watch"],
+    why: "the person-proxy brief is read-only rendering over the existing predicates (plans/0105 D1/D4): it must not import the loops, the session-driving layer or the task pipeline — the stop lines reach it through plan.ts's lines-returning twins, never the loop",
   },
   // AUTO-DECISION: models gets a one-way rule besides its classification row (selection and preflight will import it from below the session layer, so an upward import would form a cycle; the rule states that before the first consumer lands)
   {

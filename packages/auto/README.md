@@ -54,6 +54,7 @@ opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the c
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
 opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (runbooks for a coding-agent session acting as the driver) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual-driver prompt suite (install-prompts)"
+opencode-auto driver-helper [dir]   # render the person-proxy brief (plans/0105): the six-block context — role pin (never the driver; prompts/ is reference material), the driver's working model, the live state plus the stop's own lines, the person-owned channels open right now, the assist policy, the exact recovery commands — to paste into the coding-agent session acting with your pen at a boundary run cannot cross; read-only, stdout, nothing written, no run lock (a live lock is reported, never refused on), see "The person-proxy brief (driver-helper)"
 ```
 
 New-project flow, phased (`init` → `transfer` → fill in and commit → `transfer` → review → `plan` → `run`):
@@ -918,6 +919,39 @@ at all. The command is flagless and **requires an initialized project**.
   writes nothing a running driver reads and runs beside a live run; and it runs no git command — the
   suite is tracked content in the target, so you review and commit the resync.
 - Exit `0` on a completed resync (an already-current suite included), `1` on refusal or write failure.
+
+### The person-proxy brief (driver-helper)
+
+`opencode-auto driver-helper [dir]` renders the **person-proxy brief** (auto-core plans/0105): the
+context a coding-agent session needs to act **with the person's pen** at a boundary the automated
+driver deliberately leaves to them — the round-start `round.md` review commit, a held survey's
+`Fork:` lines, a phase's planning input, a blockage document's `Choice:` line, a failed task's
+accept-or-rework. The third rendered role beside the manual suite's driver (install-prompts) and the
+work order's guest session (`plan --export`): the brief is generated **from live state** — the same
+predicates and stop-line emitters the terminal prints — so it can never be stale and never misname
+the role, unlike a hand-drafted paste-prompt.
+
+The brief is six blocks: **ROLE** (the proxy pin — the session never takes the driver's seat and
+never the manual-driver role of `prompts/run.md`, which is reference material, not the execution
+path), **PRIMER** (the driver's working model), **STATE** (the live facts plus the stop's own
+lines), **CHANNELS** (the person-owned documents open at this state, each with its grammar and its
+commit ownership), **POLICY** (the assist rule, the state's recorded defaults — held forks'
+`Recommend:` lines, the round report's needs-attention section — and the stop-and-ask boundary) and
+**RECOVERY** (the exact commands, with the brief's own dir argument). A healthy mid-state renders
+the rhythm brief (`run` executes; the boundary follows) — the command is consultable at any moment,
+not only at stops.
+
+- **Read-only, stdout, flagless** (the `plan --scaffold` precedent): nothing is written into the
+  target, exit `0`; nothing is parsed back — `run`/`transfer`/`plan` gain no inputs, and the proxy's
+  writes land only in the person-owned channels that already exist.
+- **No run lock**: a live lock is *reported* in the brief (write nothing while it holds), never
+  refused on — the brief is exactly the thing a person reads while a run sits blocked.
+- The state is keyed on the config: an unloadable config refuses with exit `1` (fix the config
+  layer first); the round-close checks run without the config build (the brief says so when one is
+  configured — a brief must not run the target's build).
+- The trust model is unchanged: the proxy holds the person's pen under the backstops that bound any
+  session (protect, the clean-tree start gates, the close-out SHA audit, the P1 and containment
+  scans). The tool renders; the person pastes the brief into the coding agent of their choice.
 
 ## opencode server and agent selection
 

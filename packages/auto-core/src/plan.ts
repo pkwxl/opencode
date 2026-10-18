@@ -17,6 +17,7 @@
 import { join } from "node:path"
 import { mkdir } from "node:fs/promises"
 import { ensurePointer } from "./agents-block"
+import { ACCEPTED_MARK } from "./document/roles"
 import { analysisProblems, renderAnalysisStub, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
 import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
@@ -32,10 +33,13 @@ import {
   establishRound,
   legacyLayoutProblem,
   phaseFlowBlockedLine,
+  phaseHandoverDoc,
   phaseIndexPath,
   phaseKey,
   phaseLabel,
+  phaseSurveyDoc,
   phaseTailDrift,
+  phaseTitle,
   readPhases,
   roundRoot,
   routePhase,
@@ -829,6 +833,95 @@ export async function establishRoundSetup(
 // ("plan" | "transfer") and each caller's own line compositions are the only
 // interpolations, so every stop stays byte-identical to the twins they
 // replaced (plan.test.ts and transfer.test.ts pin them).
+// plans/0105 D3 widened the family: the loop-owned and transfer-owned stop
+// lines that were log()-composed inline (logGateStop's gate stop, the
+// boundary stop, transfer's nothing-to-advance refusal and roadmap-exhausted
+// stop, analysisGate's three analysis stops) gained lines-returning twins
+// here too, so the person-proxy brief (src/driver-helper.ts — deliberately
+// below the loop, like this module) renders the same bytes the terminal
+// prints. The loop-side originals print through these; a brief that could
+// disagree with the terminal is worse than none.
+
+// The held-phase gate stop (plans/0049 G7; the lines-returning twin of
+// loop-phase's logGateStop, verbatim): the awaiting clarification shape, the
+// acceptance shape, or the held-gate shape, with the person's ways on —
+// sign, rework through an append, or close without the gate — as commands.
+export function gateStopLines(directory: string, phase: PhaseUnit, problems: readonly string[], acceptance: string | undefined): string[] {
+  const { bin } = shellProfile()
+  const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
+  const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
+  const lines = [`⏸ phase ${phaseTitle(phase)} ${awaiting ? "awaits your clarification" : waiting ? "awaits acceptance" : "is held by its gate"}:`]
+  for (const problem of problems) lines.push(`  ${problem}`)
+  const handover = phaseHandoverDoc(phase)
+  if (awaiting) {
+    // The human gate (plans/0081 D14.3): a designed awaiting-person pause, the
+    // acceptance gate's control point — done.md waits, and the person's
+    // release simultaneously approves the proposed project brief (D15.2).
+    // The next phase's planning input is named by its home (plans/0101 D4):
+    // `plan --file` on this route is refused ("after the advance"), so the
+    // pointer stays on the phase's plan-input.md, which the next transfer
+    // construct reads. Human gates are phased-only, so no mode branch.
+    const survey = phaseSurveyDoc(phase)
+    lines.push(
+      `  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override; the next phase's planning input is its \`plan-input.md\` — write it there; the next \`transfer\` construct reads it)`,
+    )
+    lines.push(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
+    // The reshape channel (plans/0101 D6): the survey's findings are the
+    // round's best evidence of what it should still do — where they
+    // contradict its unstarted phases, this held boundary is the designed
+    // amendment moment (the findings in hand), and the next transfer applies
+    // the value to the tail before constructing (started phases untouched).
+    lines.push(`  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`)
+  }
+  if (acceptance) {
+    lines.push(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
+  }
+  lines.push(
+    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${bin} plan ${directory} --append -p <text> ` +
+      `(the stale handover is removed and distilled again after them)`,
+  )
+  lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
+  return lines
+}
+
+// The phase-boundary stop (plans/0101 D1; the dir-based twin of loop-phase's
+// boundaryStopLines, verbatim): the phase's planned work is done at a clean
+// end, and everything after is transfer's — the stop names the command, and
+// the round close too when the phase just finished was the round's last.
+export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): Promise<string[]> {
+  const { bin } = shellProfile()
+  const state = await readPhases(directory).catch(() => undefined)
+  const last = state?.phases.at(-1)?.id === phase.id
+  return [
+    `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
+    `next: ${bin} transfer ${directory} — it distills the handover, closes the phase${last ? " and the round (stopping with the round's report for your review)" : ""}, ` +
+      `and constructs the next phase's plan task for your review`,
+  ]
+}
+
+// Transfer's nothing-to-advance refusal (plans/0101 D2; the lines-returning
+// twin of the inline log() in transferAdvance, verbatim): pending execute
+// work is run's, the boundary follows its completion.
+export function nothingToAdvanceLine(directory: string, phase: PhaseUnit, pending: number): string {
+  const { bin } = shellProfile()
+  return (
+    `⏸ nothing to advance: ${phaseRefText(phase)} still holds ${pending} pending task(s) — ` +
+    `execute them first: ${bin} run ${directory}; the boundary follows their completion`
+  )
+}
+
+// Transfer's roadmap-exhausted stop (plans/0101 D2 shape 4; the
+// lines-returning twin of the inline log() pair in roundOpen, verbatim): the
+// released roadmap governs the sequence's end — the extend-the-document
+// channel, never a silent config round.
+export function roadmapExhaustedLines(directory: string, round: number): string[] {
+  const { bin } = shellProfile()
+  return [
+    `✓ round ${roundDirName(round)} is closed, and the roadmap of ${ANALYSIS_DOC} holds no line for round ${roundDirName(round + 1)} — the planned work of the roadmap is done`,
+    `next: extend ## Roadmap of ${ANALYSIS_DOC} with the next round's line (\`- ${roundDirName(round + 1)} <phases> — <goal>\`, its phases value the round establishes under), ` +
+      `commit, then re-run: ${bin} transfer ${directory}`,
+  ]
+}
 
 // The establishment stop lines (plan's establish and transfer's
 // establishStop): every rendering of establishRoundSetup's outcome — the
@@ -890,28 +983,53 @@ export function establishStopLines(
 // guidance's manual flag are the only differences between the two callers,
 // whose flag-specific pre-refusals stay caller-side. The release returns the
 // install's lines for the caller to carry into its establishment stop.
+// The three stop shapes compose through the exported lines helpers below
+// (plans/0105 D3: the person-proxy brief renders the same bytes without the
+// write side).
 type AnalysisGateOutcome = { type: "stop"; code: number; lines: string[] } | { type: "released"; lines: string[] }
+
+// The just-opened stop: the stub written, the walkthrough, the release.
+export function analysisOpenedLines(dir: string, command: "plan" | "transfer"): string[] {
+  const { bin } = shellProfile()
+  return [
+    `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
+    `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
+    `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} ${command} ${dir} — the approved brief is installed and round R-01 opens`,
+  ]
+}
+
+// The grammar-problems hold: what holds the release, and the fix channel.
+export function analysisHeldLines(dir: string, command: "plan" | "transfer", problems: readonly string[]): string[] {
+  const { bin } = shellProfile()
+  return [
+    `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
+    ...problems.map((problem) => `  ${problem}`),
+    `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} ${command} ${dir}`,
+  ]
+}
+
+// The awaits-you shape: the review, the forks, the release line.
+export function analysisAwaitingLines(dir: string, command: "plan" | "transfer", forks: number): string[] {
+  const { bin } = shellProfile()
+  return [
+    `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
+      (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
+      `, then add the line \`${CLARIFIED_MARK}\` and commit`,
+    `then re-run: ${bin} ${command} ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
+  ]
+}
 
 export async function analysisGate(
   dir: string,
   command: "plan" | "transfer",
   opts: { testByDriver?: boolean; manual: boolean },
 ): Promise<AnalysisGateOutcome> {
-  const { bin } = shellProfile()
   const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
   if (raw === undefined) {
     await mkdir(join(dir, "docs"), { recursive: true })
     await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    return {
-      type: "stop",
-      code: 0,
-      lines: [
-        `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
-        `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
-        `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} ${command} ${dir} — the approved brief is installed and round R-01 opens`,
-      ],
-    }
+    return { type: "stop", code: 0, lines: analysisOpenedLines(dir, command) }
   }
   let types: ReturnType<typeof loadPhaseTypes>
   try {
@@ -922,29 +1040,11 @@ export async function analysisGate(
   const problems = analysisProblems(raw, types)
   if (problems.length) {
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    return {
-      type: "stop",
-      code: 2,
-      lines: [
-        `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
-        ...problems.map((problem) => `  ${problem}`),
-        `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} ${command} ${dir}`,
-      ],
-    }
+    return { type: "stop", code: 2, lines: analysisHeldLines(dir, command, problems) }
   }
   if (!clarifiedMark(raw)) {
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    const forks = surveyForks(raw)
-    return {
-      type: "stop",
-      code: 2,
-      lines: [
-        `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
-          (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
-          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
-        `then re-run: ${bin} ${command} ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
-      ],
-    }
+    return { type: "stop", code: 2, lines: analysisAwaitingLines(dir, command, surveyForks(raw)) }
   }
   // The release (row 0d's shape): the approved brief proposal installs
   // verbatim (the survey release's mechanism, D15.2 generalized); the caller

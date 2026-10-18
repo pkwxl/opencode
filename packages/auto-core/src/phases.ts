@@ -98,6 +98,12 @@ export function phaseName(unit: PhaseUnit): string {
   return unit.entry.name
 }
 
+// The phase display name (logs/commit titles): P02-design Design. Lived in
+// loop-plan until plans/0105: the read-only person-proxy brief composes the
+// gate-stop and boundary lines beside the loop (plan.ts's twins), so the
+// one-liner moved home to the phases vocabulary it is made of.
+export const phaseTitle = (unit: PhaseUnit): string => `${phaseLabel(unit)} ${phaseName(unit)}`
+
 // The session layer's view of a phase (Opts.phase): the qualified id R-NN.P<nn>
 // (unique across rounds; the runtime key of step resume points, stats buckets
 // and resolve records) and the type entry.

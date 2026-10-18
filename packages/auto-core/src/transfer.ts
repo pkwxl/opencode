@@ -64,7 +64,9 @@ import {
   driftPairs,
   establishRoundSetup,
   establishStopLines,
+  nothingToAdvanceLine,
   phaseRefText,
+  roadmapExhaustedLines,
   roundCloseRefusalLines,
   truncateGoal,
 } from "./plan"
@@ -128,12 +130,8 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   // index, beside hand-added tasks too.
   if (route.type === "plan") return await advanceToReview(directory, round, opts)
   if (route.type === "execute") {
-    const remaining = route.plan.tasks.filter((task) => task.status !== "done")
     if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, round, opts)
-    log(
-      `⏸ nothing to advance: ${phaseRefText(route.phase)} still holds ${remaining.length} pending task(s) — ` +
-        `execute them first: ${bin} run ${directory}; the boundary follows their completion`,
-    )
+    log(nothingToAdvanceLine(directory, route.phase, route.plan.tasks.filter((task) => task.status !== "done").length))
     return 2
   }
   // Shape 2/3: the phase boundary. The human gate first (D2): a survey with
@@ -318,11 +316,7 @@ async function roundOpen(directory: string, round: number, opts: RunAllOpts): Pr
   }
   const roadmap = await releasedRoadmapRounds(directory)
   if (roadmap !== undefined && !roadmap.some((entry) => entry.round === round + 1)) {
-    log(`✓ round ${roundDirName(round)} is closed, and the roadmap of ${ANALYSIS_DOC} holds no line for round ${roundDirName(round + 1)} — the planned work of the roadmap is done`)
-    log(
-      `next: extend ## Roadmap of ${ANALYSIS_DOC} with the next round's line (\`- ${roundDirName(round + 1)} <phases> — <goal>\`, its phases value the round establishes under), ` +
-        `commit, then re-run: ${bin} transfer ${directory}`,
-    )
+    for (const line of roadmapExhaustedLines(directory, round)) log(line)
     return 0
   }
   return establishStop(directory, round + 1, opts, roundCloseLines(close))
