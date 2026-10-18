@@ -5,7 +5,8 @@ coding-agent session opened in the target directory, together with its five comp
 `run-verify.md`, `run-fix.md`, `run-handover.md` and `run-plan.md` (same directory, or all six pasted into
 the session). There is nothing to fill
 in. The session takes the role of the driver (`opencode-auto run`) and executes **every** incomplete task of the
-current phase, one at a time: it determines the next ready task, launches task child sessions that carry the
+current phase, one at a time — or, when the hand-over line names `parallel: <n>`, as concurrent waves of
+independent documentation-scoped tasks (the Parallel waves section): it determines the next ready task, launches task child sessions that carry the
 task to completion — a session hands its context over through `docs/T-NNN/handoff.md` when its share of the
 work is done or its session budget runs out, and the master control relaunches until the task's scope is
 complete, landing each session's share as its own commit at the boundary — then a fresh verification child
@@ -60,8 +61,8 @@ checks specified below.
 ## Keep your own context small
 
 You may drive dozens of tasks in this one session; your context is the scarce resource. Read only what the
-mechanical decisions need: the phase index lines, the `Depends:` field lines at the head of a picked task's
-`todo.md`, and file-existence checks (`todo.md` / `done.md` / `subtasks.md` / `handoff.md` / `gaps.md` /
+mechanical decisions need: the phase index lines, the `Depends:` and `Touches:` field lines at the head of a
+picked task's `todo.md`, and file-existence checks (`todo.md` / `done.md` / `subtasks.md` / `handoff.md` / `gaps.md` /
 `report.md` / `S<nn>/` state). Never read a whole task document, a handoff, a report or the work diff yourself
 (tailing a document's last line — a handover's `Status:` line, a report's `Result:` line — is a mechanical
 check, not a read); content judgment belongs to the child sessions: the task session reads its task document
@@ -77,10 +78,17 @@ reply a child sends you to a few lines (the companions instruct them so).
   baseline SHA, the wrap-up flag, the session budget — and pass the whole resulting text as the child
   session's prompt. Never quote
   a file's content into a prompt: everything a child needs (its task document, the gap list, source, docs/) it
-  reads itself, at the paths the prompt names. Your prompts carry pointers, not contents.
+  reads itself, at the paths the prompt names. Your prompts carry pointers, not contents. Under `parallel:
+  <n>` two fills gain one fact each: a task or fix child's prompt carries the parallel line (one sentence —
+  sibling task sessions run beside yours, your writes stay inside your task's declared `Touches:` paths and
+  its own `docs/T-NNN/` directory; the run-task/run-fix constraints key on it), and a verification child's
+  prompt names the sibling task ids currently live (its worktree tolerance and its path-limited diff key
+  on them).
 - Writing child sessions (task, fix, verification, handover, formulation) run one at a time, never in
-  parallel, always in this same directory. A task's test suites run as background processes inside its task
-  session (run-task.md's testing phase) — parallel lanes are processes, not child sessions.
+  parallel, always in this same directory — one exception: under the hand-over line's `parallel: <n>`
+  phrase, task and fix children of documentation-scoped tasks run beside each other in a wave, each
+  strictly inside its own declared scope (the Parallel waves section). A task's test suites run as
+  background processes inside its task session (run-task.md's testing phase) — parallel lanes are processes, not child sessions.
 - Label every child launch in the host's subagent facility with the pattern `Task session T-NNN`,
   `Verification session T-NNN` or `Fix session T-NNN` (append the retry round on relaunches, e.g.
   `Task session T-NNN (continue)`): the host prefixes its agent type and surfaces the label wherever it
@@ -156,8 +164,10 @@ reply a child sends you to a few lines (the companions instruct them so).
     `docs/T-NNN/gaps.md`, no `docs/T-NNN/report.md`, no `docs/T-NNN/testplan.md`, no `docs/T-NNN/testhands/`
     receipts. Any of those present means the task already began — a parked or interrupted run's state: resume
     it through the park-and-resume rules (the Run modes section's closing paragraph — every run carries them,
-    mode or none); a begun task those rules cannot place (no commit and no handoff to name the role, a tree
-    state their paths do not describe) stops and reports.
+   mode or none); a begun task those rules cannot place (no commit and no handoff to name the role, a tree
+   state their paths do not describe) stops and reports. (Under `parallel: <n>` the Parallel waves section
+   re-keys the first half for wave launches — the readiness rule stands in for it — and leaves the second
+   half exactly as written.)
 - The task document is `docs/T-NNN/todo.md` (title line, `Phase: R-NN.P<nn>` field, `## Goal` / `## Scope` /
   `## Acceptance`).
 
@@ -278,6 +288,68 @@ iteration.
      specific deficiency as feedback; still failing → stop and report.
 7. Next iteration: back to step 1 — the index now shows this task ticked and its `done.md` exists.
 
+## Parallel waves — the `parallel: <n>` phrase
+
+The hand-over line may name the wave width: `parallel: <n>`, at most <n> task or fix child sessions in
+flight at once (2 or 3 is the sane range — the person knows their platform's subagent capacity; a launch
+the facility refuses narrows the wave, named in the report). Without the phrase the loop above is exactly
+as written — the serial floor. With it, independent documentation-scoped tasks run beside each other in
+this same tree, the manual suite's twin of the driver's doc lanes: no worktrees, no landing machinery —
+the master control stays the sole git writer and the sole ticker of the index. The phrase composes with
+every run mode — `window` blocks wave launches like any launch, `pace` waits before each launch as
+written, a `sprint` wall lands every ended child's share before the Finish — and the report names it
+beside the mode line so the restart repeats it.
+
+Admission — the declaration is what the wave admits on, and every fail-safe direction keeps the serial
+floor:
+
+- whole-task: the task's directory holds no `subtasks.md` (checked at every launch — a task that
+  decomposes mid-wave forfeits the wave, its later sessions running alone);
+- its task document declares a non-empty `Touches:` field with every entry under `docs/` of this
+  repository — an undeclared task, or one naming any path outside docs/ (code work, a nested repository),
+  never waves;
+- its effective scope — the declared `Touches:` paths plus its own `docs/T-NNN/` directory, implied even
+  when unlisted unless a declaration already covers it — is disjoint from every live task's effective
+  scope (two paths overlap when either contains the other).
+
+The wave forms from the ready tasks in index order — readiness exactly as the pick rule states it; the
+index-order default never holds two tasks ready at once, so only explicit `Depends:` declarations wave
+(run-plan writes them beside the `Touches:` lines). A ready task that is not admitted runs alone: while
+it is in flight no other child runs, and the wave re-forms after it. Verification, handover, planning and
+formulation children are never parallel; a verification may run beside live task children (its writes are
+its unit's documents and the close-out state), never beside another verification — the close-out ticks
+the shared index — and your own git writes never overlap a verification child's flight: a share landing
+due while one runs waits for its end, the verification's close-out commits the only commits in that
+window.
+
+Per child end, the loop's steps 3–4 run as written with one change — the scoped share. Land the ended
+child's share with the add limited to its task's effective scope (the gap-list unstaging unchanged inside
+it; a docs scope never reaches a nested repository, so the share is this repository's alone), never the
+whole tree: a sibling still in flight has its own uncommitted writes, and a full-tree add would absorb
+them into the wrong share. Afterwards the porcelain may list the transient gap lists, the live tasks'
+scope paths and a held park handover — anything else is residue: stop and report. The zero-write check is
+the same check taken over the unit's own paths. `Status: continue` relaunches into the freed slot;
+`Status: done` (or no handover) moves the task to its verification, launched under the one-at-a-time rule
+above. Fix children ride the wave under their task's own effective scope, the same admission and the same
+scoped shares.
+
+A park met in a wave defers to the drain: validate the blocker exactly as step 4 does, then hold — the
+parked handoff stays uncommitted inside its scope (tolerated like a gap list) and the park commit, the
+blocker's `Depends:` amendment riding it, lands when no child is in flight, the serial rule verbatim.
+When the blocker closes before the drain, skip the park altogether: the task is ready again, its
+handoff's line flipping back to `Status: continue` at the pick, riding its next share.
+
+The wave is drained when no child is in flight and no admitted task is ready: back to the pick — a new
+wave forms around the newly ready tasks — or, every task done, the Phase transfer section. Concurrent
+suites share this one tree: the testing phase's cheap-first discipline keeps the common case safe, and an
+anchor that fails on infrastructure-shaped noise while a sibling builds (a corrupted artifact, a lock
+error) is a relaunch with that feedback, not a stall — count neither against the other.
+
+A restart re-derives a wave from disk exactly as the serial rules do, widened: uncommitted content
+spanning several task scopes means several children were in flight — for each such task (no `done.md`),
+derive its role from its last share commit and relaunch it with a continue line, in index order, the wave
+re-forming under the report's repeated `parallel:` phrase.
+
 ## Phase transfer — when a phase completes
 
 State lives on disk as everywhere else: re-read `phases.md` and the phase directory at every step. In the
@@ -347,13 +419,15 @@ next phase and every phase after it without the stops.
 The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
 with `window`, never with `sprint`); none named, the run is
 unlimited — no window, no wall, no pause: it goes on until its tasks and phases are done or this file's
-own rules stop it. The same line may carry one more phrase beside them: `phases: all`, the Phase
+own rules stop it. The same line may carry two more phrases beside them: `phases: all`, the Phase
 transfer section's phrase that lifts the default stop at each phase boundary — an unattended run (a
 sprint) usually names it,
-since nobody is there to review between phases. Where a mode conflicts with this file's rules, the mode
+since nobody is there to review between phases — and `parallel: <n>`, the Parallel waves section's phrase
+that runs independent documentation-scoped task sessions beside each other. Where a mode conflicts with this file's rules, the mode
 wins. The park/resume rules at this section's end are every run's, a mode named or none — they govern an
 already-begun task wherever the boundary check meets one. Whatever you end with, your report names
-the mode line — and the `phases: all` phrase when it rode — so the person's restart repeats them.
+the mode line — and the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise — so the
+person's restart repeats them.
 
 - `mode: window <HH:MM–HH:MM> [tz]` (times UTC unless a zone is named): a launch window. No new child
   session of any role may be created inside the window — check the clock before every launch. A child
@@ -397,7 +471,8 @@ lane table (`docs/T-NNN/testplan.md`) names suites without green receipts in `do
 mid-testing-phase, and the task child is the role to relaunch whatever the last commit says — save for a
 parked task: the dependency-inversion park outranks the lane override, its open lanes being exactly the
 blocked tail; it resumes only after its named blocker closes. A parked phase transfer (all tasks done, no
-handover yet) simply continues at the Phase transfer section.
+handover yet) simply continues at the Phase transfer section. A parallel wave restarts the same way,
+widened to its several in-flight tasks — the Parallel waves section's restart rule.
 
 ## Hands off — driver-adjacent rules
 
@@ -409,8 +484,10 @@ handover yet) simply continues at the Phase transfer section.
   writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
   unified commit after a session) and the phase-plan commit (the Phase transfer section) — the task
   close-out is the verification child's and the phase close-out the handover child's, not yours.
-- One task at a time, one child session at a time; the share commits happen at each task or fix session's
-  end, and the close-out commits inside the verification child, after a verification passes.
+- One task at a time — or, under `parallel: <n>`, one wave of scope-disjoint documentation tasks (its
+  section above); one verification, handover or planning child at a time always; the share commits happen
+  at each task or fix session's end, and the close-out commits inside the verification child, after a
+  verification passes.
 - One sanctioned exception: protocol edits under `prompts/` that the person directs mid-run are the master
   control's to make; the verification child whose unit is open (or the next one) is briefed with the short
   facts that they are out-of-unit — excluded from its checks, never part of a task's work diff — and its

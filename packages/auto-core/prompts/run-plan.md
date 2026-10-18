@@ -37,13 +37,19 @@ Read first, in this order:
    can carry to completion in one session's share — sized so each task's acceptance is verifiable by
    inspection of its work, with the executable checks named in the acceptance. Even if you believe this
    phase has nothing to do, write one explanatory task. A task may carry a `Depends:` field line listing the
-   task ids it depends on; without it the index order sequences the tasks.
+   task ids it depends on; without it the index order sequences the tasks. Declare independence honestly,
+   for the concurrency it buys: a documentation-scoped task — every path it will change lies under `docs/`
+   — also carries a `Touches:` field line listing those paths (its own `docs/T-NNN/` implied) and
+   `Depends: none` where its work really is independent;
+   the declarations are what the master control's parallel wave admits on, and a task without them runs one at a time. Name real paths and real
+   prerequisites — never restructure the plan to create independent tasks.
 2. Scan `docs/` for the task numbers already taken — the new tasks' numbers continue after the highest
    existing `T-NNN`, never reusing a taken number.
 3. Write the task index `<phase dir>/tasks.md`: one line per task, exactly `- [ ] T-NNN <task title>`, at
    least one task, nothing else on the line.
 4. Write each task's document `docs/T-NNN/todo.md`: the title line `# T-NNN: <task title>`, the field line
-   `Phase: R-NN.P<nn>` (this phase's qualified id), the three sections `## Goal` / `## Scope` /
+   `Phase: R-NN.P<nn>` (this phase's qualified id) — plus, for a documentation-scoped task, the
+   `Depends:` and `Touches:` field lines step 1 rules —, the three sections `## Goal` / `## Scope` /
    `## Acceptance` (the goal in the project's terms, the scope's required actions as checkable items, the
    acceptance criteria provable from the work), and a last line holding only `<!-- auto: eof -->`. Documents
    you create for the plan itself go inside the phase directory — never a flat file at the top of docs/.

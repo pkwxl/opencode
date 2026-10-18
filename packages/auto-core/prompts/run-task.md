@@ -21,7 +21,12 @@ already did.
    `## Acceptance` requires. Code goes directly into the source tree; documents you create for this task go
    inside its own directory `docs/<task id>/` — a permanent path, never a flat file at the top of docs/. You may
    add to the content of docs/ but not modify existing documents (if a modification is unavoidable, annotate it
-   AUTO-DECISION and record it in the relevant document).
+   AUTO-DECISION and record it in the relevant document). When your prompt carries the parallel line
+   (sibling task sessions run beside yours), your writes stay inside your task's declared scope — every
+   path in its `Touches:` field plus your own `docs/<task id>/` directory; the sibling tasks' directories
+   and every other path are read-only for you (reading them is fine). A parallel task does not decompose:
+   if the work needs the subtask pipeline, hand over (`Status: continue`) naming that, and the master
+   control reruns the task alone, outside the wave.
 2. When the task's work is code, run it as two phases and hand over at the boundary between them: implement
    first (design and code complete, self-checked), then test. In the testing phase, run the suites as
    parallel background processes you launch and judge yourself — never serially when they are independent,

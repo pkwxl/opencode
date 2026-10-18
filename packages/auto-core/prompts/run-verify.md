@@ -11,7 +11,9 @@ nothing — a finding is reported, not repaired; the repair belongs to a separat
 entire output is the committed range `<baseline commit>..HEAD` — each task or fix session's share, landed by
 the master control as its own commit at the session's end; the worktree is clean except the transient gap
 list (`docs/<task id>/gaps.md`) — the handover (`docs/<task id>/handoff.md`) is committed content, riding
-each share.
+each share. In a parallel wave (your prompt names the sibling task ids live beside this one) the worktree
+also carries those siblings' uncommitted writes, each inside its own declared scope — as tolerated as the
+gap list — and the range holds their interleaved commits: the exclusions below name both.
 
 Read first: `docs/<task id>/todo.md` — the task document (title line, `Phase:` field, `## Goal` / `## Scope` /
 `## Acceptance`). It is the standard you verify against.
@@ -32,15 +34,19 @@ else — and overwrite that gap list with the current one.
    `Auto-Task: <task id>` and `Auto-Stage: park`, the master control's landing when the task parked on
    another task's work — whose content (the parked handoff, the blocker's `Depends:` amendment) is
    protocol state, excluded from check 3's diff; and other tasks' own commits (an `Auto-Task:` trailer
-   naming another task id) that landed between this task's shares while it sat in the park — out of
+   naming another task id) that landed between this task's shares
+   while it sat in the park or ran beside its siblings in a parallel wave — out of
    unit, excluded from every check. Anything else in the range was committed inside a task or fix
-   session: a hard failure — report it as such. The worktree is clean except the transient gap list.
+   session: a hard failure — report it as such. The worktree is clean except the transient gap list —
+   and, in a parallel wave, the live siblings' scope writes and a held park handover.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —
    judged from the work itself, never from the task session's claims. Verify by inspection: read the range's
    diff (`git diff <baseline commit>..HEAD`, each repository) and the deliverables against what the task
-   requires. Do not re-run the acceptance's executable checks
+   requires. In a parallel wave, limit the diff to the unit's own scope — the `Touches:` paths of
+   `docs/<task id>/todo.md` plus its own `docs/<task id>/` directory — so the siblings' interleaved
+   commits never enter the judgment. Do not re-run the acceptance's executable checks
    (its tests, the typecheck or build) — the task session already ran them and repaired what they found; a
    re-run usually surfaces nothing new, and a defect it alone would catch is left for the person to judge once
    all tasks are done. Never accept a claim you have not inspected yourself.
@@ -59,7 +65,8 @@ else — and overwrite that gap list with the current one.
 - All checks pass → close the task out — the driver's completion sequence; the commits and state writes are
   yours alone, in exactly this order — the same commits the driver itself makes after a whole-task session's
   work is landed (the report, then the state writes, each with its own commit — the work commits are the
-  master control's shares, already in the range):
+  master control's shares, already in the range). In a parallel wave every add below is scoped to the
+  unit's own `docs/<task id>/` directory and, where it ticks, the phase index — never a sibling's path:
   1. Delete `docs/<task id>/gaps.md` when present: a fixed round's gap list is uncommitted transient
      state — removed from disk alone, landing in no commit.
   2. Wrap-up report: <WRITE|SKIP> — when WRITE, write `docs/<task id>/report.md`, the task's wrap-up report:

@@ -405,4 +405,51 @@ describe("manual-driver prompt ratchet", () => {
     expect(verify).toContain("excluded from check 3's diff")
     expect(verify).toContain("while it sat in the park")
   })
+
+  test("the parallel wave: `parallel: <n>` overlays the serial loop (plans/0104)", () => {
+    // The manual twin of the driver's doc lanes (0099) for the doc-work
+    // phases — analysis, design, acceptance above all: the hand-over
+    // line's `parallel: <n>` waves independent documentation-scoped
+    // task/fix children in this same tree (no worktrees, no landing
+    // machinery — the master control stays the sole git writer and the
+    // sole ticker of the index), while the unnamed run keeps the serial
+    // loop exactly as written — the floor. Admission rides the
+    // declaration, fail-safe: whole-task, a non-empty `Touches:` with
+    // every entry under `docs/`, effective scopes (`Touches` ∪ the own
+    // `docs/T-NNN/`, implied when unlisted) pairwise disjoint — an
+    // undeclared, code-touching or overlapping task runs alone. The
+    // deltas over the loop: shares land scoped to the ended task's
+    // effective scope (a full-tree add would absorb a live sibling's
+    // writes), one verification at a time (its close-out ticks the
+    // shared index) with the master's git writes never overlapping a
+    // verification's flight, parks deferring to the drain, the
+    // verification's path-limited diff and generalized interleaving,
+    // and run-plan's `Depends:`/`Touches:` declaration discipline on
+    // doc tasks — the declaration is what the wave admits on.
+    const run = text("run.md")
+    expect(run).toContain("`parallel: <n>`")
+    expect(run).toContain("the serial floor")
+    expect(run).toContain("effective scope")
+    expect(run).toContain("non-empty `Touches:` field")
+    expect(run).toContain("limited to its task's effective scope")
+    expect(run).toContain("never beside another verification")
+    expect(run).toContain("defers to the drain")
+    expect(run).toContain("uncommitted content")
+    expect(run).toContain("spanning several task scopes")
+    expect(run).toContain("a task or fix child's prompt carries the parallel line")
+    expect(run).toContain("the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise")
+    // The 0096 clarifier keeps its role for the serial default.
+    expect(run).toContain("parallel lanes are processes, not child sessions")
+    for (const name of ["run-task.md", "run-fix.md"]) {
+      expect(text(name), name).toContain("your writes stay inside your task's declared scope")
+    }
+    expect(text("run-task.md"), "run-task.md").toContain("does not decompose")
+    const verify = text("run-verify.md")
+    expect(verify).toContain("while it sat in the park or ran beside its siblings in a parallel wave")
+    expect(verify).toContain("limit the diff to the unit's own scope")
+    expect(verify).toContain("never a sibling's path")
+    const plan = text("run-plan.md")
+    expect(plan).toContain("`Touches:`")
+    expect(plan).toContain("the declarations are what the master control's parallel wave admits on")
+  })
 })

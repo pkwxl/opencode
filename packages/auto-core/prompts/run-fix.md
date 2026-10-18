@@ -24,6 +24,10 @@ do) — and `docs/<task id>/todo.md`, the task document, for the goal and accept
    gaps — finish the entry in flight, write the handover document (progress, the gap entries still open; last
    line `Status: continue`, or `Status: done` when that entry closed the list) and end; a successor fix
    session continues.
+4. When your prompt carries the parallel line (sibling task sessions run beside yours),
+   your writes stay inside your task's declared scope — every path in its `Touches:` field plus your
+   own `docs/<task id>/` directory; the sibling tasks' directories and every other path are read-only
+   for you (reading them is fine).
 
 ## Constraints
 
