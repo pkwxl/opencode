@@ -137,13 +137,18 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(mLines).toContain(`then re-run: opencode-auto plan ${manual} — the approved \`## Project brief\` proposal is installed and round R-01 opens`)
   })
 
-  test("row 2 — the round-start gate: the round brief is the channel, the commit the review act, recovery transfer", async () => {
+  test("row 2 — the round-start gate: the round brief is the person's own writing (0107 D2), recovery transfer", async () => {
     const dir = await repo()
     await establishRound(dir, { phases: "mt", round: 1 })
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines.some((line) => line.startsWith("- docs/R-01/round.md — the round brief:"))).toBe(true)
-    expect(lines.some((line) => line.includes("the person fills it and commits it — the commit is the review act"))).toBe(true)
-    expect(lines).toContain(`- opencode-auto transfer ${dir} — it constructs the plan task and stops for your review`)
+    // 0107 D2: the channel states authorship — the person's own writing,
+    // the pen discusses on request and never fills or commits it. The
+    // former wording ("the person fills it and commits it") was read by
+    // the field session as the pen's license.
+    expect(lines.some((line) => line.includes("the person's own writing for the new round — they write it and commit it (the commit is the review act); the pen discusses on request and never fills or commits it"))).toBe(true)
+    expect(lines.some((line) => line.includes("the person fills it"))).toBe(false)
+    expect(lines).toContain(`- opencode-auto transfer ${dir} — it constructs the plan task and stops for review`)
     // The pre-establishment rhythm (analysis released, R-01 not yet opened).
     const released = await repo()
     write(released, ANALYSIS_DOC, ANALYSIS(["- R-01 mt — port the core"], true))
@@ -224,12 +229,47 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines).toContain("⏸ round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
     expect(lines.some((line) => line.includes("close listing: docs/R-01/round.md `## Close` is empty"))).toBe(true)
-    expect(lines.some((line) => line.startsWith("- docs/R-01/round.md — fill its `## Close` section"))).toBe(true)
+    expect(lines.some((line) => line.startsWith("- docs/R-01/round.md — fill its `## Close` section: each restated decision named with where it landed"))).toBe(true)
     expect(lines).toContain(`- opencode-auto run ${dir} — a missing report task is appended automatically`)
     expect(lines).toContain(`- then: opencode-auto transfer ${dir}`)
+    // 0106: the held close names its refuser, the ⚠ records ride under their
+    // own lead, and STATE carries the glyph reading rule before the stop
+    // lines — the proxy session's work list is the ✗ set alone.
+    expect(lines).toContain("⚠ round close checks: transfer will refuse to open the next round until these are fixed")
+    expect(lines).toContain("  recorded — not this stop's work; each ⚠ names its own moment (containment waits for release):")
+    expect(lines).toContain("- reading the stop lines below: ✗ marks this stop's work; ⚠ marks a record — each names its own moment, never work for this stop")
+    // 0107 D3: the `next:` reading rule rides beside the chained
+    // instructions — the field session read "fix them … then re-run:
+    // transfer" as its own work list and walked three further advances.
+    expect(lines).toContain("- reading the stop lines below: a `next:` or `then re-run:` line names the person's act at the stop it printed — never this session's mandate to continue (ROLE's bound)")
     // A configured build is named as deliberately not run by the brief.
     const built = await renderHelperBrief(dir, { phases: "mt", build: "make check" })
     expect(built).toContain("ℹ this brief did not run the config build (`make check`) — the close gate runs it on the next opencode-auto transfer")
+  })
+
+  test("row 6 (0106) — a missing report renders the report-duty charter under its channel; a process-reference finding renders the scanExempt fork", async () => {
+    const dir = await repo()
+    await completeRound(dir, "mt")
+    // Drop the report and plant a deliverable process reference: both
+    // finding channels must ride beside the close refusal.
+    rmSync(join(dir, reportForUserPath(1)))
+    write(dir, "notes.md", "wiring notes — the full record lives in docs/T-001.\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "drop the report, plant a process reference")
+    const lines = await renderHelperBrief(dir, { phases: "mt" })
+    expect(lines.some((line) => line.includes("round report: docs/R-01/report-for-user.md is missing"))).toBe(true)
+    expect(lines.some((line) => line.startsWith(`- docs/R-01/report-for-user.md is missing — either a re-run of opencode-auto run`))).toBe(true)
+    // The charter itself: the report-duty partial verbatim, indented under
+    // CHANNELS — the same numbered shape the appended task session's
+    // planning would carry (the pen writing by hand answers it too).
+    const attention = lines.find((line) => line.trimStart().startsWith("3. **Needs your attention**"))
+    expect(attention).toBeDefined()
+    expect(attention!.startsWith("  3.")).toBe(true)
+    expect(lines.some((line) => line.trimStart().startsWith("4. Where to look deeper"))).toBe(true)
+    // The process-reference fork: restate in place, or the config's exemption
+    // channel for a person-tool file whose grammar is paths.
+    expect(lines.some((line) => line.startsWith("- a process-reference finding — restate the needed content in place and remove the path;"))).toBe(true)
+    expect(lines.some((line) => line.includes(`opencode-auto amend ${dir} --scan-exempt <path> records the exemption in the config`))).toBe(true)
   })
 
   test("row 7 — roadmap-exhausted: transfer's own stop lines verbatim, the extend-the-document channel", async () => {
@@ -323,6 +363,9 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines.some((line) => line.startsWith("- dest — the destination repository: containment findings"))).toBe(true)
     expect(lines).toContain(`- opencode-auto release ${dir} — certifies the destination standing alone (exit 2 while findings remain)`)
+    // 0106: the containment channel carries the restatement how — never
+    // delete the record the id anchored.
+    expect(lines.some((line) => line.includes("never delete the record it anchored (a bad reference beats a lost one)"))).toBe(true)
   })
 
   test("row 13 — nothing to advance: transfer's refusal line verbatim, no channels, recovery run", async () => {
@@ -375,9 +418,16 @@ describe("driver-helper: the blocks (plans/0105 D3)", () => {
     const text = lines.join("\n")
     // The proxy pin: never the driver, the suite reference-not-role.
     expect(text).toContain("You never write implementation code, never launch or drive task sessions, and never take the manual-driver role of `prompts/run.md`: the manual prompt suite that may be installed in this directory is reference material for a person choosing to hand-drive, not your execution path.")
+    // 0107 D1: the mandate bound — the person's instruction is the only
+    // scope; a stop a command reaches is a report point, never a runway.
+    expect(text).toContain("Your mandate is the person's instruction and nothing else.")
+    expect(text).toContain("every stop a command reaches is your report point — report what the stop names and wait for the person")
+    expect(text).toContain("The person re-renders this brief for the new stop: `opencode-auto driver-helper <dir>`.")
+    // 0107 D2: the canonical bullet states authorship — never the pen's.
+    expect(text).toContain("the round-start `docs/R-NN/round.md` brief the canonical one: the person's own writing and their own commit, never the pen's")
     expect(lines).toContain(GUIDANCE.DRIVER_PRIMER)
     expect(lines).toContain(GUIDANCE.ASSIST_RULE)
-    expect(text).toContain("Everything else is stop-and-ask: enumerate what is unknown, ask the person, keep undecided points open — never invent the person's answer.")
+    expect(text).toContain("Everything beyond the person's instruction is stop-and-ask: enumerate what is unknown, ask the person, keep undecided points open — never invent the person's answer.")
     // The round report's needs-attention section rides POLICY when present.
     write(dir, reportForUserPath(1), `# Round report\n\n## Needs your attention\n\n- one open question\n\n${EOF_MARK}\n`)
     const withReport = await renderHelperBrief(dir, { phases: "mt" })

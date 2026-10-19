@@ -113,14 +113,20 @@ export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLi
       if (repos.release) {
         problems.push(`${head} — no path may lead outside the destination's own root: vendor or restate what it pointed at, then re-run release`)
       } else {
-        deferred.push(`${head} — recorded for release: the destination must shed paths outside its own root before it ships`)
+        // AUTO-DECISION (wording, 0106): the remedy clause is part of the
+        // record — the field finding was a session reading "must shed" as
+        // delete and stripping the AUTO-DECISION records by removal, which
+        // loses the provenance the pointer anchored. The round-time lines
+        // now carry the same restatement instruction their release-gate
+        // siblings above carry.
+        deferred.push(`${head} — recorded for release: when the destination ships, vendor or restate what it pointed at in place and remove the path — never delete the content it anchored`)
       }
     }
     if (ids) {
       if (repos.release) {
         problems.push(`${rel}: ${ids} line(s) mention a task id (T-NNN) — restate the content in place and remove the id: the destination must stand alone to release`)
       } else {
-        deferred.push(`${rel}: ${ids} added line(s) mention a task id (T-NNN) — recorded for release: the destination must shed the id before it ships`)
+        deferred.push(`${rel}: ${ids} added line(s) mention a task id (T-NNN) — recorded for release: when the destination ships, restate the content in place and remove the id — never delete the record it anchored`)
       }
     }
   }

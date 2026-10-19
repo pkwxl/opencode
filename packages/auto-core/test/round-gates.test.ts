@@ -34,6 +34,11 @@ describe("round brief (plans/0049 G2/G3)", () => {
     const stub = renderRoundBrief(3)
     expect(stub).toStartWith("# Round R-03\n")
     expect(closeSection(stub)).toBe("")
+    // 0106: the Close hint names the post-0101 enforcer (transfer; m mode
+    // keeps plan) and carries the depth clause the field round showed a
+    // proxy session needed to fill the section properly.
+    expect(stub).toContain("`transfer` (m mode: `plan`) refuses to open the")
+    expect(stub).toContain("each restated decision names")
     await withDir(async (dir) => {
       mkdirSync(join(dir, "docs/R-03"), { recursive: true })
       writeFileSync(join(dir, "docs/R-03/round.md"), stub)
@@ -156,7 +161,16 @@ describe("round-close gate (plans/0049 G8)", () => {
       expect(close.problems[0]).toStartWith('process reference: src/lib.rs:1 references "docs/T-004/report.md"')
       expect(close.problems[1]).toContain("docs/R-01/round.md `## Close` is empty")
       expect(close.warnings).toEqual(["build: no build command configured (config `build`); the target build was not checked"])
-      expect(roundCloseLines(close)[0]).toStartWith("⚠ round close checks")
+      // 0106: the held shape names its refuser and splits the ⚠ records out
+      // from under the "until these are fixed" header — a proxy session
+      // reading the stop as a work list must not see records as work.
+      const held = roundCloseLines(close)
+      expect(held[0]).toBe("⚠ round close checks: transfer will refuse to open the next round until these are fixed")
+      expect(held).toContain(`  ✗ ${close.problems[0]}`)
+      expect(held).toContain("  recorded — not this stop's work; each ⚠ names its own moment (containment waits for release):")
+      expect(held).toContain(`  ⚠ ${close.warnings[0]}`)
+      // The m-mode caller names itself (plan.ts previousRoundClose).
+      expect(roundCloseLines(close, "plan")[0]).toBe("⚠ round close checks: plan will refuse to open the next round until these are fixed")
     }),
   )
 

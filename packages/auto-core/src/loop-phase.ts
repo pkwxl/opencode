@@ -569,7 +569,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       if (opts.stopBefore === "formulate") {
         if (close.problems.length) {
           log(`⏸ round ${roundDirName(state.round)} does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run: ${bin} transfer ${directory}`)
-          for (const line of roundCloseLines(close)) log(line)
+          for (const line of roundCloseLines(close, "transfer")) log(line)
           return 2
         }
         for (const line of roundCloseLines(close)) log(line)

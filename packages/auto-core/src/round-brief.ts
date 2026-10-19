@@ -36,14 +36,17 @@ export function renderRoundBrief(round: number): string {
     "",
     ROUND_CLOSE_HEADING,
     "",
-    // AUTO-DECISION (wording): the hint named `continue` as the gate's
-    // enforcer; with the subcommand retired the gate is plan's (its prelude
-    // refuses to open the next round while this section is empty), so the
-    // hint names plan. The heading above stays the protocol; this text is a
-    // stripped comment hint only.
+    // AUTO-DECISION (wording, 0106): two repairs from one field round — the
+    // enforcer naming caught up to 0101 (`transfer` opens rounds since; m
+    // mode keeps plan; the hint still said `plan`), and the depth clause
+    // added after a proxy session filled the section structurally but
+    // shallow: each restated decision names where it landed, each accepted
+    // loss names what it cost. The heading above stays the protocol; this
+    // text is a stripped comment hint only.
     "<!-- Fill in before the next round: list the decisions of this round that were restated into the target's own",
-    "     documentation, and the ones accepted as lost with the process documents. `plan` refuses to open the next",
-    "     round while this section is empty. -->",
+    "     documentation, and the ones accepted as lost with the process documents — each restated decision names",
+    "     where it landed, each accepted loss names what it cost. `transfer` (m mode: `plan`) refuses to open the",
+    "     next round while this section is empty. -->",
     "",
   ].join("\n")
 }

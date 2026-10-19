@@ -924,16 +924,18 @@ at all. The command is flagless and **requires an initialized project**.
 
 `opencode-auto driver-helper [dir]` renders the **person-proxy brief** (auto-core plans/0105): the
 context a coding-agent session needs to act **with the person's pen** at a boundary the automated
-driver deliberately leaves to them — the round-start `round.md` review commit, a held survey's
-`Fork:` lines, a phase's planning input, a blockage document's `Choice:` line, a failed task's
-accept-or-rework. The third rendered role beside the manual suite's driver (install-prompts) and the
-work order's guest session (`plan --export`): the brief is generated **from live state** — the same
+driver deliberately leaves to them — the round-start gate (the round brief is the person's own
+writing, 0107), a held survey's `Fork:` lines, a phase's planning input, a blockage document's
+`Choice:` line, a failed task's accept-or-rework. The third rendered role beside the manual
+suite's driver (install-prompts) and the work order's guest session (`plan --export`): the brief
+is generated **from live state** — the same
 predicates and stop-line emitters the terminal prints — so it can never be stale and never misname
 the role, unlike a hand-drafted paste-prompt.
 
 The brief is six blocks: **ROLE** (the proxy pin — the session never takes the driver's seat and
 never the manual-driver role of `prompts/run.md`, which is reference material, not the execution
-path), **PRIMER** (the driver's working model), **STATE** (the live facts plus the stop's own
+path; and its mandate is the person's instruction alone — every stop a command reaches is a report
+point, never a runway, 0107), **PRIMER** (the driver's working model), **STATE** (the live facts plus the stop's own
 lines), **CHANNELS** (the person-owned documents open at this state, each with its grammar and its
 commit ownership), **POLICY** (the assist rule, the state's recorded defaults — held forks'
 `Recommend:` lines, the round report's needs-attention section — and the stop-and-ask boundary) and

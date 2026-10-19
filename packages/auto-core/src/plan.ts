@@ -1064,7 +1064,7 @@ export function roundCloseRefusalLines(dir: string, closed: number, open: number
   const { bin } = shellProfile()
   return [
     `⏸ round ${roundDirName(closed)} does not pass its round-close checks, so round ${roundDirName(open)} cannot open yet`,
-    ...roundCloseLines(close),
+    ...roundCloseLines(close, command),
     `next: fix them, commit, then re-run: ${bin} ${command} ${dir}`,
   ]
 }

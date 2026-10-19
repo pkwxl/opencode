@@ -267,7 +267,7 @@ describe("processReferenceScan", () => {
     )
     expect(rounds.problems).toEqual([])
     expect(rounds.deferred).toEqual([
-      "vendor/src/a.c: 1 added line(s) mention a task id (T-NNN) — recorded for release: the destination must shed the id before it ships",
+      "vendor/src/a.c: 1 added line(s) mention a task id (T-NNN) — recorded for release: when the destination ships, restate the content in place and remove the id — never delete the record it anchored",
     ])
     // The release posture is the enforcement moment.
     const release = processReferenceScan(

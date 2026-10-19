@@ -116,14 +116,23 @@ async function runBuild(dir: string, command: string): Promise<string | undefine
   return `\`${command}\` ${why}${tail ? `; output tail:\n${tail}` : ""}`
 }
 
-// Terminal lines for a close result: one ✓ line, or a ⚠ line per item.
-export function roundCloseLines(close: RoundClose): string[] {
+// Terminal lines for a close result: one ✓ line, or a ⚠ line per item. In
+// the held shape the ✗ problems alone sit under the "until these are fixed"
+// header — the ⚠ records render under their own lead naming them records,
+// each with its own moment, never work for this stop (plans/0106: the field
+// finding — a proxy session read the ledger of ⚠ lines as this stop's work
+// list and acted on containment records mid-project). `command` names the
+// refuser: transfer in a phased project, plan in m mode (the caller that
+// owns the stop names itself).
+export function roundCloseLines(close: RoundClose, command: "plan" | "transfer" = "transfer"): string[] {
   if (!close.problems.length) {
     return ["✓ round close checks passed", ...close.warnings.map((warning) => `  ⚠ ${warning}`)]
   }
   return [
-    "⚠ round close checks: plan will refuse to open the next round until these are fixed",
+    `⚠ round close checks: ${command} will refuse to open the next round until these are fixed`,
     ...close.problems.map((problem) => `  ✗ ${problem}`),
-    ...close.warnings.map((warning) => `  ⚠ ${warning}`),
+    ...(close.warnings.length
+      ? ["  recorded — not this stop's work; each ⚠ names its own moment (containment waits for release):", ...close.warnings.map((warning) => `  ⚠ ${warning}`)]
+      : []),
   ]
 }

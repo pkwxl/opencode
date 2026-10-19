@@ -164,13 +164,15 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
 
   test("OPENCODE_AUTO_ANALYSIS=off degrades to direct establishment from config (D8)", async () => {
     const dir = await repo()
-    const out = await capture(() => {
-      process.env.OPENCODE_AUTO_ANALYSIS = "off"
-      return runTransfer(dir, { phases: "mt" })
-    })
-      expect(out.code).toBe(0)
-      expect(existsSync(join(dir, "docs/analysis.md"))).toBe(false)
-      expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test"))).toBe(true)
+    // Planted through the capture fixture, never written by hand: the
+    // fixture scrubs, plants for this run alone and restores — a hand-set
+    // process.env inside the run callback survives the capture's finally and
+    // leaks the off switch into later-loaded files (the pollution surfaced
+    // running file subsets out of alphabetical order).
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }), { plant: { OPENCODE_AUTO_ANALYSIS: "off" } })
+    expect(out.code).toBe(0)
+    expect(existsSync(join(dir, "docs/analysis.md"))).toBe(false)
+    expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test"))).toBe(true)
     expect(out.lines.some((line) => line.includes("roadmap"))).toBe(false)
   })
 })

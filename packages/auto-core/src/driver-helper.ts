@@ -22,6 +22,32 @@
 // dir argument). A healthy mid-state renders the rhythm brief, not an
 // error: the command is consultable at any moment (D2).
 //
+// The 0106 field repairs (plans/0106, ruled from common's R-01 close): the
+// brief carries the instructions the stops had been assuming a reader
+// already held — the report charter rendered verbatim at the missing-report
+// stop (the same `report-duty` partial the planning renders use, so a
+// hand-written report answers the same charter a task session answers), the
+// scanExempt channel beside process-reference findings (a person-tool file
+// that legitimately names process paths), the ✗/⚠ reading rule (✗ is this
+// stop's work; ⚠ is a record naming its own moment), and the restatement
+// how on the destination's containment channel (restate what the id stood
+// for — never delete the record it anchored).
+//
+// The 0107 mandate bound (plans/0107, ruled from common's R-01→R-02
+// boundary): the brief bounded what the pen may touch per stop, never how
+// far it may walk — the field session chained fix → transfer → its own
+// round-brief fill → the next transfer on the licenses the surfaces
+// themselves print (the `next:` lines, ROLE's canonical-act sentence), the
+// person's stop the only bound. ROLE gains the scope rule (the person's
+// instruction is the only mandate; every stop a command reaches is a
+// report point; a person gate's review act is taken by the person or
+// delegated in so many words), the round brief is re-ruled the person's
+// own writing (marks over recorded decisions stay delegable channels —
+// authorship does not), STATE carries the `next:` reading rule beside the
+// lines that carry it, and the stop lines themselves stay byte-identical
+// (they address the person on the terminal; the brief is the proxy's
+// reading surface — 0105 D7 stands).
+//
 // The state→channels map (D5) — every grammar and command already exists;
 // the map invents nothing, it names, per stop, what the person's pen may
 // touch. Detection is by import, never re-implemented:
@@ -30,8 +56,8 @@
 //   |----------------------------------------------------------|---------------------------------------------------------------------|-----------------------|
 //   | 1  project start, analysis unreleased (analysisGate's    | docs/analysis.md — sections, Fork: lines, ## Project brief,         | transfer (m: plan)    |
 //   |    reads: analysisProblems, clarifiedMark)               | ## Roadmap; release by whole-line Clarified: yes                    |                       |
-//   | 2  round-start gate G1 (roundBriefText undefined on an   | docs/R-NN/round.md — goal, acceptance, release criteria; the        | transfer              |
-//   |    established round, or the pre-establishment rhythm)   | person commits it (the review act)                                  |                       |
+//   | 2  round-start gate G1 (roundBriefText undefined on an   | docs/R-NN/round.md — the person's own writing, the pen never        | transfer              |
+//   |    established round, or the pre-establishment rhythm)   | fills it; their commit is the review act                             |                       |
 //   | 3  formulation review stop (route plan, or               | the phase's plan-input.md (a changed text restarts the open step);  | edit, then transfer;  |
 //   |    awaitingFormulation)                                  | round brief and project brief the fixed inputs                      | then plan, run        |
 //   | 4  human gates (phaseGateProblems)                       | survey.md — fork answers, Recommend: defaults, Clarified: yes       | transfer              |
@@ -110,6 +136,7 @@ import { roundBriefText } from "./round-brief"
 import { roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
+import { renderText, usePromptLibrary } from "./template"
 import { loadPlan } from "./tasks"
 
 // What the shell threads in: the loaded config's own facts (the renderer is
@@ -131,16 +158,27 @@ export type HelperBriefOpts = {
 // block — a pasted session must not drift into the driver's seat, and the
 // installed manual suite's master control actively recruits its reader as
 // one (prompts/run.md), so the pin names it as reference material, not the
-// execution path. The hard rules are the system's existing gates restated,
+// execution path. 0107 adds the mandate bound (D1: the person's instruction
+// is the only scope — a stop a command reaches is a report point) and
+// re-rules the canonical bullet (D2: the round brief is the person's own
+// writing). The hard rules are the system's existing gates restated,
 // never new enforcement (D8): protect, the clean-tree start gates, the SHA
 // audit and the scans already bind the proxy.
 const ROLE_LINES = [
   "You hold the person's pen at a boundary the driver (the `opencode-auto` CLI) deliberately leaves to the person. The CLI is the driver — it constructs, dispatches, commits and closes; you decide nothing the driver decides. You never write implementation code, never launch or drive task sessions, and never take the manual-driver role of `prompts/run.md`: the manual prompt suite that may be installed in this directory is reference material for a person choosing to hand-drive, not your execution path.",
+  // 0107 D1 — the mandate bound, ruled from the field session that chained
+  // fix → transfer → its own round-brief fill → the next transfer on the
+  // `next:` lines' own wording: the brief and the stop lines name the
+  // person's options, never a runway.
+  "Your mandate is the person's instruction and nothing else. This brief and the stop lines name the person's options at each stop, never a runway: a command your instruction names is in scope, and every stop a command reaches is your report point — report what the stop names and wait for the person. Never chain a further advance because a line says `next:` (that line addresses the person), and never take a person gate's review act on your own momentum — the person takes it, or the instruction delegates it in so many words. The person re-renders this brief for the new stop: `opencode-auto driver-helper <dir>`.",
   "Hard rules (the existing gates — protect, the clean-tree start gates, the close-out SHA audit, the P1 and containment scans — already enforce them; they bind this session exactly the same):",
   "- never write into `.auto/`, never tick an index line (`docs/R-NN/phases.md`, a phase's `tasks.md`), never rename a `todo.md` → `done.md` — those writes are the driver's alone;",
   "- never edit `.opencode/auto/brief.md` or `AGENTS.md` — the brief is driver-written state (seeded by `init/amend --brief`, installed from an approved proposal), and AGENTS.md is rendered from the config;",
   "- while a run holds the run lock (STATE names it when live), write nothing — wait for the run to end;",
-  "- person-commits are the review acts at the person gates — the round-start `docs/R-NN/round.md` review commit the canonical one; commits over work belong to the driver alone.",
+  // 0107 D2 — the round brief is the person's own writing; the former
+  // wording ("the round-start round.md review commit the canonical one")
+  // was read by the field session as the pen's standing license to fill it.
+  "- person-commits are the review acts at the person gates — the round-start `docs/R-NN/round.md` brief the canonical one: the person's own writing and their own commit, never the pen's; commits over work belong to the driver alone.",
 ]
 
 // The assembly: six blocks in D3's order over the map's resolution. Every
@@ -149,6 +187,17 @@ const ROLE_LINES = [
 export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Promise<string[]> {
   if (!(await Bun.file(join(dir, CONFIG_FILE)).exists())) {
     throw new Error(`nothing to render: ${dir} has no ${CONFIG_FILE}; run opencode-auto init ${dir} first`)
+  }
+  // The report charter renders through the same template library the
+  // planning renders use (0106 D2 — D6 reuse): honor the target's prompt
+  // overlay when one loads; a broken overlay leaves the built-ins standing
+  // (usePromptLibrary assigns only on success) — the commands that must
+  // parse the overlay name its failure, the brief must not die on it.
+  try {
+    usePromptLibrary(dir)
+  } catch {
+    // the built-in charter renders; the overlay's parse failure is the
+    // config family's own finding to surface
   }
   const { bin } = shellProfile()
   const manual = opts.phases === "m"
@@ -162,22 +211,56 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // The two stops whose uncommitted tree is the design (the person's commit
   // IS the review act): the dirty-tree row stays quiet under them.
   let uncommittedByDesign = false
+  // 0106 D2: the report charter block, set by roundCloseRow when the report
+  // problem rides — rendered indented under CHANNELS after the channel
+  // lines (a multi-line charter does not fit the `- ` list shape).
+  let charterBlock: string[] | undefined
+  // 0107 D2: the round brief is the person's own writing for the new round
+  // (their prompt for it, in the person's ruling) — the channel names the
+  // document and its authorship, the pen never the filler. Marks over
+  // recorded decisions (Clarified:/Accepted:/Choice:) stay delegable
+  // channels elsewhere in the map; authorship does not.
   const roundBriefChannel = (n: number): string =>
-    `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person fills it and commits it — the commit is the review act`
+    `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person's own writing for the new round — they write it and commit it (the commit is the review act); the pen discusses on request and never fills or commits it`
   const planInputChannel = (phase: PhaseUnit): string =>
     `${planInputPath(phase)} — the phase's planning input, free-form markdown (the active pack's scaffold: ${bin} plan ${dir} --scaffold prints it); written by the person, committed unchanged by the driver; a changed text restarts the open construction`
   // Row 6's renderer: the close checks (minus the build — the caveat names it
   // when configured; detection matches the gate on everything else), the
   // refusal lines verbatim, the channels and the recovery. Returns whether
   // the gate held (the caller falls through to the open rhythm when not).
+  // 0106: the held close is also where the finding-remedy channels ride —
+  // the missing report's charter (0106 D2) and the process-reference
+  // scanExempt fork (0106 D3), the two channels the field round showed a
+  // proxy session could not discover anywhere in the target.
   const roundCloseRow = async (closed: number): Promise<boolean> => {
     const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt })
     if (!close.problems.length) return false
     stopLines.push(...roundCloseRefusalLines(dir, closed, closed + 1, close, "transfer"))
     if (opts.build) stopLines.push(`ℹ this brief did not run the config build (\`${opts.build}\`) — the close gate runs it on the next ${bin} transfer`)
     channels.push(
-      `${roundBriefPath(closed)} — fill its \`## Close\` section (which decisions were restated into the target's own documentation, which accepted as lost) and commit; a missing round report self-heals through a re-run of ${bin} run ${dir}`,
+      `${roundBriefPath(closed)} — fill its \`## Close\` section: each restated decision named with where it landed in the target's own documentation, each accepted loss with what it cost; then commit; a missing round report self-heals through a re-run of ${bin} run ${dir}`,
     )
+    if (close.problems.some((problem) => problem.startsWith("round report:"))) {
+      // 0106 D2: the report charter, verbatim from the same `report-duty`
+      // partial the planning renders render — the pen that writes the report
+      // by hand answers the same charter the appended task session would.
+      channels.push(
+        `${reportForUserPath(closed)} is missing — either a re-run of ${bin} run appends a report task whose session writes it under the charter below, or the pen writes it by hand under the same charter (end it with the terminator line \`<!-- auto: eof -->\`):`,
+      )
+      charterBlock = renderText("{{> report-duty}}", { reportFile: reportForUserPath(closed) })
+        .trim()
+        .split("\n")
+        .map((line) => (line ? `  ${line}` : ""))
+    }
+    if (close.problems.some((problem) => problem.startsWith("process reference:"))) {
+      // 0106 D3: the remediation fork the finding's own line only half
+      // names — content findings restate in place, but a person-tool file
+      // whose grammar is paths (an ignore file synced from .gitignore) has
+      // the config's exemption channel instead.
+      channels.push(
+        `a process-reference finding — restate the needed content in place and remove the path; a person-tool file that legitimately names process paths (an ignore file synced from .gitignore, a tool config) has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
+      )
+    }
     recovery.push(`${bin} run ${dir} — a missing report task is appended automatically`, `then: ${bin} transfer ${dir}`)
     return true
   }
@@ -246,7 +329,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         // row 6 rendered
       } else {
         uncommittedByDesign = true
-        recovery.push(`${bin} ${advance} ${dir} — it establishes ${roundDirName(round)} and stops at the round-start gate (the setup stays uncommitted; your commit is the review)`)
+        recovery.push(`${bin} ${advance} ${dir} — it establishes ${roundDirName(round)} and stops at the round-start gate (the setup stays uncommitted; the person's round-brief commit lands it)`)
         channels.push(`after that ${advance}: ${roundBriefChannel(round)}`)
       }
     }
@@ -308,7 +391,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           channels.push(roundBriefChannel(round))
         }
         channels.push(planInputChannel(phase))
-        recovery.push(`${bin} transfer ${dir} — it constructs the plan task and stops for your review`, `then: ${bin} plan ${dir} (dispatch), ${bin} run ${dir} (execute)`)
+        recovery.push(`${bin} transfer ${dir} — it constructs the plan task and stops for review`, `then: ${bin} plan ${dir} (dispatch), ${bin} run ${dir} (execute)`)
       } else if (route.type === "execute") {
         const awaiting = awaitingFormulation(route.plan.tasks, phase)
         const failed = await failedTasks(dir, route.plan.tasks.filter((task) => task !== awaiting))
@@ -410,7 +493,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     if (roots.length) {
       const names = nestedRepoPrefixes(dir, roots)
       channels.push(
-        `${names.join(", ")} — the destination repositor${names.length > 1 ? "ies" : "y"}: containment findings the working rounds only record (task ids, out-of-root paths, process-document references) are enforced at the release gate; the fixes are the destination's own content work`,
+        `${names.join(", ")} — the destination repositor${names.length > 1 ? "ies" : "y"}: containment findings the working rounds only record (task ids, out-of-root paths, process-document references) are enforced at the release gate; the fixes are the destination's own content work — restate what each id or path stood for in place and remove the pointer, never delete the record it anchored (a bad reference beats a lost one)`,
       )
       recovery.push(`${bin} release ${dir} — certifies the destination standing alone (exit 2 while findings remain)`)
     }
@@ -427,6 +510,20 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   }
 
   // —— The six blocks, in D3's order ——
+  // 0106 D4: the glyph reading rule, rendered whenever a stop line carries
+  // the marks — the field finding was a proxy treating a ⚠ record (the
+  // containment ledger) as this stop's work under the "fix them" header.
+  if (stopLines.some((line) => line.includes("✗") || line.includes("⚠"))) {
+    facts.push("reading the stop lines below: ✗ marks this stop's work; ⚠ marks a record — each names its own moment, never work for this stop")
+  }
+  // 0107 D3: the `next:` reading rule, one field round later the same
+  // pattern — a proxy read a stop's chained instruction ("fix them … then
+  // re-run: transfer") as its own work list and walked three further
+  // advances. The rule rides beside the lines that carry it; the lines
+  // themselves stay byte-identical (0105 D7 — they address the person).
+  if (stopLines.some((line) => line.includes("next") || line.includes("then re-run"))) {
+    facts.push("reading the stop lines below: a `next:` or `then re-run:` line names the person's act at the stop it printed — never this session's mandate to continue (ROLE's bound)")
+  }
   const lines: string[] = [`# Person-proxy brief — ${dir}`, ""]
   lines.push("## ROLE — the person's pen, never the driver", "")
   for (const line of ROLE_LINES) lines.push(line)
@@ -439,6 +536,10 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   lines.push("", "## CHANNELS — what the person's pen may touch here", "")
   for (const line of channels) lines.push(`- ${line}`)
   if (!channels.length) lines.push("- none — the next act is the driver's (see RECOVERY)")
+  if (charterBlock) {
+    lines.push("")
+    lines.push(...charterBlock)
+  }
   lines.push("", "## POLICY", "")
   lines.push(GUIDANCE.ASSIST_RULE)
   lines.push("")
@@ -447,7 +548,11 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
       ? `Recorded defaults this state already carries: ${defaults.join("; ")}.`
       : "Recorded defaults this state already carries: none beyond the documents named above.",
   )
-  lines.push("Everything else is stop-and-ask: enumerate what is unknown, ask the person, keep undecided points open — never invent the person's answer.")
+  // 0107 D1: the stop-and-ask boundary is keyed to the person's
+  // instruction (the mandate), not merely "everything else" — the field
+  // session read the recorded-defaults sentence as leaving chained
+  // advances free.
+  lines.push("Everything beyond the person's instruction is stop-and-ask: enumerate what is unknown, ask the person, keep undecided points open — never invent the person's answer.")
   lines.push("", "## RECOVERY — the exact commands for this state", "")
   if (recovery.length) for (const line of recovery) lines.push(`- ${line}`)
   else lines.push(`- ${bin} status ${dir} — nothing to advance right now; the state lines above name the situation`)
