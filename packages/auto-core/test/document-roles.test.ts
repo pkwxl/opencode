@@ -132,9 +132,9 @@ describe("role-derived policies", () => {
     expect(deliverable).toEqual(["freeform"])
   })
 
-  test("p1Scope: deliverable files in, process documents and agent-contract surfaces out", () => {
-    for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md"]) expect(p1Scope(rel), rel).toBe(true)
-    for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "prompts/run.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
+  test("p1Scope: deliverable-side roles in, process documents out; workspace surfaces are in by role — the scan's nested gate keeps them out (plans/0108)", () => {
+    for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "prompts/run.md"]) expect(p1Scope(rel), rel).toBe(true)
+    for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
   })
@@ -181,16 +181,17 @@ describe("scan exemptions (config scanExempt, plans/0059 X2)", () => {
     expect(eofScanExempt("README.md", globs)).toBe(false)
   })
 
-  test("processReferenceScan skips exempted files", () => {
+  test("processReferenceScan skips exempted files (destination paths, plans/0108 scope)", () => {
     const added = new Map<string, AddedLine[]>([
-      ["test/fixtures/report.md", [{ line: 1, text: "see docs/T-003/S01/index.md (T-003)" }]],
-      ["src/a.c", [{ line: 2, text: "// see .auto/progress.json" }]],
+      ["dest/test/fixtures/report.md", [{ line: 1, text: "see docs/T-003/S01/index.md (T-003)" }]],
+      ["dest/src/a.c", [{ line: 2, text: "// see .auto/progress.json" }]],
     ])
-    expect(processReferenceScan(added).problems).toHaveLength(2)
-    expect(processReferenceScan(added).deferred).toEqual([])
-    const scan = processReferenceScan(added, globs)
+    const nested = { nested: ["dest"] as const }
+    expect(processReferenceScan(added, [], nested).problems).toHaveLength(2)
+    expect(processReferenceScan(added, [], nested).deferred).toEqual([])
+    const scan = processReferenceScan(added, ["dest/test/fixtures/**"], nested)
     expect(scan.problems).toHaveLength(1)
-    expect(scan.problems[0]).toStartWith("src/a.c:2")
+    expect(scan.problems[0]).toStartWith("dest/src/a.c:2")
   })
 })
 
@@ -200,24 +201,26 @@ describe("processReferenceScan", () => {
   test("each tool-owned path shape is a violation, with file:line in the message", () => {
     const { problems } = processReferenceScan(
       new Map([
-        ["src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
-        ["src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
-        ["tools/run.sh", lines('cat ./.auto/progress.json')],
+        ["dest/src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
+        ["dest/src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
+        ["dest/tools/run.sh", lines('cat ./.auto/progress.json')],
       ]),
+      [],
+      { nested: ["dest"] },
     )
     expect(problems).toHaveLength(3)
-    const a = problems.find((p) => p.startsWith("src/a.c"))
-    expect(a).toContain('src/a.c:1 references "docs/T-003/S01/index.md"')
+    const a = problems.find((p) => p.startsWith("dest/src/a.c"))
+    expect(a).toContain('dest/src/a.c:1 references "docs/T-003/S01/index.md"')
     expect(a).toContain("must not reference process documents")
-    expect(problems.find((p) => p.startsWith("src/b.c"))).toContain('src/b.c:2 references "docs/R-02/P02-design/handover.md"')
-    expect(problems.find((p) => p.startsWith("tools/run.sh"))).toContain('".auto/progress.json"')
+    expect(problems.find((p) => p.startsWith("dest/src/b.c"))).toContain('dest/src/b.c:2 references "docs/R-02/P02-design/handover.md"')
+    expect(problems.find((p) => p.startsWith("dest/tools/run.sh"))).toContain('".auto/progress.json"')
   })
 
   test("look-alikes are not violations", () => {
     const { problems } = processReferenceScan(
       new Map([
         [
-          "src/a.c",
+          "dest/src/a.c",
           lines(
             "see docs/guide.md",
             "mydocs/T-1 is unrelated",
@@ -229,28 +232,37 @@ describe("processReferenceScan", () => {
           ),
         ],
       ]),
+      [],
+      { nested: ["dest"] },
     )
     expect(problems).toEqual([])
   })
 
-  test("process documents and contract surfaces may reference process paths", () => {
-    const { problems } = processReferenceScan(
+  test("the working directory's own files are never scanned — process workspace, whatever they reference (plans/0108)", () => {
+    // The deliverable is the nested destination repositories' own files;
+    // test tooling, the manual-driver prompts/ suite and the agent-contract
+    // surfaces are workspace, and process documents keep their referenced-side
+    // standing.
+    const { problems, deferred } = processReferenceScan(
       new Map([
-        ["docs/T-001/report.md", lines("see docs/T-001/S01/index.md")],
+        ["src/a.c", lines("see docs/T-003/S01/index.md for the layout")],
+        ["test/lane.sh", lines("tail .auto/run.lock; docs/T-004/report.md")],
         ["AGENTS.md", lines("Read .auto/progress.json first")],
         [".opencode/auto/prompts/subtask.md", lines("read docs/{{taskId}}/context.md and docs/T-001/x")],
-        // The manual-driver suite's home (plans/0093/0103): driver runbooks
-        // name process paths by design.
         ["prompts/run.md", lines("tail docs/T-NNN/handoff.md; .auto/run.lock holds the driver")],
+        ["docs/T-001/report.md", lines("see docs/T-001/S01/index.md")],
       ]),
+      [],
+      { nested: ["dest"] },
     )
     expect(problems).toEqual([])
+    expect(deferred).toEqual([])
   })
 
   test("AUTO-* marks: self-contained is fine, a pointer into the process side is not", () => {
-    const ok = processReferenceScan(new Map([["src/a.c", lines("// AUTO-DECISION: keep the ring buffer at 64 entries (measured peak 41)")]]))
+    const ok = processReferenceScan(new Map([["dest/src/a.c", lines("// AUTO-DECISION: keep the ring buffer at 64 entries (measured peak 41)")]]), [], { nested: ["dest"] })
     expect(ok.problems).toEqual([])
-    const bad = processReferenceScan(new Map([["src/a.c", lines("// AUTO-DECISION: see docs/T-004/report.md")]]))
+    const bad = processReferenceScan(new Map([["dest/src/a.c", lines("// AUTO-DECISION: see docs/T-004/report.md")]]), [], { nested: ["dest"] })
     expect(bad.problems).toHaveLength(1)
   })
 
@@ -306,10 +318,10 @@ describe("processReferenceScan", () => {
   })
 
   test("hits per file are capped in the message", () => {
-    const { problems } = processReferenceScan(new Map([["src/a.c", lines(...Array.from({ length: 5 }, (_, i) => `// docs/T-00${i}/x.md`))]]))
+    const { problems } = processReferenceScan(new Map([["dest/src/a.c", lines(...Array.from({ length: 5 }, (_, i) => `// docs/T-00${i}/x.md`))]]), [], { nested: ["dest"] })
     expect(problems).toHaveLength(1)
-    expect(problems[0]).toContain("src/a.c:3")
-    expect(problems[0]).not.toContain("src/a.c:4")
+    expect(problems[0]).toContain("dest/src/a.c:3")
+    expect(problems[0]).not.toContain("dest/src/a.c:4")
     expect(problems[0]).toContain("(and 2 more in this file)")
   })
 })

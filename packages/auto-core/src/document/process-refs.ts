@@ -4,12 +4,16 @@
 // to resolve. The scan is a prohibition, not a resolution: it needs no tree
 // index and never asks whether the path exists.
 //
-// Scope: the lines the unit added (git.ts unitAddedLines) in files on the
-// deliverable side (roles.ts p1Scope — non-process roles minus the
-// agent-contract surfaces, the manual-driver prompts/ suite and the project's
-// scan exemptions, plans/0059 X2). Never the existing tree: retroactively
-// failing older content is not the driver's business (the whole-tree scan is
-// the round-close gate, M4).
+// Scope: the lines the unit added (git.ts unitAddedLines) in files inside a
+// nested destination repository (plans/0108: the deliverable is exactly what
+// a destination child repository's git manages — every file in the working
+// directory outside them, test tooling and prompts/ included, is process
+// workspace, never scanned) that sit on the deliverable side by role
+// (roles.ts p1Scope — non-process roles minus the project's scan exemptions,
+// plans/0059 X2). Completing 0103's line: all three finding families now key
+// on destination membership. Never the existing tree: retroactively failing
+// older content is not the driver's business (the whole-tree scan is the
+// round-close gate, M4).
 //
 // Keyed on tool-owned path shapes, not on the bare word `docs/`, so the scan
 // is safe in a tree with its own documentation directory:
@@ -65,7 +69,11 @@ const MAX_HITS_PER_FILE = 3
 // prefixes of the nested repositories inside the target, `dir` the target
 // directory itself, `release` the release gate's enforcing posture — the
 // containment findings become problems with release wording instead of
-// recorded `deferred` lines.
+// recorded `deferred` lines. `nested` is also the P1 gate itself (plans/
+// 0108): a file outside every prefix is workspace, not deliverable, and is
+// skipped whole — an absent or empty list means no destination
+// repositories, hence no scan surface (the workspace-only posture; release
+// answers the same shape with "nothing to release").
 export type ScanRepos = { nested?: readonly string[]; dir?: string; release?: boolean }
 
 export type ProcessReferenceScan = {
@@ -84,15 +92,18 @@ export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLi
   const problems: string[] = []
   const deferred: string[] = []
   for (const [rel, lines] of [...added].sort(([a], [b]) => a.localeCompare(b))) {
-    if (!p1Scope(rel, exempt)) continue
     const nested = repos.nested?.find((prefix) => rel === prefix || rel.startsWith(`${prefix}/`))
+    // The deliverable definition (plans/0108): only a nested destination
+    // repository's own files are scanned — a workspace file (test tooling,
+    // prompts/, the person's checkouts) is process side whatever its role.
+    if (!nested || !p1Scope(rel, exempt)) continue
     const hits: string[] = []
     const outside: string[] = []
     let ids = 0
     for (const { line, text } of lines) {
       const found = [...text.matchAll(PROCESS_PATH)].map((m) => m[0].replace(/[.:]+$/, ""))
       if (found.length) hits.push(`${rel}:${line} references ${found.map((path) => `"${path}"`).join(", ")}`)
-      else if (nested) {
+      else {
         const out = outsideRootReferences(rel, nested, text, repos.dir)
         if (out.length) outside.push(`${rel}:${line} references ${out.map((path) => `"${path}"`).join(", ")}`)
         else if (TASK_ID.test(text)) ids++
@@ -102,7 +113,7 @@ export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLi
       const shown = hits.slice(0, MAX_HITS_PER_FILE)
       const more = hits.length - shown.length
       problems.push(
-        `${shown.join("; ")}${more ? ` (and ${more} more in this file)` : ""} — deliverable files must not reference process documents ` +
+        `${shown.join("; ")}${more ? ` (and ${more} more in this file)` : ""} — the destination must not reference process documents ` +
           `(docs/T-*, docs/R-*, .auto/): restate the needed content in place and remove the path`,
       )
     }

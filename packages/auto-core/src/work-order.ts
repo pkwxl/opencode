@@ -140,8 +140,9 @@ type AdoptOutcome = { ok: boolean; code: 0 | 1 | 2; lines: string[] }
 //        uncommitted tree — the session cannot commit) must be non-trivial
 //        and end with the terminator, the whole-unit scan of the subtask
 //        close-out;
-//      - the P1 scan over the unit's added lines (deliverable files must not
-//        reference process documents);
+//      - the P1 scan over the unit's added lines (files inside a nested
+//        destination repository must not reference process documents,
+//        plans/0108);
 //      - the report result line: a Result: FAIL blocks (missing report or
 //        line = no verdict, the closeout's own semantics).
 //   3. the ticks and the todo.md → done.md rename (markDone), then

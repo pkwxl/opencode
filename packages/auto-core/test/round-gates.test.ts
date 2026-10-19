@@ -58,11 +58,11 @@ describe("round brief (plans/0049 G2/G3)", () => {
     expect(closeSection("## Close\n\n### Restated\n\n- a\n")).toBe("### Restated\n\n- a")
   })
 
-  test("roles: round.md is the human-written roundBrief role (process, eof-exempt); .gitignore is outside P1 scope", () => {
+  test("roles: round.md is the human-written roundBrief role (process, eof-exempt); .gitignore is in-scope by role but workspace — the scan's nested gate keeps it out (plans/0108)", () => {
     expect(roleOf("docs/R-01/round.md")).toBe("roundBrief")
     expect(roleOf("docs/R-01/P01-design/round.md")).toBe("artifact")
     expect(p1Scope("docs/R-01/round.md")).toBe(false)
-    expect(p1Scope(".gitignore")).toBe(false)
+    expect(p1Scope(".gitignore")).toBe(true)
     expect(p1Scope("src/main.rs")).toBe(true)
   })
 
@@ -146,19 +146,30 @@ describe("round-close gate (plans/0049 G8)", () => {
   }
 
   test(
-    "empty close listing and a process reference in the deliverable are problems; .gitignore's .auto/ is not",
+    "empty close listing and a process reference inside the destination are problems; the workspace's own files and .gitignore's .auto/ are not (plans/0108)",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
+      // The workspace's own files are process workspace since 0108 — src
+      // tooling referencing docs/, the gitignore's .auto/ — never scanned.
       mkdirSync(join(dir, "src"), { recursive: true })
       writeFileSync(join(dir, "src/lib.rs"), "// see docs/T-004/report.md for the reason\nfn main() {}\n")
       writeFileSync(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      // The destination: a nested repository whose own file references the
+      // process side — the deliverable, the one side the scan reads.
+      mkdirSync(join(dir, "dest", "src"), { recursive: true })
+      await git(join(dir, "dest"), "init", "-q")
+      await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+      await git(join(dir, "dest"), "config", "user.name", "t")
+      writeFileSync(join(dir, "dest", "src", "lib.rs"), "// see docs/T-004/report.md for the reason\nfn main() {}\n")
+      await git(join(dir, "dest"), "add", "-A")
+      await git(join(dir, "dest"), "commit", "-qm", "destination")
       writeReport(dir, 1)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const close = await roundCloseProblems(dir, 1)
       expect(close.problems).toHaveLength(2)
-      expect(close.problems[0]).toStartWith('process reference: src/lib.rs:1 references "docs/T-004/report.md"')
+      expect(close.problems[0]).toStartWith('process reference: dest/src/lib.rs:1 references "docs/T-004/report.md"')
       expect(close.problems[1]).toContain("docs/R-01/round.md `## Close` is empty")
       expect(close.warnings).toEqual(["build: no build command configured (config `build`); the target build was not checked"])
       // 0106: the held shape names its refuser and splits the ⚠ records out
@@ -222,29 +233,38 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
-    "scan exemptions (config scanExempt, plans/0059 X2): an exempted deliverable path is left out of the whole-tree scan",
+    "scan exemptions (config scanExempt, plans/0059 X2): an exempted destination path is left out of the whole-tree scan",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
       writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
       writeReport(dir, 1)
-      mkdirSync(join(dir, "test/fixtures"), { recursive: true })
-      writeFileSync(join(dir, "test/fixtures/sample.md"), "a sample task record: docs/T-004/report.md\n")
+      mkdirSync(join(dir, "dest", "test/fixtures"), { recursive: true })
+      await git(join(dir, "dest"), "init", "-q")
+      await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+      await git(join(dir, "dest"), "config", "user.name", "t")
+      writeFileSync(join(dir, "dest", "test/fixtures/sample.md"), "a sample task record: docs/T-004/report.md\n")
+      await git(join(dir, "dest"), "add", "-A")
+      await git(join(dir, "dest"), "commit", "-qm", "destination")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const scanned = await roundCloseProblems(dir, 1, { build: "true" })
       expect(scanned.problems).toHaveLength(1)
-      expect(scanned.problems[0]).toStartWith('process reference: test/fixtures/sample.md:1 references "docs/T-004/report.md"')
-      expect(await roundCloseProblems(dir, 1, { build: "true", scanExempt: ["test/fixtures/**"] })).toEqual({ problems: [], warnings: [] })
+      expect(scanned.problems[0]).toStartWith('process reference: dest/test/fixtures/sample.md:1 references "docs/T-004/report.md"')
+      expect(await roundCloseProblems(dir, 1, { build: "true", scanExempt: ["dest/test/fixtures/**"] })).toEqual({ problems: [], warnings: [] })
     }),
   )
 
   test(
-    "untracked deliverable files are scanned too; a missing round.md is a problem",
+    "untracked files inside a destination are scanned too; a missing round.md is a problem",
     withDir(async (dir) => {
       await gitRepo(dir)
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "notes.txt"), "state lives in .auto/progress.json\n")
+      mkdirSync(join(dir, "dest"), { recursive: true })
+      await git(join(dir, "dest"), "init", "-q")
+      await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+      await git(join(dir, "dest"), "config", "user.name", "t")
+      writeFileSync(join(dir, "dest", "notes.txt"), "state lives in .auto/progress.json\n")
       writeReport(dir, 1)
       const close = await roundCloseProblems(dir, 1, { build: "true" })
       expect(close.problems.map((problem) => problem.split(":")[0])).toEqual(["process reference", "close listing"])

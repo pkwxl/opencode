@@ -42,18 +42,20 @@
 //
 // Process documents are not design dependencies (P1, root plan D12). Every
 // role except freeform is a process role: the tool's record of long-running
-// work, kept to steer the work to its goal. The deliverable (freeform) must
-// never depend on it — no path into it, and when a comment needs what a
-// process document says, it restates the content in place — so that the
-// deliverable stays coherent once the process documents are gone (P1-a: the
-// dependency runs process → deliverable only; P1-b: the process side is
-// disposable). AUTO-* marker lines may sit in deliverable comments (ruling of
-// 2026-09-21): they are process *marks*, eventually removed by later
-// iterations, and each must be self-contained — a mark is legal, a pointer
-// into the process side is not. Enforcement: the prompt-side discipline is
-// intent (`## governance` / `### process-references`), the mechanical side is
-// the prohibition scan at unit close-out (process-refs.ts), and the whole-tree
-// scan at round close belongs to M4.
+// work, kept to steer the work to its goal. The deliverable — since plans/
+// 0108 exactly the nested destination repositories' own files; the working
+// directory's own freeform files are process workspace — must never depend
+// on it: no path into it, and when a comment needs what a process document
+// says, it restates the content in place — so that the deliverable stays
+// coherent once the process documents are gone (P1-a: the dependency runs
+// process → deliverable only; P1-b: the process side is disposable). AUTO-*
+// marker lines may sit in deliverable comments (ruling of 2026-09-21): they
+// are process *marks*, eventually removed by later iterations, and each must
+// be self-contained — a mark is legal, a pointer into the process side is
+// not. Enforcement: the prompt-side discipline is intent (`## governance` /
+// `### process-references`), the mechanical side is the prohibition scan at
+// unit close-out (process-refs.ts), and the whole-tree scan at round close
+// belongs to M4.
 import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, REPORT_FOR_USER_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"
 
@@ -265,26 +267,18 @@ export function eofScanExempt(rel: string, exempt: readonly string[] = []): bool
   return !ROLE_POLICIES[roleOf(rel)].eofScan || scanExempted(rel, exempt)
 }
 
-// Agent-contract surfaces: freeform by role (the project owns them), but
-// they legitimately name process paths — the AGENTS.md pointer block tells
-// sessions where docs/T-NNN lives, .opencode/ holds the agent
-// contract and the project's prompt/mode/intent overlays, and the driver
-// writes `.auto/` into .gitignore (gitignore.ts). The manual-driver
-// prompts/ suite (plans/0093) holds the same standing: install-prompts
-// resyncs the driver's own runbooks there, and they name process paths by
-// design — the runbooks drive the process, they are not the deliverable.
-// Outside P1 scope; the whole-tree scan at round close (round-close.ts)
-// would otherwise trip on them (plans/0103).
-function contractSurface(path: string): boolean {
-  return path === "AGENTS.md" || path === ".gitignore" || path.startsWith(".opencode/") || path.startsWith("prompts/")
-}
-
-// Whether a path belongs to the deliverable side P1 protects: a non-process
-// role, not an agent-contract surface and not one of the project's scan
-// exemptions (`exempt`, scanExempted).
+// Whether a path is deliverable-side by role: a non-process role and not one
+// of the project's scan exemptions (`exempt`, scanExempted). The other half
+// of the deliverable definition — inside a nested destination repository —
+// lives in the scan itself (plans/0108), which owns the repository context;
+// that gate is also why the former contract-surface clause (AGENTS.md,
+// `.gitignore`, `.opencode/`, the manual-driver prompts/ suite — freeform by
+// role, the project owns them) is gone: every file the working directory
+// holds outside a nested repository, these surfaces and test tooling alike,
+// is process workspace the reference scan never reaches.
 export function p1Scope(rel: string, exempt: readonly string[] = []): boolean {
   const path = rel.replaceAll("\\", "/").replace(/^\.\//, "")
-  return !ROLE_POLICIES[roleOf(path)].process && !contractSurface(path) && !scanExempted(path, exempt)
+  return !ROLE_POLICIES[roleOf(path)].process && !scanExempted(path, exempt)
 }
 
 // —— handoff role: protocol checks ——

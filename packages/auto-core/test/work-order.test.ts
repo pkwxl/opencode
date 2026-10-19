@@ -273,13 +273,18 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       const notReady = await planPrelude(dir, { phases: "m", adopt: "T-003" })
       expect(notReady.type === "stop" && notReady.code).toBe(1)
       expect(notReady.type === "stop" && notReady.lines[0]).toContain("T-003 is not ready: T-002 is not done yet")
-      // A deliverable file referencing a process document.
-      mkdirSync(join(dir, "src"), { recursive: true })
-      writeFileSync(join(dir, "src", "feature.ts"), "// see docs/T-002/report.md for the rationale\nexport const feature = 1\n")
+      // A destination file referencing a process document (plans/0108: the
+      // scan reads the nested repositories' files alone — the standalone
+      // session's uncommitted write lands inside one).
+      mkdirSync(join(dir, "dest", "src"), { recursive: true })
+      await git(join(dir, "dest"), "init", "-q")
+      await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+      await git(join(dir, "dest"), "config", "user.name", "t")
+      writeFileSync(join(dir, "dest", "src", "feature.ts"), "// see docs/T-002/report.md for the rationale\nexport const feature = 1\n")
       await Bun.write(join(dir, "docs", "T-002", "report.md"), SESSION_REPORT)
       const blocked = await planPrelude(dir, { phases: "m", adopt: "T-002" })
       expect(blocked.type === "stop" && blocked.code).toBe(1)
-      expect(blocked.type === "stop" && blocked.lines[0]).toContain("src/feature.ts:1 references")
+      expect(blocked.type === "stop" && blocked.lines[0]).toContain("dest/src/feature.ts:1 references")
       expect(await Bun.file(join(dir, "docs", "T-002", "todo.md")).exists()).toBe(true)
     }),
   )
@@ -291,8 +296,13 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
         { id: "T-001", done: true },
         { id: "T-002" },
       ])
-      mkdirSync(join(dir, "src"), { recursive: true })
-      writeFileSync(join(dir, "src", "feature.ts"), "// see docs/T-001/done.md\nexport const feature = 1\n")
+      // plans/0108: the offending write lands inside a nested destination
+      // repository — the only side the reference scan reads.
+      mkdirSync(join(dir, "dest", "src"), { recursive: true })
+      await git(join(dir, "dest"), "init", "-q")
+      await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+      await git(join(dir, "dest"), "config", "user.name", "t")
+      writeFileSync(join(dir, "dest", "src", "feature.ts"), "// see docs/T-001/done.md\nexport const feature = 1\n")
       mkdirSync(join(dir, "test"), { recursive: true })
       await Bun.write(join(dir, "test", "check.sh"), "exit 3\n")
       mkdirSync(join(dir, "tmp"), { recursive: true })

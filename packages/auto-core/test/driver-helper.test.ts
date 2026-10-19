@@ -247,13 +247,19 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(built).toContain("ℹ this brief did not run the config build (`make check`) — the close gate runs it on the next opencode-auto transfer")
   })
 
-  test("row 6 (0106) — a missing report renders the report-duty charter under its channel; a process-reference finding renders the scanExempt fork", async () => {
+  test("row 6 (0106, re-keyed by 0108) — a missing report renders the report-duty charter under its channel; a process-reference finding inside a destination renders the scanExempt fork", async () => {
     const dir = await repo()
     await completeRound(dir, "mt")
-    // Drop the report and plant a deliverable process reference: both
-    // finding channels must ride beside the close refusal.
+    // Drop the report and plant a process reference inside a destination
+    // repository (plans/0108: the workspace's own files are never scanned):
+    // both finding channels must ride beside the close refusal.
     rmSync(join(dir, reportForUserPath(1)))
-    write(dir, "notes.md", "wiring notes — the full record lives in docs/T-001.\n")
+    write(dir, "dest/notes.md", "wiring notes — the full record lives in docs/T-001.\n")
+    await git(join(dir, "dest"), "init", "-q")
+    await git(join(dir, "dest"), "config", "user.email", "t@example.com")
+    await git(join(dir, "dest"), "config", "user.name", "t")
+    await git(join(dir, "dest"), "add", "-A")
+    await git(join(dir, "dest"), "commit", "-qm", "destination")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "drop the report, plant a process reference")
     const lines = await renderHelperBrief(dir, { phases: "mt" })
@@ -267,8 +273,8 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(attention!.startsWith("  3.")).toBe(true)
     expect(lines.some((line) => line.trimStart().startsWith("4. Where to look deeper"))).toBe(true)
     // The process-reference fork: restate in place, or the config's exemption
-    // channel for a person-tool file whose grammar is paths.
-    expect(lines.some((line) => line.startsWith("- a process-reference finding — restate the needed content in place and remove the path;"))).toBe(true)
+    // channel for a destination file whose grammar is paths.
+    expect(lines.some((line) => line.startsWith("- a process-reference finding — always inside a destination repository: restate the needed content in place and remove the path"))).toBe(true)
     expect(lines.some((line) => line.includes(`opencode-auto amend ${dir} --scan-exempt <path> records the exemption in the config`))).toBe(true)
   })
 

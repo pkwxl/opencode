@@ -27,8 +27,9 @@
 // already held — the report charter rendered verbatim at the missing-report
 // stop (the same `report-duty` partial the planning renders use, so a
 // hand-written report answers the same charter a task session answers), the
-// scanExempt channel beside process-reference findings (a person-tool file
-// that legitimately names process paths), the ✗/⚠ reading rule (✗ is this
+// scanExempt channel beside process-reference findings (a destination file
+// that legitimately names process paths — the findings themselves scoped to
+// the destinations by plans/0108), the ✗/⚠ reading rule (✗ is this
 // stop's work; ⚠ is a record naming its own moment), and the restatement
 // how on the destination's containment channel (restate what the id stood
 // for — never delete the record it anchored).
@@ -253,12 +254,14 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         .map((line) => (line ? `  ${line}` : ""))
     }
     if (close.problems.some((problem) => problem.startsWith("process reference:"))) {
-      // 0106 D3: the remediation fork the finding's own line only half
-      // names — content findings restate in place, but a person-tool file
-      // whose grammar is paths (an ignore file synced from .gitignore) has
-      // the config's exemption channel instead.
+      // 0106 D3, re-keyed by 0108: the remediation fork the finding's own
+      // line only half names — content findings restate in place — with the
+      // scope the finding now carries: always inside a destination
+      // repository, the working directory's own files being process
+      // workspace the scan never reads; a destination file whose grammar is
+      // paths keeps the config's exemption channel.
       channels.push(
-        `a process-reference finding — restate the needed content in place and remove the path; a person-tool file that legitimately names process paths (an ignore file synced from .gitignore, a tool config) has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
+        `a process-reference finding — always inside a destination repository: restate the needed content in place and remove the path (the working directory's own files are the process workspace, never scanned); a destination file whose grammar legitimately names process paths has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
       )
     }
     recovery.push(`${bin} run ${dir} — a missing report task is appended automatically`, `then: ${bin} transfer ${dir}`)

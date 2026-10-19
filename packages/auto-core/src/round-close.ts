@@ -4,8 +4,11 @@
 // checks, all read-only:
 //   1. the whole-tree P1 prohibition scan — the unit close-out scan
 //      (document/process-refs.ts) widened from "lines the unit added" to every
-//      line of every tracked and untracked file, in every nested repository.
-//      This is the one moment the whole-tree price is worth paying;
+//      line of every tracked and untracked file, in every nested repository
+//      alone (plans/0108: the deliverable is the destination repositories'
+//      own files; the working directory's tree is process workspace and is
+//      not scanned). This is the one moment the whole-tree price is worth
+//      paying;
 //   2. the target's own build (config `build`), when one is configured;
 //   3. the restatement listing: round.md's `## Close` section must say which
 //      decisions were restated into the target's own documentation and which
@@ -50,12 +53,13 @@ export type RoundClose = {
 export async function roundCloseProblems(dir: string, round: number, opts: { build?: string; scanExempt?: readonly string[] } = {}): Promise<RoundClose> {
   const problems: string[] = []
   const warnings: string[] = []
-  // 1. Whole tree: an empty baseline per repository makes every tracked line
-  // "added"; untracked files are added whole by unitAddedLines itself. The
-  // nested repositories' prefixes ride along for the containment rules
+  // 1. Whole tree of the destinations: an empty baseline per repository
+  // makes every tracked line "added"; untracked files are added whole by
+  // unitAddedLines itself. The nested repositories alone enter the scan
+  // (plans/0108) — the prefixes ride along for the containment rules
   // (plans/0103: the destination answers rules the workspace does not).
-  const roots = await repoRoots(dir)
-  const scan = processReferenceScan(await unitAddedLines(dir, roots.map((root) => ({ root, sha: "" }))), opts.scanExempt, { nested: nestedRepoPrefixes(dir, roots), dir })
+  const nestedRoots = (await repoRoots(dir)).filter((root) => root !== dir)
+  const scan = processReferenceScan(await unitAddedLines(dir, nestedRoots.map((root) => ({ root, sha: "" }))), opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
   problems.push(...scan.problems.map((problem) => `process reference: ${problem}`))
   // Destination containment rides as warnings: the round-close gate records
   // it for release (plans/0103 D2) — the running ledger the person reads

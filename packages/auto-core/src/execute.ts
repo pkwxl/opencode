@@ -1166,8 +1166,10 @@ export async function runSubtask(
 // side documents and copies already committed at a handover boundary) must be
 // non-trivial + end with the terminator; exemptions derive from document roles
 // (document/roles.ts eofScanExempt); ⑥ the P1 prohibition scan (M2.3,
-// plans/0045) — lines the unit added to deliverable files must not reference
-// process documents (document/process-refs.ts; inside a nested repository
+// plans/0045) — lines the unit added inside a nested destination repository
+// must not reference process documents (document/process-refs.ts, plans/
+// 0108: the working directory's own files are process workspace, never
+// scanned; inside a nested repository
 // the destination-containment findings — task ids, paths leading outside
 // the repository's own root — are recorded for release, never blocking,
 // plans/0103 D2, while the outer workspace names tasks freely). All
