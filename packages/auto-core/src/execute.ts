@@ -1200,8 +1200,13 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
   }
   const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt, { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
   // Destination containment is recorded, not blocking (plans/0103 D2): the
-  // release gate enforces it when the person is ready to ship.
-  for (const finding of refs.deferred) log(`  ⚠ ${finding}`)
+  // release gate enforces it when the person is ready to ship. One
+  // aggregate line, never the per-finding ledger (plans/0109 D6) — the
+  // count is the signal; the restatement remedy rides it so the 0106
+  // reading rule (never delete the record the id anchored) survives.
+  if (refs.deferredCount) {
+    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
+  }
   problems.push(...refs.problems)
   return problems
 }

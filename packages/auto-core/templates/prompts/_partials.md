@@ -32,7 +32,8 @@ You are carrying out one task of an implementation plan: this session has to fin
 {{#if humanQuestions}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), do not call the question tool —
    take the recommended option as a provisional default, record the question in the affected task documents (the context, the options with their consequences, the default taken and how
-   to override it), and continue; the round report's needs-attention section lists every such question for the person's considered answer, so a decision is never closed in real time.
+   to override it), and continue; the record stays for the person's considered answer — the round conclusion's proxy-answer summary counts every such question at the round's end —
+   so a decision is never closed in real time.
    Plain engineering trade-offs that were always yours remain yours, no record required.
    Asking the same question again after it was answered blocks the task and stops the run.{{/if}}{{^humanQuestions}}{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
@@ -69,27 +70,6 @@ shared-context index shared.md, decomposition checklist subtasks.md, wrap-up rep
 docs/T-NNN/S<two-digit index>/index.md, a subtask-level test handover to testhandoff.md beside it;
 do not create flat task files at the top level of docs/.
 
-
-## report-duty
-This is the round's final phase — the round ends with this phase's work. End the task list with one wrap-up task, titled
-exactly "Round user report", whose deliverable is the round report {{reportFile}} (a round-level artifact: it does not live
-under docs/T-NNN/, and this one task may name and write it there — the placement exception to the doc-layout rule), placed
-after the verdict/consolidation closing task; a FAIL verdict is one of the report's findings, not a reason to skip the report task. The report is written for the
-person who started the run — plain prose, path links, no driver-protocol obligations beyond the closing terminator line
-`<!-- auto: eof -->`. Its charter, which the wrap-up task's document must restate in full (self-contained, as every task
-document must be):
-1. What this round set out to do, in the person's own terms (the project brief, the round brief, the planning input);
-2. What happened, phase by phase: what each phase delivered, its verdict, and headline counts (tasks done / failed /
-   blocked / closed by hand);
-3. **Needs your attention** — the section the whole report exists for: every provisionally-defaulted planning question
-   with its options, implications and override path, each phrased by its project consequence (what it changes for the
-   goal, the rounds, the cost, the acceptance — never the technique alone); open questions and the safe defaults currently in force; the round's
-   AUTO-RESOLVE proxy decisions with enough context to confirm or overturn each; FAIL verdicts and what they mean;
-   environment gaps; recorded deviations and assumption notes; mid-round decisions that belong in the project brief (the next survey folds them in);
-   formulation synthesis fallbacks recorded in this round's docs/R-NN/prompt-audit.md (`synthesis: FALLBACK` lines — a phase that
-   planned on the deterministic floor although its pack declared a charter, each with its reason);
-4. Where to look deeper: an artifact index (spec-notes, verdicts, notable task reports), one line each — the report
-   links, it never copies at length.
 
 ## task-depends
 Optional dependency fields, right after the `Phase:` line of a task document: `Depends: T-011, T-012` — the task starts only after those tasks

@@ -183,22 +183,11 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     expect(executed.lines.some((line) => line.includes("✓ phase boundary: P02-implement Implementation complete"))).toBe(true)
     expect(executed.lines.some((line) => line.includes("closes the phase and the round"))).toBe(true)
-    // The round-close advance: the report self-heal (plans/0081 D4) fires
-    // inside the handover — its appended report task is execute work, so the
-    // advance stops naming run (transfer executes nothing), run executes it,
-    // and the next advance closes the phase and the round, stopping with the
-    // report named — the round-close-then-stop split (plans/0101 D2 shape 3).
-    const healed = await f.run({ stopBefore: "formulate" })
-    expect(healed.code).toBe(2)
-    expect(healed.lines.some((line) => line.includes("appending one report task"))).toBe(true)
-    expect(healed.lines.some((line) => line.includes("transfer does not execute tasks"))).toBe(true)
-    const reported = await f.run()
-    expect(reported.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
     // The closing advance refuses while the round's own restatement listing
-    // is an unfilled stub (G8's close listing — the person's act), then the
-    // filled ## Close lets it close the round and stop with the report
-    // named — the round-close-then-stop split (plans/0101 D2 shape 3).
+    // is an unfilled stub (G8's close listing — the person's act); no report
+    // task appends anywhere (the self-heal retired with the mandate,
+    // plans/0109 D3), so the listing alone is the round's remaining work —
+    // the round-close-then-stop split (plans/0101 D2 shape 3).
     const unfilled = await f.run({ stopBefore: "formulate" })
     expect(unfilled.code).toBe(2)
     expect(unfilled.lines.some((line) => line.includes("does not pass its round-close checks"))).toBe(true)
@@ -211,6 +200,8 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(existsSync(join(f.dir, "docs/R-01/P02-implement/done.md"))).toBe(true)
     expect(closed.lines.some((line) => line.includes("✓ round close checks passed"))).toBe(true)
     expect(closed.lines.some((line) => line.includes("then open the next round with: opencode-auto transfer"))).toBe(true)
+    // The report was never written and never demanded (plans/0109 D1).
+    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     // The approved analysis reached the survey's planning session alone
     // (plans/0085 A1): the human-gated phase reads the person's settled
@@ -237,11 +228,11 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
     expect(brief).toContain("a clean-room reimplementation of the core")
     expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
-    // The round completed and its report stands (the final phase's
-    // self-healed report task): the conclusion names the report path.
+    // The round completed with no report written and none demanded
+    // (plans/0109 D1): the conclusion names no report path.
     expect(released.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)
-    expect(released.lines.some((line) => line.includes("round report for the person: docs/R-01/report-for-user.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(true)
+    expect(released.lines.some((line) => line.includes("round report for the person"))).toBe(false)
+    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     expect(analysisBlocks).toEqual(["survey"])
   })

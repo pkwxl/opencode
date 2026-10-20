@@ -116,7 +116,7 @@ export function clampMarkerLine(item: ResolveItem, reading: string): string | un
 
 // The phase-boundary surfacing line (D12): one line naming the OPEN question.
 export function clampLine(item: ResolveItem, reading: string): string {
-  return `⚡ OPEN question (charter-clamped): ${item.question} — the default in force is "${reading}"; the recorded wider grant waits for your ruling (the round report's needs-attention section lists it)`
+  return `⚡ OPEN question (charter-clamped): ${item.question} — the default in force is "${reading}"; the recorded wider grant waits for your ruling (the resolve ledger holds it; driver-helper renders the standing decisions)`
 }
 
 // The scope's clamped items (the phase-close lines read this).

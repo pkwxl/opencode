@@ -206,10 +206,13 @@ describe("round-close gate (plans/0049 G8)", () => {
       await git(dir, "commit", "-qm", "round")
       const close = await roundCloseProblems(dir, 1)
       expect(close.problems).toEqual([])
-      expect(close.warnings).toHaveLength(3)
-      expect(close.warnings[0]).toStartWith("vendor/src/a.rs: 1 added line(s) mention a task id (T-NNN) — recorded for release")
-      expect(close.warnings[1]).toStartWith('vendor/src/b.c:1 references "../../outside" — recorded for release')
-      expect(close.warnings[2]).toBe("build: no build command configured (config `build`); the target build was not checked")
+      // One aggregate containment line (plans/0109 D6: the count of pending
+      // references, never the per-finding ledger) beside the build note.
+      expect(close.warnings).toHaveLength(2)
+      expect(close.warnings[0]).toBe(
+        "containment: 2 reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
+      )
+      expect(close.warnings[1]).toBe("build: no build command configured (config `build`); the target build was not checked")
     }),
   )
 
@@ -272,28 +275,23 @@ describe("round-close gate (plans/0049 G8)", () => {
     }),
   )
 
-  // The fourth check (plans/0081 D4): the round report must exist, be
-  // non-empty and end with the eof terminator; the missing message names the
-  // file and the last task-bearing phase that should have planned the task.
+  // The fourth check retired (plans/0109 D1): the report's mandate is gone —
+  // a report the person commissions stands as a document, and the gate never
+  // reads it.
   test(
-    "the round user report: missing, empty or unterminated is a blocking problem naming the path and the phase (plans/0081 D4)",
+    "the round user report retired (plans/0109 D1): missing, empty or unterminated is never a close problem",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
       writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
-      const missing = await roundCloseProblems(dir, 1)
-      expect(missing.problems).toEqual([
-        "round report: docs/R-01/report-for-user.md is missing — the person's account of the round (P02-implement should have planned its wrap-up task); a re-run of run/plan appends one report task automatically, or write it by hand ending with the terminator line",
-      ])
+      // Absent, empty, unterminated: all pass alike — the gate is the scan,
+      // the build and the close listing alone.
+      expect((await roundCloseProblems(dir, 1)).problems).toEqual([])
       writeReport(dir, 1, "   \n")
-      const empty = await roundCloseProblems(dir, 1)
-      expect(empty.problems[0]).toContain("docs/R-01/report-for-user.md is empty")
+      expect((await roundCloseProblems(dir, 1)).problems).toEqual([])
       writeReport(dir, 1, "# Round report\n\nNeeds your attention: nothing yet.\n")
-      const unterminated = await roundCloseProblems(dir, 1)
-      expect(unterminated.problems[0]).toContain("does not end with the terminator line")
-      writeReport(dir, 1)
       expect((await roundCloseProblems(dir, 1)).problems).toEqual([])
     }),
   )

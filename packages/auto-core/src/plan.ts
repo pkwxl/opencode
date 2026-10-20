@@ -894,7 +894,7 @@ export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): P
   const last = state?.phases.at(-1)?.id === phase.id
   return [
     `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
-    `next: ${bin} transfer ${directory} — it distills the handover, closes the phase${last ? " and the round (stopping with the round's report for your review)" : ""}, ` +
+    `next: ${bin} transfer ${directory} — it distills the handover, closes the phase${last ? " and the round (stopping with its close for your review)" : ""}, ` +
       `and constructs the next phase's plan task for your review`,
   ]
 }

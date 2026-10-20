@@ -36,10 +36,9 @@
 //                    (task, round and phase documents under docs/);
 //                    shape-checked (non-trivial + eof terminator).
 // - userReport:      the round user report docs/R-NN/report-for-user.md
-//                    (plans/0081 D6a): written by a task or the knowledge
-//                    side-channel session, read by the person; a process
-//                    role, eof-scan exempt like its round-level siblings
-//                    (the round-close gate itself checks the terminator).
+//                    (plans/0081 D6a; optional since plans/0109):
+//                    person-commissioned, read by the person; a process
+//                    role, eof-scan exempt like its round-level siblings.
 // - blockage:        the blockage document docs/R-NN/blockage-<seq>.md
 //                    (plans/0082 §5 D6): the driver-parsed remediation plan
 //                    a gate's blockage assembled, answered by the person's

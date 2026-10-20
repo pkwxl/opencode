@@ -182,8 +182,6 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   mode?: ModeSpec
   trimmedPhases?: boolean
   parallel?: ParallelLevel
-  finalPhase?: boolean
-  reportFile?: string
   testByDriver?: boolean
   charter: string
   // The synthesis payload (plans/0097 D3): brief = the constructor's
@@ -353,7 +351,6 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
         duties,
         ...(synth?.protocol ? ["", `Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.`] : []),
         "",
-        ...(input.finalPhase ? [renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim(), ""] : []),
         ...(input.trimmedPhases && input.phase?.type === "implement"
           ? [
               "Pipeline-trimming note: this round's pipeline was trimmed via --phases with no separate analysis/design phase — fold",
@@ -366,14 +363,10 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
       ].join("\n"),
     )
   }
-  // m mode's report duty (the implicit round's single phase is final,
-  // plans/0053 D12's rule carried over): no duties section to sit beside, so
-  // it renders as its own block ahead of the protocol. The synthesis shape's
-  // protocol line (the caller's — the implicit implement entry's seeded
-  // rows) rides ahead of it.
-  if (manual && input.finalPhase) {
-    if (synth?.protocol) parts.push(`Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.\n`)
-    parts.push(renderText("{{> report-duty}}", { reportFile: input.reportFile }).trim() + "\n")
+  // m mode carries no duties section; the synthesis shape's protocol line
+  // (the implicit implement entry's seeded rows) renders on its own.
+  if (manual && synth?.protocol) {
+    parts.push(`Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.\n`)
   }
   const { parallel, parallelRules } = parallelismVars(facts, input.parallel)
   if (parallelRules) {

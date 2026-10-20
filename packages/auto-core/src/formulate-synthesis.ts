@@ -208,7 +208,7 @@ export function sessionRowProblems(rows: readonly LedgerRow[], sources: readonly
 // The driver-owned protocol line of the synthesized duties frame: names the
 // seeded rows' quotes. Pure; prompt-plan renders it into the synthesis
 // shape's duties block.
-export function protocolFrameText(entry: PhaseTypeEntry, finalPhase: boolean, reportFile?: string): string {
+export function protocolFrameText(entry: PhaseTypeEntry): string {
   const parts: string[] = []
   const phase = entry.phaseArtifacts.map((spec) => spec.path).join(", ")
   const task = entry.taskArtifacts.map((spec) => spec.path).join(", ")
@@ -217,15 +217,12 @@ export function protocolFrameText(entry: PhaseTypeEntry, finalPhase: boolean, re
   if (entry.gates.includes("verdict")) {
     parts.push(`the phase's verdict gate reads the closing task's verdict document ending with the result line \`Result: PASS\` or \`Result: FAIL <reason>\``)
   }
-  if (finalPhase) {
-    parts.push(`the round report duty: the plan ends with the wrap-up task titled "Round user report" whose deliverable is ${reportFile ?? "docs/R-NN/report-for-user.md"}`)
-  }
   return parts.join("; ")
 }
 
 // The seeded rows, in ledger order (O-01 up). Each quotes a fragment of the
-// protocol line; finalPhase/reportFile as in protocolFrameText.
-export function seededLedgerRows(entry: PhaseTypeEntry, finalPhase: boolean, reportFile?: string): LedgerRow[] {
+// protocol line.
+export function seededLedgerRows(entry: PhaseTypeEntry): LedgerRow[] {
   const rows: LedgerRow[] = []
   const push = (quote: string, text: string) => rows.push({ kind: "O", n: rows.length + 1, source: LEDGER_FRAME_SOURCE, quotes: [quote], text })
   for (const spec of entry.phaseArtifacts) {
@@ -236,9 +233,6 @@ export function seededLedgerRows(entry: PhaseTypeEntry, finalPhase: boolean, rep
   }
   if (entry.gates.includes("verdict")) {
     push("Result: PASS", `a closing task writes the phase's verdict document ending with the result line (a driver protocol string, verbatim)`)
-  }
-  if (finalPhase) {
-    push("Round user report", `the plan ends with the wrap-up task titled "Round user report" delivering the round report (${reportFile ?? "docs/R-NN/report-for-user.md"})`)
   }
   return rows
 }
@@ -322,8 +316,6 @@ type SynthesisInput = {
   // implement entry in m mode.
   entry: PhaseTypeEntry
   phaseStep: string
-  finalPhase: boolean
-  reportFile?: string
   sources: readonly LedgerSource[]
   // The expected-but-absent source names (the source-health finding, D6).
   missing: readonly string[]
@@ -345,7 +337,7 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     ...(resolved.global !== undefined ? ["verify-plan"] : []),
     ...(resolved.phase !== undefined ? [`verify-plan-${resolved.phaseKey}`] : []),
   ]
-  const seeded = seededLedgerRows(input.entry, input.finalPhase, input.reportFile)
+  const seeded = seededLedgerRows(input.entry)
   let lastFidelityAudit: string | undefined
   const fallback = (reason: string, ...before: readonly string[]): SynthesisOutcome => ({
     kind: "fallback",

@@ -200,7 +200,10 @@ export async function adoptUnit(
     problems.push(...docShapeProblems(content, rel))
   }
   const refs = processReferenceScan(await unitAddedLines(dir, baseline), [...(opts.scanExempt ?? [])], { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
-  for (const finding of refs.deferred) log(`  ⚠ ${finding}`)
+  // One aggregate line, never the per-finding ledger (plans/0109 D6).
+  if (refs.deferredCount) {
+    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
+  }
   problems.push(...refs.problems)
   const report = await Bun.file(join(dir, taskDoc(task.id, "report"))).text().catch(() => "")
   const result = parseResult(report)

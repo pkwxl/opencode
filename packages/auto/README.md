@@ -615,10 +615,11 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   distillation, its `todo.md` → `done.md` close, and the **next phase's plan task constructed and
   stopped for review** — the formulation todo, driver-owned, built from the round brief and the
   phase's `plan-input.md`. When the closed phase was the round's last, the same invocation performs
-  the **round close** and stops there (exit 2 while the round-close checks fail) — your natural moment
-  with R-NN's `report-for-user.md` before committing to the next round.
+  the **round close** and stops there (exit 2 while the round-close checks fail) — your natural
+  moment with the round's `## Close` listing (and its `report-for-user.md`, on the rounds you
+  commission one) before committing to the next round.
 - **Round open (the round closed)**: `transfer` runs the round-close check (whole-tree P1 scan, build
-  if configured, `## Close` filled, the round report present; failing → itemized listing, exit 2,
+  if configured, `## Close` filled; failing → itemized listing, exit 2,
   nothing opens), then establishes `docs/R-(N+1)/` from the roadmap's next line and stops at the
   round-start gate. A released roadmap governs the sequence's end: past its last planned line the
   stop names `## Roadmap` of `docs/analysis.md` as the document to extend — never a silent config
@@ -725,8 +726,9 @@ opencode-auto run <dir>             # review (edit/strike tasks directly if need
   pre-execution human review, so their sessions are told never to ask non-permission questions — a
   session takes the recommended option as a provisional default, records the question in the affected
   task documents (the context, the options, the default taken and how to override it) and continues;
-  the round report's **needs-attention section** (`docs/R-NN/report-for-user.md`) lists every such
-  question for your considered answer, so a decision is never closed in real time (see
+  the record stays for your considered answer — the round conclusion's proxy-answer summary counts
+  every such question at the round's end, and `driver-helper` renders the standing list on demand —
+  so a decision is never closed in real time (see
   [Question policy and proxy-answer audit (AUTO-RESOLVE)](#question-policy-and-proxy-answer-audit-auto-resolve)).
   A session that asks anyway is the backstop, not the policy: it waits for a human answer **without
   timeout** (`-i`'s resident input line, or a stdin prompt without `-i`), is never proxy-answered, and
@@ -1626,8 +1628,9 @@ count (same procedure as `.auto/stats.json`).
 **Exception: `plan`'s sessions never ask, never proxy-answer.** plan (and transfer) run for the
 pre-execution human review: their sessions are told to take the recommended option as a provisional
 default, record the question in the affected task documents and continue — no AUTO-RESOLVE proxy
-answers or markers, and the round report's needs-attention section (`docs/R-NN/report-for-user.md`)
-lists every such question for the person's considered answer after the fact. A session that asks
+answers or markers, and the record stays for the person's considered answer after the fact (the
+round conclusion's proxy-answer summary counts each; `driver-helper` renders the standing list on
+demand). A session that asks
 anyway is the backstop: it waits for a human answer (no timeout; `-i`'s resident input line or stdin)
 and produces no proxy answers; an unreachable answer channel (closed input) or a repeated question
 blocks for the human. `run`'s sessions (including planning sessions started by `run`) keep the normal
@@ -1933,10 +1936,11 @@ an unknown type key is a usage error at run start.
   `docs/R-NN/round.md`'s `## Close` section (listing which decisions have been restated into the target's
   own documents and which
   losses are accepted) and commit, then run `transfer`: the same invocation that closes the round's last
-  phase performs the round close and stops there (your natural moment with R-NN's `report-for-user.md`
-  before committing to the next round), and the next `transfer` runs the round-close check (whole-tree P1
+  phase performs the round close and stops there (your natural moment with the round's `## Close`
+  listing — and its `report-for-user.md`, on the rounds you commission one — before committing to the
+  next round), and the next `transfer` runs the round-close check (whole-tree P1
   scan, target build,
-  `## Close` checklist, the round report; failing → itemized listing, exit code `2`, and nothing opens);
+  `## Close` checklist; failing → itemized listing, exit code `2`, and nothing opens);
   passing, it establishes
   `docs/R-(N+1)/` — the phase index and phase directories expand from the released roadmap's line for the
   round (the configured `phases` the fallback), stopping at

@@ -24,15 +24,17 @@
 //
 // The 0106 field repairs (plans/0106, ruled from common's R-01 close): the
 // brief carries the instructions the stops had been assuming a reader
-// already held — the report charter rendered verbatim at the missing-report
-// stop (the same `report-duty` partial the planning renders use, so a
-// hand-written report answers the same charter a task session answers), the
-// scanExempt channel beside process-reference findings (a destination file
-// that legitimately names process paths — the findings themselves scoped to
-// the destinations by plans/0108), the ✗/⚠ reading rule (✗ is this
-// stop's work; ⚠ is a record naming its own moment), and the restatement
-// how on the destination's containment channel (restate what the id stood
-// for — never delete the record it anchored).
+// already held — the scanExempt channel beside process-reference findings
+// (a destination file that legitimately names process paths — the findings
+// themselves scoped to the destinations by plans/0108), the ✗/⚠ reading
+// rule (✗ is this stop's work; ⚠ is a record naming its own moment), and
+// the restatement how on the destination's containment channel (restate
+// what the id stood for — never delete the record it anchored). The
+// missing-report charter the same round added retired with the report's
+// mandate (plans/0109): the brief is now also where the round's standing
+// decisions surface (the auto-answered questions and charter-clamped OPEN
+// grants the round report's needs-attention section used to gather), as
+// counts, never lists — the 0109 counts ruling.
 //
 // The 0107 mandate bound (plans/0107, ruled from common's R-01→R-02
 // boundary): the brief bounded what the pen may touch per stop, never how
@@ -65,8 +67,8 @@
 //   |    acceptance gate (same predicate family)               | (the brief proposal rides the release); acceptance's Accepted: yes  |                       |
 //   | 5  phase boundary stop (handover route, gates passing)   | read the phase's task reports; the next phase's plan-input.md may   | transfer              |
 //   |                                                          | be written ahead                                                     |                       |
-//   | 6  round-close gate held (roundCloseProblems)            | ## Close of docs/R-NN/round.md (filled and committed by the person);| run, then transfer    |
-//   |                                                          | a missing report self-heals through run                             |                       |
+//   | 6  round-close gate held (roundCloseProblems)            | ## Close of docs/R-NN/round.md (filled and committed by the person)| run, then transfer    |
+//   |                                                          |                                                                      |                       |
 //   | 7  roadmap-exhausted stop (releasedRoadmapRounds)        | extend ## Roadmap of docs/analysis.md with the next round's line    | transfer              |
 //   | 8  task FAIL / blocked (blocked status or gaps.md)       | docs/T-NNN/gaps.md — read, then accept or rework                    | close; run --repair   |
 //   | 9  blockage dossier held (readBlockageDocs + choiceMark) | one Choice: line in docs/R-NN/blockage-<seq>.md                     | the next advance      |
@@ -137,8 +139,9 @@ import { roundBriefText } from "./round-brief"
 import { roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
-import { renderText, usePromptLibrary } from "./template"
+import { usePromptLibrary } from "./template"
 import { loadPlan } from "./tasks"
+import { resolvesOf } from "./resolve"
 
 // What the shell threads in: the loaded config's own facts (the renderer is
 // config-parse-blind by design — the shell refuses an unloadable config, and
@@ -212,10 +215,6 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // The two stops whose uncommitted tree is the design (the person's commit
   // IS the review act): the dirty-tree row stays quiet under them.
   let uncommittedByDesign = false
-  // 0106 D2: the report charter block, set by roundCloseRow when the report
-  // problem rides — rendered indented under CHANNELS after the channel
-  // lines (a multi-line charter does not fit the `- ` list shape).
-  let charterBlock: string[] | undefined
   // 0107 D2: the round brief is the person's own writing for the new round
   // (their prompt for it, in the person's ruling) — the channel names the
   // document and its authorship, the pen never the filler. Marks over
@@ -229,30 +228,18 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // when configured; detection matches the gate on everything else), the
   // refusal lines verbatim, the channels and the recovery. Returns whether
   // the gate held (the caller falls through to the open rhythm when not).
-  // 0106: the held close is also where the finding-remedy channels ride —
-  // the missing report's charter (0106 D2) and the process-reference
-  // scanExempt fork (0106 D3), the two channels the field round showed a
-  // proxy session could not discover anywhere in the target.
+  // 0106: the held close is also where the process-reference scanExempt fork
+  // rides (0106 D3) — the channel the field round showed a proxy session
+  // could not discover anywhere in the target. The round report channel
+  // retired with the report's mandate (plans/0109 D1/D5).
   const roundCloseRow = async (closed: number): Promise<boolean> => {
     const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt })
     if (!close.problems.length) return false
     stopLines.push(...roundCloseRefusalLines(dir, closed, closed + 1, close, "transfer"))
     if (opts.build) stopLines.push(`ℹ this brief did not run the config build (\`${opts.build}\`) — the close gate runs it on the next ${bin} transfer`)
     channels.push(
-      `${roundBriefPath(closed)} — fill its \`## Close\` section: each restated decision named with where it landed in the target's own documentation, each accepted loss with what it cost; then commit; a missing round report self-heals through a re-run of ${bin} run ${dir}`,
+      `${roundBriefPath(closed)} — fill its \`## Close\` section: each restated decision named with where it landed in the target's own documentation, each accepted loss with what it cost; then commit`,
     )
-    if (close.problems.some((problem) => problem.startsWith("round report:"))) {
-      // 0106 D2: the report charter, verbatim from the same `report-duty`
-      // partial the planning renders render — the pen that writes the report
-      // by hand answers the same charter the appended task session would.
-      channels.push(
-        `${reportForUserPath(closed)} is missing — either a re-run of ${bin} run appends a report task whose session writes it under the charter below, or the pen writes it by hand under the same charter (end it with the terminator line \`<!-- auto: eof -->\`):`,
-      )
-      charterBlock = renderText("{{> report-duty}}", { reportFile: reportForUserPath(closed) })
-        .trim()
-        .split("\n")
-        .map((line) => (line ? `  ${line}` : ""))
-    }
     if (close.problems.some((problem) => problem.startsWith("process reference:"))) {
       // 0106 D3, re-keyed by 0108: the remediation fork the finding's own
       // line only half names — content findings restate in place — with the
@@ -264,7 +251,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         `a process-reference finding — always inside a destination repository: restate the needed content in place and remove the path (the working directory's own files are the process workspace, never scanned); a destination file whose grammar legitimately names process paths has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
       )
     }
-    recovery.push(`${bin} run ${dir} — a missing report task is appended automatically`, `then: ${bin} transfer ${dir}`)
+    recovery.push(`then: ${bin} transfer ${dir}`)
     return true
   }
 
@@ -451,6 +438,24 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
 
   // —— The standing rows (D5: 9, 10, 12) — facts that ride beside the stop ——
 
+  // The round's standing decisions (plans/0109 D5 — the surface the round
+  // report's needs-attention section used to gather; counts, never lists,
+  // per the same ruling): the auto-answered questions awaiting the person's
+  // confirmation, and the charter-clamped OPEN grants awaiting their ruling.
+  {
+    const resolves = await resolvesOf(dir, "round", round).catch(() => [])
+    const unconfirmed = resolves.filter((item) => !(item.source === "driver" && item.matched))
+    const clamped = resolves.filter((item) => item.clamped === true)
+    if (unconfirmed.length) {
+      facts.push(`⚠ ${unconfirmed.length} question(s) this round were auto-answered and await the person's confirmation — each record sits in its task report's "Proxy-answered questions" section`)
+      defaults.push(`the round's ${unconfirmed.length} auto-answered question(s) — each record in its task report's "Proxy-answered questions" section, awaiting the person's confirmation or overturn`)
+    }
+    if (clamped.length) {
+      facts.push(`⚠ ${clamped.length} charter-clamped OPEN question(s) hold a narrower default in force — the wider grant waits for the person's ruling`)
+      defaults.push(`the ${clamped.length} charter-clamped OPEN question(s) — the ⚡ line at each phase boundary named them, the resolve ledger holds the records`)
+    }
+  }
+
   // Row 9 — un-Choice'd blockage documents of this round (a stale-span
   // `Rejected:` mark is recorded and skipped: the run continues into a fresh
   // diagnosis).
@@ -539,10 +544,6 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   lines.push("", "## CHANNELS — what the person's pen may touch here", "")
   for (const line of channels) lines.push(`- ${line}`)
   if (!channels.length) lines.push("- none — the next act is the driver's (see RECOVERY)")
-  if (charterBlock) {
-    lines.push("")
-    lines.push(...charterBlock)
-  }
   lines.push("", "## POLICY", "")
   lines.push(GUIDANCE.ASSIST_RULE)
   lines.push("")

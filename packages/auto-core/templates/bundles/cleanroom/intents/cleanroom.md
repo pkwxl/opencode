@@ -96,10 +96,11 @@ proof should take>
 
 Environment facts and gaps:
 <missing tools, quotas, layout facts planning must respect; name a gap as a gap — it
-becomes a needs-attention item of the round report>
+becomes a recorded gap the person reads — `driver-helper` renders the standing list)>
 
-Corrections to provisionally-defaulted questions the last round's report flagged:
-<the person's answers to the needs-attention items of docs/R-NN/report-for-user.md>
+Corrections to provisionally-defaulted questions the last round recorded:
+<the person's answers to the round's AUTO-RESOLVE records — the task reports' "Proxy-answered
+questions" sections; `driver-helper` renders the standing list>
 
 What would convince you it is done:
 <the observable outcome that makes this step finished>

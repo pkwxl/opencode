@@ -120,12 +120,12 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     for (const unit of state.phases.slice(0, 2)) expect(await completePhase(f.dir, unit, [])).toEqual([])
     await f.commit("earlier phases complete")
     const stopped = await f.run()
-    // The extraction session ran (the phase's work — kb.md and, the round's
-    // last phase, the report too), and the run stopped at the phase's
-    // boundary ahead of the k phase's handover distillation.
+    // The extraction session ran (the phase's work — kb.md alone; the
+    // k-final report duty retired, plans/0109 D4), and the run stopped at
+    // the phase's boundary ahead of the k phase's handover distillation.
     expect(stopped.code).toBe(0)
     expect(has(f, "docs/R-01/P03-knowledge/kb.md")).toBe(true)
-    expect(has(f, "docs/R-01/report-for-user.md")).toBe(true)
+    expect(has(f, "docs/R-01/report-for-user.md")).toBe(false)
     expect(has(f, "docs/R-01/P03-knowledge/handover.md")).toBe(false)
     expect(has(f, "docs/R-01/P03-knowledge/todo.md")).toBe(true)
     expect(stopped.lines.some((line) => line.includes("✓ phase boundary: P03-knowledge Knowledge distillation complete"))).toBe(true)

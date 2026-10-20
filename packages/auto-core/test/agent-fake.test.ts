@@ -2752,7 +2752,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       // The planning branch (plans/0081 D16: default and record), never the
       // unattended proxy-answer rule.
       expect(order).toContain("take the recommended option as a provisional default")
-      expect(order).toContain("needs-attention section")
+      expect(order).toContain("proxy-answer summary")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3342,7 +3342,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
   const FIDELITY_MARK = "You judge the fidelity of one synthesis"
   const withConstructor = (input: string, verdict: string | undefined): ((dir: string) => TurnScript) => (dir: string): TurnScript => (ctx) =>
     synthesisTurn("The widget is reimplemented from the specification alone.", [
-      `- O-02 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
+      `- O-01 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
     ])(ctx) ??
     (ctx.text.includes(FIDELITY_MARK)
       ? [ev.text(ctx.session, `fid_${ctx.n}`, "Fidelity: pass"), ev.idle(ctx.session)]
@@ -3422,7 +3422,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       // obligations ledger ride the formulation session's single input.
       expect(f.agent.prompts[4]!.text).toContain("## Sources brief (constructor session, under the charter)")
       expect(f.agent.prompts[4]!.text).toContain("## Obligations ledger")
-      expect(f.agent.prompts[4]!.text).toContain('- O-02 | docs/R-01/P01-implement/plan-input.md | "Reimplement the widget from the specification alone."')
+      expect(f.agent.prompts[4]!.text).toContain('- O-01 | docs/R-01/P01-implement/plan-input.md | "Reimplement the widget from the specification alone."')
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
       expect(lines).toContain("✓ all tasks complete")
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()

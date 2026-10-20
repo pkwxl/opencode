@@ -38,7 +38,8 @@ Constraints:
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), do not call the question tool —
    take the recommended option as a provisional default, record the question in the affected task documents (the context, the options with their consequences, the default taken and how
-   to override it), and continue; the round report's needs-attention section lists every such question for the person's considered answer, so a decision is never closed in real time.
+   to override it), and continue; the record stays for the person's considered answer — the round conclusion's proxy-answer summary counts every such question at the round's end —
+   so a decision is never closed in real time.
    Plain engineering trade-offs that were always yours remain yours, no record required.
    Asking the same question again after it was answered blocks the task and stops the run.
    A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.

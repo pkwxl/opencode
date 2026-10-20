@@ -145,7 +145,8 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
   // plan's sessions (the composition root sets humanQuestions when
   // RunAllOpts.stopBefore === "execute", carried by the facts since E2 — no
   // module state left to reset): planning questions are taken as recorded
-  // provisional defaults and listed in the round report (plans/0081 D16),
+  // provisional defaults and surface through the round conclusion's
+  // proxy-answer summary (re-keyed by plans/0109 D5, the report retired),
   // never asked or decided in real time; permission problems stay askable;
   // the same single numbered-2 invariant holds.
   test("humanQuestions setting (plan's sessions): default and record, never ask; the structural invariant holds equally", () => {
@@ -153,7 +154,7 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     for (const ask of [false, true]) {
       const text = fragment(ask, attended)
       expect(text).toContain("take the recommended option as a provisional default")
-      expect(text).toContain("needs-attention section")
+      expect(text).toContain("proxy-answer summary")
       expect(text).toContain("question tool")
       expect(text).toContain("do not call the question tool")
       expect(text).not.toContain("answered automatically")

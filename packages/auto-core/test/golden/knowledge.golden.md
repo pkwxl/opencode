@@ -97,4 +97,4 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
    A non-permission question gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
    A follow-up that states what was understood and asks only about the part an answer left ambiguous is a new question, not the banned re-ask.
 3. Writing that document is a hard requirement: even with little information, write out the full section skeleton and explain
-   why; producing no document makes this phase's knowledge extraction fail;
+   why; producing no document makes this phase's knowledge extraction fail.

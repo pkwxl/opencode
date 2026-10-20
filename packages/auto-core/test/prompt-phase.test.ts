@@ -190,34 +190,17 @@ describe("renderFormulationTodo, phased (the formulation task's single input, pl
   })
 })
 
-describe("renderPhasePlan finalPhase (the round report duty, plans/0081 D2/D3)", () => {
-  const charter = [
-    "This is the round's final phase",
-    '"Round user report"',
-    "docs/R-01/report-for-user.md",
-    "Needs your attention",
-    "provisionally-defaulted planning question",
-    "environment gaps",
-    "an artifact index",
-    "never copies at length",
-  ]
-  test("present: the report-duty partial renders beside the phase duties, carrying the D3 charter in full", () => {
-    const text = phasePlan({ phase: L("v"), finalPhase: true, reportFile: "docs/R-01/report-for-user.md" })
-    for (const marker of charter) expect(text, marker).toContain(marker)
-    // Beside the duties, after them (the placement exception stated).
-    expect(text.indexOf("overall acceptance")).toBeLessThan(text.indexOf("This is the round's final phase"))
-    expect(text).toContain("does not live\nunder docs/T-NNN/")
-  })
-  test("absent: a non-final phase renders nothing of the duty", () => {
-    const text = phasePlan({ phase: L("v") })
-    for (const marker of ['"Round user report"', "This is the round's final phase", "Needs your attention"]) {
-      expect(text, marker).not.toContain(marker)
+describe("renderPhasePlan (the round report duty retired, plans/0109 D2)", () => {
+  test("no phase renders the report duty — final or not, phased or m mode", () => {
+    for (const text of [
+      phasePlan({ phase: L("v") }),
+      phasePlan({ phase: L("m") }),
+      implementPlan({ input: "the input" }),
+    ]) {
+      for (const marker of ['"Round user report"', "This is the round's final phase", "Needs your attention", "report-for-user.md"]) {
+        expect(text, marker).not.toContain(marker)
+      }
     }
-  })
-  test("the m-mode formulation carries the duty (the implicit round's single phase is final)", () => {
-    const text = implementPlan({ input: "the input", finalPhase: true, reportFile: "docs/R-01/report-for-user.md" })
-    for (const marker of charter) expect(text, marker).toContain(marker)
-    expect(implementPlan({ input: "the input" })).not.toContain("Round user report")
   })
 })
 

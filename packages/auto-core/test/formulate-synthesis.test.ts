@@ -115,19 +115,19 @@ describe("the mechanical validation (0097 D4)", () => {
     expect(problems.filter((p) => p.includes("O-03") || p.includes("C-01"))).toEqual([])
   })
 
-  test("the seeded protocol rows quote fragments of the frame's protocol line", () => {
+  test("the seeded protocol rows quote fragments of the frame's protocol line (the report duty retired, plans/0109 D2)", () => {
     const entry = phaseType("acceptance")!
-    const line = protocolFrameText(entry, true, "docs/R-01/report-for-user.md")
-    const rows = seededLedgerRows(entry, true, "docs/R-01/report-for-user.md")
-    // acceptance: the phase verdict document + the final-phase report duty.
-    expect(rows.map((row) => row.quotes[0])).toEqual(["verdict.md", "verification.md", "Result: PASS", "Round user report"])
+    const line = protocolFrameText(entry)
+    const rows = seededLedgerRows(entry)
+    // acceptance: the phase verdict document + the verification task artifact.
+    expect(rows.map((row) => row.quotes[0])).toEqual(["verdict.md", "verification.md", "Result: PASS"])
     for (const row of rows) {
       expect(quoteLocates(row.quotes[0]!, line)).toBe(true)
       expect(row.source).toBe(LEDGER_FRAME_SOURCE)
     }
-    // A type with no artifacts, no verdict gate and no final phase seeds nothing.
-    expect(seededLedgerRows(phaseTypeOfLetter("m"), false)).toEqual([])
-    expect(protocolFrameText(phaseTypeOfLetter("m"), false)).toBe("")
+    // A type with no artifacts and no verdict gate seeds nothing.
+    expect(seededLedgerRows(phaseTypeOfLetter("m"))).toEqual([])
+    expect(protocolFrameText(phaseTypeOfLetter("m"))).toBe("")
   })
 })
 
@@ -297,8 +297,10 @@ async function synthesisFixture(turn: (dir: string) => TurnScript, fidelity = "F
 const constructorTurn: TurnScript = (ctx) => {
   const input = /### (docs\/R-01\/P01-implement\/plan-input\.md)\n\n([^\n]+)/.exec(ctx.text)?.[2]?.trim()
   if (input === undefined) return undefined
+  // plans/0109 D2: the seeded sequence in m mode starts empty (the report
+  // row retired), so the session's first row is O-01.
   return synthesisTurn("The widget is reimplemented from the specification alone.", [
-    `- O-02 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
+    `- O-01 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
   ])(ctx)
 }
 
@@ -324,8 +326,7 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       const todo = await unitDoc(f.dir, "T-001")
       expect(todo).toContain("## Sources brief (constructor session, under the charter)")
       expect(todo).toContain(LEDGER_HEADING)
-      expect(todo).toContain(`- O-01 | ${LEDGER_FRAME_SOURCE} | "Round user report" |`)
-      expect(todo).toContain(`- O-02 | docs/R-01/P01-implement/plan-input.md | "${INPUT}" |`)
+      expect(todo).toContain(`- O-01 | docs/R-01/P01-implement/plan-input.md | "${INPUT}" |`)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
       expect(audit).toMatch(/formulation R-01\.P01 synthesis: charters \[verify-plan\] on a — the sources demand a specification-only reimplementation — source health: \.opencode\/auto\/brief\.md absent/)
       expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
@@ -336,7 +337,7 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(wrapup).toBeDefined()
       expect(wrapup!.text).toContain("judge it row by row")
       expect(wrapup!.text).toContain("The obligations ledger under judgment:")
-      expect(wrapup!.text).toContain("- O-02 | docs/R-01/P01-implement/plan-input.md |")
+      expect(wrapup!.text).toContain("- O-01 | docs/R-01/P01-implement/plan-input.md |")
       expect(wrapup!.text).toContain("docs/T-001/coverage.md")
       expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
       // The synthesized document is committed: the phase-formulate commit

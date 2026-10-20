@@ -306,8 +306,7 @@ describe("golden render snapshots", () => {
         "R-01.P02",
       ),
     )
-    // m mode (plans/0095 D1): no phase entry — the plan-file input framing,
-    // the report duty always (the implicit round's single phase is final).
+    // m mode (plans/0095 D1): no phase entry — the plan-file input framing.
     golden(
       "formulation-todo-manual",
       formulationDocument(
@@ -320,8 +319,6 @@ describe("golden render snapshots", () => {
           phaseId: "R-01.P01",
           taskIndex: "docs/R-01/P01-implement/tasks.md",
           numberStart: 2,
-          finalPhase: true,
-          reportFile: "docs/R-01/report-for-user.md",
           charter: formulationAcceptance(facts),
         }),
         "R-01.P01",
@@ -349,12 +346,12 @@ describe("golden render snapshots", () => {
           synthesis: {
             brief: "The round brief demands the parser error paths covered with recorded evidence; the handover carries the design's error-semantics objective forward.",
             ledger: renderLedger([
-              ...seededLedgerRows(tEntry, false),
+              ...seededLedgerRows(tEntry),
               { kind: "O", n: 3, source: "docs/R-01/round.md", quotes: ["error semantics preserved for the parser"], text: "the plan's tests exercise parser error paths and record observed evidence" },
               { kind: "C", n: 1, source: "docs/R-01/P01-implement/plan-input.md vs docs/R-01/round.md", quotes: ["rewrite the config layer wholesale", "error semantics preserved for the parser"], text: "round.md wins (authority order); the plan records the deviation, never silent" },
             ]),
             missing: ["docs/analysis.md"],
-            protocol: protocolFrameText(tEntry, false),
+            protocol: protocolFrameText(tEntry),
           },
         }),
         "R-01.P02",

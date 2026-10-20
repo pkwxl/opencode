@@ -32,8 +32,8 @@ inventory tasks this phase needs (usually one — inventory is enumeration, not 
 closing consolidation task that alone writes survey.md in this phase directory, made of: the
 reference's map (subsystem areas, sizes, structure), the decisions ledger (every `Settled:`
 line with its derivation, every `Fork:` line with its project-level consequences and its
-`Recommend:` default), environment facts and gaps (a missing tool is a gap, named as one — it
-becomes a needs-attention item of the round report), a proposed MUST baseline, and beside
+`Recommend:` default), environment facts and gaps (a missing tool is a gap, named as one — a
+recorded gap the person reads; driver-helper renders the standing list), a proposed MUST baseline, and beside
 that evidence a `## Project brief` section proposing the project's constants: the goal in the
 target's own terms, where the reference lives, where the deliverable goes, the constraints
 that bind every round, and the scope posture with every settled decision and each fork's

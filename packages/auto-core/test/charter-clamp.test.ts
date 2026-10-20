@@ -181,11 +181,12 @@ describe("Part II template pins (plans/0082 §10 D11 / D14c-d)", () => {
     expect(parseVerifyReply("garbage")).toBeUndefined()
   })
 
-  test("the round report's needs-attention charter lists un-Choice'd blockage documents (§7)", async () => {
-    const { reportCharter } = await import("../src/round-report")
-    const charter = reportCharter("docs/R-01/report-for-user.md")
-    expect(charter).toContain("un-Choice'd blockage documents (docs/R-NN/blockage-<seq>.md")
-    expect(charter).toContain("awaiting your one `Choice:` line")
+  test("the ⚡ clamp line names the standing-decisions surface (plans/0109 D5 re-keying)", () => {
+    const item = { question: "which key ring?", clamp: "rotate on the primary only" } as ResolveItem
+    const line = clampLine(item, item.clamp!)
+    expect(line).toContain("⚡ OPEN question (charter-clamped): which key ring?")
+    expect(line).toContain('the default in force is "rotate on the primary only"')
+    expect(line).toContain("driver-helper renders the standing decisions")
   })
 
   test("the default-check template carries the charter and the text under review with its Clamp protocol", () => {

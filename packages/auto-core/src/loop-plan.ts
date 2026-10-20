@@ -23,7 +23,7 @@ import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { REQUIRED_TYPE, phaseType, type PhaseTypeEntry } from "./phases/registry"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseTitle, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
-import { ANALYSIS_DOC, reportForUserPath, roundBriefPath } from "./docpaths"
+import { ANALYSIS_DOC, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "./prompt-plan"
@@ -309,10 +309,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           inputPath: planInputPath(phase),
           mode: opts.mode,
           parallel: opts.parallel,
-          // The no-phase implicit round's single phase is the round's final one
-          // (plans/0081 D2): its formulation carries the report duty.
-          finalPhase: true as const,
-          reportFile: reportForUserPath(await currentRound(directory)),
           charter,
         }
       : {
@@ -328,7 +324,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           handovers: parts!.handovers,
           prevRound: parts!.prevRound,
           mode: opts.mode,
-          ...(parts!.finalPhase ? { finalPhase: true as const, reportFile: parts!.reportFile } : {}),
           // No analysis/design phase delivered in this round's index → the
           // implement phase's planning gets the pipeline-trimming note.
           trimmedPhases: parts!.trimmedPhases,
@@ -392,8 +387,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       else if (parts!.prevRoundExpected) missing.push("prior-round digest")
     }
     const entry = ctx.manual ? phaseType(REQUIRED_TYPE)! : phase.entry
-    const finalPhase = ctx.manual || parts!.finalPhase
-    const reportFile = ctx.manual ? reportForUserPath(await currentRound(directory)) : parts!.reportFile
     const outcome = await synthesizeFormulation({
       pool: ctx.server,
       routing: ctx.routing,
@@ -401,8 +394,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       phaseEntry: phaseEntryOf,
       entry,
       phaseStep: phaseKey(phase).id,
-      finalPhase,
-      ...(reportFile !== undefined ? { reportFile } : {}),
       sources,
       missing,
       duties: ctx.manual ? "" : planDuties(ctx, phase.entry),
@@ -417,7 +408,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
               brief: candidateBrief,
               ledger: renderLedger(rows),
               ...(missing.length ? { missing } : {}),
-              protocol: protocolFrameText(entry, finalPhase, reportFile),
+              protocol: protocolFrameText(entry),
             },
           })
           return []
@@ -432,7 +423,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
     }
     if (outcome.kind === "fallback") {
-      log(`⚠ formulation synthesis fell back to the Stage-1 deterministic floor: ${outcome.reason} (the round report's needs-attention section carries it)`)
+      log(`⚠ formulation synthesis fell back to the Stage-1 deterministic floor: ${outcome.reason} (this round's docs/R-NN/prompt-audit.md carries the record)`)
       return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: outcome.audit, digest, landed: false }
     }
     const todo = renderFormulationTodo(facts, {
@@ -441,7 +432,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         brief: outcome.brief,
         ledger: renderLedger(outcome.rows),
         ...(missing.length ? { missing } : {}),
-        protocol: protocolFrameText(entry, finalPhase, reportFile),
+        protocol: protocolFrameText(entry),
       },
     })
     return {
@@ -594,8 +585,6 @@ type FormulationParts = {
   prevRoundExpected: boolean
   round: string | undefined
   analysis: string | undefined
-  finalPhase: boolean
-  reportFile: string | undefined
   trimmedPhases: boolean
 }
 
@@ -666,14 +655,6 @@ async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<Formula
   // settled decisions directly, so what the analysis settles is never
   // re-raised as a fork. Human-gated phases only.
   const analysis = phase.entry.gates.includes("human") ? await analysisText(directory) : undefined
-  // The round report duty (plans/0081 D2): this phase is final when it is the
-  // round's last and lays out tasks — its formulation ends the index with the
-  // wrap-up task whose deliverable is docs/R-NN/report-for-user.md. A round
-  // ending in a trailing task-less phase (knowledge) renders nothing here:
-  // that side-channel session writes the report as its second artifact
-  // (D6b, knowledge.ts).
-  const last = state.phases.at(-1)
-  const finalPhase = last !== undefined && last.id === phase.id && phase.entry.hasTasks
   return {
     state,
     handovers,
@@ -683,8 +664,6 @@ async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<Formula
     prevRoundExpected,
     round,
     analysis,
-    finalPhase,
-    reportFile: finalPhase ? reportForUserPath(state.round) : undefined,
     // No analysis/design phase delivered in this round's index → the
     // implement phase's planning gets the pipeline-trimming note. A closed
     // analysis/design phase (plans/0053 D16: done for scheduling, not

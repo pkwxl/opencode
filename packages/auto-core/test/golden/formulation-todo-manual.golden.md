@@ -26,26 +26,6 @@ This plan belongs to a migration/upgrade scenario, on the premise that externall
   behaviour (existing tests, reproducible checks or behaviour snapshots), then do the migration work, and do regression verification last;
 - Do not smuggle in functional changes or refactoring unrelated to the migration; when one is genuinely needed, make it a task of its own.
 
-This is the round's final phase — the round ends with this phase's work. End the task list with one wrap-up task, titled
-exactly "Round user report", whose deliverable is the round report docs/R-01/report-for-user.md (a round-level artifact: it does not live
-under docs/T-NNN/, and this one task may name and write it there — the placement exception to the doc-layout rule), placed
-after the verdict/consolidation closing task; a FAIL verdict is one of the report's findings, not a reason to skip the report task. The report is written for the
-person who started the run — plain prose, path links, no driver-protocol obligations beyond the closing terminator line
-`<!-- auto: eof -->`. Its charter, which the wrap-up task's document must restate in full (self-contained, as every task
-document must be):
-1. What this round set out to do, in the person's own terms (the project brief, the round brief, the planning input);
-2. What happened, phase by phase: what each phase delivered, its verdict, and headline counts (tasks done / failed /
-   blocked / closed by hand);
-3. **Needs your attention** — the section the whole report exists for: every provisionally-defaulted planning question
-   with its options, implications and override path, each phrased by its project consequence (what it changes for the
-   goal, the rounds, the cost, the acceptance — never the technique alone); open questions and the safe defaults currently in force; the round's
-   AUTO-RESOLVE proxy decisions with enough context to confirm or overturn each; FAIL verdicts and what they mean;
-   environment gaps; recorded deviations and assumption notes; mid-round decisions that belong in the project brief (the next survey folds them in);
-   formulation synthesis fallbacks recorded in this round's docs/R-NN/prompt-audit.md (`synthesis: FALLBACK` lines — a phase that
-   planned on the deterministic floor although its pack declared a charter, each with its reason);
-4. Where to look deeper: an artifact index (spec-notes, verdicts, notable task reports), one line each — the report
-   links, it never copies at length.
-
 ## What this task writes (the DRIVER's format protocol)
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content;

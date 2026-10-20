@@ -188,7 +188,7 @@ describe("scan exemptions (config scanExempt, plans/0059 X2)", () => {
     ])
     const nested = { nested: ["dest"] as const }
     expect(processReferenceScan(added, [], nested).problems).toHaveLength(2)
-    expect(processReferenceScan(added, [], nested).deferred).toEqual([])
+    expect(processReferenceScan(added, [], nested).deferredCount).toBe(0)
     const scan = processReferenceScan(added, ["dest/test/fixtures/**"], nested)
     expect(scan.problems).toHaveLength(1)
     expect(scan.problems[0]).toStartWith("dest/src/a.c:2")
@@ -243,7 +243,7 @@ describe("processReferenceScan", () => {
     // test tooling, the manual-driver prompts/ suite and the agent-contract
     // surfaces are workspace, and process documents keep their referenced-side
     // standing.
-    const { problems, deferred } = processReferenceScan(
+    const { problems, deferredCount } = processReferenceScan(
       new Map([
         ["src/a.c", lines("see docs/T-003/S01/index.md for the layout")],
         ["test/lane.sh", lines("tail .auto/run.lock; docs/T-004/report.md")],
@@ -256,7 +256,7 @@ describe("processReferenceScan", () => {
       { nested: ["dest"] },
     )
     expect(problems).toEqual([])
-    expect(deferred).toEqual([])
+    expect(deferredCount).toBe(0)
   })
 
   test("AUTO-* marks: self-contained is fine, a pointer into the process side is not", () => {
@@ -266,28 +266,28 @@ describe("processReferenceScan", () => {
     expect(bad.problems).toHaveLength(1)
   })
 
-  test("a bare task id is fine in the outer workspace, recorded inside a nested repository, blocking at release (plans/0103 D2)", () => {
+  test("a bare task id is fine in the outer workspace, recorded inside a nested repository, blocking at release (plans/0103 D2; the record is a count, plans/0109 D6)", () => {
     // The workspace's own scripts name tasks freely — no check runs there.
     const outer = processReferenceScan(new Map([["test/lane.sh", lines("// fixed in T-012", "echo T-012 done")]]))
     expect(outer.problems).toEqual([])
-    expect(outer.deferred).toEqual([])
-    // While rounds run the finding is recorded, never blocking.
+    expect(outer.deferredCount).toBe(0)
+    // While rounds run the finding is recorded as the aggregate count, never
+    // blocking and never itemized (the release gate's output is the fix
+    // list).
     const rounds = processReferenceScan(
       new Map([["vendor/src/a.c", lines("// the geometry slot (T-012 §2.2)", "int T-0x;")]]),
       [],
       { nested: ["vendor"] },
     )
     expect(rounds.problems).toEqual([])
-    expect(rounds.deferred).toEqual([
-      "vendor/src/a.c: 1 added line(s) mention a task id (T-NNN) — recorded for release: when the destination ships, restate the content in place and remove the id — never delete the record it anchored",
-    ])
+    expect(rounds.deferredCount).toBe(1)
     // The release posture is the enforcement moment.
     const release = processReferenceScan(
       new Map([["vendor/src/a.c", lines("// the geometry slot (T-012 §2.2)", "int T-0x;")]]),
       [],
       { nested: ["vendor"], release: true },
     )
-    expect(release.deferred).toEqual([])
+    expect(release.deferredCount).toBe(0)
     expect(release.problems).toEqual([
       "vendor/src/a.c: 1 line(s) mention a task id (T-NNN) — restate the content in place and remove the id: the destination must stand alone to release",
     ])
@@ -306,12 +306,9 @@ describe("processReferenceScan", () => {
     ])
     const rounds = processReferenceScan(added, [], { nested: ["vendor"], dir })
     expect(rounds.problems).toEqual([])
-    expect(rounds.deferred).toHaveLength(1)
-    expect(rounds.deferred[0]).toContain('vendor/src/b.c:1 references "../../outside"')
-    expect(rounds.deferred[0]).toContain('vendor/src/b.c:2 references "/work/target/test/t053_ktest.sh"')
-    expect(rounds.deferred[0]).toContain("recorded for release")
+    expect(rounds.deferredCount).toBe(2)
     const release = processReferenceScan(added, [], { nested: ["vendor"], dir, release: true })
-    expect(release.deferred).toEqual([])
+    expect(release.deferredCount).toBe(0)
     expect(release.problems).toHaveLength(1)
     expect(release.problems[0]).toContain('vendor/src/b.c:1 references "../../outside"')
     expect(release.problems[0]).toContain("no path may lead outside the destination's own root")

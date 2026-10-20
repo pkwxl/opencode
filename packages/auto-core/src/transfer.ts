@@ -16,8 +16,9 @@
 //   3. round close: the same invocation, when the closed phase was the
 //      round's last, additionally performs the round close and stops there —
 //      the full stop between rounds is the person's natural moment with
-//      R-NN's report before committing to R-NN+1 (the loop's complete
-//      route gates it, exit 2 naming the checks);
+//      R-NN's close listing (a commissioned report beside it) before
+//      committing to R-NN+1 (the loop's complete route gates it, exit 2
+//      naming the checks);
 //   4. round open (the round closed): the roadmap's next line applied (D5)
 //      — a released roadmap that plans lines governs the sequence's end, so
 //      the round past its last line meets the roadmap-exhausted stop naming

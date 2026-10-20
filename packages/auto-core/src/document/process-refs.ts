@@ -30,12 +30,13 @@
 // repository's own root — a `..` chain climbing past the root, or an
 // absolute path under the target directory. Their enforcement moment is the
 // release gate (plans/0103 D2): while rounds still run the scan only
-// RECORDS them (`deferred`, logged at close-out, listed at round close —
-// the treatment is deliberately delayed because restating citations away is
-// churn a working round should not be forced into), and `release`
-// (src/release.ts) refuses while any remains. In the outer workspace a bare
-// task id is acceptable content — the harness's own scripts name tasks
-// freely — so no task-id check runs there at all.
+// RECORDS them (`deferredCount`, one aggregate ⚠ line at close-out and
+// round close — plans/0109 D6, the treatment deliberately delayed because
+// restating citations away is churn a working round should not be forced
+// into), and `release` (src/release.ts) refuses while any remains — with
+// each finding itemized, the fix list of the enforcement moment. In the
+// outer workspace a bare task id is acceptable content — the harness's own
+// scripts name tasks freely — so no task-id check runs there at all.
 //
 // AUTO-* marker lines are held to the same rule: a mark may sit in a code
 // comment, a pointer into the process side may not. The marks themselves are
@@ -81,16 +82,19 @@ export type ProcessReferenceScan = {
   // posture — the containment findings below.
   problems: string[]
   // Destination containment while rounds still run: recorded, never
-  // blocking; the release gate (src/release.ts, plans/0103 D2) enforces
-  // them when the person is ready to ship.
-  deferred: string[]
+  // blocking — as one aggregate count (plans/0109 D6: the per-finding
+  // ledger was verbose and unreadable; the count tells how many references
+  // pend their release-time fix, and the release gate's own itemized
+  // problems are the fix list). Counts out-of-root references plus
+  // task-id-flagged lines.
+  deferredCount: number
 }
 
 // `exempt` = the project's scan exemptions (config scanExempt, roles.ts
 // scanExempted): deliverable files where process-shaped strings are content.
 export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLine[]>, exempt: readonly string[] = [], repos: ScanRepos = {}): ProcessReferenceScan {
   const problems: string[] = []
-  const deferred: string[] = []
+  let deferredCount = 0
   for (const [rel, lines] of [...added].sort(([a], [b]) => a.localeCompare(b))) {
     const nested = repos.nested?.find((prefix) => rel === prefix || rel.startsWith(`${prefix}/`))
     // The deliverable definition (plans/0108): only a nested destination
@@ -124,24 +128,22 @@ export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLi
       if (repos.release) {
         problems.push(`${head} — no path may lead outside the destination's own root: vendor or restate what it pointed at, then re-run release`)
       } else {
-        // AUTO-DECISION (wording, 0106): the remedy clause is part of the
-        // record — the field finding was a session reading "must shed" as
-        // delete and stripping the AUTO-DECISION records by removal, which
-        // loses the provenance the pointer anchored. The round-time lines
-        // now carry the same restatement instruction their release-gate
-        // siblings above carry.
-        deferred.push(`${head} — recorded for release: when the destination ships, vendor or restate what it pointed at in place and remove the path — never delete the content it anchored`)
+        // Recorded for release as the aggregate count (plans/0109 D6). The
+        // restatement remedy rides the count line at every emission site —
+        // 0106's reading rule (never delete the record the id anchored)
+        // survives the compression.
+        deferredCount += outside.length
       }
     }
     if (ids) {
       if (repos.release) {
         problems.push(`${rel}: ${ids} line(s) mention a task id (T-NNN) — restate the content in place and remove the id: the destination must stand alone to release`)
       } else {
-        deferred.push(`${rel}: ${ids} added line(s) mention a task id (T-NNN) — recorded for release: when the destination ships, restate the content in place and remove the id — never delete the record it anchored`)
+        deferredCount += ids
       }
     }
   }
-  return { problems, deferred }
+  return { problems, deferredCount }
 }
 
 // The out-of-root path references of one added line in a nested repository
