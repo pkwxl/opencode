@@ -1166,13 +1166,13 @@ export async function runSubtask(
 // side documents and copies already committed at a handover boundary) must be
 // non-trivial + end with the terminator; exemptions derive from document roles
 // (document/roles.ts eofScanExempt); ⑥ the P1 prohibition scan (M2.3,
-// plans/0045) — lines the unit added inside a nested destination repository
-// must not reference process documents (document/process-refs.ts, plans/
-// 0108: the working directory's own files are process workspace, never
-// scanned; inside a nested repository
-// the destination-containment findings — task ids, paths leading outside
-// the repository's own root — are recorded for release, never blocking,
-// plans/0103 D2, while the outer workspace names tasks freely). All
+// plans/0045; enforced at release alone, plans/0103 D2 read whole) — lines
+// the unit added inside a nested destination repository (document/
+// process-refs.ts, plans/0108: the working directory's own files are process
+// workspace, never scanned): every finding family — process-document
+// references, task ids, paths leading outside the repository's own root —
+// is recorded for release as one aggregate count, never blocking, while the
+// outer workspace names tasks freely. All
 // criteria are deterministic: a zero-write or truncated
 // "natural end" is never completion. `exempt` = the project's scan
 // exemptions (config scanExempt, plans/0059 X2): deliverable paths both ⑤ and
@@ -1199,15 +1199,15 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
     problems.push(...docShapeProblems(content, rel))
   }
   const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt, { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
-  // Destination containment is recorded, not blocking (plans/0103 D2): the
-  // release gate enforces it when the person is ready to ship. One
-  // aggregate line, never the per-finding ledger (plans/0109 D6) — the
-  // count is the signal; the restatement remedy rides it so the 0106
-  // reading rule (never delete the record the id anchored) survives.
+  // Destination containment is recorded, not blocking (plans/0103 D2, every
+  // family since its second addendum): the release gate enforces it when
+  // the person is ready to ship. One aggregate line, never the per-finding
+  // ledger (plans/0109 D6) — the count is the signal; the restatement
+  // remedy rides it so the 0106 reading rule (never delete the record the
+  // id anchored) survives.
   if (refs.deferredCount) {
-    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
+    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
   }
-  problems.push(...refs.problems)
   return problems
 }
 

@@ -200,11 +200,12 @@ export async function adoptUnit(
     problems.push(...docShapeProblems(content, rel))
   }
   const refs = processReferenceScan(await unitAddedLines(dir, baseline), [...(opts.scanExempt ?? [])], { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
-  // One aggregate line, never the per-finding ledger (plans/0109 D6).
+  // Recorded, never blocking — every finding family (plans/0103 D2 read
+  // whole, its second addendum); release enforces. One aggregate line,
+  // never the per-finding ledger (plans/0109 D6).
   if (refs.deferredCount) {
-    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
+    log(`  ⚠ destination containment: ${refs.deferredCount} reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
   }
-  problems.push(...refs.problems)
   const report = await Bun.file(join(dir, taskDoc(task.id, "report"))).text().catch(() => "")
   const result = parseResult(report)
   if (result?.type === "fail") problems.push(`the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}`)

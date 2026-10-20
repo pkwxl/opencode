@@ -1,12 +1,13 @@
 // The release gate (plans/0103 D2/D3, ruled from spi-nor-glm's R-01 close):
 // the destination repository ships standalone, so the containment rules the
-// working rounds only record (document/process-refs.ts `deferred` — task
-// ids, paths leading outside the repository's own root) become blocking
-// here. The maintainer's ruling: restating citations away is churn a working
-// round should not be forced into, so during the migration's rounds the
-// findings ride as recorded lines (close-out logs, round-close warnings —
-// the running ledger), and the one moment their price is worth paying is
-// the person's `release`.
+// working rounds only record (document/process-refs.ts `deferredCount` —
+// process-document references, task ids, paths leading outside the
+// repository's own root, the full set since 0103's second addendum) become
+// blocking here. The maintainer's ruling: restating citations away is churn
+// a working round should not be forced into, so during the migration's
+// rounds the findings ride as the recorded count (the close-out log, the
+// round-close warning — the running ledger), and the one moment their price
+// is worth paying is the person's `release`.
 //
 // A gate, not a scrubber: removal is content work (restate the decision the
 // id pointed at, vendor or rewrite what the path named) that the person's

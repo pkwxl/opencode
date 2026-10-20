@@ -261,7 +261,7 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
   )
 
   test(
-    "the P1 scan blocks process-document references in deliverable files; readiness is re-checked at adopt",
+    "a process-document reference in a destination file records for release — the adopt proceeds; readiness is re-checked at adopt",
     withDir(async (dir) => {
       await fixture(dir, [
         { id: "T-001", done: true },
@@ -275,17 +275,19 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       expect(notReady.type === "stop" && notReady.lines[0]).toContain("T-003 is not ready: T-002 is not done yet")
       // A destination file referencing a process document (plans/0108: the
       // scan reads the nested repositories' files alone — the standalone
-      // session's uncommitted write lands inside one).
+      // session's uncommitted write lands inside one): a recorded finding
+      // now, counted for release like the other families (0103 D2's second
+      // addendum) — never an adopt blocker.
       mkdirSync(join(dir, "dest", "src"), { recursive: true })
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
       await git(join(dir, "dest"), "config", "user.name", "t")
       writeFileSync(join(dir, "dest", "src", "feature.ts"), "// see docs/T-002/report.md for the rationale\nexport const feature = 1\n")
       await Bun.write(join(dir, "docs", "T-002", "report.md"), SESSION_REPORT)
-      const blocked = await planPrelude(dir, { phases: "m", adopt: "T-002" })
-      expect(blocked.type === "stop" && blocked.code).toBe(1)
-      expect(blocked.type === "stop" && blocked.lines[0]).toContain("dest/src/feature.ts:1 references")
-      expect(await Bun.file(join(dir, "docs", "T-002", "todo.md")).exists()).toBe(true)
+      const adopted = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      expect(adopted.type === "stop" && adopted.code).toBe(0)
+      expect(adopted.type === "stop" && adopted.lines.some((line) => line.startsWith("✓ T-002 adopted"))).toBe(true)
+      expect(await Bun.file(join(dir, "docs", "T-002", "done.md")).exists()).toBe(true)
     }),
   )
 
@@ -296,13 +298,17 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
         { id: "T-001", done: true },
         { id: "T-002" },
       ])
-      // plans/0108: the offending write lands inside a nested destination
-      // repository — the only side the reference scan reads.
+      // plans/0108: the blocking write lands inside a nested destination
+      // repository — an unterminated Markdown file the eof scan catches
+      // after the test handover already ran (a process-document reference
+      // alone no longer blocks: recorded for release, 0103 D2's second
+      // addendum — the reference in the notes is a counted finding beside
+      // the real blocker).
       mkdirSync(join(dir, "dest", "src"), { recursive: true })
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
       await git(join(dir, "dest"), "config", "user.name", "t")
-      writeFileSync(join(dir, "dest", "src", "feature.ts"), "// see docs/T-001/done.md\nexport const feature = 1\n")
+      writeFileSync(join(dir, "dest", "src", "notes.md"), "# Notes\n\nBackground: docs/T-001/done.md holds it.\n")
       mkdirSync(join(dir, "test"), { recursive: true })
       await Bun.write(join(dir, "test", "check.sh"), "exit 3\n")
       mkdirSync(join(dir, "tmp"), { recursive: true })
@@ -314,6 +320,7 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       // The blocked lines still carry the executed test handover's report,
       // and the marker was consumed either way.
       expect(result.lines[0]).toContain("test handover executed (exit code 3)")
+      expect(result.lines.some((line) => line.includes("dest/src/notes.md: missing last-line terminator"))).toBe(true)
       expect(await Bun.file(join(dir, "tmp", "test.sh")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs", "T-002", "todo.md")).exists()).toBe(true)
     }),

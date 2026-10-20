@@ -146,7 +146,7 @@ describe("round-close gate (plans/0049 G8)", () => {
   }
 
   test(
-    "empty close listing and a process reference inside the destination are problems; the workspace's own files and .gitignore's .auto/ are not (plans/0108)",
+    "an empty close listing is the problem; a destination process reference records with the other families, never a round-time problem (plans/0103 D2's second addendum); the workspace's own files and .gitignore's .auto/ are not scanned (plans/0108)",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
@@ -156,7 +156,8 @@ describe("round-close gate (plans/0049 G8)", () => {
       writeFileSync(join(dir, "src/lib.rs"), "// see docs/T-004/report.md for the reason\nfn main() {}\n")
       writeFileSync(join(dir, ".gitignore"), "tmp/\n.auto/\n")
       // The destination: a nested repository whose own file references the
-      // process side — the deliverable, the one side the scan reads.
+      // process side — the deliverable, the one side the scan reads, and a
+      // recorded finding like every other family.
       mkdirSync(join(dir, "dest", "src"), { recursive: true })
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
@@ -168,10 +169,12 @@ describe("round-close gate (plans/0049 G8)", () => {
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const close = await roundCloseProblems(dir, 1)
-      expect(close.problems).toHaveLength(2)
-      expect(close.problems[0]).toStartWith('process reference: dest/src/lib.rs:1 references "docs/T-004/report.md"')
-      expect(close.problems[1]).toContain("docs/R-01/round.md `## Close` is empty")
-      expect(close.warnings).toEqual(["build: no build command configured (config `build`); the target build was not checked"])
+      expect(close.problems).toHaveLength(1)
+      expect(close.problems[0]).toContain("docs/R-01/round.md `## Close` is empty")
+      expect(close.warnings).toEqual([
+        "containment: 1 reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
+        "build: no build command configured (config `build`); the target build was not checked",
+      ])
       // 0106: the held shape names its refuser and splits the ⚠ records out
       // from under the "until these are fixed" header — a proxy session
       // reading the stop as a work list must not see records as work.
@@ -186,20 +189,22 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
-    "destination containment rides as warnings, never problems (plans/0103 D2: the treatment is deferred to release)",
+    "destination containment rides as warnings, never problems — every family counted (plans/0103 D2, its second addendum: the treatment is deferred to release)",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
       writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
       writeReport(dir, 1)
       // A nested destination repository carrying exactly the recorded
-      // findings: a task-id citation and a path climbing out of its root.
+      // findings: a process-document citation, a task-id citation and a
+      // path climbing out of its root.
       mkdirSync(join(dir, "vendor", "src"), { recursive: true })
       await git(join(dir, "vendor"), "init", "-q")
       await git(join(dir, "vendor"), "config", "user.email", "t@example.com")
       await git(join(dir, "vendor"), "config", "user.name", "t")
       writeFileSync(join(dir, "vendor", "src", "a.rs"), "//! The slot (T-012 §2.2).\n")
       writeFileSync(join(dir, "vendor", "src", "b.c"), 'path = "../../outside"\n')
+      writeFileSync(join(dir, "vendor", "src", "c.rs"), "//! Layout per docs/T-009/report.md.\n")
       await git(join(dir, "vendor"), "add", "-A")
       await git(join(dir, "vendor"), "commit", "-qm", "destination")
       await git(dir, "add", "-A")
@@ -210,7 +215,7 @@ describe("round-close gate (plans/0049 G8)", () => {
       // references, never the per-finding ledger) beside the build note.
       expect(close.warnings).toHaveLength(2)
       expect(close.warnings[0]).toBe(
-        "containment: 2 reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
+        "containment: 3 reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
       )
       expect(close.warnings[1]).toBe("build: no build command configured (config `build`); the target build was not checked")
     }),
@@ -252,14 +257,14 @@ describe("round-close gate (plans/0049 G8)", () => {
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const scanned = await roundCloseProblems(dir, 1, { build: "true" })
-      expect(scanned.problems).toHaveLength(1)
-      expect(scanned.problems[0]).toStartWith('process reference: dest/test/fixtures/sample.md:1 references "docs/T-004/report.md"')
+      expect(scanned.problems).toEqual([])
+      expect(scanned.warnings[0]).toStartWith("containment: 1 reference(s) recorded for release")
       expect(await roundCloseProblems(dir, 1, { build: "true", scanExempt: ["dest/test/fixtures/**"] })).toEqual({ problems: [], warnings: [] })
     }),
   )
 
   test(
-    "untracked files inside a destination are scanned too; a missing round.md is a problem",
+    "untracked files inside a destination are scanned into the count; a missing round.md is the problem",
     withDir(async (dir) => {
       await gitRepo(dir)
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
@@ -270,8 +275,10 @@ describe("round-close gate (plans/0049 G8)", () => {
       writeFileSync(join(dir, "dest", "notes.txt"), "state lives in .auto/progress.json\n")
       writeReport(dir, 1)
       const close = await roundCloseProblems(dir, 1, { build: "true" })
-      expect(close.problems.map((problem) => problem.split(":")[0])).toEqual(["process reference", "close listing"])
-      expect(close.problems[1]).toBe("close listing: docs/R-01/round.md is missing")
+      expect(close.problems).toEqual(["close listing: docs/R-01/round.md is missing"])
+      expect(close.warnings).toEqual([
+        "containment: 1 reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
+      ])
     }),
   )
 

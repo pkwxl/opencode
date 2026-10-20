@@ -252,13 +252,16 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(built).toContain("ℹ this brief did not run the config build (`make check`) — the close gate runs it on the next opencode-auto transfer")
   })
 
-  test("row 6 (0106, re-keyed by 0108 and 0109) — a process-reference finding inside a destination renders the scanExempt fork; the containment record is one counted line", async () => {
+  test("row 6 (0106, re-keyed by 0108, 0109 and 0103's second addendum) — the recorded containment count carries every family; the scanExempt fork rides the held close", async () => {
     const dir = await repo()
     await completeRound(dir, "mt")
-    // Plant findings inside a destination repository (plans/0108: the
-    // workspace's own files are never scanned): a blocking process reference
-    // beside a deferred task-id mention whose round-time record is the
-    // aggregate count (plans/0109 D6), never the per-finding ledger.
+    // Empty the close listing so the gate holds — the stop the channel rides
+    // in — then plant findings inside a destination repository (plans/0108:
+    // the workspace's own files are never scanned): a process-document
+    // citation beside a task-id mention, both recorded now, the count the
+    // only round-time record (plans/0109 D6; the process family joined by
+    // 0103's second addendum).
+    write(dir, "docs/R-01/round.md", renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core; the journal deferred."))
     write(dir, "dest/notes.md", "wiring notes — the full record lives in docs/T-001.\n")
     write(dir, "dest/extra.c", "// the geometry slot (T-007 §2.2)\n")
     await git(join(dir, "dest"), "init", "-q")
@@ -269,14 +272,19 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "plant destination findings")
     const lines = await renderHelperBrief(dir, { phases: "mt" })
-    // The blocking finding is the stop's work, with its remediation fork.
-    expect(lines.some((line) => line.includes("process reference: dest/notes.md:1 references"))).toBe(true)
-    expect(lines.some((line) => line.startsWith("- a process-reference finding — always inside a destination repository: restate the needed content in place and remove the path"))).toBe(true)
+    // No process-reference ✗ line exists at round time — the blocking form
+    // of "the destination must not reference process documents" is
+    // release-time truth alone.
+    expect(lines.some((line) => line.includes("process reference: dest/notes.md:1 references"))).toBe(false)
+    expect(lines.some((line) => line.includes("must not reference process documents"))).toBe(false)
+    expect(lines.some((line) => line.includes("close listing: docs/R-01/round.md `## Close` is empty"))).toBe(true)
+    // The remediation fork rides the ledger, naming release as the moment.
+    expect(lines.some((line) => line.startsWith("- recorded containment references — always inside a destination repository, enforced at release alone:"))).toBe(true)
     expect(lines.some((line) => line.includes(`opencode-auto amend ${dir} --scan-exempt <path> records the exemption in the config`))).toBe(true)
-    // The deferred record rides as one counted ⚠ line, byte-identical to the
-    // terminal's own round-close output.
+    // The record rides as one counted ⚠ line — both families in the figure —
+    // byte-identical to the terminal's own round-close output.
     expect(lines).toContain(
-      "  ⚠ containment: 1 reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
+      "  ⚠ containment: 2 reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them",
     )
   })
 

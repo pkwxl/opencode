@@ -240,15 +240,16 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     channels.push(
       `${roundBriefPath(closed)} — fill its \`## Close\` section: each restated decision named with where it landed in the target's own documentation, each accepted loss with what it cost; then commit`,
     )
-    if (close.problems.some((problem) => problem.startsWith("process reference:"))) {
-      // 0106 D3, re-keyed by 0108: the remediation fork the finding's own
-      // line only half names — content findings restate in place — with the
-      // scope the finding now carries: always inside a destination
-      // repository, the working directory's own files being process
-      // workspace the scan never reads; a destination file whose grammar is
-      // paths keeps the config's exemption channel.
+    if (close.warnings.some((warning) => warning.startsWith("containment:"))) {
+      // 0106 D3's channel, re-keyed by 0108 and by 0103's second addendum:
+      // the process-reference findings no longer block the close — they ride
+      // the recorded count with the other families, enforced at release
+      // alone — so the fork keys on the ledger itself: the records restate
+      // in place when the destination ships (never delete what a record
+      // anchored, the 0106 reading rule), and a destination file whose
+      // grammar is paths keeps the config's exemption channel.
       channels.push(
-        `a process-reference finding — always inside a destination repository: restate the needed content in place and remove the path (the working directory's own files are the process workspace, never scanned); a destination file whose grammar legitimately names process paths has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
+        `recorded containment references — always inside a destination repository, enforced at release alone: restate what each anchored in place when the destination ships, never delete the record it anchored (the working directory's own files are the process workspace, never scanned); a destination file whose grammar legitimately names process paths has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
       )
     }
     recovery.push(`then: ${bin} transfer ${dir}`)

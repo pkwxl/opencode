@@ -120,3 +120,56 @@ sub-command might be needed.*
 The manual-driver suite keeps its stricter wording deliberately: an
 agent-driven run has no release gate standing behind it, so its verification
 child holds the line the driver's rounds now defer.
+
+## Addendum two — the carve-out re-read (2026-10-20)
+
+Not a new ruling: the addendum above, read whole, already included the
+process-document family — the carve-out sentence below (*"the classic
+process-path rule (docs/T-\*, docs/R-\*, .auto/) keeps blocking everywhere
+as before"*) was this document's own narrowing of the ruling's words, and
+aster-net's round close (the third field round on the seam) surfaced it as
+exactly the retroactive churn the ruling rejects: the whole-tree scan held
+the next round on `docs/T-018/S01.md` citations that past tasks' sessions
+had landed (whole-task units never had a close-out reference check — only
+the subtask close-out did), so content no round-time gate had caught when
+written was blocking every later round until restated mid-project. The
+maintainer, shown that held close, in review (verbatim): *such references
+also belong to `recorded for release`* and *`the destination must not
+reference process documents` only when release*.
+
+The re-reading, why the ruling's own words carry it:
+
+- the addendum's *"such references"* are the destination's citations of the
+  process side — this document's own finding 3 named them ("~90 comment
+  citations of the process side … every one a pointer that breaks when the
+  repository ships standalone"), and a `docs/T-*` citation inside a
+  destination is one of those pointers exactly; the first ruling's phrase
+  *"any path out of its own root repo"* reads on it too (a path pointing at
+  the process side, whatever pure path arithmetic does with the bare
+  token);
+- 0108 D8.2 already treats the families uniformly — "a `T-XXX` (or
+  process-path) reference" with one remedy, citing the deferred records'
+  own remedy string ("never delete the record it anchored");
+- the closing paragraph above already said it: the manual suite *"holds the
+  line the driver's rounds now defer"* — the whole line, not two of its
+  three families. The manual suite keeps that stricter wording for the same
+  reason it always had: no release gate stands behind an agent-driven run.
+
+**The change** (`document/process-refs.ts` and its consumers): the
+process-path family joins `deferredCount` in every non-release posture — the
+scan's `problems` answer exists under the release posture alone, itemized
+with the same wording, so the subtask close-out and the work-order adopt no
+longer block or re-prompt on a reference, and the round-close gate's
+whole-tree scan answers the count alone (its blocking checks are the build
+and the `## Close` listing). The count line's parenthetical names all three
+families at every emission site (close-out, adopt, round-close,
+driver-helper through the stop twins), the helper's round-close channel row
+keys on the containment warning instead of the retired `process reference:`
+problem prefix, and `release` is untouched — still itemized, still the fix
+list. The intent packs' `### process-references` discipline texts are
+untouched: they teach sessions what to write (each such reference is release
+debt), not when the gate fires; no provenance-staleness event. Pinned in
+`test/document-roles.test.ts` (the family flip),
+`test/round-gates.test.ts`, `test/subtask-shape.test.ts`,
+`test/work-order.test.ts` (the close-outs walking past references) and
+`test/driver-helper.test.ts` (the counted line, the re-keyed channel).

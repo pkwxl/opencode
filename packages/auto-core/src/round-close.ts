@@ -1,14 +1,18 @@
 // Round-close gate (M4.2, plans/0049 G8; root plan D12 ③, 0036 D12, open
 // question 15-⑦ ruled "middle form"): whether a round whose phases are all
-// done may be closed, i.e. whether the next round may start. Three
-// checks, all read-only:
-//   1. the whole-tree P1 prohibition scan — the unit close-out scan
+// done may be closed, i.e. whether the next round may start. Three checks,
+// all read-only — two hold the gate, one rides as the ledger:
+//   1. the whole-tree destination scan — the unit close-out scan
 //      (document/process-refs.ts) widened from "lines the unit added" to every
 //      line of every tracked and untracked file, in every nested repository
 //      alone (plans/0108: the deliverable is the destination repositories'
 //      own files; the working directory's tree is process workspace and is
-//      not scanned). This is the one moment the whole-tree price is worth
-//      paying;
+//      not scanned). It answers the recorded containment count alone — never
+//      a problem (plans/0103 D2 read whole, its second addendum: every
+//      finding family, the process-document references included, defers to
+//      `release`; the blocking form of "the destination must not reference
+//      process documents" is release-time truth), so this is the one moment
+//      the whole-tree price buys the running ledger the person reads;
 //   2. the target's own build (config `build`), when one is configured;
 //   3. the restatement listing: round.md's `## Close` section must say which
 //      decisions were restated into the target's own documentation and which
@@ -37,7 +41,7 @@ const BUILD_TAIL_LINES = 20
 export type RoundClose = {
   // Blocking: plan refuses to open the next round while any is listed.
   problems: string[]
-  // Advisory: bare task-id mentions, a skipped build.
+  // Advisory: the recorded containment count, a skipped build.
   warnings: string[]
 }
 
@@ -53,13 +57,14 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
   // (plans/0103: the destination answers rules the workspace does not).
   const nestedRoots = (await repoRoots(dir)).filter((root) => root !== dir)
   const scan = processReferenceScan(await unitAddedLines(dir, nestedRoots.map((root) => ({ root, sha: "" }))), opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
-  problems.push(...scan.problems.map((problem) => `process reference: ${problem}`))
-  // Destination containment rides as one aggregate warning (plans/0103 D2
-  // recording, plans/0109 D6 shape): the running count the person reads
-  // each round while the treatment stays deliberately delayed — the
-  // itemized fix list is the release gate's own output.
+  // The scan answers the count alone at round time — never a problem (every
+  // family defers to release). Destination containment rides as one
+  // aggregate warning (plans/0103 D2 recording, plans/0109 D6 shape): the
+  // running count the person reads each round while the treatment stays
+  // deliberately delayed — the itemized fix list is the release gate's own
+  // output.
   if (scan.deferredCount) {
-    warnings.push(`containment: ${scan.deferredCount} reference(s) recorded for release (task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
+    warnings.push(`containment: ${scan.deferredCount} reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
   }
   // 2. Build.
   if (opts.build) {

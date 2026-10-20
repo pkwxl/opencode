@@ -525,11 +525,13 @@ describe("unitChangedFiles (the D6 basis)", () => {
 })
 
 describe("runSubtask P1 prohibition scan (M2.3)", () => {
-  test("a process-document path added to a destination file: re-prompt, removed → ticked; a pre-existing one is not blamed", async () => {
+  test("a process-document path added to a destination file records for release — one session, ticked, no re-prompt (0103 D2's second addendum)", async () => {
     const dir = await shapeRepo()
     try {
       // plans/0108: the reference check reads destination files alone — the
-      // fixture's writes land inside a nested repository.
+      // fixture's writes land inside a nested repository. The reference is
+      // a recorded finding (the close-out count, enforced at release), so
+      // the session that wrote it is re-prompted never — one session.
       mkdirSync(join(dir, "dest"))
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
@@ -544,18 +546,11 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
           await Bun.write(join(dir, "dest/src/a.c"), "// layout: see docs/T-001/S01/record.md\nint a;\n")
           await Bun.write(join(dir, "dest/src/old.c"), "// legacy note: docs/T-000/report.md\nint touched;\n")
         },
-        async () => {
-          await Bun.write(join(dir, "dest/src/a.c"), "// layout: a 64-entry ring, head at index 0\nint a;\n")
-        },
       ])
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
       expect(result).toBeUndefined()
-      expect(calls.prompts.length).toBe(2)
-      const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain('dest/src/a.c:1 references "docs/T-001/S01/record.md"')
-      expect(feedback).toContain("restate the needed content in place")
-      expect(feedback).not.toContain("dest/src/old.c")
+      expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -603,26 +598,28 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
     }
   })
 
-  test("the reference stays after the re-prompt → blocked, not ticked", async () => {
+  test("a reference that stays no longer blocks the close-out — recorded in the count, the subtask ticks", async () => {
     const dir = await shapeRepo()
     try {
       // plans/0108: the reference check reads destination files alone — a
-      // nested repository is where the session's offending write must land.
+      // nested repository is where the session's write lands. The reference
+      // stays in the tree and the close-out passes: the finding rides the
+      // recorded count, enforced at release (0103 D2's second addendum).
       mkdirSync(join(dir, "dest"))
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
       await git(join(dir, "dest"), "config", "user.name", "t")
-      const { client } = scriptedClient([
+      const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          await Bun.write(join(dir, "dest/README.md"), "# Sample\n\nBackground notes.\n\nStatus is tracked in .auto/units.json.\n")
+          await Bun.write(join(dir, "dest/README.md"), "# Sample\n\nBackground notes for the destination's own record, written out so the file stands on its own.\n\nStatus is tracked in .auto/units.json.\n\n<!-- auto: eof -->\n")
         },
       ])
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir }, makeChain())
-      expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain('dest/README.md:5 references ".auto/units.json"')
-      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(1)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -187,27 +187,27 @@ describe("scan exemptions (config scanExempt, plans/0059 X2)", () => {
       ["dest/src/a.c", [{ line: 2, text: "// see .auto/progress.json" }]],
     ])
     const nested = { nested: ["dest"] as const }
-    expect(processReferenceScan(added, [], nested).problems).toHaveLength(2)
-    expect(processReferenceScan(added, [], nested).deferredCount).toBe(0)
+    expect(processReferenceScan(added, [], nested).problems).toEqual([])
+    expect(processReferenceScan(added, [], nested).deferredCount).toBe(2)
     const scan = processReferenceScan(added, ["dest/test/fixtures/**"], nested)
-    expect(scan.problems).toHaveLength(1)
-    expect(scan.problems[0]).toStartWith("dest/src/a.c:2")
+    expect(scan.deferredCount).toBe(1)
+    expect(processReferenceScan(added, ["dest/**"], nested).deferredCount).toBe(0)
   })
 })
 
 describe("processReferenceScan", () => {
   const lines = (...texts: string[]): AddedLine[] => texts.map((text, i) => ({ line: i + 1, text }))
 
-  test("each tool-owned path shape is a violation, with file:line in the message", () => {
-    const { problems } = processReferenceScan(
-      new Map([
-        ["dest/src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
-        ["dest/src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
-        ["dest/tools/run.sh", lines('cat ./.auto/progress.json')],
-      ]),
-      [],
-      { nested: ["dest"] },
-    )
+  test("each tool-owned path shape is a finding — counted in rounds, itemized with file:line at release (plans/0103 D2's second addendum)", () => {
+    const added = new Map([
+      ["dest/src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
+      ["dest/src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
+      ["dest/tools/run.sh", lines('cat ./.auto/progress.json')],
+    ])
+    const rounds = processReferenceScan(added, [], { nested: ["dest"] })
+    expect(rounds.problems).toEqual([])
+    expect(rounds.deferredCount).toBe(3)
+    const { problems } = processReferenceScan(added, [], { nested: ["dest"], release: true })
     expect(problems).toHaveLength(3)
     const a = problems.find((p) => p.startsWith("dest/src/a.c"))
     expect(a).toContain('dest/src/a.c:1 references "docs/T-003/S01/index.md"')
@@ -259,11 +259,14 @@ describe("processReferenceScan", () => {
     expect(deferredCount).toBe(0)
   })
 
-  test("AUTO-* marks: self-contained is fine, a pointer into the process side is not", () => {
+  test("AUTO-* marks: self-contained is fine, a pointer into the process side is a recorded finding", () => {
     const ok = processReferenceScan(new Map([["dest/src/a.c", lines("// AUTO-DECISION: keep the ring buffer at 64 entries (measured peak 41)")]]), [], { nested: ["dest"] })
     expect(ok.problems).toEqual([])
+    expect(ok.deferredCount).toBe(0)
     const bad = processReferenceScan(new Map([["dest/src/a.c", lines("// AUTO-DECISION: see docs/T-004/report.md")]]), [], { nested: ["dest"] })
-    expect(bad.problems).toHaveLength(1)
+    expect(bad.problems).toEqual([])
+    expect(bad.deferredCount).toBe(1)
+    expect(processReferenceScan(new Map([["dest/src/a.c", lines("// AUTO-DECISION: see docs/T-004/report.md")]]), [], { nested: ["dest"], release: true }).problems).toHaveLength(1)
   })
 
   test("a bare task id is fine in the outer workspace, recorded inside a nested repository, blocking at release (plans/0103 D2; the record is a count, plans/0109 D6)", () => {
@@ -314,8 +317,11 @@ describe("processReferenceScan", () => {
     expect(release.problems[0]).toContain("no path may lead outside the destination's own root")
   })
 
-  test("hits per file are capped in the message", () => {
-    const { problems } = processReferenceScan(new Map([["dest/src/a.c", lines(...Array.from({ length: 5 }, (_, i) => `// docs/T-00${i}/x.md`))]]), [], { nested: ["dest"] })
+  test("hits per file are capped in the release message; the round-time count is not", () => {
+    const added = new Map([["dest/src/a.c", lines(...Array.from({ length: 5 }, (_, i) => `// docs/T-00${i}/x.md`))]])
+    const rounds = processReferenceScan(added, [], { nested: ["dest"] })
+    expect(rounds.deferredCount).toBe(5)
+    const { problems } = processReferenceScan(added, [], { nested: ["dest"], release: true })
     expect(problems).toHaveLength(1)
     expect(problems[0]).toContain("dest/src/a.c:3")
     expect(problems[0]).not.toContain("dest/src/a.c:4")
