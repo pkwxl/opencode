@@ -291,9 +291,10 @@ iteration.
 ## Parallel waves — the `parallel: <n>` phrase
 
 The hand-over line may name the wave width: `parallel: <n>`, at most <n> task or fix child sessions in
-flight at once (2 or 3 is the sane range — the person knows their platform's subagent capacity; a launch
-the facility refuses narrows the wave, named in the report). Without the phrase the loop above is exactly
-as written — the serial floor. With it, independent documentation-scoped tasks run beside each other in
+flight at once, plus at most one verification child beside them (2 or 3 is the sane range — the person
+knows their platform's subagent capacity, sizing it for the brief <n>+1 peak a verification adds, never
+for <n> alone; a launch the facility refuses narrows the wave, named in the report). Without the phrase
+the loop above is exactly as written — the serial floor. With it, independent documentation-scoped tasks run beside each other in
 this same tree, the manual suite's twin of the driver's doc lanes: no worktrees, no landing machinery —
 the master control stays the sole git writer and the sole ticker of the index. The phrase composes with
 every run mode — `window` blocks wave launches like any launch, `pace` waits before each launch as
@@ -318,7 +319,12 @@ index-order default never holds two tasks ready at once, so only explicit `Depen
 it is in flight no other child runs, and the wave re-forms after it. Verification, handover, planning and
 formulation children are never parallel; a verification may run beside live task children (its writes are
 its unit's documents and the close-out state), never beside another verification — the close-out ticks
-the shared index — and your own git writes never overlap a verification child's flight: a share landing
+the shared index — and a pending verification launches before any new task child: a launch the facility
+refuses narrows the wave for a task, and a refused verification would block completion itself, so the
+ordering keeps any refusal on the task side. Several tasks ending together queue their verifications —
+at most one runs at a time, the oldest first, a queued one launching at the next launch moment — and the
+drained wave runs every remaining one, one at a time, before it returns to the pick or the Phase
+transfer. Your own git writes never overlap a verification child's flight: a share landing
 due while one runs waits for its end, the verification's close-out commits the only commits in that
 window.
 
@@ -327,11 +333,13 @@ child's share with the add limited to its task's effective scope (the gap-list u
 it; a docs scope never reaches a nested repository, so the share is this repository's alone), never the
 whole tree: a sibling still in flight has its own uncommitted writes, and a full-tree add would absorb
 them into the wrong share. Afterwards the porcelain may list the transient gap lists, the live tasks'
-scope paths and a held park handover — anything else is residue: stop and report. The zero-write check is
+scope paths, an ended task's scope whose landing waits out a verification's flight, and a held park
+handover — anything else is residue: stop and report. The zero-write check is
 the same check taken over the unit's own paths. `Status: continue` relaunches into the freed slot;
 `Status: done` (or no handover) moves the task to its verification, launched under the one-at-a-time rule
-above. Fix children ride the wave under their task's own effective scope, the same admission and the same
-scoped shares.
+above and before any new task child — the freed slot then refills with the next admitted ready task, the
+wave back at its <n> task children with the one verification beside them. Fix children ride the wave
+under their task's own effective scope, the same admission and the same scoped shares.
 
 A park met in a wave defers to the drain: validate the blocker exactly as step 4 does, then hold — the
 parked handoff stays uncommitted inside its scope (tolerated like a gap list) and the park commit, the

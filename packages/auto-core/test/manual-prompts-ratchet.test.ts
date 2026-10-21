@@ -438,6 +438,21 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("spanning several task scopes")
     expect(run).toContain("a task or fix child's prompt carries the parallel line")
     expect(run).toContain("the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise")
+    // The wave-scheduling amendment over 0104's verification clause: the
+    // width's peak is <n> task/fix children plus at most one verification,
+    // stated overtly so the person sizes <n> for the brief <n>+1; a pending
+    // verification launches before any new task child (a facility refusal
+    // narrows the wave for a task, never blocks the verification — completion
+    // evidence rides on it); verifications ending together queue
+    // one-at-a-time and drain fully at the wave's tail; the freed task slot
+    // refills beside the verification; and an ended task's scope awaiting its
+    // deferred landing is tolerated residue, not a stop.
+    expect(run).toContain("plus at most one verification child beside them")
+    expect(run).toContain("sizing it for the brief <n>+1 peak a verification adds")
+    expect(run).toContain("a pending verification launches before any new task child")
+    expect(run).toContain("queue their verifications")
+    expect(run).toContain("the freed slot then refills with the next admitted ready task")
+    expect(run).toContain("an ended task's scope whose landing waits out a verification's flight")
     // The 0096 clarifier keeps its role for the serial default.
     expect(run).toContain("parallel lanes are processes, not child sessions")
     for (const name of ["run-task.md", "run-fix.md"]) {
