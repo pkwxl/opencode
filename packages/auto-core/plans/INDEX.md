@@ -1,6 +1,6 @@
 # plans/ index — the corpus manifest
 
-The manifest over the plans/ corpus — the 108 numbered design documents 0001–0109 (0028 deliberately deleted; see [Anomalies](#anomalies)) — and the **one maintained file** in this directory. The numbered documents themselves are immutable history under the "retired once obsolete, never maintained to track later changes" convention; that convention governs the documents, not this map. Originals stay byte-untouched: a document's status changes are recorded **here**, never stamped onto the document.
+The manifest over the plans/ corpus — the 108 pre-constitution documents 0001–0109 (0028 deliberately deleted; see [Anomalies](#anomalies)), plus the post-baseline documents 0110– ruled under the constitution — and the **one maintained file** in this directory. The numbered documents themselves are immutable history under the "retired once obsolete, never maintained to track later changes" convention; that convention governs the documents, not this map. Originals stay byte-untouched: a document's status changes are recorded **here**, never stamped onto the document.
 
 The columns lean on two companions:
 
@@ -127,6 +127,15 @@ One row per document, ordered by number.
 | 0107-mandate-bound | the proxy's mandate is the person's instruction and nothing else — every stop a command reaches is a report point, never a runway, never chaining an advance because a line says `next:`; the round brief the person's own writing (the pen discusses, never fills or commits); marks over recorded decisions delegable channels, authorship not; the bound instruction-layer, the backstop the person's catch | active-authority | P2 | src/driver-helper.ts | pre |
 | 0108-p1-destination-scope | the deliverable is exactly what a nested destination repository's git manages — everything else in the working directory process workspace, the reference check applying only inside nested repositories (one gate, all four scan sites); no environment-specific knowledge in tool source ever (the escape a structural rule, never an in-code exemption); a destination-side reference fix judged by the truth carried across | active-authority | P1, P8, P16 | src/document/process-refs.ts, src/document/roles.ts, src/release.ts, src/round-close.ts | pre |
 | 0109-round-report-optional | the round report retired to a person-commissioned optional document — the live driver-helper brief is the account, re-derived at every render where a report froze; the round-close gate check, the planner's report duty, the self-heal and the k-final second artifact retire; per-finding ledgers compressed to aggregate counts (itemization only where the list is the work — the release fix list, a stop's own blocking problems) | active-authority | P2, P6, P8 | src/round-close.ts, src/document/process-refs.ts, src/prompt-plan.ts, src/driver-helper.ts | pre |
+
+## Post-baseline documents (0110– )
+
+Documents ruled under the constitution itself: each states its `Derives:`/`Amends:` and the tier touched, and its row carries the release its rulings shipped in (the constitution's How-to-rule, `docs/principles.md`).
+
+| doc | what it ruled | status | principles | code homes | release |
+|---|---|---|---|---|---|
+| 0110-design-principles-distillation | The constitution, INDEX, the derivation discipline, the release framework: the positioning statement with the tier test, six Tier I + twelve Tier II in the five-part format, the tombstones and requirement families, How to rule, the trade-off and risk registers, the v0.1.0 release | active-authority | all (the document that established the set) | docs/principles.md, plans/INDEX.md, docs/releases.md | v0.1.0 |
+| 0111-audit-findings-ruling | The 0110 audit findings ruled at the checkpoint: F1 admitted as **P21** machinery waits for its consumer (Tier II, the thirteenth); F2 "refactor invariance" declined from the constitution; F3 the development conventions homed in AGENTS.md + the principles.md scope sentence; F4 the boundary disclaimer beside the secrets family; F5 the shell-side auth posture routed to the shells' docs; v0.2.0 cut | active-authority | P19, P21 | — | v0.2.0 |
 
 ## Anomalies
 

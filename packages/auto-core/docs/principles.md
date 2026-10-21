@@ -1,8 +1,8 @@
 # Design principles
 
-This is the design constitution of the auto tool family: the ruled set of principles every design decision in `plans/NNNN` derives from, and the frame that governs how the set itself changes. It compresses the plans corpus (0001–0109, baselined `pre`) into one positioning statement, six constitutional principles, twelve operating principles and two registers — every entry carrying its provenance and code homes, so a reader can check the ruling rather than trust the summary. Concrete requirements (formats, grammars, exit codes, thresholds, security mechanics) are not here: they live with their mechanisms, and the tier test keeps them out. The plans corpus remains the detail record; this document is the ruling surface.
+This is the design constitution of the auto tool family: the ruled set of principles every design decision in `plans/NNNN` derives from, and the frame that governs how the set itself changes. It compresses the plans corpus (0001–0109, baselined `pre`) into one positioning statement, six constitutional principles, thirteen operating principles and two registers — every entry carrying its provenance and code homes, so a reader can check the ruling rather than trust the summary. Concrete requirements (formats, grammars, exit codes, thresholds, security mechanics) are not here: they live with their mechanisms, and the tier test keeps them out. The plans corpus remains the detail record; this document is the ruling surface.
 
-Current as of release v0.1.0. The plans corpus before this initiative is baselined `pre`.
+Current as of release v0.2.0. The plans corpus before this initiative is baselined `pre`.
 
 ## 0. The positioning statement
 
@@ -140,7 +140,7 @@ Six principles: four pillars, one fence, one contract. Removal of any breaks a c
 
 ## II. Operating principles
 
-Twelve principles: removal degrades how the tool runs without changing what the tool is. Each is a standing trade-off — the same five parts as Tier I plus three fields: **Choice** (the tension), **Chosen default** (where it stands today), **Revisit trigger** (what would reopen it). A Tier II default may flip without identity change, by `Amends:` at a release boundary.
+Thirteen principles: removal degrades how the tool runs without changing what the tool is. Each is a standing trade-off — the same five parts as Tier I plus three fields: **Choice** (the tension), **Chosen default** (where it stands today), **Revisit trigger** (what would reopen it). A Tier II default may flip without identity change, by `Amends:` at a release boundary.
 
 ### P5 — Single ownership (two scopes: state and mechanism; absorbs P11)
 
@@ -409,6 +409,22 @@ Twelve principles: removal degrades how the tool runs without changing what the 
 **Chosen default.** Wait out transient faults naming the instant; keep accumulated context (fork a copy before abandoning); hints before halts; control changes only at safe boundaries; the terminal of every bounded wait is the person.
 **Revisit trigger.** Waits dominating productive wall-clock in the stats (T8).
 
+### P21 — Machinery waits for its consumer
+
+**Statement.** Interfaces, generality and mechanisms are built when a real consumer locks the shape; until then a reserved surface is a name, never a half-built mechanism; speculative generality is recorded as cost, never accrued silently.
+
+**Rationale.** Machinery built ahead of its consumer guesses the shape and then defends it; the consumer arrives, the guess bends, and the bending costs more than the waiting did (0034 D2's first-consumer amendment; 0046 D9's inert reservation).
+
+**Derivations.** The unwired loader (0031 D4 → 0032); the first-consumer amendment (0034 D2); composition deferred to the second consumer (0036); reserved-inert names (`--max-sessions`, 0046 D9); deferred cleanup of retired mechanisms (0044 D6); trigger-gated non-builds (0063's Rust deferral — the triggers are the consumer's stand-in). Homes: review-held like P19 (the principle rules at design time); its surfaces are the reservation sites — `src/config.ts` (the key set), the shells' command surfaces, `src/intent/load.ts` (the loader seam 0031 D4 deferred).
+
+**Provenance.** First stated as a family by 0110's stage-4 audit (two children independently); the family's earliest ruling is 0031 D4.
+
+**Known tensions.** Waiting serializes a second consumer's work — the 0036 deferral ended exactly when that wait was paid; the reserved name covers the *certainty* of a consumer, the machinery still waits for its *shape*. A pre-emptive mechanism, like a pre-emptive rule, needs its own evidence (0057 §11.10; P19's tensions).
+
+**Choice.** Wait for the consumer versus build ahead.
+**Chosen default.** Wait; reserve names inertly at most; speculative generality recorded as cost.
+**Revisit trigger.** A field case where the wait measurably serializes two consumers' work — then build to the named consumer, still not to the guess.
+
 ## Tombstones and requirement families
 
 Ids are never reused — P13's own discipline: a tombstoned id never returns with a new meaning.
@@ -416,6 +432,7 @@ Ids are never reused — P13's own discipline: a tombstoned id never returns wit
 - **P9 — demoted** to the counts-not-lists presentation convention (a concrete requirement, ruled 0109): human-facing surfaces carry aggregate counts; enumeration only where the list is the work (the release gate's fix list, a stop's own blocking problems). It lives on its surfaces — `src/round-close.ts` (the containment count lines), `src/conclusion.ts` (the ⚑ proxy-answer summaries), `src/driver-helper.ts` (the standing-decisions counts, rendering `resolvesOf`/`clampedItemsOf`, the latter defined in `src/charter-clamp.ts`) — not in the constitution; re-decidable per surface (T5).
 - **P11 — folded into P5.** One ownership principle, two scopes: state and mechanism. The id tombstones; nothing else changes meaning.
 - **P16's secrets half — demoted** to the security requirement family: keys and env values are references (`{env:NAME}`/`{file:path}`), never literals; a resolved value never enters anything the tool builds — logs, `models` output and error lines name the reference, never a value. Hard, testable, right-or-wrong by inspection: held by code (`src/models.ts`, `src/keyring.ts`, `src/agent-env.ts`; 0055 §4.3/C4) and by review — the AGENTS.md invariants keep carrying it.
+- **The boundary disclaimer** — the driver's protections and driver-run scripts are accidental-write guardrails and convenience stops, not security boundaries (0007 T-016, 0009 §D); where a hard security property is required it is stated as a requirement (the secrets family above), never assumed from a guardrail.
 
 ## How to rule
 
@@ -432,6 +449,8 @@ Rulings may derive from more than one principle (name each); a documented tensio
 **Admission — the evidence rule (P19).** A ruling enters on measured field evidence or a named incident; every claim carries its citation; speculation is not a basis. Pre-emptive rules carry their open gaps explicitly and their own re-audit trigger (0057 §11.10; 0064 T1).
 
 **Requirements live with their mechanisms.** A requirement ruling names its code home and its test home in the same change. Formats, grammars, exit codes, thresholds and security mechanics stay in code headers, `docs/structure.md` rows and INDEX pointers — never in this constitution; a requirement never migrates upward without an `Amends:` ruling. The constitution is bounded by the tier test, never a quota; size is an audit finding (AGENTS.md's 65-bullet navigation is the precedent-documented failure mode); orphan requirements are audit findings.
+
+**Repository-development rules.** Rules governing this repository's own development — not the tool's behavior contract — live in AGENTS.md's development conventions; the tier test keeps them out of the constitution.
 
 **The traceability chain.** positioning → Tier I principle → Tier II policy → concrete requirement → code home → test home — audited in both directions at each release: rule→principle (orphans, gaps) and principle→code (divergences), findings numbered and append-only.
 

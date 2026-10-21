@@ -56,3 +56,33 @@ The plans/0110 design-principles distillation lands: the constitution layer `doc
 **Findings disposition.** F1–F8 recorded as follow-up work items in plans/0110's Execution record, each awaiting its own later ruling: F1 "no speculative machinery" and F2 "refactor invariance" (missing-principle candidates); F3 development-process rules (home question); F4 security-boundary disclaimer; F5 shell-side auth posture (the shells' own docs); F6 demotion confirmations (no action); F7/F8 symbol-attribution corrections (already applied in the landed principles.md).
 
 **Version practice.** Documentation-layer in this release: no git tag is cut and the package version stays untouched; the maintainer may tag later.
+
+## v0.2.0 — 2026-10-21 — the audit-findings ruling round
+
+The plans/0111 audit-findings ruling round lands: the 0110 stage-4/5 audit findings F1–F5 presented with their admission cases, ruled by the maintainer at the checkpoint, and dispositioned. A minor release — a Tier II principle admitted and requirement-family framing added; no Tier I change, no contract change, no mechanism.
+
+**Principles deltas.**
+
+- **Tier II +1 (thirteen):** **P21 — machinery waits for its consumer** (F1, admitted as drafted): interfaces, generality and mechanisms are built when a real consumer locks the shape; until then a reserved surface is a name, never a half-built mechanism; speculative generality is recorded as cost, never accrued silently. Evidence: 0031 D4, 0034 D2, 0036, 0046 D9, 0044 D6 — the family flagged independently by two 0110 stage-4 audit children; the drafting's own correction rides the landing (0044 D6 reassigned from the development-convention family to P21's evidence).
+- **Requirement families +the boundary disclaimer** (F4, adopted as drafted): the driver's protections and driver-run scripts are accidental-write guardrails and convenience stops, not security boundaries; where a hard security property is required it is stated as a requirement, never assumed from a guardrail (0007 T-016, 0009 §D).
+- **Declined from the constitution** (F2): "refactor invariance" — pure moves proven behavior-preserving by byte-identical goldens. It fails both tier tests: removal changes how this *repository* is changed, not how the *tool* runs. Homed as the first line of the development conventions (below).
+
+**Tombstones: none.**
+
+**Mechanisms added/retired: none.** A documentation-layer release again — zero code change.
+
+**Development conventions homed (F3).** AGENTS.md gains "Development conventions (this repository's own build rules)": behavior-preserving changes prove themselves under byte-identical goldens and pinned outputs; one ingredient per change during relocations; stage-assist waves always-green per session — plus the dispositions carried by their own documents (0035's flip-program batching, 0030 D13's naming split, 0052's CLI factoring heuristics). `docs/principles.md`'s How-to-rule gains the scope sentence: repository-development rules live in AGENTS.md, kept out of the constitution by the tier test. **F5 routed:** 0067 §8's shell-side operational security posture (daemon allowlist, token auth, loopback default, POST-not-GET probe) lives with the shell packages' own docs at their next snapshot refresh; the core's constitution stays deliberately silent (P14's seam).
+
+**Re-keyed surfaces.** Amended: `docs/principles.md` (P21, the boundary disclaimer, the scope sentence, the stamp → v0.2.0), `docs/releases.md` (this section), `plans/INDEX.md` (the post-baseline section with the 0110 and 0111 rows — 0110's missing row the standing correction, its rulings shipping with v0.1.0), `docs/glossary.md` (the principle-id row widens to P21, Tier II thirteen), `AGENTS.md` (the P21 summary line; the development-conventions subsection). Every `plans/NNNN-*` original untouched.
+
+**Falsification replay.** The round's replay — the reserve-or-build question (0046 D9) and the eager-cleanup question (0044 D6) answered from the amended constitution alone, plans closed — runs at stage 3 immediately after the landing; its confirmation is recorded in plans/0111's Execution record.
+
+**Findings disposition — F1–F5 closed with their rulings** (completing the 0110 audit findings; F6–F8 were closed inside 0110):
+
+- **F1 — admitted as P21** (Tier II, the thirteenth operating principle), full drafted text as approved.
+- **F2 — declined from the constitution** (fails both tier tests); the substance lives as the development conventions' first line.
+- **F3 — the named home adopted**: the AGENTS.md development-conventions subsection + the principles.md scope sentence as drafted.
+- **F4 — adopted**: the boundary-disclaimer sentence, beside the secrets family.
+- **F5 — routed**: the shells' own docs at their next snapshot refresh; core unchanged.
+
+**Version practice.** Documentation-layer: no git tag cut, package version untouched (the v0.1.0 tag likewise remains open for the maintainer).

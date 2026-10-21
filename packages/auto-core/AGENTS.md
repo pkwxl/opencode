@@ -127,11 +127,22 @@ Tier II — operating (standing trade-offs, each with choice / default / revisit
 - **P17 — declared concurrency**: parallelism admitted on declarations (`Depends:`/`Touches:`), bought at the cheapest fitting isolation tier, bounded by disjoint scopes with one sole writer of shared git state; wrong declarations surface loudly, never as corruption.
 - **P19 — measured evidence**: rulings grounded in measured field evidence (incidents, censuses, live probes, cost tables), every claim cited; speculation is not a basis; compensation machinery re-audited on schedule.
 - **P20 — in-flight work is never destroyed**: transient faults waited out with accumulated context kept; control changes land only at safe boundaries; heuristics advise before they enforce; probes never pollute the real session.
+- **P21 — machinery waits for its consumer**: interfaces, generality and mechanisms are built when a real consumer locks the shape; a reserved surface is a name, never a half-built mechanism; speculative generality is recorded as cost, never accrued silently.
 
 ### Requirement families carried here (hard, testable; ids never reused — P9 lives on its surfaces, the counts-not-lists presentation convention)
 
 - **Security family** (P16's secrets half, demoted to a requirement — AGENTS.md keeps carrying it): registry keys and env values are references, never literals. A key is `{env:NAME}` or `{file:path}` and the driver never reads a referenced value into anything it builds — the reference reaches the managed opencode server through the spawn config and is substituted in the server's own process; a resolved env value goes only into that child's environment. Logs, `models` output and error lines name the reference (`key 2/3 ZHIPU_KEY_B`, `env: HTTPS_PROXY`), never a value. The registry's project layer is local-only: init gitignores it, preflight refuses a layer git would commit (naming `fix`), and nothing but the operator writes either layer.
 - **No environment-specific knowledge in tool source, ever** (P16's enforcement example, standing): facts about a particular target project never enter `auto-core`/`auto`/shell code; mechanisms stay generic, and project-specific facts ride only the surfaces the target directory itself declares (config `scanExempt`, intent packs and bundles, `brief.md`, the roadmap). A change that would need to name a real project is the signal to find the structural rule instead.
+
+### Development conventions (this repository's own build rules)
+
+Rules governing this repository's own development — not the tool's behavior contract; the tier test keeps them out of the constitution (plans/0111, F2/F3):
+
+- Behavior-preserving changes prove themselves: pure moves, splits and dedups run under byte-identical goldens and pinned outputs (0032 F9, 0034 D4, 0102).
+- One ingredient per change during relocations — no dedup mid-move; every step ends green and interruptible (0024).
+- Stage-assist waves run always-green per session; the person commits at command boundaries (0010/0011's convention, standing as this corpus's practice).
+
+Dispositions, no home needed: the flip-program batching (0035) died with its program (closed 2026-09-28); the AI-facing naming split (0030 D13) is presentation, carried by its own document; the CLI command-factoring heuristics (0052) are design rationale, carried by 0052.
 
 ### Operational specifics (pure vocabulary and mechanics a coding agent needs at a glance; details live with their mechanisms)
 

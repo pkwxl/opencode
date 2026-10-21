@@ -373,8 +373,8 @@ Principles (the constitution, `plans/0110`):
 | 中文 | English | Code / notes |
 |---|---|---|
 | 原则 | principle | The constitution `docs/principles.md` (`plans/0110`); the corpus manifest `plans/INDEX.md` maps every `plans/NNNN` ruling to its principles |
-| 原则编号 | principle id | `P1`–`P20`, continuing the established P-series (a tombstoned id is never reused); distinct from the phase notation `P<nn>` |
-| 原则层级 | principle tier | Tier I constitutional (six — removal breaks a positioning pillar, fence or contract) / Tier II operating (twelve — standing trade-offs: choice, default, revisit trigger); like the usage and reasoning tiers, prose names the kind |
+| 原则编号 | principle id | `P1`–`P21`, continuing the established P-series (a tombstoned id is never reused); distinct from the phase notation `P<nn>` |
+| 原则层级 | principle tier | Tier I constitutional (six — removal breaks a positioning pillar, fence or contract) / Tier II operating (thirteen — standing trade-offs: choice, default, revisit trigger); like the usage and reasoning tiers, prose names the kind |
 | 推导 / 修订 | `Derives:` / `Amends:` | The derivation discipline every future `plans/NNNN` decision block states — `Derives: P-NN` or `Amends: P-NN`, plus the tier it touches (`plans/0110` D5); an `Amends:` ruling names the release it amends (`docs/releases.md`, the version spine) |
 | 墓碑编号 | tombstone id | A retired principle id, reserved for good: P9 (demoted to the counts-not-lists presentation convention), P11 (folded into P5); P16's secrets half demoted to the security requirement family — P13's own discipline, the same rule as the tombstone key name |
 
