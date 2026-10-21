@@ -1,0 +1,296 @@
+# batch-07 — plans/0058..0066 (combed 2026-10-21)
+- range: 0058–0066
+- date: 2026-10-21
+
+## 0058-task-add-design
+- Date: 2026-09-27 (Status: "landed with this document (2026-09-27)"; git add 2026-09-27)
+- Trigger: `plan` planned every scope through one mechanism — a planning session — so adding one already-known task either spawned a session to transcribe it or forced hand-listing that must satisfy the numbering, field-block, section and eof rules by hand.
+- Rulings:
+  - D1: `plan <dir> --new-task "<one-line title>"` adds the one named task with no session; standalone flag — combining with `--append` or `-p`/`--file` is a usage error; composes with `--force-close` (D1)
+  - The route is decided and done entirely in the prelude — a route needing no AI; targeting is D23's rule verbatim (the phase the route names now); refusals in prelude order: legacy layout, usage backstops, round-setup rows 1–3, blocked route, open step, task-less phase, D26's guard (§ The route)
+  - Exit codes: 0 added; 1 usage or refused; 2 dirty worktree (the unit-start gate) or failed commit (§ The route)
+  - The write is ordered for a path with no resume record: `beginUnit` gate; number = max(record, deterministic floor) with AUTO-DECISION that a missing auto-number record is never recovered on this path; stale handover removed in its own commit before the add; document + index line in one commit `Auto-Stage: task-add` (§ The write, steps 1–4)
+  - What stayed out: no `--goal/--scope/--acceptance` flags, no `-p` reuse as body; no multi-task form; no runtime-state entry, no step record (§ What stayed out)
+- Supersession: none seen.
+- Principle candidates (verbatim):
+  - "The flag is standalone, not `--append --new-task`: `--append` means "a session plans tasks from an input" (D23's rule that it requires one stays untouched), while `--new-task` means there is nothing to plan — combining them would carve an exception out of that rule for no added meaning." (D1)
+  - "Decided and done entirely in the prelude — a route needing no AI, like establishing a round:" (§ The route)
+  - "Ordered for a path with **no resume record** — a kill must leave a state a plain re-run completes:" (§ The write)
+  - "The document is deliberately minimal and honest about its provenance: the title doubles as the Goal, and Scope / Acceptance say they were left unrestricted by `plan --new-task` — nothing is padded to look planned." (§ The write)
+  - "**No `--goal/--scope/--acceptance` flags, no `-p` reuse as the body**: one flag, one meaning; richer content is one edit away after the add, and the add stops for review anyway." (§ What stayed out)
+  - "**No multi-task `--new-task a --new-task b`**: several known tasks are either an input for the planner (decomposition is its job) or two commands; the parser keeps single values everywhere." (§ What stayed out)
+  - "**No runtime-state entry, no step record**: a pending task needs none (pending is the default), and the write is driver-bookkeeping, not a step." (§ What stayed out)
+- Code touchpoints: `src/task-add.ts` (new module), `src/plan.ts` (row 11, the prelude route), `test/task-add.test.ts`, `test/plan.test.ts` (row 11), `packages/auto/test/e2e.test.ts`, `test/import-direction.test.ts`; names `renderTaskTodo`/`renderTaskIndex`/`taskNumberFloor` and the `Auto-Stage: task-add` commit.
+
+## 0059-adaptive-subtask-decomposition-design
+- Date: 2026-09-27 (Status: "design, ruled; S1–S7 implemented (2026-09-27)"; §8 ruled 2026-09-27; S7 measurement fold 2026-10-03; git add 2026-09-27)
+- Trigger: `--subtask auto` was meant to cut cost but on the field did the opposite — T-008 decomposed into 11 subtasks used a whole five-hour quota window (measured $12.28, 2–3× a comparable single session, ≈3.5× with stray sessions), so every later task ran `off`.
+- Rulings:
+  - D1: `true` is today's `auto` pipeline verbatim; `SubtaskMode` becomes `off|auto|true|ondemand`; every branch testing `"auto"` today tests `"true"` (D1)
+  - D2: `auto` is adaptive — one lead session first (a whole-task session under the 0056 usage protocol); no decompose session, no digest base, no `context.md`/`shared.md` (D2)
+  - D3: the split clause — the lead may split only when (a) 2–5 streams each changing their own files, (b) each stream substantial (tens of tool turns), (c) the first usage notice (50% of the wall) has arrived; the lead does the shared foundation itself; the driver, not the session, writes each `S<nn>/todo.md` (D3)
+  - D4: the driver's split guard is mechanical (2–5 items, valid graph, no path shared unless dependency-ordered, lead's final context ≥50% of the wall); otherwise the split is rejected with one re-prompt to a fork of the lead (D4)
+  - D5: fan-out items are forks of the lead (the lead's session id becomes the fork base); `fanout.md` delta prompt; changed-files list for dependent streams; last item runs the task's full acceptance verification once (D5)
+  - D6: the wall on large windows is `min(max(2×cap, window/4), 0.8×window)` (D6)
+  - D7: degradation — an agent without session fork or mid-turn steer runs `auto` without the split clause (`auto` ≡ `ondemand`) (D7)
+  - D8: the config default stays `"auto"` and now means adaptive; a stored `"auto"` takes the new meaning with no migration (§8 item 1)
+  - D9: `OPENCODE_AUTO_DECOMPOSE_FINE` defaults to off — its premise is refuted for the `digest` base (§8 item 3)
+  - X1: the driver's switches never reach agent processes — both adapters' spawn environments drop `OPENCODE_AUTO_*` (§4 X1)
+  - X2: process-shaped strings in a deliverable that legitimately contains them — a project-owned exemption glob list in `.opencode/auto/config.json` consulted by `p1Scope`/`eofScanExempt` (§4 X2, §8 item 4; landed as `scanExempt`)
+  - X3: harness overhead per fresh claude session — measure first; candidate `--strict-mcp-config`-style switches (§4 X3)
+  - T1–T6 trims for `true` — siblings by title only, honest digest warm sentence, budget above the session base, = D9, targeted per-item verification with the full suite once, no separate close-out item; all six ruled in (§5, §8 item 5)
+  - §8 item 2: the D6 wall applies to `ondemand` as well as `auto` (rejected: `auto` only)
+  - S1–S7 all implemented 2026-09-27 (§12); S7's measured A/B: `auto` cost ≈0.47× the pipeline ($2.66 vs $5.62); a claude `leadUsed` defect found and fixed (no readable history → later streams forked cold)
+  - addendum: S7 measurement fold, 2026-10-03 — the raw artifacts (`docs/T-043/ab/*`, report.md) deleted per docs-governance rules; the unique measured record folded into §12 (per-session tables, cross-checks, corrected API-equivalent column, six AUTO-RESOLVEs)
+- Supersession: none seen.
+- Principle candidates (verbatim):
+  - "For `auto` to mean anything it must cost less than a single session." (Status)
+  - "So "keep contexts small" is the wrong goal for a cached agent. The right goal is **never re-establish context and never duplicate artifacts**." (§0)
+  - "The fan-out sessions are **forks of the lead**, so the understanding stays in the cached prefix and nothing is re-read." (§0)
+  - "The default must be one session: decomposition is justified by size and separability, not by habit." (§2 consequence 1)
+  - "A split must come from the session that holds the understanding, at the point it holds it, and continue as forks, not as cold sessions reading a digest." (§2 consequence 2)
+  - "A split must add no ceremony: no second statement of the plan, no per-item records, no per-item full verification, no close-out unit." (§2 consequence 3)
+  - "A split must never be finer than a few substantial streams." (§2 consequence 4)
+  - "The handover wall must sit where a handover pays for almost any remaining work: well above 128k on a 1M-window model." (§2 consequence 5)
+  - "The plan is stated once." (D3)
+  - "**X1 — the driver's switches never reach agent processes.**" (§4 X1)
+  - "The target is **`auto` ≤ `off` on every task, below it on large, separable ones**. No mechanism under prompt caching makes decomposition dramatically cheaper than one well-run session. The 3× seen on T-008 was waste, not the price of decomposition." (§7)
+- Code touchpoints: `src/opts.ts` (SubtaskMode), `src/config.ts`, `src/runner.ts`, `src/resume-gate.ts`, `src/loop-preflight.ts`, `src/execute.ts` (executeWhole, leadForkBase), `src/session.ts` (ensureForkBase), `src/tasks.ts` (driver-written `S<nn>/todo.md`, setSplit/leadUsed), `src/testrun.ts` (steerWall), `src/capability.ts`, `src/usage.ts` (splitUsageReached, forkBaseAllowed), `src/split.ts` (new), `src/prompt.ts`, `templates/prompts/whole.md`, `templates/prompts/fanout.md` (new), `templates/prompts/split-rejected.md`, `src/template.ts`, `src/switches.ts`, `src/agent/claude/client.ts` (claudeEnv), `src/agent/opencode/server.ts`, `src/agent/env.ts` (driverVariable), `src/document/roles.ts` (scanExempted), `src/git.ts` (headText, unitChangedFiles), `test/agent-fake.test.ts`, `packages/auto`.
+
+## 0060-driver-consolidation
+- Date: 2026-09-27 (revision 2, "design, proposed"; git add 2026-09-27); status set to "implemented as ruled in 0061" 2026-10-01
+- Trigger: Revision 1 asked how auto-core should be refactored so feature improvements stop requiring dependency tracing across most of the codebase; measured: one flat ~80-module driver plane with wide fan-out, two god-functions (`watch()` ~1,070 lines / `runSession()` ~900), stateful hubs reached into directly, a stalled domain migration, 20 experiment switches.
+- Rulings:
+  - §3 the responsibility boundary (ruled this revision): the driver owns order, state and boundaries, not the quality of content — line 1 completion signals mechanically decidable are the driver's; line 2 content quality is not the driver's; line 3 the "would this check still exist if sessions finished reliably?" test (line 3 later superseded by 0061 R15, lines 1–2 stand)
+  - Audit of the quality-assurance family: retire refcheck entirely — ruled (D5g); retire `check` ①'s heuristic half and fold the mechanical half into `fix` — recommended, ruling requested (D5h); keep doccheck, the P1 scan, artifact specs, round-close gates, and the knowledge phase (§3 table)
+  - D1: the driver plane is divided into five sub-domains with entry modules, enforced by a `SUBDOMAIN_ENTRIES` ratchet in the direction test
+  - D2: `watch()` becomes a fixed spine (~300 loc) plus registered policy objects each owning its own state; extensibility amendment — the eight policies are the initial migration roster, not the type (`WatchPolicy` protocol + registry)
+  - D3: `runSession()`'s retry ladder composes the same policies (a `RetryOrchestrator`), preserving the layering rank
+  - D4: a composition root assembles the run's services (`Run`); each field an interface with a core default at one registration site; `Run` is a holder only
+  - D5: the pruning program — (a) merge the controls quartet; (b) `PromptFacts` landing the stalled intent move; (c) switch diet; (d) single routing path; (e) split the two fat state files; (f) feature-level candidates; (g) retire refcheck (ruled); (h) `check` → `fix` redistribution (recommended)
+  - D6: physical moves go through re-export shims (counted as a shell-contract version bump)
+  - D7: guardrails — no flat file-splitting without entry modules; `Run` never a god object; the target-directory file contract never broken; no protocol-string translation mid-refactor; no user-visible feature pruned by architect's fiat; no content-quality scan returns to the driver
+  - §5 extensibility review: three axes (behavior, workflow-shape, consumer); directions RunEvent (5.2), gate vocabulary (5.3), parallel execution (5.4), memory as a service (5.5), role registry (5.6), embeddable `Run` (5.7), explicitly out of scope (5.8)
+  - §6 test-suite strategy: re-tiering by placement, deduplication, lane-splitting — not a smaller contract; scheduling against the refactor stages
+  - §10: five rulings requested (D5h; the switch-diet list and major-version timing; memory vs declarative knowledge; direction ordering; lane policy) — answered by 0061 §2.1
+- Supersession: the document as a whole: Status — "plans/0061-driver-consolidation-plan.md rules this document … this document is the historical proposal"; §11 — implementation record "Not kept here". §3 line 3 carries an in-file note: "(Superseded by `plans/0061` R15, which restates this line as a grammar criterion … lines 1–2 stand.)". 0061 §2.3 replaces: D1→R10, D2/D3→R7/§4, D4→R11/§4.9, D5a→R8, D5b→E2/E3, D5c/d→R2, D5e→R14, D5f+§5.5→R3, D6→R9, §3 line 3→R15, §6 lanes→R5/§5, §7 stages→§6 stages A–F, §8's "roughly 7×"→3.5–4×.
+- Principle candidates (verbatim):
+  - "The operator's ruling, generalized into the doctrine the pruning program now applies: **the driver owns order, state, and boundaries. It does not own the quality of content.**" (§3)
+  - "**Completion signals are the driver's when they are mechanically decidable** — a file exists, a marker is the last line, a path is on the right side of the process/deliverable boundary, a commit range contains only driver commits." (§3 line 1)
+  - "**Content quality is not the driver's, whoever writes the check** — whether a reference points at the right file, whether prose violates a principle, whether distilled knowledge is good." (§3 line 2)
+  - "Quality *guidance* belongs to prompts (intent packs already carry the quality bars); quality *judgment* belongs to planned acceptance work (the v phase, the `Result:` verdict, human review — 0044's doctrine "checking work is planned work")." (§3 line 2)
+  - "A driver-side scan that judges content re-implements acceptance work in the wrong layer, with heuristics instead of a model" (§3 line 2)
+  - "**The test for future features**: *would this check still exist if sessions finished reliably?* If it compensates for unfinished work → driver (mechanical). If it compensates for unwise work → acceptance work, never driver." (§3 line 3 — superseded by 0061 R15)
+  - "pruning by this doctrine does not leave target directories unguarded — it moves the guard to where the doctrine says it works." (§3)
+  - "The refactor generalizes these patterns; it does not invent new ones." (§1.2)
+  - "the direction test itself: a ratchet that converts verbal conventions into assertions." (§1.2)
+  - "The five rows are the *current* partition, not a closed set: the rule (entry module + ratchet row) is the mechanism, and a future sub-domain (a `memory` service domain, §5.5) joins by the same procedure — one ratchet edit, not a redesign." (D1)
+  - "Effective module count for any given change drops even though the file count rises — that is the right kind of addition." (D1)
+  - "**Extensibility amendment (this revision, was implicit before): that list is the initial migration roster, not the type.**" (D2)
+  - "Two guardrails unchanged: `Run` is a holder only — it never grows behavior — and each service stays cohesive; the goal is to make the blast radius of a state change typecheck-discoverable instead of "grep 28 call sites and hope"." (D4)
+  - "**No flat file-splitting without entry modules** — more files without bounded reach increases tracing cost; the unit of modularity is the interface, not the file." (D7)
+  - "**`Run` never becomes a god object** and policies never share a mutable bag — each policy owns its state; that ownership is the point." (D7)
+  - "**The target-directory file contract is never broken** — it is the cross-version anchor and what humans review." (D7)
+  - "**No protocol-string translation mid-refactor** — the 0035 lockstep procedure owns every flip." (D7)
+  - "**No user-visible feature is pruned by architect's fiat** — code paths (dual routing, dead switch branches) go aggressively; features only by the operator's ruling (D5c/d/f/h)." (D7)
+  - "**No content-quality scan returns to the driver** (this revision) — a future linter for reference validity or prose principles belongs to acceptance work or a separate tool, not to the run path. The §3 test is applied to every proposed gate." (D7)
+  - "always inside 0044's doctrine: gates check what is mechanically decidable at a boundary; judgment stays in planned acceptance sessions and people." (§5.3)
+  - "not a vector store bolted on, and not a second knowledge system: it must subsume or delete the k phase's injection path, not parallel it." (§5.5)
+  - "no plugin marketplace or third-party extension API (extension = registries inside the process, shells outside it); no remote/web UI (RunEvent JSONL is the interchange, consumers are not built here); no multi-user orchestration or federation (one driver, one directory, one lock — 0053 D1); no re-introduction of driver-side content judgment in any form (§3, D7 last guardrail)." (§5.8)
+  - "this codebase is developed largely by AI agents against this suite** — the tests are the executable spec of the driver contract; thinning the spec thins the contract agents work to." (§6.1)
+  - "The direction is therefore **re-tiering by placement, deduplication, and lane-splitting — not a smaller contract**." (§6.1)
+  - "the win being bought is maintenance cost per behavior change and feedback latency, not lines." (§6.1)
+  - "Architecturally the invariant is stated once: the pipeline is the only code that knows order, policies the only code that knows behavior, services the only code that holds state, the agent and model registries remain the variables, and — added this revision — the registries themselves are the growth mechanism (a ninth policy, a new service, a new phase type, eventually a new session role are registrations, not surgeries), while the driver's own contract stays pinned to order, state and boundaries (§3)." (§8)
+- Code touchpoints: `test/import-direction.test.ts` (`SUBDOMAIN_ENTRIES`, `FROZEN_IMPORTS`), `src/watch.ts`, `src/session.ts`, `src/attempt.ts`, `src/runner.ts` (runTask), `src/refcheck.ts` (retired), `src/unit-commit.ts` (`gatedAutoCorrectRefs`), `src/check.ts`, `src/config-fix.ts`, `src/agents-block.ts`, `templates/prompts/wrapup.md`, `src/switches.ts`, `src/git.ts`, `src/tasks.ts`, `src/stats.ts`, `src/models.ts`, `src/prompt.ts`, `src/phases.ts`, `script/fix-refs.ts`, `test/refcheck.test.ts`, `.auto/invalid-refs.md`, `docs/structure.md`, `docs/glossary.md`, `docs/shell-contract.md`, `packages/auto`, `.auto/run-events.jsonl` (proposed).
+
+## 0061-driver-consolidation-plan
+- Date: 2026-09-28 (ruled; git add 2026-09-28); implementation record §10 runs 2026-09-28 → 2026-10-01 (all units A1–F4 landed)
+- Trigger: 0060 names the right disease but its central cure does not hold up against the code — in `watch()` the statement order carries safety rules and two inputs reach the loop outside the event stream; plus 163 `SessionChain` write sites in 9 files, decision state in module singletons, switches not a read-only snapshot; this document rules 0060's open questions and turns it into an executable 38-unit program.
+- Rulings:
+  - R1 (0060 D5h): `check` retires (answers a retirement notice, exits 1); `fix` gains `--dryrun`; the principle scan's regexes are deleted (A4)
+  - R2 (0060 D5c/d): switch diet — retire `REF_CHECK` (with refcheck), the dead `commit: false` path, `REUSE_SESSION` and `HANDOVER_CONCURRENT` (tranche 1), register `OPENCODE_AUTO_SERVER`; the single routing path is first fenced behind the router service (C4), then retired by an implicit registry synthesized from the env switches (F2); no switch retires for it
+  - R3 (0060 §5.5/D5f): neither memory service nor declarative knowledge phase — book digest sizes per planning session in stats and cap injected digests above 25% of the run's context limit (index form); the memory service is not funded until counters show digests near the cap in real rounds
+  - R4 (direction ordering): RunEvent first, then the role registry, then parallel execution; RunEvent redefined as an input log at the I/O seam plus decision events; `stats.ts` is not rewritten as a fold (R14); parallel execution waits for per-unit worktrees behind its own design
+  - R5 (lane policy): every unit is gated on the full suite under a machine-independent budget (baseline × 1.25, re-measured in F3); the `unit` lane (5 s) is the dev-loop convenience, never the gate
+  - R6: refcheck's retirement changes exactly two target-facing texts (AGENTS.md block paragraphs 2–3, the wrap-up reference item); leaving them "makes a false statement permanent"
+  - R7 (0060 D2/D3 replaced): `watch()` becomes a spine running concerns in a declared arbitration-table order over single-writer `TurnState` slices with I/O only through an audited `TurnFx`; `runSession()`'s ladder becomes a pure `nextStep` + executor; `attempt()`'s dispatch a pure `planDispatch`; no shared policy objects (different lifetimes); AUTO-DECISION: concerns are async handlers over a capability object, not pure reducers
+  - R8 (0060 D5a replaced): a type extraction — `Boundary`/`Interactive` move to the leaf `src/control-types.ts`; no 721-line merged module
+  - R9 (0060 D6 dropped): no re-export shims; no physical move required (the only live shell is updated in the same change; absorb note precedent)
+  - R10 (0060 D1 becomes logical sub-domains): a `SUBDOMAIN` column plus a `SUBDOMAIN_EDGES` allowlist seeded from the measured graph, shrink-only; `contract` a leaf, no engine→pipeline edge; no barrels
+  - R11 (0060 D4 becomes `RunServices`): one constructed holder (clock, router, control, git) built in preflight in a written order; ambient `services()` accessor allowed only in the shrink-only `SERVICE_ENTRIES`; `SessionChain` stays behind named transitions; `Opts` built by one builder; rejected a god `Run`
+  - R12: `Opts` literals — equivalence first (`sessionOpts` builder reproducing the seven literals, pinned by a table test), then one ruled merge adding `idleMs` and `mode` to every site
+  - R13: the `commit: false` path — a `GitOps` seam in services with a `noCommitGit()` test double, then the 29 gates and the config key deleted; the tombstone stays (stored `commit: true` loads and is ignored); `Opts.commit` an ignored field until F4
+  - R14 (0060 D5e): `models.ts` splits into schema/types (`models-schema.ts`) and load/merge/validate; `stats.ts` is neither split nor rewritten as an event fold
+  - R15 (0060 §3 restated): the grammar criterion — the driver may judge and write only grammars it defines, never the meaning of prose; stuck detector kept (tool-call-stream grammar); replaces 0060 §3 line 3
+  - R16: prior knowledge stays a shell-contract API — the reader stays, the producer stays exported for shells, nothing wired or retired
+  - R17: retired switches warn (one `⚠` line, variable ignored) instead of failing — a stale shell profile should not cost an unattended run
+  - R18: `OPENCODE_AUTO_SERVER` is registered (a URL beside `models`, kept out of `Switches`)
+  - R19: hold rule — while a stage is open, its hold-listed files take no feature work outside the program; a feature that must land is written against the new seams or waits
+  - §2.3: the replacement table over 0060 (D1→R10, D2/D3→R7+§4, D4→R11+§4.9, D5a→R8, D5b→E2/E3, D5c/d→R2, D5e→R14, D5f+§5.5→R3, D5g→R6+A3–A5, D5h→R1, D6→R9, §3 line 3→R15, §6→R5/§5/F3, §7→§6, §8 7×→3.5–4×)
+  - Adoption entries A-1…A-6: all six 0062 amendments adopted (machine-independent gate budget; D1 split into D1a/D1b; D0 race enumeration; §3.1 stated as "byte-for-byte minus the §3.2 rows"; the per-policy call-coverage assertion replaced by concern suites over a fake `TurnFx`; the feature-freeze calendar price named as part of the approval)
+  - Implementation record: every unit A1–A7, B1–B5, C1–C7, D0–D9 (D1 as D1a/D1b), E1–E5, F1–F4 landed 2026-09-28 → 2026-10-01; the exit criteria of §8 measured met at F4 (`watch.ts` 149 lines, zero chain writes outside the transitions, zero module-level decision state outside `RunServices`, zero type-edge cycles, no `FROZEN_IMPORTS`)
+- Supersession: none seen for the document itself (Status: "plan, ruled 2026-09-28; implemented"); it supersedes the 0060 parts listed in §2.3 ("Where the two disagree, this document wins").
+- Principle candidates (verbatim):
+  - "0060 names the right disease: god functions, hidden process state, a dual routing path and a stalled domain migration. Its central cure does not hold up against the code." (§0)
+  - "In `watch()` the statement order carries safety rules: when the test-handover freeze commit may happen, which steer wins at a measurement point, and when truncation continuation is allowed." (§0)
+  - "Moving that code into "registered policy objects owning their own state" would turn those rules into implicit registration order and bring the races back." (§0)
+  - "Equivalence is proven mechanically, not argued: the prompt goldens, the agent-fake call recordings, a new **turn-trace oracle** recorded from today's `watch()` before its first cut, and `test/incident-regression.test.ts` kept untouched until the last unit." (§0)
+  - "Each unit is one normal work unit with its own tests, the suite is green after every unit, and the program can stop at any stage boundary and leave a consistent codebase." (Status)
+  - "Why: the heuristic scan is content policing (0060 §3 line 2). Its useful half already lives in `fix`. The commit principle is enforced mechanically at close-out: foreign commits are rejected (`src/git.ts:387`)." (R1)
+  - "a feature would be lost when data can carry it" (R2, rejected "Retire `_FALLBACK`")
+  - "It is the basis for replay; the decision log cannot be, because decisions are outputs." (R4)
+  - "A unit's commit takes the whole tree, and concurrent units in one worktree would take each other's half-written files; that is a file-contract change, not a scheduling one." (R4)
+  - "Stateful registered policies (0060 D2): ordering becomes registration order, and async callbacks mutate private state again (F3, F4)." (R7, rejected)
+  - "**The driver may judge and write only grammars it defines: paths, markers, trailers, index lines, field blocks, and the agent event and tool-call streams. It never judges or rewrites the meaning of prose.**" (R15)
+  - "run-wide services are reached through an installed ambient instance at a ratchet-listed set of entry modules, not threaded as a parameter (one run per process is an existing invariant — one driver, one directory, one lock — and the positional engine entries that tests and the incident suite call stay stable)." (R11, AUTO-DECISION)
+  - "ignored with a one-line notice (switches never persist and are this-run-only by contract; failing an unattended run over a leftover environment variable costs more than it protects)." (R17, AUTO-RESOLVE)
+  - "Why: F19. Strangler cuts and feature edits in the same file cannot both be reviewed as "pure moves"." (R19)
+  - "Everything else is a regression. A unit that finds it needs drift not listed here stops, and the drift becomes a ruling recorded in §10 before the unit continues." (§3.2)
+  - "A new concern is one file, one slice, its table cells with a declared position, its suite and its roster cells." (§4.5 table rules)
+  - "A ninth concern therefore states its rank explicitly. That rank is the honest price of the invariants (F4)." (§4.5)
+  - "The table may only go down, and it reaches zero at B5." (§4.8, the write ratchet)
+  - "They mirror files or the process's single terminal and identity, and a second instance would break their serialization." (§4.9, process-level state)
+  - "A case moves when its unit extracts the mechanism it asserts, and the original is deleted in the same unit, so no case exists twice." (§5.4)
+  - "Comments in code restate the reason; they do not point at this plan's unit ids." (§6.1 rule 5)
+  - "The program is a feature freeze on the hold-listed files for its duration, and that calendar price is part of the approval." (§6.1, amendment A-6)
+  - "A new cross-cutting turn concern is one file, one slice, table cells at a declared position, and its suite." (§8)
+  - "a live file's contract comment must not name a deleted command" (A4 record)
+  - "a live file's contract comment must not describe a deleted mechanism" (A6 record)
+- Code touchpoints: `src/engine/contract.ts`, `src/engine/spine.ts`, `src/engine/fx.ts`, `src/engine/sources.ts`, `src/engine/concerns/*.ts`, `src/engine/ladder.ts`, `src/engine/dispatch.ts`, `src/engine/events.ts`, `src/engine/result.ts`, `src/chain-transitions.ts`, `src/services.ts`, `src/router.ts`, `src/control-types.ts`, `src/git-ops.ts`, `src/models-schema.ts`, `src/prompt-facts.ts`, `src/watch.ts`, `src/session.ts`, `src/attempt.ts`, `src/refcheck.ts` (deleted), `src/check.ts` (deleted), `src/agents-block.ts`, `templates/prompts/wrapup.md`, `templates/prompts/digest-index.md`, `src/switches.ts` (`RETIRED_SWITCHES`), `src/loop-preflight.ts`, `src/opts.ts` (`sessionOpts`), `src/config.ts`, `.auto/run-events.jsonl`, `test/chain-writes.test.ts`, `test/turn-arbitration.test.ts`, `test/turn-trace.test.ts` + `test/golden/turn/`, `test/turn-*.test.ts` (concern suites), `test/services.test.ts`, `test/ladder.test.ts`, `test/dispatch.test.ts`, `test/replay.test.ts`, `test/lanes.ts`, `test/import-direction.test.ts`, `test/incident-regression.test.ts`, `packages/auto`.
+
+## 0062-consolidation-plan-assessment
+- Date: 2026-09-28 (assessment; git add 2026-09-28); measurement fold 2026-10-03 (§9)
+- Trigger: An independent review of the ruled consolidation program (0061) against the code at `1482d53f8`, written before any unit starts, to verify feasibility and engineering soundness.
+- Rulings:
+  - Verdict: proceed — "0061 is feasible and its engineering basis is sound"; every load-bearing factual claim re-measured held (god-function sizes, state inventories, out-of-band inputs, order-carried safety rules, write-site counts, churn numbers); the four gaps found are all addressable with unit-level changes
+  - A-1: make the gate budget machine-independent (`test:gate` fails above baseline × 1.25, re-baselined in A1/F3; the `unit` lane stays the dev-loop gate everywhere)
+  - A-2: split D1 — D1a installs the spine/sources/fx/audit around the uncut loop body; D1b performs the cut into per-input handlers under `remainder`
+  - A-3: D0's done-when gains an enumerated list of race-dependent interleavings; each oracle scenario either pinned by construction or excluded with the reason recorded
+  - A-4: state §3.1 uniformly as "byte-for-byte minus the §3.2 rows"
+  - A-5: say explicitly in §5.4 that the per-policy call-coverage assertion is replaced by concern suites over a fake `TurnFx` (agent-fake stays unsplit)
+  - A-6: one sentence in §6.1 — the program is a feature freeze on the hold-listed files and that price is part of the approval
+  - All six amendments adopted into 0061 §10 on 2026-09-28 (Status)
+  - addendum: §9 Measurement fold (2026-10-03) — the raw measurement artifacts (`docs/T-044/measure/graph.py`, timing scripts and snapshots) deleted per docs-governance rules; unique data (graph snapshots, gate-machine timing, the review's three report-only AUTO-RESOLVEs) folded into the document
+- Supersession: none seen (its amendments were adopted, not superseded; it itself supersedes nothing).
+- Principle candidates (verbatim):
+  - "Its central correction of 0060 — that `watch()`'s statement order carries safety rules which "registered policy objects" would turn into implicit registration order — is confirmed by the code, not merely argued." (§0)
+  - "The equivalence methodology (a turn-trace oracle recorded before the first cut, goldens, agent-fake recordings, an untouched incident suite) is mechanical, not rhetorical." (§0)
+  - "Under registry-ordered iteration those rules become implicit registration order — preserved only as long as every future author understands the hidden constraint." (§2)
+  - "That is the right trade — the alternative (compiler-checked exclusivity) is what a Rust port would buy, and is one of the few genuine technical arguments for one (0063 §3)." (§2)
+  - "the shrink-only write ratchet is this repo's proven pattern (the direction test's own history)." (§3)
+  - "The ambient `services()` accessor is a service locator — normally a smell — but the choice is defended (one run per process is an existing invariant; `incident-regression.test.ts` calls positional entries that must stay stable), and the shrink-only `SERVICE_ENTRIES` ratchet bounds it. Acceptable; the ratchet must not be allowed to grow, which the plan states." (§3)
+  - "Prune-first (stage A) is correct sequencing: retiring refcheck/`check` (~1,440 loc + tests + a false AGENTS.md text) *before* the engine must reproduce it shrinks the oracle's obligation." (§5)
+  - "That is a *product decision as much as an engineering one* — the operator greenlights a feature freeze on the session-driving plane for the program's duration." (§5)
+  - "the work is disciplined movement under green gates, which is exactly the unit model the tool itself runs." (§7)
+  - "The largest true risk is not technical: it is schedule concentration — 38 units holding the busiest files — and it should be priced at approval, not discovered at stage C." (§7)
+- Code touchpoints: none it rules (read-only assessment); it verifies `src/watch.ts`, `src/chain.ts`, `test/import-direction.test.ts`, `src/agent/opencode/{client,events,server}.ts` (SDK confinement) and cites `docs/T-044/measure/*` (since deleted, folded into §9).
+
+## 0063-rust-reimplementation-analysis
+- Date: 2026-09-28 (analysis; git add 2026-09-28); re-read addendum 2026-10-03 (R-02 unit U-E2)
+- Trigger: The question "could, and should, the auto driver family be reimplemented in Rust end to end" — building on 0062's verified fact base and measuring the port surface at `1482d53f8`.
+- Rulings:
+  - Verdict: a complete Rust reimplementation is technically feasible with bounded difficulty (tiny runtime dependency surface, closed engine vocabulary), but nothing in current requirements needs it — performance is not an argument and the decisive cost is the development loop
+  - Recommendation: stay on TypeScript; execute 0061 as ruled; keep its fixtures language-neutral (the port option's spec); revisit on any §5 trigger (§0, §7)
+  - R-1 flagged the highest-severity risk: development-loop regression — the tool would be rebuilt by the loop a Rust move would slow
+  - §5 trigger conditions T-1…T-5 defined (distribution load-bearing; supervisor daemon; parallel execution central; non-TS library consumers; TS toolchain liability); any one justifies a feasibility spike, two justify the program
+  - §6 the viable plan if triggered: precondition 0061 landed; six crates (`auto-contract`…`auto-cli`); phases R0–R5 (spec freeze, kernel, adapters, engine, pipeline+shell, cutover) with parity gates — fixture replay, turn-trace replay parity, shadow runs; ≈4–6 months agent-driven
+  - Alternatives considered: Go (no sum types — the vocabulary degenerates into strings), Zig (productivity too low for a suite-driven loop), stay TS (the recommendation)
+  - addendum: re-read 2026-10-03 (after 0068 lanes and 0067's service shell landed) — none of the triggers fully met; AUTO-DECISION: no spike; the option is better preserved (0061's portable spec on disk) but demanded by no trigger; re-read again when T-2's remaining clause fires or any T-1 requirement appears
+- Supersession: none seen (the 2026-10-03 re-read reaffirms and sharpens the standing decision rather than superseding it).
+- Principle candidates (verbatim):
+  - "the decisive cost is the development loop — this codebase is developed largely by AI agents against a TypeScript suite, and the tool would be rebuilt by the very loop a Rust move would slow." (§0)
+  - "Recommendation: do not port now; land 0061 and keep its fixtures language-neutral (they are the port option's spec); revisit on any §5 trigger, at which point §6's phased plan applies — a migration with parity gates, not a leap of faith." (§0)
+  - "keep shelling out to git — **not** libgit2 — so commit subjects, trailers, ordering and object bytes stay identical" (§2, git row)
+  - "*Async soundness by construction*: the race class 0061 F3/F4 documents (callbacks preempting a live loop through a shared `trip()`) cannot exist behind explicit channels; 0061's single-queue spine is precisely the design Rust would have forced anyway." (§3)
+  - "The tool would be rebuilt by the loop it just made slower." (§4 R-1)
+  - "this alone justifies the "not now" even if every technical argument favored the port" (§4 R-1)
+  - "Any one trigger justifies a feasibility spike (§6 R0–R1); two justify the program." (§5)
+  - "This is the strongest practical argument for running 0061 even for someone whose end goal is Rust: the consolidation program is the port's specification-writing phase, paid for once." (§6)
+  - "Alternatives considered: **Go** — cheaper to port, but without sum types the arbitration/advice vocabulary degenerates into strings and the main technical reason to leave TS evaporates; **Zig** — productivity too low for a suite-driven loop; **stay TS** — the recommendation." (§6)
+  - "until then a port would be a rewrite for taste in a codebase whose costs live elsewhere" (§7)
+  - "the concurrency surface was moved out of the core (process per unit, single-threaded parent), so a port would buy the scheduler nothing the 47-test suite does not already pin" (§5, 2026-10-03 re-read AUTO-DECISION)
+- Code touchpoints: none it changes (standing analysis); it measures `src/` (101 modules), `packages/auto`, `templates/`, goldens and agent-fake recordings, `src/agent/opencode/{client,events,server}.ts` (SDK confinement, the 14-call seam); the re-read examines `src/lanes.ts`, `src/loop-task.ts`, `src/loop-preflight.ts` (`recoverOrphanLanes`), `test/lanes-scheduler.test.ts`, `packages/auto-server`, `test/golden/turn/` and the F1 RunEvent logs (to be kept language-neutral).
+
+## 0064-positioning-alignment
+- Date: 2026-09-28 (analysis; git add 2026-09-28)
+- Trigger: Written after 0062/0063 to state what the auto family fundamentally *is* as a multi-step long-horizon coding-agent management tool and how its positioning should align future development — a strategy document with explicit falsification criteria.
+- Rulings:
+  - The thesis: the durable identity is the deterministic process layer of record for long-horizon software work — not "an agent orchestrator" (§0)
+  - The alignment risk is drift into two adjacent traps — becoming an agent (judging content) or a framework (hosting other people's logic); both already fenced by doctrine (§0)
+  - T1: treat capability-driven shrinkage of compensation machinery as a scheduled cost audit (quarterly stats read), not an identity crisis (§3)
+  - T2: one run, one directory, one lock — the supervisor/portfolio layer is a consumer of RunEvent and the embeddable `Run`, never core state (§3)
+  - T3: the boundary is the human product — boundary UX (blocked-item explainability, close ergonomics, plan-review surfaces) as a first-class track, not a shell afterthought (§3)
+  - T4: absorb ecosystem standards (agents.md, MCP, agent-wire protocols) as adapters, never as core dependencies (§3)
+  - T5: say the sweet spot out loud — "the driver for weeks-long codebase transformation" (§3)
+  - §4 the five fences: not a content judge; not a framework or marketplace; not multi-tenant or federated; not a model provider or gateway; not a rewrite for taste
+  - §5 the sequenced alignment: execute 0061 → RunEvent immediately after → boundary UX track → the role registry → parallel execution behind its own design → memory strictly gated on R3's counters → Rust only on 0063's triggers → publish the record (the stats as positioning evidence)
+  - §6 the falsification criteria: humans bypassing the file contract; compensation stops firing while process features go unused; boundary interactions clustering away from the declared boundaries
+- Supersession: none seen.
+- Principle candidates (verbatim):
+  - "The tool's durable identity is not "an agent orchestrator" generically — that phrase describes a crowded and collapsing category. It is the **deterministic process layer of record for long-horizon software work**: a driver that owns order, state and boundaries while replaceable AI sessions do the work, with the target directory's files and git history as the durable, human-auditable record, and the person deciding at declared boundaries." (§0)
+  - "The alignment risk is not competitive pressure from better agents; it is **drift into the two adjacent traps**: becoming an agent (judging content) or becoming a framework (hosting other people's logic). Both traps are already fenced by doctrine; positioning means keeping those fences load-bearing while the tool grows." (§0)
+  - "completion **never judged by self-report** (state files, ticks, and commits are the driver's)" (§1)
+  - "**The record outlives the tool.** A run's full state is git commits, `docs/T-NNN` documents, index files and JSON state that any human, agent or script can read and manipulate without the driver present. This is the deepest moat: not lock-in but its absence — adoption costs little because leaving costs nothing, and audits need no special tooling." (§1)
+  - "**The tool is its own case study.** The repo's history — 61 numbered plans of decision provenance, T-NNN units executed by agents against a suite that is the executable spec, 0061 itself written to be executed by the pipeline it describes — is a running, public demonstration of weeks-long agent-driven development with human judgment at the boundaries." (§1)
+  - "It is the **durable workflow engine** — the shape of Temporal/Airflow: a state machine that outlives unreliable executors — specialized to software work, where the state store is git+files rather than a database, the tasks are LLM sessions, and the human is a first-class participant at declared boundaries rather than an after-the-fact reader of logs." (§2)
+  - "Orchestrators whose value is **capability-shaped** (prompt scaffolding, reliability compensation, context nursing) get hollowed out by that curve; orchestrators whose value is **process-shaped** (state, decomposition, auditability, boundaries, policy) get *more* valuable as the executors improve, because better executors make longer horizons and more delegation economical." (§2)
+  - "This tool is on the right side of the line by doctrine. Positioning's first job is to keep it there (§3 T1)." (§2)
+  - "The aligned posture: treat capability-driven shrinkage as a **scheduled cost audit, not an identity crisis** — e.g. quarterly, read the stats (which compensations fired, how often, per model) and prune what stopped paying. The doctrine stays; the machinery under it breathes." (§3 T1)
+  - "Keep the core single-run. The supervisor/portfolio layer people will eventually want (many runs, priorities, budgets across projects) is a **consumer** of RunEvent and the embeddable `Run`, never core state — matching 0060 §5.8's line that extension is registries inside the process and consumers outside it." (§3 T2)
+  - "Keep the 13-call `AgentClient` as the stable internal seam; absorb ecosystem standards (agents.md-style instruction files, MCP, future agent-wire protocols) **as adapters, never as core dependencies**. The core's variables stay swappable; that is the hedge that pays across vendor outages, price moves and capability jumps." (§3 T4)
+  - "**Not a content judge** (0060 §3/D7; R15): no driver-side prose-quality policing ever returns; quality judgment stays in planned acceptance work and people." (§4 fence 1)
+  - "**Not a framework or marketplace** (0060 §5.8): extensibility is registries inside the process and consumers outside it; hosting third-party logic imports other people's failure modes into the reliability core." (§4 fence 2)
+  - "**Not multi-tenant or federated** (0060 §5.8): one driver, one directory, one lock; supervision composes from outside." (§4 fence 3)
+  - "**Not a model provider or gateway**: models are variables; routing is a service; the tool never becomes where models are bought or authenticated as an identity." (§4 fence 4)
+  - "**Not a rewrite for taste** (0063): platform moves need triggers; until then the moat is the contract and the record, not the language." (§4 fence 5)
+- Code touchpoints: none named as homes (strategy document); it grounds itself in 0060 §3/§5.8, 0061 R15/R3/R4/F1, 0063 §5 triggers, the `AgentClient` 13-call seam (0037–0042/0055), RunEvent, plans/ stats (0019, 0055 §7.1).
+
+## 0065-artifact-declaration-pitfalls
+- Date: 2026-09-29 (git add; original findings record); fixes landed 2026-10-02 (T-113) — the F1–F4 spec of record
+- Trigger: T-066's decomposed checklist declared the golden **directory** as a subtask artifact — S01's close-out failed "declared artifact … does not exist" though the directory existed (`Bun.file(path).exists()` is false for directories), and S02 failed the same way *after* the declaration was fixed (the close-out judges the dispatch-time snapshot), each burning a session cycle and a human round-trip.
+- Rulings:
+  - F1: re-read the item text at close-out (reload the checklist before `runSubtask`'s shape check); alternative with the deeper payoff — move the artifact declaration's source of truth to `S<nn>/todo.md`'s `## Artifacts` section, parsed fresh from disk (§2 F1)
+  - F2: reject unsatisfiable declarations at decompose time (a declared path ending in `/` is a problem line); rejected — teaching `checkArtifactSpecs` to accept directories (§2 F2)
+  - F3: make `status` immune to item formatting — print `checklistTitle(item.text)`, the existing 60-char cap (§2 F3)
+  - F4: the test gap — a golden case declaring a trailing-slash directory would have caught F2's hole at M1.4 (§2 F4)
+  - Interim (T-066, no src changes): declarations edited to name the concrete files; S01–S02 marked done by hand (state-file rename + tick); items re-wrapped to ~100 columns, consciously accepting that continuation-line `Artifacts:` makes the existence check inert for the remaining subtasks (§3)
+  - correction: the status banner rewritten 2026-10-02 (T-113) — the header had said "no code changes are made here", true only while awaiting the fix unit; rewritten per the fix-status pattern (0069 §4.1), and F1–F4 are the spec of record the fix unit landed
+- Supersession: none seen.
+- Principle candidates (verbatim):
+  - "A declaration fixed mid-session is therefore judged by its pre-session text — every subtask that fixes its own declaration eats exactly one spurious block, cleared only by a human re-run." (§1)
+  - "Note the tick/idempotency invariant is unaffected: the shape check reads, it does not write." (§2 F1)
+  - "This matches the protocol's own division of labor — subtasks.md is the index, todo.md is what the subtask learns" (§2 F1 alternative)
+  - "Failing the *planning* session costs a retry inside one session; failing a *subtask close-out* costs a hidden blockage, a human diagnosis, and a re-run." (§2 F2)
+  - "A directory declaration is vacuous as a completion gate — it passes the moment any file lands, saying nothing about *which* artifacts the unit owed. Concrete files are the honest declaration; the directory form only ever appeared by convention drift." (§2 F2, rejected alternative)
+  - "wrapping conventions are a social contract between decompose sessions, the cap is not." (§2 F3)
+  - "files are the progress fact" (§3)
+  - "F1's alternative (declarations in todo.md) is the principled repair of this silent coupling between line-wrapping and check semantics." (§3)
+- Code touchpoints: `src/document/spec.ts` (`checkArtifactSpecs`), `src/runner.ts` (:557, :561 — the dispatch-time item snapshot), `src/status.ts` (:56), `src/tasks.ts` (:137–142 `subtasks()`, :155 `checklistTitle`), `src/document/state.ts` (:108–119).
+
+## 0066-quota-module-plan
+- Date: 2026-09-30 (drafted); implemented and landed 2026-10-01 (commit `794f35095`); git add 2026-10-01
+- Trigger: Provide the data basis for "switch model / switch account" — query kimi/zhipu account quota status over the network; 0057 §9 had deferred provider quota endpoint probing (blocked by the C4 credential constraint: credential values only ever enter subprocess environments), and a separate process/package bypasses that constraint.
+- Rulings:
+  - A standalone module `opencode/packages/quota/` (`@opencode-ai/quota`, private), zero dependency on auto-core, zero changes to auto-core/`packages/auto`/`opencode.json`/root tsconfig; only the Bun standard library (§2)
+  - Queries are advisory-only — the module only produces data, never triggers a switch automatically (§1)
+  - Security discipline (C4 spirit): raw tokens/cookies never enter code, docs, tests, logs or error messages; errors always masked (§2)
+  - No git commit-type commands are run — the DRIVER commits uniformly (§2)
+  - Vocabulary aligned with auto-core (scopes `5h`/`7d`, `utilization`/`resetAt`); the monthly subscription gets its own `subscription` entry, not a masqueraded scope (§2)
+  - kimi endpoint ruled by live test: minimal headers = `Authorization: Bearer` + `Content-Type`; the `kimi-auth` cookie cannot query the endpoint; only the 15-minute Bearer works (capture-then-query; sustainable renewal deferred to phase two); a missing `ratio` normalizes to utilization 0 (§3.1)
+  - zhipu endpoint ruled by live test: bare JWT; the HTTP status code is not an error signal (success = envelope `code===200 && success===true`); scope mapping `(unit:3,number:5)`→`5h`, `(unit:6,number:1)`→`7d`; `nextResetTime` = last consumption + window length, can sit in the past while the window still counts; `usage` (the allowance) changes and must not be cached as a fixed limit (§3.2)
+  - Multi-account storage `~/.config/quota/<provider>/<label>.token` (0600, XDG-aware); token resolution `--token` > env > file; the first two never touch disk (§4)
+  - CLI is JSON-only; batch queries isolate account failures (a single account failure does not sink the batch); exit codes 0/1/2 (§5)
+  - Adapter spec: injectable fetch, 10 s timeout, no retries (advisory: failure means no answer), lenient normalization (never let an exception propagate) (§6)
+  - §9 explicitly not doing: no auto-core/`.auto/windows.json` integration yet (the future point = `WindowSource: "probe"`), no automatic switch decisions, no automatic token renewal (§9)
+  - correction: the old status "review approved, implementation deferred" is void (2026-10-02 correction, `plans/0069` §4.2 A7); the file is now the historical spec of the landed module
+- Supersession: the status line's own correction — the prior "implementation deferred" status voided by 0069 §4.2 A7 (2026-10-02); the spec itself stands as the historical record of the landed module.
+- Principle candidates (verbatim):
+  - "Queries are advisory-only: the module only produces data and **never triggers a switch automatically**." (§1)
+  - "As a **separate process/separate package**, this module bypasses that constraint and inherits the contract spirit of §9: advisory; failure means "no answer"; timeout means "no answer"; §11 item 10 (observation must not preempt scheduling) likewise applies." (§2)
+  - "Security discipline (C4 spirit): raw tokens/cookies never enter code, docs, tests, logs, or error messages; errors are always masked; this plan document itself contains no credentials." (§2)
+  - "`opencode/` is a nested git repo (branch auto-core); **no git commit-type commands are run**; the DRIVER does the committing uniformly." (§2)
+  - "unknown tiers still fall back to the delta rule; when in doubt, always `unknown`, keeping `unit/number` in `raw`." (§3.2)
+  - "The adapter must not treat a past nextResetTime as a future wait-until moment; treat it as "resets only on the next consumption" and classify the scope per the mapping table." (§3.2)
+  - "**each account succeeds or fails independently, and a single account failure does not sink the batch**" (§5)
+  - "no retries (advisory: failure means no answer); lenient normalization (missing fields/wrong types → skip that window or set `unknown`; never let an exception propagate through)." (§6)
+- Code touchpoints: `packages/quota/` (new package: `src/cli.ts`, `src/kimi.ts`, `src/zhipu.ts`, `src/store.ts`, `src/index.ts`, `src/types.ts`, `test/*.test.ts`, `README.md`), `turbo.json` (the `"@opencode-ai/quota#test"` entry), the root bun workspace; explicitly not `packages/auto-core`/`packages/auto`/`opencode.json`/root tsconfig; future wiring `.auto/windows.json` `WindowSource: "probe"`; modeled on `packages/codemode` and auto-core `quota-windows` (atomic writes).

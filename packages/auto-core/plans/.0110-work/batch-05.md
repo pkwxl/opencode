@@ -1,0 +1,421 @@
+# batch-05 — plans/0038..0052 (combed 2026-10-21)
+- range: 0038–0052
+- date: 2026-10-21
+
+## 0038-usage-source-design
+- Date: no own header date; git add 2026-09-21.
+- Trigger: MA.2 of the root plan — the usage-driven mechanisms (reuse, steer, handover checks, fork guard, retry sources, failover clamp) all read one `used` figure, and "unknown" is today spelled `used = 0` / `pct = 100`, which gives the wrong answer in two places (G1 unknown fork base passes the guard; G2 a turn-end-reporting tier never got the hint yet the check demands the handover document).
+- Rulings:
+  - D1: two questions decide every row — is a value known, and is it known while the turn runs; decision functions take `used: number | undefined` plus the tier, no per-tier special cases beyond liveness. (D1)
+  - D2: unknown resolves one way — toward the side that neither carries context forward nor ends a session on a guess. (D2)
+  - D3: "always full" is not taken literally for triggers — full applies only where it costs money, not progress (reuse off, fork off); the substitute trigger for `none` is MA.5's round cap. (D3)
+  - D4: `reported` keeps everything but in-turn triggers — the steer hint cannot fire, so the post-session check must not demand a handover document (fixes G2). (D4)
+  - D5: estimates overestimate — ASCII 3 chars/token, every non-ASCII code point a whole token; `start` = inherited occupancy or the adapter's fixed overhead; MA.5 calibrates. (D5)
+  - D6: measured "0" keeps today's reading — a measured 0 means "nothing arrived yet". (D6)
+  - D7: unknown base = full (fixes G1) — `forkBaseAllowed(undefined)` is false: cold start with the full prompt, the existing fork-failure path. (D7)
+  - addendum: MA.3 update (0039 D5) — wired, with `events` byte-equal; the G2 fix is live for `reported`; the estimated tier's inherited start and initial prompt are not fed yet. (§1 scope note 3)
+- Supersession: header — "Stage-assisting document per D6: retires as history once MA closes." (MA closed with 0042's merge-back.) Its §6 latent item ("hint sent" instead of re-reading the final figure) was later taken by 0040 D6; U7 "has output" deferred to MA.5 and settled unused by 0041 §4.
+- Principle candidates (verbatim):
+  - "Toward the side that neither carries context forward (no reuse, no fork) nor ends a session on a guess (no steer, no handover demand, no test handover)." (D2)
+  - ""Full" applies only where it costs money, not progress: reuse off, fork off (plan risk 3)." (D3)
+  - "Overestimating costs extra handovers/fresh sessions; underestimating runs a session into the wall." (D5)
+  - "For `events`, U5's `used > 0 ? used : startUsed` stays: a measured 0 means "nothing arrived yet"." (D6)
+  - "Is a value known, and is it known while the turn runs." (D1)
+- Code touchpoints: src/usage.ts (usageSource, the behavior matrix, estimateTokens), test/usage.test.ts, testrun.ts (handoverDue/testHandoverDue), attempt.ts, watch.ts, session-api.ts (seedForkSession), session.ts (×3, switchModel), the import-direction table.
+
+## 0039-opencode-adapter-design
+- Date: no own header date; git add 2026-09-21.
+- Trigger: MA.3 of the root plan — first consumer of the MA.1 frozen interface; move the driver off the raw opencode SDK onto an AgentClient adapter, move the server into the agent domain, and wire the MA.2 usage source with `events` byte-equal.
+- Rulings:
+  - D1: tests go through the adapter — existing suites keep SDK-shaped fakes wrapped in `opencodeAgent(...)`; every driver test exercises the real SSE mapping end to end. (D1)
+  - D2: 0037 D2 alignment item resolved with no production delta — the SDK v2 client never rejects; the exception path exists only for test doubles; runSession's catch stays a safety net. (D2)
+  - D3: session-api becomes driver; server.ts moves to agent/opencode/server.ts; `agent/opencode/server` joins `agent/types` in the entry list; `log` is injected because a domain file may not import the driver. (D3)
+  - D4: interface amendment — adapter error wording; agent-specific error names move to the adapter (`OPENCODE_ERROR_PATTERNS`); without the adapter's table those names are plain text. (D4)
+  - D5: usage wiring, `events` byte-equal — measurement at a completed assistant message for every tier; the G2 fix wired; G1 takes effect only for a tier whose rebuild yields undefined (MA.4/MA.5 territory). (D5)
+  - D6: display — `describePart` takes an AgentPart; the retry line moves into watch's retry branch; log output unchanged. (D6)
+  - D7: error merge rules — both retry signals merge into `errorInfo` field by field; a session error keeps the pessimistic `isRetryable: false`. (D7)
+- Supersession: header — "A stage-assisting document per D6: it retires as history once MA closes." Its §5 carried-forward items (estimated-tier inputs, U7 "has output", the "hint sent" reading) were settled by 0040 D6 and 0041 §4.
+- Principle candidates (verbatim):
+  - "No driver file imports `@opencode-ai/sdk`." (§1 item 3)
+  - "A domain file may not import the driver (rule 6), so `log` is injected into `manage` and `timeoutFetch`." (D3)
+  - "The measurement point stays at a completed assistant message, for every tier." (D5)
+- Code touchpoints: src/agent/opencode/client.ts (opencodeAgent, splitModel, error names), src/server.ts → src/agent/opencode/server.ts (AgentHost, syncContext), src/agent/types.ts (AgentErrorPatterns), attempt, watch, session, session-api, exec-session, execute, interactive, testrun.ts, test/agent-client.test.ts, test/chain.test.ts, test/agent-server.test.ts, the import-direction table.
+
+## 0040-capability-degradation-design
+- Date: no own header date; git add 2026-09-21.
+- Trigger: MA.4 of the root plan — the frozen `AgentCapabilities` record was never read; every missing flag must land on an existing fallback, and one carried-forward item (0039 §5, the "hint sent" post-session check) closes here.
+- Rulings:
+  - D1: degrade through the switches, once — the run start forces the matching switches off with `clampSwitches` mutating the memoized switches in place; the per-consumer capability-check alternative was rejected. (D1)
+  - D2: guards where no switch reaches — each guard sits in the helper that owns its fallback and "only turns a request into the result the helper already returns on failure". (D2)
+  - D3: `--test-by-driver` without steer is refused — no degraded mode exists (nothing else carries test results, wrapup request, handover backfill), so the run stops at start, exit 1. (D3)
+  - D4: permission preset = each mode's no-answer outcome (`auto-allow`/`ask-allow` → allow, `ask-deny` → deny, `ask-fail` → block; dryrun → deny). (D4)
+  - D5: agent profile carries the host factory — `agent: { name, host }` optional on `setShellProfile`, absent = opencodeHost byte-equal; capabilities come from `host.client.capabilities`, never declared in the profile. (D5)
+  - D6: hint sent ORed into the post-session check — `sessionHandoverDue(tier, steer, used, hinted)` is due when `hinted` is set or the figure rule holds; the OR only adds the compacted case. (D6)
+  - D7: interface amended, second time — `PermissionPreset`, `AgentHostOptions`, `AgentHostFactory` move into agent/types.ts. (D7)
+- Supersession: header — "A stage-assisting document per D6: it retires as history once MA closes." Its §5 open items were settled by 0041 §4 ("MA.4 hand-offs, settled").
+- Principle candidates (verbatim):
+  - "every missing flag lands on an existing fallback" (title)
+  - "The alternative was a capability check at every consumer. It was rejected: `ask` alone is read by 25 render exits through `renderPrompt` (0020 §E), and a per-site check would silently miss the next template." (D1)
+  - "Nothing is persisted, so the switch invariant (env only, this run only) holds." (D1)
+  - "Each guard only turns a request into the result the helper already returns on failure." (D2)
+  - "Unlike every other row there is no degraded mode, so the run stops at start (exit 1, environment error). It does not fail halfway through a unit." (D3)
+  - "Capabilities are not declared in the profile. They come from `host.client.capabilities`, so a profile cannot claim what its adapter cannot do." (D5)
+- Code touchpoints: src/capability.ts (degrade, permissionPreset), loop.ts (clampSwitches application), src/agent/types.ts, session-api.ts (forkSession/sessionAlive/sessionUsage/sessionUsed guards), attempt.ts (resumable), watch.ts (length branch, hinted), interactive.ts (send), exec-session.ts (seedPinFork anchor), src/shell.ts (agent profile), test/capability.test.ts.
+
+## 0041-claude-headless-adapter-design
+- Date: no own header date; git add 2026-09-21 (facts measured during MA.5 with claude 2.1.278).
+- Trigger: MA.5 of the root plan — the second adapter behind the frozen interface, the first not opencode; settles open question 5's second half (claude's usage fields) and open question 7 (the contract surface), and closes what 0040 §5 handed forward.
+- Rulings:
+  - D1: one live process per working session, closed at idle — a prompt spawns/reuses the streaming-input process; idle at a `result` with nothing unconsumed closes stdin; keep-alive across idle rejected (would leak). (D1)
+  - D2: capabilities as measured — resume true, fork "session", steer true (C4), abort true (C7), question false, permission false, history false, usage events (C3); with these values degrade forces only ASK off. (D2)
+  - D3: billing from `result`, cost as a difference — one step-finish per turn with the turn's exact tokens; cost = `total_cost_usd` minus the session's previous total; unknown previous total → first turn bills no cost. (D3)
+  - D4: context and window — `contextUsed` = input + cache reads + cache writes of the latest API message (the MA.2 `events` row unchanged); windows learned live from `result.modelUsage` into `contextLimits()`. (D4)
+  - D5: model strings `claude/<model id>`; adapter strips everything up to the first "/"; model fixed per process — a prompt naming another model restarts the process between turns, a steer never changes it. (D5)
+  - D6: contract surface — translate, do not duplicate: the driver keeps one contract `.opencode/agent/<name>.md` and one permission policy `opencode.json`; the adapter translates per process start (`--append-system-prompt`, `--settings`); a second claude-shaped contract file rejected. (D6)
+  - D7: permission preset honored by an adapter — allow → bypassPermissions; deny → `--permission-prompts none`; block → same flags plus a non-retryable `PermissionDenied` error and process kill. (D7)
+  - D8: exit and error handling — unexpected exit yields a retryable `ProcessExit` error; API errors named by claude's code; classifier table additions (`prompt is too long` → overflow, `billing_error` → quota, etc.). (D8)
+  - D9: selection — profile first, then experiment switch `OPENCODE_AUTO_AGENT=opencode|claude` (default opencode), following the switch invariant (env only, this run only, invalid → exit 1). (D9)
+  - D10: environment hygiene — the spawn drops `CLAUDECODE`, `CLAUDE_PID` and the `CLAUDE_CODE_*` variables so a driver started inside a Claude Code session does not pass that identity to children. (D10)
+- Supersession: header — "A stage-assisting document per D6: it retires as history once MA closes." §4 marks the 0040 §5 hand-offs settled. No other supersession signal seen.
+- Principle candidates (verbatim):
+  - "Everything below was observed with real `claude -p` runs (haiku) during MA.5, not taken from documentation." (§2)
+  - "The alternative was to keep processes alive across idle. It was rejected because the driver runs hundreds of sessions and never says when one is finished, so a live process per session would leak." (D1)
+  - "A cold `--resume` costs about two seconds and loses nothing (prompt caching is server-side)." (D1)
+  - "When the previous total is unknown, the first turn bills **no cost**. Billing the whole history would be much worse, and the tokens stay exact either way." (D3)
+  - "The driver keeps one contract, `.opencode/agent/<name>.md`, and one permission policy, `opencode.json`." (D6)
+  - "A second, claude-shaped contract file was rejected: it would need its own init, reset, preflight and drift checks, and would drift from the first." (D6)
+  - "A driver started inside a Claude Code session (developer machines) must not pass that session's identity to its children." (D10)
+- Code touchpoints: src/agent/claude/client.ts, src/agent/claude/stream.ts, src/agent/claude/contract.ts, src/agent/claude/host.ts, loop.ts (selection), test/agent-claude.test.ts, test/switches.test.ts, the import-direction table (agent/claude/host).
+
+## 0042-agent-track-verification
+- Date: §3 "Setup (2026-09-21)"; git add 2026-09-21.
+- Trigger: MA.6 — close the MA agent track: driver-level tests still reached the driver only through the opencode adapter, which cannot show the driver needs nothing beyond `agent/types.ts`; and the track must merge back into auto-core.
+- Rulings:
+  - Native fake layer: `test/fixtures/agent.ts` implements `AgentClient` directly (configurable capabilities, records every call, FULL/BARE presets); `test/agent-fake.test.ts` (24 cases in 8 groups) ends with a roster check that all 14 calls were exercised. (§2)
+  - Dual-backend run: one sample project run under opencode and under claude with the model each has credentials for — the comparison is about the driver's flow and artifact shape, not model content; both runs exited 0 with the same six Auto-Stage commits and identical tracked file sets; test suites cross-run against the other backend's modules. (§3)
+  - Merge-back: auto-core had stayed frozen at `b7aeb419f`, so the merge is a fast-forward including the two docs-only plans/0036 commits ("leaving them out would take a cherry-pick series that forks history for nothing"); the loop track (M2+) keeps going on auto-next; this is MVR-2. (§5)
+- Supersession: header — "A stage-assisting document per D6: it retires as history once the merge is done." No other signal seen.
+- Principle candidates (verbatim):
+  - "That covers the adapter's mapping end to end, but it cannot show that the driver needs nothing beyond `src/agent/types.ts`." (§2)
+  - "Each backend ran with the model it has credentials for, so the comparison is about the driver's flow and the shape of the artifacts, not about the content the model wrote." (§3)
+  - "No delta points at the driver. Everything above is either the adapter's declared capabilities or model behavior." (§3)
+  - "Those are plans/ documents with no code, and leaving them out would take a cherry-pick series that forks history for nothing." (§5)
+- Code touchpoints: test/fixtures/agent.ts, test/agent-fake.test.ts, test/fixtures/runner.ts (the SDK-shaped fakes), test/agent-client.test.ts / test/agent-events.test.ts / test/agent-claude.test.ts (adapter-specific mapping, kept), packages/auto (driver from source, e2e), the sample project setup.
+
+## 0043-understand-wrapup-knowledge-intent-externalization
+- Date: §1 "Ruled by the user on 2026-09-21, before this batch started"; git add 2026-09-21.
+- Trigger: root plan item M2.1 — the (b)-class content (digest layout, wrap-up report/audit, knowledge quality bars, AGENTS.md maintenance rules, stuck-hint reflection, question-rule decision catalog) moves out of core templates/code into the built-in intent pack `templates/intents/default.md`, as a pure move with byte-identical renders.
+- Rulings:
+  - Marker lifecycle (0036 open question 7 / D11), ruled by the user 2026-09-21: **(a), refined** — AUTO-DECISION/AUTO-FIXME/AUTO-RESOLVE markers belong in target source, self-consistent, never pointing into process documents; (c) "never in source" and (b) "strip at round close" both rejected; "process *markers* in target code are legitimate, process *references* are not". (§1)
+  - D1: marker formats stay core-owned — `RESOLVE_FORMAT`/`DECISION_FORMAT` exported constants reaching the pack as template vars; a project override can reword the catalog but not fork the grammar. (D1)
+  - D2: literal fallback keeps the tier-1 anchors in the partial — the `{{^decisionsUnattended}}` fallback states both formats literally; a test pins fallback literal == constant. (D2)
+  - D3: governance hook injected at the render exit — `promptCtx(ctx)` completes every render's ctx with `ask`, the two formats and the branch-selected catalog, pre-rendered. (D3)
+  - D4: headings travel with guarded bodies — a pack without a key leaves no empty chapter and no dangling colon. (D4)
+  - D5: layout stays core — the solo-form line break is a core `{{#if solo}}`, not pack text, because pack bodies are blank-trimmed. (D5)
+  - D6: AGENTS.md block reads the active pack raw (`activeIntentText("governance", "agents-maintenance")`, unrendered — the block is not a prompt template). (D6)
+  - D7: scope held to the plan's list — knowledge chapter skeletons, level-1 stuck premises, wrapup item 1 stay core; translation is M2.5's (moved text stays in its current language). (D7)
+- Supersession: none seen in-document.
+- Principle candidates (verbatim):
+  - "Pure move: every render is byte-identical to before (§4)." (header ¶1)
+  - "They belong in target source because later development iterations are meant to work them off, and they must stand self-consistently there." (§1)
+  - "The marker line carries its own question/decision/reason and never points into process documents." (§1)
+  - "process *markers* in target code are legitimate, process *references* are not (D12/P1 and its forbidden-shape check are unaffected)." (§1)
+  - "The pack catalog carries no literal marker grammar, so a project override can reword the catalog but not fork the grammar." (D1)
+  - "so a zero-intent pack still gets a scannable instruction" (D2)
+  - "a pack without the key leaves no empty chapter" (D4)
+- Code touchpoints: templates/intents/default.md (ten new subsections), src/prompt.ts (promptCtx, RESOLVE_FORMAT/DECISION_FORMAT, contextDigest/reportForm/auditScope/qualityRules/reflection/activeIntentText injections), src/resolve.ts (the scanned formats), templates/prompts/decompose*.md, wrapup.md, knowledge.md, prior-knowledge.md, stuck-hint.md, _partials.md (question-rule), src/agents-block.ts (MAINT_RULE moved), test/intent.test.ts, test/prompt-template.test.ts, test/prompt-exec.test.ts, test/golden/.
+
+## 0044-completion-side-retirement-design
+- Date: §1 "Rulings (root open question 16, 2026-09-21)"; git add 2026-09-21.
+- Trigger: root plan decision D13 — the three completion-side mechanisms (`--verify`, `--review N`, `--final-review N`) are deleted outright, code and CLI surface, not switched off; the replacement for the checking half is planned work, and the missing consequence half becomes "FAIL stops the run".
+- Rulings:
+  - D1: the five retired flags (`--verify`, `--review`, `--early`, `--early-review`, `--final-review`) are a usage error (exit 1) on every command, message pointing at planned acceptance tasks / the `v` phase; retired `OPENCODE_AUTO_MODEL` role keys fail the strict unknown-role check. (D1)
+  - D2: config `verify: true` fails strictly with a "retired" message; `verify: false` and absent are accepted and ignored (init has written `false` everywhere; rejecting would break every in-flight project); init no longer writes the key. (D2)
+  - D3: PLAN.md legacy fields `verify:`/`verified`/`final:` read-compatible and ignored; unknown field lines survive untouched. (D3)
+  - D4: unfinished `T-F<k>` tasks run as ordinary tasks. (D4)
+  - D5: progress records stopped in `verify`/`review` map on read to the new `closeout` phase. (D5)
+  - D6: leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` left in place — both directories are driver-local and git-ignored; "cleanup code would outlive its purpose". (D6)
+  - D7: old watchdog names `verifyIdle`/`verifyMax` kept — they alias the retained watchdog, not the retired mechanism. (D7)
+  - D8: the migrate shell is not touched on auto-next (freeze); its pass-through flags are logged as an issue for M6.2. (D8)
+  - D9: FAIL stops the run — (i) the result line lives only in `docs/T-NNN/report.md`; (ii) literal `Result: PASS` / `Result: FAIL <reason>`, no line = no stop; (iii) on FAIL the work is committed, then the task is blocked; (iv) a person edits PLAN.md before re-running, the driver never decides on its own. (D9, settled earlier the same day)
+  - The closeout pipeline: after wrap-up the runner persists `closeout`, reads the report, and on FAIL returns blocked with the wrapup commit already carrying the report; the check runs whether or not the wrap-up session ran. (§3.2)
+- Supersession: none seen for itself ("Historical plans (0005 final-review design and others) are not edited (D6)" concerns other documents). D9's manual-rename acceptance was later given a command by 0052 §9 ("0044: `close` becomes the sanctioned way to accept a `Result: FAIL`") — a signal recorded in 0052, not here.
+- Principle candidates (verbatim):
+  - "A task completes on wrap-up plus the unified commit." (header ¶)
+  - "The replacement for the checking half is planned work: `--test-by-driver` keeps script execution out of the session, a planned task is already an independent session, and the `v` (acceptance) phase takes over the final review." (header ¶)
+  - "(ii) literal `Result: PASS` / `Result: FAIL <reason>`, no line = no stop" (D9)
+  - "(iv) a person edits PLAN.md before re-running, the driver never decides on its own." (D9)
+  - "the project asked for acceptance that no longer runs; silently ignoring it would hide that" (D2)
+  - "cleanup code would outlive its purpose" (D6)
+  - "A pack that omits the subsection drops the whole instruction, so the zero-intent baseline is "never stops"." (§3.1)
+  - "The check runs whether or not the wrap-up session ran (`--no-wrapup`): a report written by the task itself is read the same way." (§3.2)
+- Code touchpoints: src/review.ts and src/final.ts (deleted), src/verify.ts → src/script.ts (runScript, scriptTmpDir, ScriptRun), src/wrapup.ts (parseResult/reportResult), runner.ts (closeout), loop-task.ts, loop-phase.ts, loop-preflight.ts, src/gitignore.ts, PLAN.md fields and templates (review.md, review-fix.md, verify-judge.md, verify-script-gen.md, fix.md, final-task.md and goldens, every `{{#if verify}}` branch), src/check.ts, refcheck, packages/auto-migrate (untouched), templates/intents/default.md (`## acceptance`/`### result-line`).
+
+## 0045-document-role-model-design
+- Date: §1 "Rulings (root open question 15, 2026-09-21)"; git add 2026-09-21.
+- Trigger: root plan item M2.3 (document domain part two), with 0044 §4's two residuals moved to its front and the three open-question-15 candidates the user ruled on 2026-09-21. Root-plan citation, captured exactly (opening paragraph, before §1): "Root plan item M2.3 (`plans/AUTO_NEXT_REFOCTOR_PLAN.md`, document domain part two), with the two residuals 0044 §4 moved to its front and the three open-question-15 candidates the user ruled on 2026-09-21." — the same now-absent root plan is also cited in §1 ("Rulings (root open question 15, 2026-09-21)") and in the §1 closing note ("P1 principle text (0036 D10) was not a candidate: root D12 already adopted it; M2.3 only writes it down.").
+- Rulings:
+  - R1: the P1 prohibition check is **in M2.3, blocking** — a hit in the unit's added deliverable lines is a close-out problem (re-prompt once, then blocked); a bare task id only warns; the whole-tree scan stays a round-close gate (M4). (R1)
+  - R2: the phase acceptance document role **now** — a new `DocumentRole` plus its path constructor; no reader until the M3 gate, which also owns the acceptance marker literal. (R2)
+  - R3: id namespace (0036 D3-A/B) + configurable `destDir` (F18) **deferred, both** — `T-NNN` and the fixed `destDir` stay. (R3)
+  - D1: one classifier, one policy table — `roleOf(rel)` classifies by shape only (never content or existence); `ROLE_POLICIES` carries per-role `eofScan` and `process`. (D1)
+  - D2: six roles (the five of the M1.1 freeze plus `phaseAcceptance`); `todo.md`/`done.md` are artifact on both sides — "state is not a role". (D2)
+  - D3: eof-scan exemption derived (`eofScanExempt = !ROLE_POLICIES[roleOf].eofScan`); the name list in doccheck.ts is gone. (D3)
+  - D4: protect list hung on the role — `PROTECTED_FILES` feeds protect.ts; a test asserts every entry is `driverState`. (D4)
+  - D5: handoff checks move to the document domain (handoffStatus, HANDOVER_SECTIONS/validHandover live in roles.ts as the handoff role's two protocol shapes; literals untouched until M2.4). (D5)
+  - D6: state protocol moves into the domain (`src/subtask-state.ts` → `src/document/state.ts`, git mv, behavior unchanged). (D6)
+  - D7: acceptance record path `<phaseDocsDir>/acceptance.md` (`PHASE_ACCEPTANCE_NAME`); the classifier also accepts `acceptance-r<n>.md` so M3 may choose per-iteration naming. (D7)
+  - D8: P1 scan = added lines of deliverable files — `processReferenceScan` over `git.ts unitAddedLines`; scope non-process roles minus agent-contract surfaces; added lines, not whole files. (D8)
+  - D9: wired into subtask close-out only — whole-task and wrap-up get the prompt discipline but no mechanical check (a known gap, not a new loop). (D9)
+  - D10: P1 prompt discipline is intent — `### process-references` injected into subtask.md and whole.md; "The pack states the rule, not the mechanism". (D10)
+  - D11: test-wrapup split, byte-identical — the two completeness sentences move to `### test-handover-finish`/`### test-handover-leftover`; the protocol stays in the template. (D11)
+  - D12: where the text lives — the roles.ts header (code is the first carrier) and one invariant line in the package AGENTS.md; intent-pack trust boundary at shell-contract §C.2. (D12)
+- Supersession: none seen in-document.
+- Principle candidates (verbatim):
+  - "The driver's protocol markers constrain exactly two kinds of file: the index and state files it parses (PLAN.md, the ledger, subtasks.md checklist items and their `产出:` declarations, the todo.md anchors, the report result line) and the handoff documents (status line, four handover sections). Everything else a session writes under `docs/T-NNN/` is free content: the only mechanical demands are the shape check and the section anchors a decomposition declared for itself." (§3, the standardization boundary as written in roles.ts)
+  - "New protocol surface should prefer a marker in an index or handoff file over a schema on free content." (§3)
+  - "classifies any target-relative path by shape only (never content or existence)" (D1)
+  - "the content is the decompose session's scope statement; the state is which file of the pair exists, interpreted only by `document/state.ts` — state is not a role." (D2)
+  - "Added lines, not whole files: a unit touching a file with older references is not blamed for them (0036's "never the existing tree", made line-exact)." (D8)
+  - "The pack states the rule, not the mechanism (the whole-task path has no check, D9)." (D10)
+  - "AUTO-* lines may sit in code comments, each self-contained, never pointing at a process document." (D10)
+- Code touchpoints: src/document/roles.ts (roleOf, ROLE_POLICIES, PROTECTED_FILES, handoff shapes), src/document/state.ts (from src/subtask-state.ts), src/document/process-refs.ts (processReferenceScan, p1Scope), src/git.ts (unitAddedLines), src/docpaths.ts (PHASE_ACCEPTANCE_NAME), src/protect.ts, src/phases.ts (phaseAcceptanceDoc), src/execute.ts (subtaskArtifactProblems), src/doccheck.ts, templates subtask.md / whole.md, templates/intents/default.md (`### process-references`, `### test-handover-finish`, `### test-handover-leftover`), shell-contract §C.2, package AGENTS.md, test/document-roles.test.ts, test/subtask-shape.test.ts, test/prompt-exec.test.ts.
+
+## 0046-parallel-declaration-design
+- Date: Status (2026-09-21) partly superseded; Status (2026-09-22) D8–D12 implemented; git add 2026-09-21.
+- Trigger: root plan item MP.1 ("declaration only, no concurrency"), stage 1 of 0036 §6.4's rollout — the dependency/touched-paths declaration surface plus the `--parallel`/`--max-sessions` flags, with the four open-question-15 sub-items ruled 2026-09-21.
+- Rulings:
+  - R1: **task-level parallelism first** — a task is already a commit-bounded unit with its own `docs/T-NNN/` and is what MP.3's one-worktree-per-agent model isolates. (§1 R1)
+  - R2: the touched-paths declaration is a PLAN.md task field (`touches:`) written by the planning session — "the declaration has to live where the planner writes"; the subtask-level token deferred. (§1 R2)
+  - R3: flag naming `--max-sessions <N>` — it counts concurrent AI sessions and cannot be misread next to `--agent`. (§1 R3)
+  - R4: `--parallel` is **init-frozen only** — passing it to `run` is a usage error, like every other project-level setting. (§1 R4)
+  - R5: id namespace (D3-A/B) deferred again, to MP.3, where it is a hard prerequisite; MP.1 changes no id shape. (§1 R5)
+  - D1: two task fields, English from the start (`depends`, `touches`); `edit()` needs no change (unknown field lines preserved). (D1)
+  - D2: shallow semantics — a `depends` edge means "start after that task is done", nothing about data flow. (D2)
+  - D3: missing `touches:` means "touches everything" — never disjoint, so a future scheduler serializes it; an empty value is a plan error, not "touches nothing". (D3)
+  - D4: plan checks (`planProblems`) — unknown id, self-dependency, cycle with its path, malformed id, absolute/`..`/empty paths; overlap between two tasks' touches is not an error. (D4)
+  - D5: where the checks run — only when `parallel` is not `none`: planning `collect` (retry message lists problems) and each task-loop `load` (problems → log, exit 2). (D5)
+  - D6: retry message may be dynamic — `requireArtifact`'s `requirement` accepts `string | (() => string)`. (D6)
+  - D7: dependency order, serial — `next(plan, { deps })`; the first not-done task whose dependencies are all done; `blocked` tasks stay selectable. (D7)
+  - D8: `--parallel` is an init attribute (`none|low|medium|high`, optional config key; `none`/absent the same, nothing written). (D8)
+  - D9: `--max-sessions` is a run flag, reserved — integer ≥ 1, default 1; above 1 a usage error until MP.3 ships a scheduler. (D9)
+  - D10: planning guidance is intent — new `## parallelism` section with `### low`/`### medium`/`### high`; no `### none`. (D10)
+  - D11: injected into the planning templates only; decompose gets nothing until subtask parallelism. (D11)
+  - D12: tier-1 markers — the field literals cannot be unconditional `PROTOCOL_MARKERS` entries; the overlay gap recorded. (D12)
+  - addendum (Status 2026-09-21): "partly superseded by `0047-unit-layout-design.md`" — PLAN.md retired there, D1's carrier replaced by the unit `todo.md` field block (0047 §7); D4/D7 implemented generically in M3.1/M3.5; D3 carries over as 0047 G3; S1 handed to M3. (Status block)
+  - addendum (Status 2026-09-22): D8–D12 implemented (S2–S6, §8); with D1–D7 already delivered by M3.1/M3.5 in generalized form, MP.1 is complete. (Status block)
+  - addendum (§8 implementation notes): D12's gap closed itself (the literals sit in the unconditional `task-depends` partial since M3.5); the "above 1 with `parallel: none`" rule subsumed (any value above 1 fails); the `init --implement-*` shortcut renders with the built-in pack only (a known limit predating MP.1).
+- Supersession: explicit Status block: "**Status (2026-09-21): partly superseded by `0047-unit-layout-design.md`.** PLAN.md is retired there, so D1's carrier (PLAN.md task fields) is replaced by the unit `todo.md` field block (0047 §7). D4 (checks) and D7 (dependency order) are implemented generically in root M3.1/M3.5, and D3 carries over as 0047 G3."
+- Principle candidates (verbatim):
+  - "A `depends` edge means "start after that task is done" — nothing about data flow, which the driver cannot verify." (D2)
+  - "Conservative by construction: forgetting the field costs width, never correctness." (D3)
+  - "**Overlap between two tasks' `touches` is not an error** — it only means they won't run side by side." (D4)
+  - "tasks are decomposed only when they start (`ensureDecomposed`), so a task-level scheduler cannot see subtask declarations at plan time; the declaration has to live where the planner writes." (§1, R1/R2 rationale)
+  - "Every existing golden, incident-regression test and gate therefore stays untouched; new behaviour is reachable only by an explicit `init --parallel` choice. This also keeps the freeze-period invariant that an existing project's behaviour does not change." (§4)
+- Code touchpoints: src/plan.ts (fields, planProblems, next), src/config.ts (parallel key), src/intent/types.ts (parallelism section, PARALLEL_LEVELS), src/intent/load.ts, src/prompt.ts, src/artifact.ts (dynamic requirement), src/loop-phase.ts, src/implement.ts, src/loop-task.ts, packages/auto/src/index.ts, templates/prompts/phase-plan.md and implement-plan.md, templates/intents/default.md, tests in both packages.
+
+## 0047-unit-layout-design
+- Date: §6 "Rulings (user, 2026-09-21)"; implementation notes 2026-09-22 (M3.1–M3.8); git add 2026-09-21.
+- Trigger: root M3 — the three process-document levels are asymmetric (phases split across three places and hard-wired letters; tasks live entirely in one PLAN.md with a redundant subtask copy; dependencies exist at no level); goal: generalize the subtask shape to phases and tasks, one dependency grammar, standard artifact names per phase type.
+- Rulings:
+  - R1 (user): `blocked` is carried as runtime state in `.auto/units.json` and the run log; the file name only says todo/done. (§6 R1)
+  - R2 (user): human overview after PLAN.md is a read-only CLI `status`; no summary file. (§6 R2)
+  - R3 (user): **no compatibility** with existing projects — old-layout projects do not advance; a project that must continue is restarted by hand as a new project; legacy code is deleted in M3.7; a legacy layout is a usage error; this overrides plans/0013 D2 and the root plan's "old admtvk configs lossless" clause. (§6 R3)
+  - R4 (user): 0046 S1 deferred and absorbed — its checks and selection implemented once, generically, in M3.1/M3.5. (§6 R4)
+  - R5 (user): scheduling regrouped into the root plan as M3 (§9). (§6 R5)
+  - U1: content lives in the unit — a unit's title, field block and body sections are in its own `todo.md`. (§3 U1)
+  - U2: progress is the file name — exactly one of `todo.md`/`done.md` exists; the driver renames inside the unit's closing commit; both or neither is illegal. (§3 U2)
+  - U3: the index holds order and membership only — the tick is a redundant view and files win (as `effectiveDone` today). (§3 U3)
+  - U4: runtime state is not a document — `in_progress`, `blocked`, `attempts`, `fork-base` move to `.auto/progress.json`/`.auto/units.json`. (§3 U4)
+  - U5: tasks are not nested — a phase relates to its tasks only through `tasks.md` membership plus a `Phase:` back-reference. (§3 U5)
+  - L1: PLAN.md is retired — no root file, no symlink, no archive snapshot; read-only CLI `status`; no generated summary file. (§4 L1)
+  - L2: no-phase mode is phase P01 (`phases: "m"` becomes an implicit `R-01/P01-implement`; the loops merge). (§4 L2)
+  - L3: planning writes units (`P<nn>/tasks.md` plus one `docs/T-NNN/todo.md` per task, checked by `checkArtifactSpecs` under the `mandatory` policy). (§4 L3)
+  - L4: the ledger is derived — a phase is complete when its `done.md` exists; `LEDGER_ENTRY` retired, not translated. (§4 L4)
+  - Phase types replace letters as registry entries; letters become presets; after expansion the order is data; types can repeat. (§5)
+  - G1: scope — `Depends` names same-level ids; no cross-level edges; the hierarchy implies them. (§7 G1)
+  - G2: shallow "start after that unit is done" semantics (0046 D2). (§7 G2)
+  - G3: defaults are conservative — missing `Depends` = previous sibling; `Depends: none` declares a root; missing `Touches` = touches everything; empty value an error. (§7 G3)
+  - G4: checks `unitProblems` (unknown id, self, cycle with path, out-of-scope, absolute/`..`/empty); overlap is not an error. (§7 G4)
+  - G5: selection `nextReady` — first unit in index order not done whose dependencies are all done. (§7 G5)
+  - G6: checks run in planning/decompose `collect` (one retry naming the problem) and on loop load, exit 2. (§7 G6)
+  - Rejected: tasks inside phase directories (breaks task permanence); a generated PLAN.md (second source of truth); `blocked.md` as a third state; a compatibility read or migration command (R3 rules it out). (§8)
+  - correction/deviation (M3.5 note): subtask ids stay positional — checklist lines carry no ids; adding ids would change text that goes into commit subjects, prompts and CURRENT.md "for no gain". (§11 M3.5)
+  - correction/deviation (M3.5 note): exit codes deviate from G6's "exits 2" — a bad graph in a phase/task index is an invalid index through the blocked route (exit 1); a bad subtask graph blocks the task (exit 2). (§11 M3.5)
+  - correction/deviation (M3.3 note): the PLAN.md snapshot stays, inside the phase directory, until M3.4 replaces it with `tasks.md` (closed in M3.4). (§11 M3.3)
+- Supersession: this document is the superseder of 0046 D1 (recorded in 0046's Status). In-document supersession signals about others: R3 "This overrides `plans/0013` D2 and the root plan's D2 clause "old admtvk configs lossless""; "0036 §7.4's objection disappears instead of being managed"; the dual-read retirement is root open question 17, later ruled (a) and applied by M3.7. None for itself.
+- Principle candidates (verbatim):
+  - "task paths are permanent, so **tasks are never nested under rounds or phases**" (§1, constraints from 0036 §7)
+  - "Ids are already in immutable media (`Auto-Task:` trailers, git history), so id shapes do not change." (§1)
+  - "Exactly one of `todo.md` / `done.md` exists. The driver renames, inside the unit's closing commit." (§3 U2)
+  - "Both files, or neither, is an illegal state." (§3 U2)
+  - "An index line looks like `- [ ] T-014 <title>`. Its tick is a redundant view, and files win, exactly as `effectiveDone` does today." (§3 U3)
+  - "**U4 — runtime state is not a document.**" (§3 U4 heading)
+  - "No generated summary file is written, so there is one source of truth." (§4 L1)
+  - "A missing `Depends` means the previous sibling in the index, which is serial and today's order; `Depends: none` declares a root. A missing `Touches` means touches everything, never disjoint (0046 D3). An empty value is an error." (§7 G3)
+  - "There are no cross-level edges; the hierarchy implies them (a phase is done only when its tasks are)." (§7 G1)
+  - "This breaks task permanence (0036 §7.1): a task spanning rounds would get two homes." (§8)
+  - "It is a second source of truth, and every rewrite enters commits and the clean gate (0036 F14's reasoning)." (§8)
+  - "After expansion, the order is data." (§5)
+  - "**None.** Old-layout projects do not advance under auto-next; a project that must continue is restarted by hand as a new project." (§6 R3)
+- Code touchpoints: src/document/unit.ts (M3.1), src/phases/registry.ts (M3.2), src/phases.ts (M3.3), src/tasks.ts replacing src/plan.ts (M3.4), src/status.ts (M3.4), src/phases/custom.ts (M3.6), src/document/state.ts, src/docpaths.ts, src/document/roles.ts, src/refcheck.ts, src/knowledge.ts, src/loop-phase.ts, src/loop-task.ts, src/loop-preflight.ts, src/loop-progress.ts, src/implement.ts, src/runner.ts, src/execute.ts, src/current.ts, src/numbering.ts, src/git.ts, src/check.ts, the prompt layer, templates (PLAN.md and PLAN.scaffold.md removed; the decompose/planning/handover/knowledge set), packages/auto/src/index.ts, test/document-unit.test.ts, test/phases-registry.test.ts, test/tasks.test.ts, test/fixtures/units.ts.
+
+## 0048-round-mechanism-audit
+- Date: header "Line numbers are as of 2026-09-22"; §7 M4.3 follow-up (2026-09-22); git add 2026-09-22.
+- Trigger: root M4.1 — audit the round mechanism after M3 (inventory `currentRound`/`nextRound`/`roundRoot`/`establishRound`/`prevRoundDigest`) and list every human intervention surface, as the input to M4.2's gate design; explicitly "an audit, not a design".
+- Rulings:
+  - Verdict: the round mechanism needs no functional change — the five functions are small, derived and stateless; two comment-only corrections made (a claimed shell round-start commit; a claimed `verdict` gate reader). (§1)
+  - R1: the round-start commit is an implicit, mandatory human step (only index and phase todo.md count as driver state; `run`'s clean gate blocks until a human commits) — route M4.2: name it as the round-start gate or have init/continue commit it; the first fits "outermost loop = human gates". (§3 R1)
+  - R2: an interrupted `continue` has no obvious recovery (empty `docs/R-(N+1)` is invisible to git) — cheap fix: treat a current round with an empty directory as in-flight continuation. (§3 R2)
+  - R3: `prevRoundDigest` reaches only a planning session that runs before any phase of the round is done — a leading task-less phase swallows it. (§3 R3)
+  - R4: Chinese AI-facing inline strings survived M3.8 (`prevRoundDigest` headings, the `(无交接文档)` placeholder) — route M4.3, plain translation. (§3 R4)
+  - R5: declared phase gates have no reader (`gate: "verdict"` set but nothing reads `verdict.md`; the acceptance role exists but the 0036 D8 gate was left unimplemented; phase artifacts have no shape check) — all three belong inside `completePhase`. (§3 R5)
+  - R6: there is no round-close step (the `complete` route writes nothing) — suggested shape: one pure `roundCloseProblems` evaluated at the `complete` route (report) and the `continue` precheck (block). (§3 R6)
+  - R7: `docs/R-NN/round.md` has constraints the M4.2 design must honor (its role; authoring order vs `legacyLayoutProblem`/`currentRound`; the migrate shell's prior-kb ordering). (§3 R7)
+  - R8: the phase `todo.md` carries no goal or exit criteria — `round.md` is the intended supplier. (§3 R8)
+  - R9: only the current round is visible — recorded, no action. (§3 R9)
+  - R10: there is no plan-review pause between a phase's planning session and its first task — candidate: at `OPENCODE_AUTO_STEP ≥ phase`, also pause after the phase-plan commit, reusing `stepPause`. (§3 R10)
+  - §4: the complete human intervention surface H1–H19 with kinds gate/pause/steer/edit/recovery/view; H7, H8, H9, H10 marked missing. (§4)
+  - addendum (§7, M4.3 follow-up 2026-09-22): R4 closed; with the user's agreement M4.3 also cleared the Chinese no later milestone owned (the agent contract, inline AI-facing messages, refcheck logs, template-engine errors); some Chinese stays on purpose (input-recognition patterns, comments per the translate-on-touch rule).
+- Supersession: none seen for itself; its findings R1/R2/R3/R5/R6/R7/R8/R10 were closed by 0049 (recorded there as its input). The §1 tidy-up corrected two comments that claimed nonexistent mechanisms (a correction note about other files).
+- Principle candidates (verbatim):
+  - "This document is an audit, not a design. Where a finding needs a behavior change, it is routed to M4.2 or M4.3 (§5) and nothing is decided here." (header)
+  - "**The round mechanism needs no functional change.** The five functions are small, derived and stateless." (§1)
+  - "The first fits "outermost loop = human gates"." (§3 R1)
+  - "one pure `roundCloseProblems(dir, round)` evaluated at both anchors, reporting at (a) and blocking at (b). No new state, and `routePhase` stays a pure function of the files." (§3 R6)
+  - "This reuses the existing mechanism, which honors 0036 D8's "no new pause mechanism"." (§3 R10)
+  - "Kinds: **gate** = the run cannot proceed without it; **pause** = optional hold at a boundary; **steer** = input into a live session; **edit** = a file the human owns and the driver reads; **recovery** = the action the human takes after a blocked exit; **view** = read-only." (§4)
+- Code touchpoints: src/docpaths.ts, src/phases.ts (currentRound/nextRound/roundRoot/establishRound/prevRoundDigest/legacyLayoutProblem), src/knowledge.ts, src/phases/registry.ts, src/loop-phase.ts, src/loop-preflight.ts, src/git.ts (DRIVER_STATE), src/runner.ts, src/wrapup.ts, src/document/roles.ts, src/step.ts (stepPause), packages/auto (continue precheck, e2e "round baseline" commit).
+
+## 0049-human-gate-convergence-design
+- Date: §1 "Rulings (user, 2026-09-22)"; git add 2026-09-22.
+- Trigger: M4.2 — close the four real gaps in the human-gate surface found by the M4.1 audit (R1, R5, R6, R10) plus the cheap fixes (R2, R3, R7, R8).
+- Rulings:
+  - U1 (user): who commits the round setup — a named human gate; `init`/`continue` do not commit; they print the review-and-commit step and `run`'s clean gate names it. (§1 U1)
+  - U2 (user): the phase acceptance gate default — opt-in per phase type (custom types via `Gate: acceptance`; builtins via config `acceptanceGate`); off otherwise so existing presets run unattended. (§1 U2)
+  - U3 (user): author and marker — AI pre-fills, human signs; the handover session drafts `acceptance.md` and never writes the marker; the human adds `Accepted: yes`. (§1 U3)
+  - U4 (user): hardness of the round-close gate — middle form; the whole-tree P1 scan and the target build are mechanical and block `continue`; the restatement obligation is a `## Close` listing; reported, not blocking, on every `complete` run. (§1 U4)
+  - G1: round-start gate — committing the round setup stays a human act; no driver commit, no new Auto-Stage. (G1)
+  - G2: `round.md` the round brief — `establishRound` writes a four-section stub once (Goal / Acceptance criteria / Release criteria / Close); new role `roundBrief` (`eofScan: false, process: true`); the driver writes the stub after the directory and index exist so neither `legacyLayoutProblem` nor `currentRound` gains an exemption; only `## Close` is parsed. (G2)
+  - G3: planning reads `round.md` directly (a new `round` slot; HTML comments stripped; an untouched stub injects nothing; the phase `todo.md` stays without Goal/Exit so there is no second copy to drift; the discipline is intent content `### round-brief`). (G3)
+  - G4: the previous-round digest reaches the first planning session (injected when no completed phase of the round has tasks). (G4)
+  - G5: plan-review pause — with `OPENCODE_AUTO_STEP ≥ phase`, `stepPause("phase", …)` also fires after a successful phase-planning commit, before the first task; `/exit` honored at the same point. (G5)
+  - G6: interrupted `continue` recovers by re-running it — `nextRound` reuses the current round when its directory exists without a `phases.md`. (G6)
+  - G7: phase gates inside `completePhase` — `phaseGateProblems` precondition while problems remain (the phase is not renamed, the route stays `handover`, each re-run re-checks); verdict gate reads `verdict.md` with the task report's parser (a missing file or line passes); acceptance gate passes on a whole line `Accepted: yes` (one marker value, no `Accepted: no` to parse); the AI draft must exist and be non-trivial and must not carry an `Accepted:` line; the waiting exit prints both procedures and exits 2; phase-artifact shape checks are not added (recorded). (G7)
+  - G8: round-close gate — `roundCloseProblems(dir, round, { build })` in the new `src/round-close.ts`, one pure-in-intent evaluator (reads the tree, runs the build, writes nothing): whole-tree P1 scan, the configured target build (30-minute cap), the `## Close` restatement listing; reported at the `complete` route, blocking at `continue`; no state written. (G8)
+  - G9: config keys — optional `acceptanceGate` (array of phase type ids) and `build` (non-empty string), hand-edited like the rest of the constitution; no CLI flags in M4.2. (G9)
+- Supersession: none seen in-document.
+- Principle candidates (verbatim):
+  - "Committing the round setup stays a human act." (G1)
+  - "`completePhase` stays the single completion path shared by the handover and its interruption recovery." (G7)
+  - "Each re-run re-checks, so the recovery path cannot bypass the gate (0036 D8)." (G7)
+  - "A missing file or a missing line passes, the same as the task-level rule "no result line = no stop"." (G7, verdict gate)
+  - "There is one marker value. Rejection means the line is absent, so there is no `Accepted: no` to parse." (G7)
+  - "A draft that carries an `Accepted:` line fails the check, because an AI must not sign." (G7)
+  - "Signing is a human change, so the human commits it, as for G1. Carryover is for driver state only (0021 P3)." (G7)
+  - "That leaves the `legacyLayoutProblem` and `currentRound` hazards of R7 without a trigger, and neither check gains an exemption." (G2)
+  - "The phase `todo.md` stays without `Goal`/`Exit`, so there is no second copy to drift." (G3)
+  - "It is one pure-in-intent evaluator (it reads the tree and runs the build, and writes nothing)." (G8)
+  - "No state is written, and `routePhase` stays a pure function of the files." (G8)
+- Code touchpoints: src/phases.ts (completePhase, phaseGateProblems, establishRound stub, nextRound recovery, `Accepted: yes`), src/phases/custom.ts (`Gate:` list form), src/round-close.ts (new), src/round-brief.ts (the stub, per 0050's catalog), src/document/roles.ts (roundBrief role), src/docpaths.ts, src/config.ts (acceptanceGate, build), src/loop-phase.ts, src/loop-preflight.ts (clean-gate naming), templates/prompts/phase-plan.md, phase-handover.md, plan-duties-v, templates/intents/default.md (`### round-brief`, `### phase-acceptance-draft`), packages/auto (continue precheck, closing lines), test/round-gates.test.ts.
+
+## 0050-structure-historical
+- Date: header "Retired (M6.2, 2026-09-22)" / "translated to English 2026-10-03"; git add 2026-09-22.
+- Trigger: was `docs/structure.md`, the per-file mechanism detail routed from AGENTS.md; retired at M6.2 in favor of a lean module → responsibility → key files index, kept verbatim as a historical record describing the tree as of its last edit (partly pre-M2.2/M3 layouts). Combed the same way per the batch instruction.
+- Rulings:
+  - none — a descriptive per-file catalog, not a ruling document (no decision list, no §-rulings, no Dn sections; its governing statements are captured under principle candidates).
+- Supersession: the whole document: "> **Retired (M6.2, 2026-09-22), historical record — not maintained.** This was `docs/structure.md`, the per-file mechanism detail. Its successor `docs/structure.md` is a lean module → responsibility → key files index; mechanism detail now lives in each module's header comment and the numbered plans/ documents." Plus the stale-until note: "> **Stale until the M6.2 rebuild:** verify / review / final-review … were retired in M2.2 — see `plans/0044-completion-side-retirement-design.md`; `src/verify.ts` survives as `src/script.ts` … Entries below that describe them no longer apply."
+- Principle candidates (verbatim):
+  - "AGENTS.md keeps only navigation and a quick overview; per-file responsibilities and mechanism detail are centralized in this file, updated here in sync whenever the source structure changes." (header note)
+  - "it takes the commit right away from AI sessions" (src/git.ts entry — the unified commit)
+  - "task numbers (T-NNN) never repeat in the target directory" (src/numbering.ts entry)
+  - "eof only proves "it finished writing" (mechanically decidable); quality belongs to verify/review" (src/doccheck.ts entry)
+  - "what it asks is "would switching to a candidate model help", deliberately different from opencode's own retry classifier" (src/chain.ts entry, classifySessionError)
+  - "under-reporting an auto-answer costs more than format purism" (src/resolve.ts entry, parseResolveLine)
+  - "non-TTY counts as authorized and returns true directly (no one can answer in a non-interactive environment — asking would just hang)" (src/confirm.ts entry)
+  - "Outside any repo it counts as clean and passes (the same discipline as ensureGitignore's "a non-git directory does nothing")." (src/clean.ts entry)
+  - "directory reclamation is always `rmdir` (non-empty is skipped, **never rm -r**) — this is precisely the mechanism that preserves the user's self-created `.opencode/auto/prompts/` and the other agent contracts under `.opencode/agent/`." (src/reset.ts entry)
+  - "a non-zero exit code is not judged here — judgment belongs to the AI, the same philosophy as verify" (src/testrun.ts entry, runTestScript)
+  - "the wording is hard-constrained to never mention context/caps/tokens" (src/prompt.ts entry, renderTestWrapup)
+  - "with the artifact missing and the worktree dirty → returns dirty for manual cleanup (the driver never touches git on its own)" (src/knowledge.ts entry, prior-knowledge completion)
+  - "when unset, the core's messages and historical behavior stay byte-for-byte identical" (src/shell.ts entry)
+- Code touchpoints: the whole tree as of its last edit — src/index (shell), src/config.ts, src/switches.ts, src/step.ts, src/exit.ts, src/failback.ts, src/stuck.ts, src/stats.ts, src/resolve.ts, src/loop.ts, src/loop-task.ts, src/loop-phase.ts, src/loop-preflight.ts, src/loop-progress.ts, src/conclusion.ts, src/interactive.ts, src/opts.ts, src/chain.ts, src/unit-commit.ts, src/current.ts, src/resume-gate.ts, src/session-api.ts, src/testrun.ts, src/watch.ts, src/attempt.ts, src/session.ts, src/artifact.ts, src/exec-session.ts, src/review.ts, src/wrapup.ts, src/execute.ts, src/runner.ts, src/tasks.ts, src/status.ts, src/phases.ts, src/phases/custom.ts, src/round-brief.ts, src/round-close.ts, src/docpaths.ts, src/doccheck.ts, src/refcheck.ts, src/prompt.ts, src/template.ts, src/mode.ts, src/knowledge.ts, src/numbering.ts, src/final.ts, src/reset.ts, src/clean.ts, src/confirm.ts, src/gitignore.ts, src/git.ts, src/check.ts, src/verify.ts, src/protect.ts, src/agent/ (types, opencode/, claude/), src/capability.ts, src/log.ts, src/shell.ts, templates/ (prompts, modes, intents, contract), docs/shell-contract.md, script/build.ts, script/fix-refs.ts, test/.
+
+## 0051-unit-state-design
+- Date: Status — "ruled (2026-09-23; drafted 2026-09-22)"; absorption note dated 2026-10-02; git add 2026-09-23.
+- Trigger: 0036 D16's list of state that must become per-unit "before any concurrency" — the list needed re-derivation because D16 predates D15's one-worktree-per-agent isolation model and the M3 unit layout (which already keyed part of the runtime state).
+- Rulings:
+  - D1 (user, 2026-09-23): process model **(a) one child `run` process per agent**, each in its own worktree; the parent schedules, allocates ids, merges and routes input; the rejected branch (b) (one process, N in-process chains) is recorded with its cost (the full D16 list would have grown back). (§4 D1)
+  - D2: keep `progress.json` / `handover.json` / `CURRENT.md` / `tmp/test.sh` in the single-record-per-directory form (per worktree) — no schema change, no protocol-string change. (§4 D2)
+  - D3: the parent's in-flight registry extends `units.json` (not a new `.auto/agents.json`) — `worktree?: string` on the `Runtime` entry; tasks only; recovery re-launches a child per entry. (§4 D3)
+  - D4: the parent is the sole writer of the parent's `units.json` (children write their own worktree's copy); no lock needed; the in-process queue stays. (§4 D4)
+  - D5: the step/task overwrite coupling in `closeStep` is left as is — phase steps are never concurrent with tasks; record the rationale only. (§4 D5)
+  - D6: `exit.ts`/`failback.ts` are per-process = per-agent by construction; document the parent-level broadcast semantics MP.4 must implement (`/exit` and `/failback [order]` broadcast; `sticky` stays per child). (§4 D6)
+  - Outcome (user, 2026-09-23): **MP.2 as written in 0036 D16 is retired and folds into MP.3** — every D16 item is satisfied by construction (G2/G4) or has no serial value (G1); the residue is P1–P4 (the registry field, the recovery planner, header comments recording the per-directory/per-process invariant, the dir-parameter invariant test). (§5)
+- Supersession: two Status blocks: "Status (2026-10-02): **fully absorbed — retired into `0068-parallel-execution-lanes-design.md`.** D1's process model … and D3's registry … are built there …; P2's recovery planner became 0068 D14's orphan scan … Nothing here is maintained further." And "Status: **ruled** (2026-09-23; drafted 2026-09-22). Outcome: **MP.2 is retired as a milestone and folds into MP.3**".
+- Principle candidates (verbatim):
+  - "This is the same argument 0036 makes for F8 ("satisfied by construction rather than redesigned"), and it extends to the rest of D16's file list." (G2)
+  - "a crash of one agent cannot corrupt another's in-memory state (root plan MP exit criterion "killing any agent does not damage other units")" (§4 D1)
+  - "phase steps are never concurrent with tasks (planning precedes the task set, the handover follows it)" (§4 D5)
+  - "P3 Header comments in `resume.ts`, `handover.ts`, `current.ts`, `testrun.ts`, `exit.ts` and `failback.ts` recording the per-directory / per-process invariant that D1 (a) rests on, so a later in-process concurrency change cannot break it silently." (§5 P3)
+  - "P4 An invariant test: every state-file function takes `dir` and never falls back to `process.cwd()` (guards F7, on which G2 depends)." (§5 P4)
+  - "It also says the list is worth doing "even if tier 3 never ships", as a recovery-fidelity gain." (§1, quoting 0036 D16)
+- Code touchpoints: src/resume.ts (progress.json), src/tasks.ts (.auto/units.json), src/handover.ts, src/testrun.ts (tmp/test.sh), src/current.ts, src/gitignore.ts (F8), src/exit.ts, src/failback.ts, src/agent/opencode/server.ts (F11), runAll / MP.1's max-sessions rule.
+
+## 0052-cli-responsibility-convergence-design
+- Date: Status — "design, ruled (2026-09-23, rulings U1–U6). P1 and P2 implemented (2026-09-23 …)"; git add 2026-09-23.
+- Trigger: the user proposal of 2026-09-23 — converge `init` on initializing configuration only; remove `--dest-dir`/`--source-dir`/`--source-path` (what they express is user intent, not configuration); a future `plan` command with `--force-close`; same-day follow-up replacing `init --auto-fix` with a `fix` command and `--amend` with an `amend` command.
+- Rulings:
+  - U1 (user): scope — design document only, no code change. (§1 U1)
+  - U2 (user): `--force-close` becomes a standalone `close` primitive (a core `closeUnit` plus `close <ref> --reason`, with no AI); `plan --force-close` is only a shortcut. (§1 U2)
+  - U3 (user): `continue` folds into `plan` and is retired. (§1 U3)
+  - U4 (user): init's target boundary is the config layer only — "`init` writes exactly what `reset` removes"; round establishment, `-p` and `--implement-*` move to `plan`. (§1 U4)
+  - U5 (user): auto-fix is a standalone `fix` command covering the whole config layer. (§1 U5)
+  - U6 (user): `--amend` becomes a standalone `amend` command (added in P2; `init --amend` retired in P3c). (§1 U6)
+  - Classification criterion: a setting's home is decided by what the driver does with its value — config (interprets: branches, runs, checks), intent selectors (stay in config), intent content (forwards word for word into a prompt: brief.md, round.md, planning input), lifecycle (a transition of process state). (§3)
+  - D1: the three migration flags become usage errors with the hint to state the migration source and target in `brief.md`; per-flag retirement messages. (P1 D1)
+  - D2: removals — the config keys, the RunAllOpts pass-through, the renderPhasePlan inputs and the phase-plan.md slots. (P1 D2)
+  - D3: a stored `source`/`destDir` fails strictly like `verify: true`, with the exact fix; the two names are permanent tombstones. (P1 D3)
+  - D4: the full-overwrite baseline read tolerates retired keys but prints each discarded key with its value — a stored value is never lost without notice; removes the trap that a stored `commit: false` blocks every re-init. (P1 D4)
+  - D5: delete `infer-source` (template, renderer, registration, markers, goldens); the frozen migrate shell keeps its snapshot. (P1 D5)
+  - D6: leave `templates/modes/migrate.md` unchanged. (P1 D6)
+  - D7: `init` becomes validate-then-write — every check before the first write; the e2e ordering test inverted. (P1 D7)
+  - D8: documentation in the same change (README, package notes, shell contract, 0035 registry, the m-mode `-p` message fix). (P1 D8)
+  - D9: `brief.md` becomes an intent document with a stub (## Goal / ## Source / ## Target / ## Constraints, comment hints only); planning strips comments; `reset` removes it only while it equals the stub. (P2 D9)
+  - D10: `src/config-fix.ts` holds a rule table over the raw JSON and the config-layer artifacts, findings `fixable` (deterministic, meaning-preserving) or `manual` (report only, never guess); `validateProjectConfig` stays strict. (P2 D10)
+  - D11: `fix [dir] [-f]` — baseline the existing config read raw, no config flags, print the plan then the clean-tree gate and confirm, apply all fixable findings, exit 1 if manual findings remain, no commit, idempotent; hints in run/status/preflight/check. (P2 D11)
+  - D12: run lock `.auto/run.lock` (pid, command, start time; stale when the pid is not alive); `run`/`plan`/`close` acquire it; `init`/`reset` refuse a live lock. (P3 D12)
+  - D13: `plan` is a stop condition (`stopBefore: "execute"`); returns 0 at the first execute route after at least one planning step; everything else (preflight, openStep precedence, numbering, stats, hibernation) reused. (P3a D13)
+  - D14: route table for `plan` (no round → establish R-01 deterministically, stop at G1; round complete → G8 then establish; plan route → plan, stop; handover/knowledge → advance to the next planning point; execute → refuse pointing to run/close/append; m mode → implement-style planning with input, else establish/print). (P3a D14)
+  - D15: `implementPlan` merges into `planPhase` (m-mode planning on the planPhase machinery; implement.ts and its separate agent start deleted). (P3a D15)
+  - D16: planning input is persisted (`plan -p`/`--file` writes `plan-input.md` with a new document role; a resumed step reads it back). (P3a D16)
+  - D17: `closeUnit(ref, reason, opts)` — explicit targets; writes `Closed: <reason>` into the field block, renames todo→done, ticks the index; driver commit `Auto-Stage: force-close`; cascade round → phases → tasks → subtasks; explicit dependents refuse (implicit previous-sibling counts as satisfied); clears every resumable record; dirty tree refused unless `--commit`/`--discard`; a closed phase gets a mechanical four-section handover; closed units skip the unit-close P1 scan but the whole-tree scan at round close still applies; the completion invariant gains "or explicitly closed by a person through `close`". (P3b D17)
+  - D18: `plan --append` — its own resume step kind `phase-append`; reset removes only ids absent from the pre-session snapshot; new tasks appended after existing index lines; allowed on the execute route and in m mode. (P3b D18)
+  - D19: `plan --force-close <ref>` is `closeUnit`, then `plan`, in one process holding the lock. (P3b D19)
+  - D20: `init` writes the config layer only; `establishRound`, `-p`, `--implement-*` and `--amend` become usage errors. (P3c D20)
+  - D21: `continue` is retired — a usage error pointing to `plan`. (P3c D21)
+  - D22: phases sync — `plan` re-syncs the unstarted tail; `run` detects the mismatch and stops with exit 1 pointing to `plan`; `init` keeps a read-only prefix-guard check. (P3c D22)
+  - D23: messages that say "run init to establish the round" point to `plan`. (P3c D23)
+  - D24: the new-project flow documented (init → plan → fill in briefs and commit → plan → run) — one invocation more, in exchange for a single owner of round establishment. (P3c D24)
+  - D25: `amend [dir] --<key> <value>…` — exactly init's config flags, one shared parser; refuses without config.json or with no key; loads strictly; validates then writes; also runs the round step until P3c; every "change one key" hint names `amend`. (P2 D25)
+  - Q8 decided in P2: `check` does not list `fix`'s findings — "Two listings of one rule table would drift." (§8.4)
+- Supersession: for itself — the P3 detail moved on: "From here the P3 steps are tracked in 0053 §10" (§6, P3 design pass done 2026-09-23: `plans/0053-lifecycle-commands-design.md`). §9 records that 0004/0006 are narrowed ("Both are historical and not updated") and states relationships (0044: `close` becomes the sanctioned way to accept a `Result: FAIL`; 0047 two-state invariant holds with `Closed:` as a field).
+- Principle candidates (verbatim):
+  - "A setting's home is decided by **what the driver does with its value**:" (§3)
+  - "`init` and `reset` become exact inverses." (§4.1)
+  - "`init` is deterministic, needs no AI or network, and suits CI." (§4.1)
+  - "**Addition 1: give every duty a new owner before moving it.**" (§4.1)
+  - "An option that excludes all the others is another command." (§4.3)
+  - "**fixable** means deterministic and meaning-preserving. **manual** means report only, never guess (for example `handoverTest` without `testByDriver`: which side to change is a human decision)." (§4.3)
+  - "Only keys that fail to load or silently lose their meaning are "broken". Valid alternative spellings are not rewritten" (§4.3)
+  - "`plan` must be the same state machine with a stop condition. Then preflight, resume-point precedence, the clean gate and SHA baseline, numbering, protect, stats and hibernation all behave identically for free (D13)." (§4.4)
+  - "Bundling an irreversible state change into an AI command violates the same single-responsibility argument that motivates the `init` change." (§4.5)
+  - "It keeps the two-state invariant, and `git revert` undoes it." (§4.5, the `Closed:` carrier)
+  - "The two names are permanent tombstones: no future key reuses them, so F18's process-doc root needs another name." (D3)
+  - "The overwrite discards them anyway, but it prints each discarded retired key with its value, so a stored `source` is never lost without notice." (D4)
+  - "the package `CLAUDE.md` invariant "a unit is done only when its artifacts are on disk and committed" gains "or explicitly closed by a person through `close`, recorded in its `Closed:` field"." (D17)
+  - "Two listings of one rule table would drift." (Q8)
+- Code touchpoints: packages/auto/src/index.ts (init/continue/run flag surface, RETIRED_FLAGS, CONFIG_FLAGS, amendCommand), src/config.ts, src/config-fix.ts (new, incl. renderAgentContract moved there), src/brief.ts (new stub, per P2 notes), src/reset.ts, src/loop-preflight.ts, src/loop-phase.ts, src/implement.ts (deleted at D15), src/phases.ts, src/status.ts, src/check.ts, src/runner.ts, src/prompt.ts (renderPhasePlan, renderInferSource removed), src/template.ts, templates/prompts/phase-plan.md, templates/modes/migrate.md, src/document/roles.ts (plan-input role), src/session-api.ts (missing-agent hint), packages/auto/test/e2e.test.ts, README, docs/shell-contract.md, plans/0035 registry, glossary, packages/auto/AGENTS.md.
+
+## Anomalies
+- none — all fifteen expected files (0038–0052) were present and read in full; 0050 exceeded a single read and was combed in sequential chunks covering lines 1–85 (the whole file).

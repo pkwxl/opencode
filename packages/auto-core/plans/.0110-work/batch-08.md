@@ -1,0 +1,309 @@
+# batch-08 — plans/0067..0074 (combed 2026-10-21)
+- range: 0067–0074
+- date: 2026-10-21
+
+## 0067-opencode-auto-headless-service-evolution
+- Date: 2026-10-01 (header "Date: 2026-10-01"); implementation record §8 dated 2026-10-01..02; banner correction 2026-10-02.
+- Trigger: The proposition to evolve opencode-auto into a purely headless automation service (REST API + SSE + Web client) needed a direction assessment and pre-planning before chartering.
+- Rulings:
+  - The direction holds; the "headless execution core" already exists as auto-core itself — do not fork or rewrite it, add a shell package in server form; the core never knows HTTP (§1 correction 1).
+  - "Dynamic config" reinterpreted as API-reachable (API-driven pre-run config), not mutable mid-run; breaking the config constitution is the only ruin path (§1 correction 2).
+  - Three real gaps identified: no structured event bus, blocking Q&A flow, process topology — runAll must execute in a subprocess (§2).
+  - Corrected five-component split: core evolving in place / config via API pre-run / REST+SSE as new shell package packages/auto-server / pure Web client / packages/auto kept as reference shell and escape hatch (§3).
+  - Phased roadmap P1–P4, with P1 needing zero core changes and packages/auto untouched throughout (§4).
+  - Invariants that must hold under servicization: driver-exclusive state writes, unified commit as completion, config constitution, one run per directory, daemon allowlist + token auth (§5).
+  - Status banner: chartered and fully implemented as T-086..T-098 (2026-10-02) delivering packages/auto-server; the old "not chartered" status is void (banner, 2026-10-02 correction per 0069 §4.2 A8).
+  - P1a: --version a compiled-in constant; agentRecovery "startup"; auditLog true; configDir keeps the CLI default (one operator one registry); the stub refuses a bare invocation (§8 P1a).
+  - P1b: the worker is a process entry, never an in-process library; payload = one argv token; switch names validated against the core registry; stdin closed by construction — permission questions block, others auto-answer, never a hang (§8 P1b).
+  - P1c: whitelist/token management is a CLI surface, not REST; loopback default; /health unauthenticated; kill = double SIGINT, not SIGKILL; stale-but-locked resolved as registry-vs-lock disagreement, never a daemon-side lock write (§8 P1c).
+  - P1d: operations run in the daemon process as library calls into the core; the confirmation is never skipped, only answered — an unanswered destructive request answers 428 carrying the exact question; task-add routes through planPrelude, no re-implemented guard chain (§8 P1d).
+  - P1e: defect found and fixed — the git-status poller takes .git/index.lock under polling; the fix passes --no-optional-locks; newest run log found by name-sort, never mtime; torn state files served 200, never an error (§8 P1e).
+  - P2a: RunStatusEvent is a frozen, additive-only 12-type vocabulary; the driver-level error event is named failure, never error; the join key run = the run's start epoch ms; phase brackets deliberately absent (§8 P2a).
+  - P2b: the question seam is the questions concern, not askHuman; emitStatus stamps run/at/seq centrally; SSE event-id cursoring; bounded subscriber capacity 256; SERVICE_ENTRIES did not grow (§8 P2b).
+  - P3a: InteractiveOption = boolean / injected Interactive / io factory, three structurally distinct shapes; the io form is a lazy zero-arg factory; no HTTP import anywhere (§8 P3a).
+  - P3b: the transport is the worker as a WS client of the daemon; the client endpoint's door is answer OR control with per-frame scope checks; control liveness = the run's first session attach; reconnect grace 5 s — even a hard-wait ask degrades in seconds (§8 P3b).
+  - P3c: the pending-question queue persists in the daemon's own data directory, never under a target's .auto/; the journal is a rebuild aid, not the system of record; the plan route unlocked via stopBefore "execute"; the plan request carries text, never a request-named file (§8 P3c).
+  - P4a: SSE over fetch, not EventSource (credential footprint); resume in the UI = a plain re-run; no log line is ever parsed; the bundle unminified so the served script stays auditable (§8 P4a).
+  - P4b: the probe is a POST, not ?probe on a GET; the rate window per-daemon in memory; write surfaces hidden without their scope, never disabled-with-a-clickable; the config form tri-state on booleans (§8 P4b).
+  - Close-out: "the core imports no HTTP" becomes a constitutional assertion in test/import-direction.test.ts; the SERVICE_ENTRIES shrink-only ratchet verified; test/no-target-writes.test.ts pins that the daemon writes nothing under any target's .auto/ (§8 T-098).
+  - addendum: the fake-agent question-capability limitation and its workaround pattern (the chain pinned in two halves over the same transport/queue/scope) stated once at the §8 section head (§8).
+  - addendum: the macOS git-identity e2e caveat and the sequential-suites host discipline stated once at the §8 section head (§8).
+- Supersession: Banner itself: the old status "not chartered, for future discussion" is void (2026-10-02 correction, 0069 §4.2 A8); "The body keeps the assessment draft as originally written; for implementation truth, `packages/auto-server` and its docs are authoritative." (banner). Also 0069 §4.2 A8 / T-105 corrected the stale "not chartered" header.
+- Principle candidates (verbatim):
+  - "Do not fork or rewrite it; just add a shell package in server form. The core never knows HTTP (core/shell contract: core does not know shells)." (§1 correction 1)
+  - "The correct meaning is **API-reachable** (API-driven pre-run config), not **mutable mid-run**. Breaking the config constitution is the only path by which this migration could ruin the whole design." (§1 correction 2)
+  - "log lines are prose for humans, not a protocol; the Web side must not scrape them." (§2 gap 1)
+  - "events are structured (unit transitions, session start/end, question, usage, error), with absolutely no scraping of English text." (§2 gap 1)
+  - "Crash and kill are isomorphic; workers can be cattle, not pets" (§2 table row 6)
+  - "The core never imports HTTP." (§3 item 1)
+  - "The credibility of this tool comes precisely from those "inconvenient" invariants, and the biggest risk of going Web is bypassing them for convenience:" (§5)
+  - "**The driver has exclusive rights to write state**: API/Web must never write directly to `.auto/`, `todo.md`/`done.md`, or index ticks; every change goes through library functions such as `closeUnit` / `task-add` / `runAll`." (§5)
+  - "**Unified commit is the completion condition**: "done" on the Web must be judged by the commit (③ commit / ④ dirty); never trust agent self-reports." (§5)
+  - "**Config constitution**: do not introduce mid-run config changes just because the Web is convenient." (§5)
+  - "**One run per directory**: horizontal scaling happens only along the directory dimension, never concurrently on the same directory." (§5)
+  - "(rejected: a silent 200-cancelled default — a stateless API whose silent default was cancelled would let scripts believe they had written)" (§8 P1d)
+  - "the core writes `.auto/`, the daemon does not" (§8 P3c)
+  - "the only "done" marks come from the read model's structured verdicts (a unit done exactly when its `done.md` exists inside the driver's closing commit); the status tree is the core's own rendered lines shown verbatim; no log line is ever parsed" (§8 P4a)
+  - "the probe is a mutation of the operator's wallet, not a read — a GET with side effects would cache, prefetch and replay its way into tokens" (§8 P4b)
+  - "**the core imports no HTTP** — a new constitutional assertion in `test/import-direction.test.ts`" (§8 T-098)
+  - "**environment memoization**, the per-run switch layer needs a fresh process, and **process ownership**, the exit vocabulary and SIGINT discipline are properties of the process running the run" (§8 T-098)
+- Code touchpoints: src/loop.ts, src/interactive.ts, src/control-types.ts, src/exit.ts, src/opts.ts, src/lock.ts, src/status.ts, src/log.ts, src/run-status-schema.ts, src/run-status.ts, src/tasks.ts, src/loop-task.ts, src/runner.ts, src/engine/concerns/questions.ts, src/stats.ts, src/loop-preflight.ts, src/session-api.ts, src/agent/claude/client.ts, test/import-direction.test.ts, docs/shell-contract.md; packages/auto-server (src/profile.ts, src/worker.ts, src/request.ts, src/daemon.ts, src/store.ts, src/ops.ts, src/observe.ts, src/ws-protocol.ts, src/interactive-ws.ts, src/worker-interactive.ts, src/question-journal.ts, src/web/client.ts (generated), web/, script/build-web.ts, test/…, docs/daemon.md, README.md); test/run-status-schema.test.ts, test/run-status.test.ts, test/status-events.test.ts, test/no-target-writes.test.ts, test/service-e2e.test.ts, test/turn-questions.test.ts, test/interactive-seam.test.ts.
+
+## 0068-parallel-execution-lanes-design
+- Date: 2026-10-01 (Status "Written 2026-10-01"); retired 2026-10-02 with S6 (all six stages landed 2026-10-02).
+- Trigger: 0036 §6.4 called for the detailed intra-run parallel-execution design; the plan absorbs 0046's deferred MP.3 list, 0051's ruled-but-unbuilt D1/D3, and 0061 R4's queued per-unit-worktree design.
+- Rulings:
+  - D1: isolation = one git worktree per lane (branch auto-lane/<task-id> in .auto/worktrees/); landing a serialized git merge --no-ff; the same-tree model and path-scoped staging consciously not taken.
+  - D2: process model = one child process per lane (0051 D1(a)); preserves one-run-per-process with zero surgery; crash isolation and kill story for free.
+  - D3: granularity staged — tasks first (index units), a taken split's streams second (S5).
+  - D4: uniform lanes when the scheduler is on — the parent executes no task sessions; one exception: a unit that cannot be isolated runs serially in the main tree after all lanes drain.
+  - D5: the scheduler is pure readiness over declared facts — nextReady plus Touches-disjointness from in-flight lanes plus a free slot; the admission rule is deliberately level-independent.
+  - D6: state ownership split by directory — parent-exclusive (index ticks, units.json scheduling fields, id allocation, run.lock, landings, stats, conclusion) vs lane-local (the worktree's own .auto/); nothing lane-local survives teardown except what git carried.
+  - D7: landing protocol — verify lane branch, merge --no-ff with Auto-Stage: landing, re-derive ticks as landing-sync, clear runtime fields and book usage, teardown; conflict path level-derived per D21.
+  - D8: lane report contract .auto/lane.json written at every controlled exit; absence is the orphan signal.
+  - D9: rollback stays lane-local; undo after landing out of scope (the existing human paths handle it).
+  - D10: activation iff maxSessions ≥ 2 and parallel not none/absent; byte-identical floor at one session for any project; OPENCODE_AUTO_LANE_ISOLATION forces lane-per-task at one session.
+  - D11: interactive input refuses under concurrency (v1) — one human cannot steer N sessions.
+  - D12: failback, quota and control are per lane process; the parent's windows.json copied best-effort into the worktree; lane-learned windows discarded at teardown.
+  - D13: observability — relay, don't scrape: prefix relay [<task-id>] through the parent's log; no lane terminal text is ever parsed.
+  - D14: orphan recovery — an alive pid awaited then landed; a dead pid re-dispatched in place up to the attempts cap; cap or unownable scene blocks naming the park path.
+  - D15: nested repos serialize (v1) — a unit whose declared Touches reach a nested-repo root is not lane-eligible; undeclared nested movement caught at landing blocks.
+  - D16: park = .auto/worktrees/ inside the target tree; repoRoots' walk skips the park (a worktree's .git is a file).
+  - D17: all new literals are new English protocol strings, no dual-read.
+  - D18: decompose-side parallelism guidance lands with stream lanes (S5), level-gated on real width.
+  - D19: stream lanes cold-start (v1) — no cross-process fork; the fork is a context-budget optimization, not a correctness need.
+  - D20: phases serialize — a phase's lanes drain completely before completePhase; no unit of the next phase scheduled before the phase closes.
+  - D21 (ruled 2026-10-01, user): the landing-conflict response is level-derived — low blocks immediately (a conflict at low is a plan defect); medium/high allow one session-assisted repair then block; level-dependent Touches admission and per-conflict shape classification both rejected.
+  - §5: same-tree concurrency with path-scoped staging rejected; in-process lanes rejected (one crash takes every lane; module state would need per-lane threading); lane = child of the parent runAll so the feature is complete on the CLI today.
+  - §11 item 6 / §12: lane log retention — the worktree's .auto/logs/ discarded at teardown; the parent's relayed audit log keeps the run story.
+  - addendum (S1): readyUnits' disjointness is also checked within the same call's admits — the returned batch must be mutually disjoint; laneEligible's reach test is overlap, not strict containment; laneOutcome maps unnamed pairs conservatively (absent report = orphan; code/report contradiction = blocked, never land).
+  - addendum (S2): dispatch writes the runtime fields after the spawn; .gitignore rides in the scaffolding copy; a landing conflict blocks immediately in S2 (low posture); the report's commits list is base..HEAD of the worker's own start; lane usage books into an additive per-unit lanes section, never the parent buckets; the switch takes on|off per the registry's uniform grammar.
+  - addendum (S3): the isolation switch outranks the scheduler; orphan recovery runs only when the scheduler is active; the landing merge resolves parent-owned conflicts itself (the phase index, later the owning task's checklist, re-derived in step ③); the repair merge is driver-side; --wait-between pauses between landings.
+  - addendum (S4): the relay drops empty lines; the report detail folds into the phase and round buckets, never the task bucket; wall time never folds; the booked honesty marker; the lanes roll-up line lives in the round-complete block only; lane events emitted from dispatchLane/landLane and the loops.
+  - addendum (S5): the split RECORD — not the state files — makes a checklist stream lanes; the unit-done outcome word for a lane that closes its unit without completing the task; syncChecklistTicks on the landing-sync commit; clearLane drops a stale in_progress mark; the cold delta carries the question rule.
+  - addendum (S6): teardown retries plain-once-then---force with waits between; the path guard is platform-gated and join-built; 0036's and 0051's notes land as status blockquotes.
+  - addendum (§8 registrations): S3 appended --merge <branch> and Auto-Stage: merge-repair; S4 appended the detail field; S5 typed the split field (items/baseline) and the stream lane unit id T-NNN.S<nn>.
+- Supersession: Status (2026-10-02): "retired — all six stages landed, §13 holds the implementation record … this document is preserved as the design's historical record and is not maintained against later code (the plans/ convention)." S6 wrote supersession notes on 0036 (executional half superseded) and 0051 (fully absorbed, D1/D3 named as built); the header had already declared 0051 retired into this document.
+- Principle candidates (verbatim):
+  - "`Touches` remains **advisory**: a wrong declaration surfaces as a landing conflict (D7), never as corruption — defense in depth, not trust." (D5)
+  - "The admission rule is deliberately **level-independent** — it is the guard against both reported conflicts and silently-completed semantic merges (D21 records why it never relaxes); the level's merge-relevant meaning lives in the anomaly budget, not here." (D5)
+  - "the scheduler's degenerate mode, preserving correctness over width" (D4)
+  - "Nothing lane-local survives teardown except what git carried." (D6)
+  - "rejected because the failure that matters is the merge git *silently completes*: two lanes editing different hunks of one function produce a clean textual merge and broken semantics, invisible to every gate (the lanes' `Result:` lines predate the merge)." (D21)
+  - "Under D5 the "vast majority merges directly" property holds **at every level by construction** — scheduled lanes have disjoint `Touches`, so landings merge changesets with no overlapping paths at all, the trivially safe kind." (D21)
+  - "rejected as unverifiable inference; the attempts cap is already the deterministic automatic escalation this house style permits." (D21)
+  - "no lane terminal text is ever parsed (F13's rule)" (D13)
+  - "land the blocked lane's committed work (failure keeps its commit, per the completion invariant)" (§6.2 failure matrix)
+  - "same loops, same prompts, same goldens — the 0036 D17 guarantee carried forward" (D10)
+  - "the fork is a context-budget optimization, not a correctness need, and cold start sidesteps the fork guard entirely." (D19)
+  - "The costs it accepts — a preflight per lane, an agent server per lane (see Risks), spawn latency per task — are bounded and optimizable later (server reuse via `--server`, F13's daemon), while the in-process model's costs are structural." (§5)
+  - "**Landing conflicts** are the designed failure: `Touches` lies sometimes;" (§10)
+  - "block-with-path as the terminal failure (never silent loss)" (§10 Windows)
+  - "D15 words the rule as "paths under a root"; the parent covers them, and a lane that cannot land is a wasted dispatch" (§13 S1)
+  - "a record naming a pid that was never spawned would read as a dead orphan" (§13 S2)
+  - "the conflict is between two redundant views of a file the parent owns; nothing semantic is auto-decided (any other conflicted path still blocks)." (§13 S3)
+  - "inventing an automatic semantic resolution is exactly what D21 rejects." (§13 S3)
+  - "a switch that pins "one lane at a time" is the more specific intent than the run's `--max-sessions` width." (§13 S3)
+  - "a report an older shape wrote leaves lane-local figures the totals do not include, and the line must not claim otherwise." (§13 S4)
+  - "the plans/ convention stacks dated status notes at the head (0046's pattern) rather than rewriting the original status text — the originals stay preserved, each note naming what superseded what and where the kept rulings are recorded." (§13 S6)
+- Code touchpoints: src/lanes.ts (new), src/tasks.ts, src/git.ts, src/git-ops.ts, src/loop-task.ts, src/loop.ts, src/loop-preflight.ts, src/shell.ts (laneLauncher), src/switches.ts, src/runner.ts, src/execute.ts, src/stats.ts, src/conclusion.ts, src/status.ts, src/run-status-schema.ts, src/document/unit.ts, src/resume.ts, src/resume-gate.ts, src/protect.ts, src/gitignore.ts, src/agent-pool.ts, src/chain-transitions.ts, src/handover.ts, src/quota-windows.ts, src/numbering.ts, src/lock.ts, src/engine/events.ts, src/testrun.ts, src/split.ts, src/docpaths.ts; packages/auto (_lane hidden subcommand, README, e2e); templates (decompose family, whole-task split clause, fanout delta); test/lanes-scheduler.test.ts, test/lanes.ts, test/import-direction.test.ts, test/git.test.ts, test/loop-preflight.test.ts, test/loop-isolation.test.ts, test/stats.test.ts, test/loop-conclusion.test.ts, test/tasks.test.ts, test/run-status-schema.test.ts, test/prompt-exec.test.ts, test/golden.test.ts, test/session-opts.test.ts, test/document-roles.test.ts, test/fixtures/lane-worker.ts; docs/structure.md, docs/shell-contract.md §C/§E, docs/glossary.md, AGENTS.md.
+
+## 0069-system-review
+- Date: 2026-10-02 (Status "review, 2026-10-02"); §8 execution record written 2026-10-03.
+- Trigger: A whole-project review grounded in the 0064 final vision, covering the person's three axes — goals & architecture convergence/debt, feature pruning of unlanded early designs, and documentation & reference governance of plans/.
+- Rulings:
+  - The project has converged and converged well; all four differentiator axes structurally present, all five fences hold in code; the consolidation left no parallel spines (§0, §2.1).
+  - Architecture debt is concentrated in three items: session.ts's closure web with 5× fork-seeding scaffold; duplicated ondemand-handover / lane-exit / recovery-ladder logic; two dead protocol fields tests keep exercised (§0.1, §2.2).
+  - Refactor recommendations ordered R1–R5: extract fork-seeding helper, one ondemand-handover engine, one recovery-ladder module, dead-vocabulary deletion, the role registry as the positive-architecture move (§2.3).
+  - Keep all three window systems (availability, tariff pause, learned quota resets) — merging couples run-level and learned state for zero shared semantics (§2.4).
+  - The compensation audit is blind: add three per-model counters (probe failures, length continuations, step-ups) or the quarterly audit cannot judge three of the five named compensations (§2.4).
+  - Feature pruning: exactly one hard discard (--track-fixme, zero code); the real debt is three decide items for the person (STRICT_RESUME, TASK_CONTEXT, _DECOMPOSE_FINE), one live defect list (0065 F1–F4), five retain-by-design roadmap items (§0.2, §3.2).
+  - The person's "many stage-assist docs should be deleted" hypothesis refuted — of 68 documents exactly one merits deletion (0028, self-scheduled); the real defect is stale status headers (§4.1, §6.1).
+  - Proposed standing rule: a plan document's Status line is updated once, at the landing commit of its own unit (§4.1).
+  - Correction procedure: four ordered commits — status banners A2–A8; authoritative-index truth A9–A12; 0028 deletion + pointer hygiene A1; executable-spec self-description A13–A14 (§4.4).
+  - The single most urgent finding: the 0067 program ran off a document whose header still said "not chartered" — the plans/ convention's control bypassed by the thing it governs (§0).
+  - The executable-spec claim substantially holds; weakest points: front matter misdescribes itself; three modules lack same-named suites; the core/shell contract has no enforcement leg (§5.1).
+  - Six decisions reserved for the person: deletion-convention change, the three switch decides, boundary-UX ownership, 0035 disposition, A14 wording + note placement, falsifier evaluation and T-3 re-read ownership (§6).
+  - §8: the review adopted directly as nine execution units T-105..T-113 (2026-10-02) — the four documentation commits, R4 dead-vocabulary deletion, the register smalls, the compensation counters, the runIsolationLoop suite, the 0065 fix unit.
+  - T-105: banner-only corrections in seven stale plans headers; six gained the missing eof terminator; 0005's wording deviates from Appendix A because the tree contradicts "all" (§8).
+  - T-106: AGENTS.md protocol-string line rewritten to the closed flip truth, 0035 disposition left unruled; 14→13 call corrections in structure.md and 0064; --track-fixme README claim corrected (§8).
+  - T-107: plans/0028 deleted; A1 folds the deleted review descriptively, token-free; 0035's closure note not taken — the disposition is the person's (§8).
+  - T-108 (reconstructed per AUTO-RESOLVE): import-direction lanes comment names live production callers; auto-server request.ts comments re-attribute the maxSessions limit; the user-facing fail message byte-identical — the shell owner's reserved call (§8).
+  - T-109: LadderFacts.registry/ringLength and the write-only failover field deleted; a third dead arm (nextStep's spent-window recover branch) retired beyond the register; seven turn-trace goldens hand-edited under the freeze rule (§8).
+  - T-110: register smalls D7/D8/D9/D11–D14 — shared helpers, not parameter-threading; routingOf parameter-injected so routing.ts cannot join SERVICE_ENTRIES; SERVICE_ENTRIES shrunk to five (§8).
+  - T-111: three compensation counters in the existing one-word caliber, additive only, no decision/pruning/ordering logic; late step-ups count the same as steered ones (§8).
+  - T-112: a suite for runIsolationLoop driven through the exported runTaskLoop; the floor compared at the outcome level; the landing-conflict construction note preserved (§8).
+  - T-113: 0065 F1–F4 fixed — the fresh item re-read before subtaskArtifactProblems; directory declarations rejected at decompose time; status caps checklist titles; F1's deeper move (source of truth to S<nn>/todo.md) not taken (§8).
+  - addendum: environment findings stated once at the §8 head — no global git identity on this host (GIT_CONFIG_GLOBAL workaround, never GIT_AUTHOR_*); git 2.43 inits master; macOS hosts diverge in the opposite direction (§8).
+- Supersession: none seen (the review's own recommendations were executed by its §8 record; its §6 person-decisions were later ruled by 0070 §5.1, but the document carries no supersession marker of its own).
+- Principle candidates (verbatim):
+  - "every claim below carries a `file:line` / `doc §` citation or a named census — the evidence rule bound every unit" (Status)
+  - "it changes nothing — every recommendation becomes its own executional unit later." (Status)
+  - "The project has converged, and converged well." (§0)
+  - "the debt is concentrated, not diffuse" (§0)
+  - "No shape bypasses the unified commit — the completion-condition fence holds everywhere." (§2.1)
+  - "the codebase retires its own dead designs on schedule" (§3.1)
+  - "The residual is not dead code but **unruled decisions and stale documents**." (§3.1)
+  - "the preserve-originals default is load-bearing (provenance is cited forward by living docs: 0050 ×119 out-references, 0061 ×78)." (§4.1)
+  - "live-reference = named baseline of a running mechanism, no successor rewrite; historical-record-keep = unique decision provenance (convention default); retire-and-delete = only when self-scheduled or a pure consumption list, everything verifiably landed, and no kept doc needs it" (§4.1)
+  - "Proposed standing rule: *a plan document's Status line is updated once, at the landing commit of its own unit* — cheap, mechanical, and it would have prevented all seven." (§4.1)
+  - "Boundary UX grew core surface under a consumers-not-core promise — watch that auto-server's requests keep landing as core seams, not core policy." (§1.4)
+  - "the spec's front matter misdescribes itself (A9/A10 — the cheapest, most corrosive erosion)" (§5.1)
+  - "the core/shell contract has **no enforcement leg**" (§5.1)
+  - "the three ratchets are genuine bidirectional locks; retirements are themselves pinned by negative tests" (§5.1)
+  - "If the person wants a smaller plans/ anyway, that is a change to the two-tier convention (AGENTS.md), not a correction of drift — it should be ruled as such." (§6.1)
+- Code touchpoints: src/session.ts, src/execute.ts, src/loop-task.ts, src/runner.ts, src/artifact.ts, src/resume-gate.ts, src/lanes.ts, src/status.ts, src/stats.ts, src/conclusion.ts, src/switches.ts, src/services.ts, src/session-api.ts, src/routing.ts, src/select.ts, src/agent-pool.ts, src/ladder.ts, src/chain.ts, src/engine/result.ts, src/git-ops.ts, src/loop-preflight.ts, src/run-status.ts, src/interactive.ts, src/run-status-schema.ts, src/engine/events.ts, src/document/spec.ts, src/agent/types.ts, src/keyring.ts, src/agent-env.ts, src/document/roles.ts; plans/ headers (0002, 0005, 0009, 0011, 0053, 0066, 0067, 0028 deleted, 0035, 0063, 0064, 0065); AGENTS.md, docs/structure.md, ../auto/README.md, ../auto-server/src/request.ts; test/import-direction.test.ts, test/ladder.test.ts, test/watch.test.ts, test/agent-fake.test.ts, test/loop-isolation.test.ts, test/lanes.ts, packages/quota (0066 landed).
+
+## 0070-driver-docs-governance-and-round-transition
+- Date: 2026-10-03 (Status "ruled, 2026-10-03"; drafted at the person's direct instruction the same day; executed as T-114..T-129 the same day).
+- Trigger: Drafted at the person's direct instruction after three read-only investigations (reference census, code-coupling audit, per-task value census of 113 task dirs) to decide the target repo's corpus distillation/deletion and the R-01→R-02 transition.
+- Rulings:
+  - The coupling between the driver's code and the target's task documents is mechanical, not informational — three live obligations (task index, done-id globs, the current unit's files); nothing extracts content from completed task documents (§0.1, §1).
+  - Deletion is mechanically safe after distillation, and only after — the P01 close's handover distillation reads the phase's task documents, so deletion waits for the round close (§0.3).
+  - Distill-then-delete: distillation targets the B/C clusters; the A majority needs none; all products land in durable homes following the corpus's own pattern (§3.1).
+  - Distillation units D-1..D-5: 0067 gains an implementation record; 0069 gains §8; measurement/incident dirs folded; docs/temp analyses appended to 0015/0022; deliverables-guide refresh (§3.2).
+  - Deletion policy: delete all A-class dirs plus their 106 index lines in one commit; keep docs/R-01/ in full, docs/agents/, and initially T-109..T-113; zero-deletion alternative documented (§3.3).
+  - The R-01→R-02 transition uses shipped machinery only: amend phases "m"→"mk", run (P01 close with handover distillation, k phase produces kb.md), round close, plan establishes R-02 with the digest injected (§4).
+  - P-1: promote OPENCODE_AUTO_STRICT_RESUME to default-on (20 tests, 17+ days gray, no field incidents).
+  - P-2: discard OPENCODE_AUTO_TASK_CONTEXT (ownerless wording knob).
+  - P-3: keep _DECOMPOSE_FINE (5 days old, consciously ruled).
+  - P-4: charter the boundary-UX standing track, sanctioning its core seams, rather than folding under auto-server (→ 0071).
+  - P-5: 0035 retired-as-history (flip program closed; A9 already fixed).
+  - P-6: A14's user-facing refusal message and the root-plan note placement — shell-owner/convention choices.
+  - P-7: schedule the 0063 T-3 trigger re-read (verdict executed: no Rust spike, recorded in 0063 §5).
+  - P-8: own the falsifier evaluation (~2026-12) in R-02 and build the minimal publish-the-record artifact (U-7) as its instrument.
+  - P-9: sequencing — the role registry (R5) after U-1 (registry-first converts the refactors' surgery into descriptor work).
+  - P-10: approve §3 (distill-then-delete), §4 (transition) and the deletion extent as written; keep T-109..T-113 initially.
+  - Execution units U-1..U-10 defined (refactors R1–R3, D5/D10 merges, role registry, distillation, publish-the-record artifact, e2e stabilization, smalls, 0057 S0 captures); U-10 open by design, gated on the next spent quota window (§5.2, Status).
+  - Deleting task dirs without removing their tasks.md index lines bricks the run — deletion always pairs dirs + index lines + one commit, a manual operation by design (§1.3).
+- Supersession: none seen (Status records execution of P-1..P-10 and the open-by-design items; no retirement language).
+- Principle candidates (verbatim):
+  - "**The coupling between the driver's code and the target's task documents is mechanical, not informational.**" (§0.1)
+  - "Specific task numbers appear in code and plans only as provenance citations (§1.2) that survive deletion via git history." (§0.1)
+  - "Knowledge distillation as the end of one round and the beginning of the next is exactly the shipped mechanism." (§0.4)
+  - "**Deletion is mechanically safe after distillation, and only after.**" (§0.3)
+  - "after deletion they resolve through the target repo's git history, which retains every task dir and every per-task commit ("T-NNN …" subjects) — the audit trail survives the working tree." (§1.2)
+  - "There is no driver command that does this; it is a manual operation by design (`src/reset.ts:8-10`: de-init never touches docs/ — "the work of humans and AI")." (§1.3)
+  - "Distill-then-delete." (§3.1)
+  - "All distillation products land in durable homes (plans/ implementation records, the deliverables guide), following the corpus's own pattern (0061 §10, 0068 §13)." (§3.1)
+  - "Git history retains everything; the audit trail (per-task commits) never leaves." (§3.3)
+  - "Where a ruling disagrees with a recommendation, the corresponding unit is dropped or reshaped, not silently overridden." (§6)
+- Code touchpoints: src/tasks.ts (loadPlan, doneTaskIds, takenTaskIds), src/document/unit.ts, src/phases.ts (prevRoundDigest, completePhase, routePhase, no-phase mode), src/knowledge.ts (extractKnowledge, priorKnowledgeDigest), src/loop-preflight.ts (start-clean gate, restoreTestHandoffs), src/reset.ts; plans/0067 (gains §8), plans/0069 (gains §8), plans/0059 §12, plans/0062, plans/0015, plans/0022, plans/0010 (referenced); docs/R-01/, docs/temp/, docs/agents/auto-core-deliverables.md, docs/T-001..T-113 (the target repo corpus).
+
+## 0071-boundary-ux-track
+- Date: 2026-10-03 (Status "chartered, 2026-10-03 — by ruling P-4 of 0070 §5.1").
+- Trigger: Ruling P-4 of 0070 chartered the boundary-UX standing track (0064 T3's first-class track), resolving 0069 §3.2's decide between chartering the track with its core seams and folding them under auto-server's ownership.
+- Rulings:
+  - The track is chartered as a standing document (the plans/ two-tier exception, sanctioned by P-4): scope decisions and contract changes append as dated records made in the same change as the code; nothing rewritten except where an appended record explicitly supersedes; retires only with the track itself (§0).
+  - Scope: five core seams owned — src/run-status-schema.ts, src/run-status.ts, .auto/run-status.jsonl, src/engine/events.ts (boundary-UX face only), src/interactive.ts (§1 table).
+  - The track owns the seam, not the module's every line; the machinery around a seam keeps its own home (§1).
+  - AUTO-DECISION: seam 4's ownership scoped to its boundary-UX face so 0071 and 0061 state one truth instead of two owners (§1).
+  - The core-seam sanction: the substrate is core; the consumers stay outside — four grounds (state-file protocol/run machinery; consumers outside any one shell; journal writes driver-exclusive; the track's measurement depends on it) (§2).
+  - Consumer contract: RUN_STATUS_EVENT_TYPES frozen additive-only; payload fields keep names/meanings, consumers tolerate new fields defensively; the three event vocabularies pairwise disjoint; join keys run/at/unit/task/subtask/session/lane (§3).
+  - Journal semantics: append-only within a run, one JSON line per event, truncated at each run start; the 1-based line number is the event id; recording best-effort; the emitter inert after run-end (§3).
+  - The landing rule: core seams vs shell UX decided by one question — does a machine consume it, or does only a human see it; shells never modify the core, extension points go core-first (§4).
+  - Contract-change rule: any change to the contract appends its record to this charter in the same change — the charter travels with the vocabulary (§3).
+- Supersession: none seen (standing charter; "The charter retires only with the track itself, and then by a final dated record saying so." §0).
+- Principle candidates (verbatim):
+  - "scope decisions and contract changes append here as the track grows, as dated records made in the same change as the code they describe; nothing already written is rewritten except where an appended record explicitly supersedes it." (§0)
+  - "The track owns the seam, not the module's every line." (§1)
+  - "**the substrate is core; the consumers stay outside.**" (§2)
+  - "code two shells share lives in core and nowhere else." (§2 ground 2)
+  - "Writes into a target's `.auto/` belong to the driver alone — the constitutional line the daemon's own guard pins" (§2 ground 3)
+  - "only the core's run can be the writer, so the writer's vocabulary is a core decision." (§2 ground 3)
+  - "a name never renames or removes, and the planted-rename ratchet is the enforcement." (§3)
+  - "consumers tolerate new fields (defensive parsing — a line that does not parse is skipped, never an error)." (§3)
+  - "The three vocabularies — `RunStatusEvent`, `AgentEvent` (`src/agent/types.ts`), `RunEvent` (`src/engine/events.ts`) — stay pairwise disjoint by event-type name (the driver-level failure event is `failure`, never `error`)." (§3)
+  - "a kill -9'd run leaves complete lines and **no `run-end`**; the missing bracket and the stale lock are that story, and the next run's `run-start` opens a fresh journal (a shrink is a new run)." (§3)
+  - "Recording is best-effort: a journal that cannot open does not exist, and a write failure is silenced — never a run failure." (§3)
+  - "After the run-end bracket the emitter is inert: no event is ever stamped under a dead run's id." (§3)
+  - "**Never log prose**: SSE payloads are the typed vocabulary only — the no-scraping rule the schema module itself carries; the log's lines are for humans." (§3)
+  - "nothing else about the seams' internals (poll cadence, file-descriptor mechanics, emission timing beyond event order within a run) is contract." (§3)
+  - "the charter travels with the vocabulary, or it is not the contract." (§3)
+  - "Where a piece of future boundary-UX work lands is decided by one question: **does a machine consume it, or does only a human see it?**" (§4)
+  - "shells never modify the core, extension points go core-first." (§4)
+  - "the no-scraping rule runs both ways: a shell never parses prose for a fact a machine should have been given as data." (§4)
+- Code touchpoints: src/run-status-schema.ts, src/run-status.ts, .auto/run-status.jsonl, src/engine/events.ts, src/interactive.ts, src/loop-preflight.ts, src/loop.ts, src/control-types.ts, src/agent/types.ts; test/run-status-schema.test.ts, test/run-status.test.ts, test/interactive-seam.test.ts; packages/auto-server/src/observe.ts, packages/auto-server/src/worker.ts (wsInteractive), packages/auto-server/test/status-events.test.ts, packages/auto-server/test/no-target-writes.test.ts, packages/auto-server/web/, packages/auto-server/docs/daemon.md, packages/auto-server/README.md; docs/shell-contract.md.
+
+## 0072-agents-md-retirement-and-prompt-consolidation
+- Date: 2026-10-03 (proposal, amended same day); ruled 2026-10-04 (all three rulings as recommended); U-A (T-130) and U-B (T-131) executed 2026-10-04.
+- Trigger: Behavioral rules travel in three manually-synced carriers (the AGENTS.md block, the agent contract, the prompt partials) with no audit ever checking them against each other — the drift already real (REFS_SPEC pointing at a document no target directory holds).
+- Rulings:
+  - Amendment 2026-10-03: the first draft's AGENTS.md-block retirement is dropped — the block stays as the constitution layer (re-weighed against 0076's standalone prompt-session direction, which the split makes load-bearing) (Status, §1).
+  - Keep all three carriers, give each rule exactly one owning layer, mechanize the sync; the disease is the manual sync, not the carrier count (§1).
+  - U-A: a read-only contradiction audit with an audience tag per rule (every session → block, driver sessions → contract, this role → partial) — the tag decides the owning layer, the person approves the mapping (§2).
+  - U-B: one wording per rule at its owning layer; agents-block.ts constants become the single source (block + 0076's constitution preamble, one source two renderings) plus a drift ratchet test failing on any other carrier restating a constitution rule (§2).
+  - Dropped from the first draft: the preflight janitor, protect/gitignore/call-site removal, agents-block test deletions — the block is permanent (§2).
+  - Ruling 1 (2026-10-04): layer ownership decided by the audit's audience tag (§5).
+  - Ruling 2 (2026-10-04): agents-block.ts constants as the single source (block + preamble + ratchet) (§5).
+  - Ruling 3 (2026-10-04): U-A then U-B as separate units (§5).
+  - Audit cadence in force: any later edit to a carrier reruns §6's contradiction case before it lands (Status, §4).
+  - U-A findings: 4 contradictions (K1 question-policy branches, K2 dryrun vs summary prohibition, K3 test-rule command class, K4 ungated t-phase duty), 12 duplications (K5–K16), 3 stale (K17–K19), zero unclassified instances in the coverage ledger (§6).
+  - U-B executed: contract slimmed to driver-operational protocol (item 3 rewritten branch-invariant, item 5 deleted); state-rule deleted whole with its 14 include sites cleaned; decompose constraint 4 and the four planning/handover constraints slimmed; wrapup points at the block's reference conventions; dryrun's final message named as the run's highlights channel; the t-phase duty gated on testByDriver (§7).
+  - Ratchet: test/constitution-ratchet.test.ts with a constant-derived probe table, a banned table of retired restatements verbatim, a zero-hit flat rule, planted-restatement self-tests, and the preamble/block equivalence (§7).
+  - AUTO-RESOLVE (T-131): E2a's fold into the block cannot execute — the block's rendered bytes are frozen by the 0072 amendment; the chmod gap stays open until a sanctioned block change (K15, K17 same reason) (§7).
+  - AUTO-DECISION (T-131): item 3 rewritten to its branch-invariant core — "stay" read as "stay in the contract", not "stay frozen" (§7).
+  - Deliberately not executed: K11's mechanical dedup of six byte-identical decompose files; K12's shared handover core; K18/K19's stale maintainer comments (§7).
+- Supersession: In-document: the first draft's retirement proposal superseded by the 2026-10-03 amendment ("the retirement is **dropped** — the block stays as the constitution layer", Status). K10 notes the 0061 R6 replacement text was being maintained in two places (now consolidated here). Otherwise none seen.
+- Principle candidates (verbatim):
+  - "every behavioral rule reaches every session exactly once, from one source, contradiction-free under every parameter decision." (Status)
+  - "The disease is the manual sync, not the carrier count." (§1)
+  - "Retiring the block would leave the sessions the person drives inside other coding agents with no rule carrier at all." (§1)
+  - "So: keep all three carriers, give each rule exactly one owning layer, and mechanize the sync." (§1)
+  - "The ratchet is wording-based: paraphrase drift (same rule, different words) is caught by the audit cadence, not the ratchet." (§4)
+  - "the unit of "rule instance" is one carrier wording that must be kept in sync by hand — a block paragraph, a contract item or clause, a partial section, an inline protocol text in a template, an intent subsection." (§6.1 AUTO-DECISION)
+  - "A `{{> partial}}` reference is a *use* of the partial's instance, not a second instance (uses cannot drift on their own);" (§6.1 AUTO-DECISION)
+  - "the block's rendered bytes are frozen by the 0072 amendment" (§7 AUTO-RESOLVE)
+  - "the regression arm — the collapsed paraphrases return loudly, not silently" (§7)
+- Code touchpoints: src/agents-block.ts (CONSTITUTION export, renderConstitutionPreamble, renderAgentsBlock), templates/.opencode/agent/auto.md, templates/prompts/_partials.md, templates/prompts/*.md (whole.md, subtask.md, decompose.md + decompose-{a,d,k,m,t,v}.md, implement-plan.md, phase-plan.md, phase-append.md, phase-handover.md, wrapup.md, dryrun.md, fanout.md, knowledge.md, prior-knowledge.md, split-rejected.md, test-continue.md, test-result.md, test-wrapup.md, handoff-steer.md, usage-note-*.md, classify-error.md, context-base.md, digest-index.md, number-recovery.md, stuck-hint.md, step-up.md), templates/intents/default.md, templates/modes/; src/prompt.ts, src/config-fix.ts, src/resolve.ts, src/document/roles.ts; test/constitution-ratchet.test.ts, test/golden/ (49 golden files incl. agent-contract-{plain,testbydriver}.golden.md, 33 regenerated), test/template.test.ts, test/prompt-template.test.ts, test/prompt-exec.test.ts, test/prompt-phase.test.ts, test/lanes.ts.
+
+## 0073-git-bootstrap-at-init
+- Date: 2026-10-03 (proposal, per the person's ruling of 2026-10-03); ruled 2026-10-04 (all three rulings as recommended).
+- Trigger: A non-git target directory is a silent degradation tier — init succeeds outside any work tree, so the unified commit (the constitutional completion condition) is silently disabled and the person discovers the missing history late.
+- Rulings:
+  - In init only (amend/fix/run unchanged), when the target is not inside any git work tree: git init -b main (honoring init.defaultBranch) before the identity probe and ensureInitGitignore, printed loudly (§2.1).
+  - Identity resolution order: a resolving global/GIT_* identity → proceed; --name/--email at init → written as local config in the new repository, never --global; neither → refuse with today's message plus the new-flags hint (§2.2).
+  - Auto-writing the opencode-auto@local fallback identity deliberately NOT done at init — explicit identity keeps history attributable (§2.2).
+  - The existing identityArgs fallback reconciled with one comment block each: init demands an explicit identity for the target root; the fallback covers only nested repositories the person brought in (§2.3).
+  - Nested repositories untouched; the non-git production tier effectively disappears (tests keep their seam) — a conscious behavior-contract change recorded in the README's environment notes (§2 scope notes).
+  - No --no-git escape hatch (§3).
+  - No auto-detection of "the person deliberately avoids git" — undecidable; the loud print is the disclosure (§3).
+  - Ruling 1 (2026-10-04): approve auto-init as the default in non-git directories, no escape hatch (§5).
+  - Ruling 2 (2026-10-04): identity refusal when no global identity and no flags, rather than auto-writing the local fallback (§5).
+  - Ruling 3 (2026-10-04): branch fallback main (honoring init.defaultBranch first) (§5).
+- Supersession: none seen.
+- Principle candidates (verbatim):
+  - ""committing is the completion condition" (plans/0021, constitutional) is silently disabled" (§1)
+  - "never `--global`; the tool never edits the person's global config" (§2.2)
+  - "Explicit identity keeps history attributable; auto-writing the `opencode-auto@local` fallback identity is deliberately NOT done at init." (§2.2)
+  - "init demands an explicit identity for the **target root**; the fallback covers only **nested repositories the person brought in**." (§2.3)
+  - "a git-less production run is precisely the silently-broken state this closes; the person who truly wants no git can say so by not running the driver (or by a later ruling if field demand appears)." (§3)
+  - "No auto-detection of "the person deliberately avoids git" (undecidable; the loud print is the disclosure)." (§3)
+  - "an initialized empty repo is `rm -rf .git` away from undone" (§4)
+- Code touchpoints: src/git.ts (commitIdentityProblem, identityArgs), src/gitignore.ts (ensureInitGitignore), the README's environment notes (packages/auto README); the e2e side pre-stabilized by T-127/U-E1.
+
+## 0074-branch-isolation-landing
+- Date: 2026-10-03 (proposal, per the person's ruling of 2026-10-03); ruled 2026-10-04 (all four rulings as recommended).
+- Trigger: The unified commit is per-session and nested-repos-first, so a nested deliverable repository receives one driver commit per session on whatever branch is checked out — unusable history for an upstream/PR-workflow repository; the person asked to land all of a round's work back as one commit.
+- Rulings:
+  - The originally requested mechanism (back up and remove the nested .git, work under the outer repository's git, restore at a final commit) rejected after assessment: it fights the machinery at every layer, opens an uninsured crash window, does not generalize, and relocates the audit trail (§1).
+  - Branch isolation instead: a new constitutional config key (init flag --isolate <rel-path>, repeatable, amend per-key; name avoiding the tombstoned source/destDir) designating nested repositories; the driver's own record repository is never a member (§2.1).
+  - Isolation at round start: each designated clean nested repo gets branch auto/R-NN created from its current HEAD and checked out — zero changes to git.ts's commit/rollback paths; the person's original branch never moves (§2.2).
+  - A dirty designated repo at establishment blocks listing the paths — a person decision (same class as the run-start clean gate) (§2.2 implied, §3 U-L1, §4).
+  - Landing: person-invoked opencode-auto land <dir> — refuse (exit 2) if the original branch moved or foreign commits mixed into auto/R-NN's range; otherwise check out the original branch, apply the round's net change as one commit (default git merge --squash), delete the branch (--keep to retain), print the landed SHA; landing mid-round allowed; land --abandon the undo path after a person-reviewed reset (§2.3).
+  - Lanes interplay: round-level isolation orthogonal to unit-level worktree lanes; one e2e case of lanes inside an isolated repo must be pinned (§2.4).
+  - The audit-trail trade-off stated, not hidden: after land the deliverable holds one commit, the full per-unit trail remains in the driven root's git (§2).
+  - Unit split U-L1 (core: key + isolation + refusals), U-L2 (shell command land + README), U-L3 (tests incl. the lanes-inside-isolation case) (§3).
+  - Ruling 1 (2026-10-04): approve the branch-isolation mechanism, rejecting the .git-removal design (§5).
+  - Ruling 2 (2026-10-04): command name land (over commit — avoids colliding with the "sessions never commit" doctrine) (§5).
+  - Ruling 3 (2026-10-04): default landing mode squash-one-commit with --merge the explicit alternative (§5).
+  - Ruling 4 (2026-10-04): config surface — key isolate (a list of relative paths) and the init flag --isolate (§5).
+- Supersession: none seen (the .git-removal mechanism was rejected at birth, not superseded).
+- Principle candidates (verbatim):
+  - "All existing per-unit machinery keeps working because nothing about the nested repository's git changes except **which branch is checked out**:" (§2)
+  - "The person's original branch never moves." (§2.2)
+  - "The audit trail trade-off is stated, not hidden: during the round the per-unit record lives in the working repository + the isolated branch; after `land` the deliverable's history holds one commit, and the full per-unit trail remains in the driven root's git — which is exactly the 0064 record model (the driven root is the process layer of record; the deliverable repository is the person's to curate)." (§2)
+  - "`land` on a diverged original branch is a conflict surface by design: refusal, never an automated merge resolution." (§4)
+  - "must name the repo and stay a person decision (the same class as today's run-start clean gate)" (§4)
+  - "The isolation branch left behind by an abandoned run is recoverable state, not corruption: `land --abandon` and plain git both address it; preflight reports it." (§4)
+- Code touchpoints: src/git.ts (commit/rollback paths unchanged, repoRoots walking referenced), the new isolate config key (config surface), the shell command land (packages/auto, opencode-auto land), README section; the init gitignore's nested-repo entries, per-repo SHA baselines, rollback's stash/reset, close-out's foreign-commit detection (all named as the machinery the rejected design would have fought).
