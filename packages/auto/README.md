@@ -2181,4 +2181,26 @@ halts:
   rerun
   `opencode-auto run` to resume from the block.
 
+## Security posture and boundaries
+
+The guardrails this tool ships are accident prevention, not security boundaries — where a hard security
+property is required it is stated as a requirement, never assumed from a guardrail (the design
+constitution's boundary disclaimer, `packages/auto-core/docs/principles.md`):
+
+- **Read-only protections** — during `run` the driver makes the config files, the project brief, AGENTS.md
+  and the registry's project layer read-only and restores write access at run end: a guard rail against
+  accidental writes by the sessions it spawns; a same-user process can still bypass it.
+- **Driver-run test scripts** (`--test-by-driver`) — bypass the agent's permission system as a convenience
+  trade-off, equivalent to running the tests locally yourself.
+- **The standing hard security requirement** — the secrets family: registry keys and env values are
+  references (`{env:NAME}` / `{file:path}`), never literals, and logs, `models` output and error lines name
+  the reference, never a value (see the model registry section).
+- **The agent server** — the managed `opencode serve` child's lifecycle belongs to this tool (auto-start,
+  restart, shutdown; see "opencode server and agent selection"); an external instance reused through
+  `--server <url>` / `OPENCODE_AUTO_SERVER` is the operator's own to secure and repair.
+- **The headless service shell** — the daemon behind `opencode-auto-server` carries its own operational
+  security posture (the target-directory allowlist, token auth with scopes, the loopback-by-default bind,
+  the POST-not-GET model probe); it is documented with that package (`packages/auto-server/docs/daemon.md`),
+  not here — this CLI shares only the core with it.
+
 <!-- auto: eof -->
