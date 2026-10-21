@@ -55,7 +55,7 @@ The plans/0110 design-principles distillation lands: the constitution layer `doc
 
 **Findings disposition.** F1–F8 recorded as follow-up work items in plans/0110's Execution record, each awaiting its own later ruling: F1 "no speculative machinery" and F2 "refactor invariance" (missing-principle candidates); F3 development-process rules (home question); F4 security-boundary disclaimer; F5 shell-side auth posture (the shells' own docs); F6 demotion confirmations (no action); F7/F8 symbol-attribution corrections (already applied in the landed principles.md).
 
-**Version practice.** Documentation-layer in this release: no git tag is cut and the package version stays untouched; the maintainer may tag later.
+**Version practice.** Documentation-layer in this release: the package version stays untouched; the `v0.1.0` git tag was cut by the maintainer later the same day (2026-10-21), pointing at this release's commit.
 
 ## v0.2.0 — 2026-10-21 — the audit-findings ruling round
 
@@ -85,4 +85,4 @@ The plans/0111 audit-findings ruling round lands: the 0110 stage-4/5 audit findi
 - **F4 — adopted**: the boundary-disclaimer sentence, beside the secrets family.
 - **F5 — routed**: the shells' own docs at their next snapshot refresh; core unchanged.
 
-**Version practice.** Documentation-layer: no git tag cut, package version untouched (the v0.1.0 tag likewise remains open for the maintainer).
+**Version practice.** Documentation-layer: package version untouched; the `v0.2.0` git tag was cut by the maintainer on 2026-10-21, pointing at this release's commit (the `v0.1.0` tag likewise, at the constitution-landing commit).
