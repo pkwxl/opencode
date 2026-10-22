@@ -381,7 +381,7 @@ describe("the remediation kill switch (plans/0082 §5 D8)", () => {
   test("OPENCODE_AUTO_REMEDIATE clamps off without touching the rest of the snapshot", async () => {
     clampSwitches({ remediate: false })
     expect(autoSwitches().remediate).toBe(false)
-    expect(autoSwitches().planVerify).toBe(true)
+    expect(autoSwitches().planVerify).toBe(false)
     clampSwitches({ remediate: true })
     expect(autoSwitches().remediate).toBe(true)
   })

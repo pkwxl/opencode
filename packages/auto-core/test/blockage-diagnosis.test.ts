@@ -7,7 +7,7 @@
 // the two-consecutive-reblocks suspension prints the static message with the
 // audit pointer; and the write-time handover check (§10 D14a) fails closed
 // after exactly one re-distill, the blockage machinery owning the decision.
-import { afterAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -77,6 +77,17 @@ const contraryTurn = (diagnosis: (file: string) => string | undefined): ((dir: s
   diagnosisTurn(dir, diagnosis)(ctx)
     return artifactTurns(dir)(ctx) ?? undefined
 }
+
+// Every verifier-fail-closed case in this file needs the check on: the
+// switch defaults off since plans/0102, so the file clamps it on for its
+// own runs and restores the default after (the clampSwitches restore
+// idiom).
+beforeAll(() => {
+  clampSwitches({ planVerify: true })
+})
+afterAll(() => {
+  clampSwitches({ planVerify: false })
+})
 
 describe("the blockage diagnosis session (plans/0082 §4-§6, the agent-fake cases)", () => {
   afterAll(() => {

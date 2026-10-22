@@ -328,7 +328,7 @@ export type LoopFixture = {
   // ctx, not the opts; opts.stopBefore is plan's stop condition). routing is
   // the LoopCtx field runAll fills from the loaded registry — the harness
   // takes it the same way for the cases that need one (the plan verifier's
-  // classifier entry, plans/0080 §5).
+  // deep planning-route entry, plans/0080 §5 as amended by plans/0102).
   run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts; repl?: Interactive }) => Promise<LoopRunResult>
 }
 

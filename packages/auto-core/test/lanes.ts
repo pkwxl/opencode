@@ -152,6 +152,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/failback.test.ts",
   "test/formulate.test.ts",
   "test/formulate-synthesis.test.ts",
+  // The plan verifier's routing and activation surface (plans/0102): pure
+  // registry walks and skip reasons over temp directories, no spawn.
+  "test/prompt-verify.test.ts",
   "test/golden.test.ts",
   "test/handover.test.ts",
   "test/hibernate.test.ts",
