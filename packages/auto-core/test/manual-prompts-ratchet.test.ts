@@ -201,10 +201,18 @@ describe("manual-driver prompt ratchet", () => {
     }
   })
 
-  test("the run modes: window, sprint and pace, one phrase in the hand-over (plans/0089)", () => {
+  test("the run modes: window, sprint and pace, one phrase in the hand-over (plans/0089; window re-ruled by plans/0117)", () => {
     // Person-directed, chosen per invocation — no second file, no fill-ins
-    // in run.md: `mode: window <HH:MM–HH:MM> [tz]` parks launches inside
-    // the window (ongoing children finish); `mode: sprint <minutes>` walls
+    // in run.md: `mode: window <HH:MM–HH:MM>` is the working period (0117
+    // D5, re-ruled from 0089's prohibited stretch): local times, a range
+    // may span midnight, launches only inside it, every launch sized to
+    // the runway the end leaves (a task/fix child's budget the smaller of
+    // the default and the runway; ≥10 minutes of runway to launch a
+    // task/fix child, ≥15 for a verification/handover/planning child),
+    // the end a soft deadline the wrap-up alone may overrun slightly —
+    // new work never starts past it, and before the start the session
+    // holds polling or ends with a restart-at-the-start report.
+    // `mode: sprint <minutes>` walls
     // the whole run below the platform's task kill (a 3-hour kill →
     // sprint 175, the gap to the kill itself the landing margin), child
     // budgets the runway itself (wall − now, no second margin — relaunch
@@ -212,20 +220,63 @@ describe("manual-driver prompt ratchet", () => {
     // properly before the kill; `mode: pace <minutes>` pauses between
     // child sessions — the person's throttle against a rolling 5-hour
     // usage cap, waited in polled short steps, composable with window
-    // alone: its waits apply outside the window (inside it launches are
-    // blocked anyway), slowing the token burn of the working stretches
-    // (`pace` never rides with `sprint`: a wall-bounded run spends
-    // its runway on work, not on waiting).
+    // alone: its waits apply inside the window (outside it no launch
+    // happens anyway), slowing the token burn of the working stretches
+    // (`pace` never rides with `sprint` or `single`: a wall-bounded run
+    // spends its runway on work, not on waiting).
     // All share the park/resume rules that
     // override the begun-task boundary refusal, resuming off 0087's
     // committed shares.
     const run = text("run.md")
-    expect(run).toContain("`mode: window <HH:MM–HH:MM> [tz]`")
+    expect(run).toContain("`mode: window <HH:MM–HH:MM>`")
+    expect(run).toContain("the working period")
+    expect(run).toContain("times in this machine's local time")
+    expect(run).toContain("end is a soft deadline")
     expect(run).toContain("`mode: sprint <minutes>`")
-    expect(run).toContain("`sprint 175`")
+    expect(run).toContain("sprint 175")
     expect(run).toContain("`mode: pace <minutes>`")
-    expect(run).toContain("`mode: window <HH:MM–HH:MM> [tz] pace 20`")
+    expect(run).toContain("`mode: window <HH:MM–HH:MM> pace 20`")
     expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
+  })
+
+  test("the single-session mode: `mode: single <minutes>` folds every role into the one session (plans/0117)", () => {
+    // Some providers disallow child sessions outright — the delegated
+    // design rests on a facility they withhold. `mode: single <minutes>`
+    // names that shape: no child of any role is ever launched; this one
+    // session takes every role itself (master control, task, fix,
+    // verification, handover, planning), reading each companion as the
+    // rulebook of the role it holds — the companions' worker rules bind
+    // unchanged, their session-boundary rules (a child's budget, a
+    // child's final reply) read against the whole session. `<minutes>`
+    // is the wall — the one-hour child budget's whole-session
+    // replacement, set below the platform's kill (a 3-hour kill →
+    // single 175, sprint's arithmetic), the gap the wrap-up's room:
+    // settle the lanes, write the handoff, land the share, Finish — the
+    // wrap-up completes inside the gap even past the wall, and never let
+    // the platform kill the session mid-flight; context is the wall's
+    // twin, a voluntary cut the same way at any moment. Git is identical
+    // to the delegated run: one commit per role share at each role
+    // boundary, the same grammar and order — which makes verification
+    // self-verification (run-verify's checks and close-out by the same
+    // session), the loss of fresh eyes named in the report, the default
+    // phase-boundary stop the person's bracket. `parallel: <n>` never
+    // rides with it (a wave needs child sessions — both phrases are a
+    // stop and report), `window` alone composes (the working period
+    // gates the session's own work starts), and the park/resume restart
+    // re-keys one way: the successor takes the identified role up itself.
+    const run = text("run.md")
+    expect(run).toContain("`mode: single <minutes>`")
+    expect(run).toContain("no child session of any role is ever launched")
+    expect(run).toContain("the one-hour child budget's whole-session replacement")
+    expect(run).toContain("`single 175`")
+    expect(run).toContain("work, never the wrap-up: finish the step in flight")
+    expect(run).toContain("never let the\nplatform kill this session mid-flight")
+    expect(run).toContain("commit per role share at each role boundary")
+    expect(run).toContain("verification becomes self-verification")
+    expect(run).toContain("the verifications ran in the session that did the work")
+    expect(run).toContain("a wave needs child sessions")
+    expect(run).toContain("rides with `window` alone")
+    expect(run).toContain("the whole design rests on one of the two")
   })
 
   test("the facility-keyed launch: background-first for every run, foreground only forced (plans/0092)", () => {

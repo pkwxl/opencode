@@ -6,7 +6,9 @@ coding-agent session opened in the target directory, together with its five comp
 the session). There is nothing to fill
 in. The session takes the role of the driver (`opencode-auto run`) and executes **every** incomplete task of the
 current phase, one at a time — or, when the hand-over line names `parallel: <n>`, as concurrent waves of
-independent documentation-scoped tasks (the Parallel waves section): it determines the next ready task, launches task child sessions that carry the
+independent documentation-scoped tasks (the Parallel waves section) — or, when it names `mode: single`,
+with no child sessions at all, the one session itself in every role (the Single-session runs section): it
+determines the next ready task, launches task child sessions that carry the
 task to completion — a session hands its context over through `docs/T-NNN/handoff.md` when its share of the
 work is done or its session budget runs out, and the master control relaunches until the task's scope is
 complete, landing each session's share as its own commit at the boundary — then a fresh verification child
@@ -26,7 +28,9 @@ is a stop by default — one phase per hand-over: the person reviews the closed 
 its task reports) before the next one is planned, and hands this file over again to continue; the phrase
 `phases: all` in the hand-over line lifts the stop, and only then does the task loop continue on the new
 phase, until the round's phases are done. All implementation
-work happens in child sessions launched through the host coding agent's subagent facility; the master-control
+work happens in child sessions launched through the host coding agent's subagent facility (`mode: single`
+alone excepted — a platform whose provider disallows child sessions entirely: there this one session is the
+worker too, the Single-session runs section); the master-control
 session itself writes no implementation code and no state writes — its one driver write is the share commit
 that lands each task/fix session's work when the session ends (the driver's own unified commit after a
 session; its fix rounds and subtasks land the same way), and the close-out commits belong to the verification
@@ -49,7 +53,10 @@ checks specified below.
    the target holds (work inside a gitignored nested repository leaves the outer status clean). Every task
    starts from a clean tree (the driver's clean gate); a dirty tree is the person's to commit or clean first.
 5. You can launch child sessions (your platform's subagent facility) that work in this same directory, and the
-   five companion files are available to you verbatim. Otherwise stop: the whole design rests on them.
+   five companion files are available to you verbatim. A platform that withholds the facility (some providers
+   disallow child sessions) has exactly one shape left: the hand-over line's `mode: single` (the
+   Single-session runs section — no child is ever launched, the companions read as your own role rulebooks).
+   Otherwise stop: the whole design rests on one of the two.
 6. Read the config's `wrapup` key (default true): it decides whether a passing verification also writes the
    task's wrap-up report (`docs/T-NNN/report.md`).
 7. The config's `testByDriver` and `handoverTest` keys are both unset: this suite has no driver process to run
@@ -69,7 +76,9 @@ check, not a read); content judgment belongs to the child sessions: the task ses
 and the sources, the verification session reads the work, the fix session reads the gap list. Fill child
 prompts with short facts only, take a child's outcome only through its verdict line plus the mechanical checks
 below, and keep every
-reply a child sends you to a few lines (the companions instruct them so).
+reply a child sends you to a few lines (the companions instruct them so). (Under `mode: single` the unit in
+flight is the one exception — you hold the worker's role too, and its task document, handoff and diff are
+yours to read; every other unit's documents stay pointer-only as ever, the Single-session runs section.)
 
 ## Launching a child session
 
@@ -118,10 +127,13 @@ reply a child sends you to a few lines (the companions instruct them so).
   line ("still there? poll your log in short steps — never sit waiting on a long command") over anything
   harder; a platform without messaging changes nothing — the budget wall remains the backstop.
 - The session budget turns the handover on: fill `<session budget>` in `run-task.md` / `run-fix.md` with
-  `60 minutes` unless the person directed another figure (a sprint mode's runway fit counts as one). A
+  `60 minutes` unless the person directed another figure (a sprint mode's runway fit counts as one, a
+  window's remaining runway likewise). A
   task or fix child that cannot finish inside it
   wraps up — ten minutes before the budget it stops starting new work — and hands over through
-  `docs/T-NNN/handoff.md` instead of overrunning; a fresh budget rides every relaunch.
+  `docs/T-NNN/handoff.md` instead of overrunning; a fresh budget rides every relaunch. Under `mode:
+  single` no fill ever happens — there is no child prompt to fill; the wall of the Single-session runs
+  section bounds the whole session instead.
 - When the target holds nested git repositories, the baseline is multi-repo: record HEAD of this repository
   and of each nested one, and run every HEAD check and dirty-tree check of the loop against them all.
 - After a task or fix child session you land its share yourself (the loop's step 3, the INCOMPLETE branch for
@@ -297,7 +309,9 @@ for <n> alone; a launch the facility refuses narrows the wave, named in the repo
 the loop above is exactly as written — the serial floor. With it, independent documentation-scoped tasks run beside each other in
 this same tree, the manual suite's twin of the driver's doc lanes: no worktrees, no landing machinery —
 the master control stays the sole git writer and the sole ticker of the index. The phrase composes with
-every run mode — `window` blocks wave launches like any launch, `pace` waits before each launch as
+every run mode but `single` (a single-session run launches no children to wave — both phrases in one
+hand-over line are a stop and report) — `window` gates wave launches like any launch (none outside the
+working period), `pace` waits before each launch as
 written, a `sprint` wall lands every ended child's share before the Finish — and the report names it
 beside the mode line so the restart repeats it.
 
@@ -357,6 +371,77 @@ A restart re-derives a wave from disk exactly as the serial rules do, widened: u
 spanning several task scopes means several children were in flight — for each such task (no `done.md`),
 derive its role from its last share commit and relaunch it with a continue line, in index order, the wave
 re-forming under the report's repeated `parallel:` phrase.
+
+## Single-session runs — the `mode: single <minutes>` phrase
+
+Some providers disallow child sessions outright, and a platform whose coding agent has no subagent
+facility cannot run the delegated design at all. The hand-over line's `mode: single <minutes>` names that
+shape: no child session of any role is ever launched; this one session takes every role itself — master
+control, task, fix, verification, handover, planning — reading each companion file as the rulebook of the
+role it currently holds (`run-task.md` while executing, `run-fix.md` in a fix round, `run-verify.md` at a
+task's verification, `run-handover.md` at a phase close, `run-plan.md` when a phase is planned). The
+companions' work rules bind unchanged — the scope discipline, the record markers, the terminator, the
+lane protocol, the handover document; only their session-boundary rules (a child's `<session budget>`, a
+child's final reply) are read against this whole session instead. The commit grammar, the commit
+sequence and the state writes stay exactly the delegated run's, made at the same boundaries in the same
+order — afterwards git cannot tell the two runs apart; what changes is who was in the room.
+
+`<minutes>` is the wall, the one-hour child budget's whole-session replacement: record your start time
+at your first action; the wall is start + <minutes>, set below the platform's own kill of this session
+so the gap between them is the wrap-up's room (a 3-hour kill → `single 175`, sprint's arithmetic). Check
+the clock (`date`) at every role boundary: take up a new task or a fix round only with at least 10
+minutes of runway, a verification, handover or planning role only with at least 15. The wall stops new
+work, never the wrap-up: finish the step in flight (never end with a lane process running — wait it out
+or kill it deliberately with its log state recorded), write the handover document when mid-task
+(`Status: continue` — the successor session continues from it exactly as a successor child would), land
+your share (the loop's step 3 pass, made by you), and Finish with the resume note — the landing, the
+handover document and the report complete inside the gap even past the wall, the platform's kill the
+only hard line. Ending properly before that kill is this mode's own completion criterion: never let the
+platform kill this session mid-flight. Your context is the wall's twin scarce resource — when it fills,
+cut the same way at any moment (handoff, share, report): a fresh session continues from the committed
+share, so the run's continuity never rested on this one session surviving.
+
+The loop under `single`, the deltas:
+
+- The pick, the boundary check and the loop's steps 1, 3, 4 and 7 stand as written — you are the master
+  control throughout, and every commit the loop names is yours to make at the moment it names it: one
+  commit per role share at each role boundary (a task's execution share when its work ends or hands
+  over, a fix round's share, the close-out's wrapup and done, the park commit), never a heap of
+  uncommitted work across tasks — each task's verification needs its committed range, and each new task
+  its clean tree.
+- Step 2's launch becomes execution: read `docs/T-NNN/todo.md` yourself and carry the task under
+  run-task.md's `## Work` rules, item by item; a predecessor's handoff rides the committed tree exactly
+  as written. A `Status: continue` boundary mid-session (the implement→test boundary, a context pinch)
+  lands its share and you continue from your own handoff — the same boundary the delegated run relaunches
+  on. A task too large for one share simply spans shares that way; the subtask pipeline never runs under
+  `single` (its stage children are child sessions).
+- Steps 5–6's verification becomes self-verification: when the task's work ends, land its share first,
+  then take run-verify's checks over the committed range yourself — the range grammar, the state files,
+  the diff against the acceptance, the terminator — and on pass perform its close-out exactly as written
+  (the wrap-up report, the done rename, the index tick, the commits). On a failed check write the gap
+  list and run the fix rounds yourself under run-fix.md, at most two, re-verifying after each. The
+  verdict line's child-to-master channel is empty here — record the verdicts in the Finish report
+  instead, and name the loss honestly there: the verifications ran in the session that did the work, no
+  fresh pair of eyes among them; the person's review is the independent check this mode does not have,
+  and the default phase-boundary stop is where it lands.
+- The Phase transfer's children become your own roles the same way: the handover document written under
+  run-handover.md's four sections, then its close-out commits; an unplanned phase formulated through the
+  PLAN formulate construction and carried out under run-plan.md's rules — its share and its
+  self-verified close-out through the same task flow above.
+- One role at a time, always: never execute and verify together, never two tasks' work in flight at
+  once — the delegated run's one-writing-child-at-a-time held by one session's attention instead of the
+  launch facility.
+
+`parallel: <n>` never rides with `single` — a wave needs child sessions; both phrases in one hand-over
+line are a stop and report. Among the modes, `single` rides with `window` alone: the working period
+gates this session's own work starts exactly as it gates launches — no new role's work outside the
+period, an end that arrives mid-task wrapped up the wall's way — never with `sprint` (the wall bounds
+time once) and never with `pace` (a wall-bounded run spends its runway on work, not on waiting).
+
+A restart of a `single` run is the park/resume rules verbatim, one re-keying: the successor session
+takes the identified role up itself instead of relaunching it — the same role from the last share
+commit, the same continue context from the handoff. The report names the mode line so the person's
+restart repeats it.
 
 ## Phase transfer — when a phase completes
 
@@ -422,10 +507,11 @@ next phase and every phase after it without the stops.
      specific deficiency as feedback; still failing → stop and report. Back to the loop's step 1 on the
      new phase.
 
-## Run modes — window and sprint, chosen by one phrase
+## Run modes — window, sprint, pace and single, chosen by one phrase
 
-The person may name a run mode in the hand-over line — `window`, `sprint`, or `pace` (`pace` may ride
-with `window`, never with `sprint`); none named, the run is
+The person may name a run mode in the hand-over line — `window`, `sprint`, `pace`, or `single` (`pace`
+may ride with `window`, never with `sprint`; `single` may ride with `window` alone — never with `sprint`
+or `pace`, its wall the only bound it carries); none named, the run is
 unlimited — no window, no wall, no pause: it goes on until its tasks and phases are done or this file's
 own rules stop it. The same line may carry two more phrases beside them: `phases: all`, the Phase
 transfer section's phrase that lifts the default stop at each phase boundary — an unattended run (a
@@ -437,14 +523,21 @@ already-begun task wherever the boundary check meets one. Whatever you end with,
 the mode line — and the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise — so the
 person's restart repeats them.
 
-- `mode: window <HH:MM–HH:MM> [tz]` (times UTC unless a zone is named): a launch window. No new child
-  session of any role may be created inside the window — check the clock before every launch. A child
-  already running when the window opens runs to its normal end; never stop it for the window. When the
-  window blocks your next launch, land the ended child's share as usual, then park: either hold this
-  session alive polling the clock every few minutes until the window closes (only sensible when the window
-  outlives the platform's own limit on this session — against a 3-hour task kill, holding through a longer
-  window is pointless), or end the session and report that the person should restart it after the window.
-- `mode: sprint <minutes>`: no launch window — a wall for the whole run: the handoff deadline the person
+- `mode: window <HH:MM–HH:MM>` (times in this machine's local time; a range may span midnight —
+  `22:00–06:00` runs to six the next morning): the working period. No new child session of any role may
+  be created outside it — check the clock (`date`) before every launch — and every launch fits the
+  runway the end leaves: fill a task or fix child's `<session budget>` with the smaller of the default
+  and the runway itself, launch a task or fix child only while at least 10 minutes of runway remain, a
+  verification, handover or planning child only with at least 15. A child already running when the end
+  arrives is never stopped for the clock — its own budget bounds it — and its share lands after: the
+  end is a soft deadline, the wrap-up alone may overrun it slightly (land the ended child's share, do
+  not relaunch a `Status: continue` handover, Finish with the resume note); new work never starts past
+  it. Before the start the same gate holds from the other side — no launch until the period opens:
+  either hold this session alive polling the clock every few minutes until the start (only sensible
+  when the wait fits inside the platform's own limit on this session — against a 3-hour task kill,
+  holding through a longer wait is pointless), or end the session and report that the person should
+  restart it at the start time, inside the working period.
+- `mode: sprint <minutes>`: no working period — a wall for the whole run: the handoff deadline the person
   chooses, set below the platform's kill of this session so the gap between them is the final share
   landing's room (a 3-hour task limit → `sprint 175`). Record your start time at your first action; the
   wall is start + <minutes>. Every launch fits the runway: fill a task or fix child's `<session budget>`
@@ -462,10 +555,15 @@ person's restart repeats them.
   rolling usage limit (a 5-hour account cap): sized so any 5-hour window's consumption stays under it —
   you never compute quota, the figure is the knob. Wait in short polled steps (`sleep 300` then `date`,
   repeated): never one long silent sleep — ten minutes of silence is this session's kill line as well.
-  `pace` may ride with `window` alone (`mode: window <HH:MM–HH:MM> [tz] pace 20`): the waits apply
-  outside the window, never inside it — inside the window launches are blocked anyway; outside it, each
-  pause between child sessions slows the burn of tokens in the working stretches. Never with `sprint`: a
+  `pace` may ride with `window` alone (`mode: window <HH:MM–HH:MM> pace 20`): the waits apply inside
+  the window, never outside it — outside it no launch happens anyway; inside it, each
+  pause between child sessions slows the burn of tokens in the working stretches. Never with `sprint` or
+  `single`: a
   wall-bounded run spends its runway on work, not on waiting.
+- `mode: single <minutes>`: the Single-session runs section's shape, for a platform whose provider
+  disallows child sessions — no launch of any role ever happens; this one session takes every role
+  itself, and `<minutes>` is its wall, the one-hour child budget's whole-session replacement. It rides
+  with `window` alone among the modes, and `parallel: <n>` never rides with it.
 
 Park and resume (every run, mode or none): a parked run sits at a legal boundary — the last share
 committed, the tree clean except the transient gap list, a report of what remains. On the restart,
@@ -480,7 +578,9 @@ mid-testing-phase, and the task child is the role to relaunch whatever the last 
 parked task: the dependency-inversion park outranks the lane override, its open lanes being exactly the
 blocked tail; it resumes only after its named blocker closes. A parked phase transfer (all tasks done, no
 handover yet) simply continues at the Phase transfer section. A parallel wave restarts the same way,
-widened to its several in-flight tasks — the Parallel waves section's restart rule.
+widened to its several in-flight tasks — the Parallel waves section's restart rule; a `single` run the
+same way with one re-keying — the successor session takes the identified role up itself instead of
+relaunching it (the Single-session runs section's restart rule).
 
 ## Hands off — driver-adjacent rules
 
@@ -491,7 +591,10 @@ widened to its several in-flight tasks — the Parallel waves section's restart 
 - You make no edits and no state writes of your own: everything on disk was written by child sessions; your
   writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
   unified commit after a session) and the phase-plan commit (the Phase transfer section) — the task
-  close-out is the verification child's and the phase close-out the handover child's, not yours.
+  close-out is the verification child's and the phase close-out the handover child's, not yours. (Under
+  `mode: single` the same writes happen with you in every role: each write named a child's here is yours
+  exactly while you hold that role — the role boundary and the grammar are the discipline, not a second
+  session.)
 - One task at a time — or, under `parallel: <n>`, one wave of scope-disjoint documentation tasks (its
   section above); one verification, handover or planning child at a time always; the share commits happen
   at each task or fix session's end, and the close-out commits inside the verification child, after a
