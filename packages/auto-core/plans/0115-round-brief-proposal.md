@@ -1,6 +1,16 @@
 # 0115 — The round-brief proposal channel
 
-> Renumbered from 0104 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0104 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+> Renumbered from 0104 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0104 was already the retained line's plan (0104 names the manual parallel waves there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+
+This ruling Derives: **P2** (the person's words ride verbatim — the released `### R-NN`
+proposal installs as the round's round.md unchanged, a filled round.md is never clobbered,
+and the release mark is the person's signature on their own proposal), **P5** (single
+ownership — the analysis document is the one carrier (D5 rejects every other home), one
+install implementation across the three reach points) and **P6** (derived at the boundary
+— the install re-derives from the released document at each open, idempotent, every floor
+byte-identical). Tier touched: **mechanism only** — a proposal channel over existing
+document grammar and surfaces; no principle change; the INDEX release cell stays open
+until the next release event.
 
 ## Evidence
 
@@ -132,9 +142,9 @@ repositories (establishment continuation with the round-start commit, the held-g
 never-clobber and idempotent shapes, the floors), m mode's establishment, the ratchet pins for
 the new guidance wording, the shell e2e walkthrough extended with a proposal.
 
-The deployed fleet binary is a sibling lineage — the retained line, where plans/0114 is
-`destination containment` and plans/0116 (this plan's renumbered home) is the `clarify`
-command (the number collision this line's drafting flagged is resolved by the 2026-10-23
-merge's renumbering to 0113–0116). Its driver-helper CHANNELS block did not yet name the
+The deployed fleet binary is a sibling lineage — the retained line, where plans/0103 is
+`destination containment` and plans/0105 the `driver-helper` brief (the number collision
+this line's drafting flagged is resolved by the 2026-10-23 merge's renumbering to
+0113–0116). Its driver-helper CHANNELS block did not yet name the
 analysis channel at the round-start stop; the merge lands that follow-up — the brief's
 round-start channel row carries the same both-ways wording the guidance states carry here.

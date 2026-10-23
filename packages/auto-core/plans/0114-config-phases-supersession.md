@@ -1,6 +1,6 @@
 # 0114 — config `phases` under a released roadmap: supersession named, never synced
 
-> Renumbered from 0103 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0103 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+> Renumbered from 0103 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0103 was already the retained line's plan (0103 names destination containment there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 Ruled 2026-10-23, from the aster-mig-root/common fleet session (the R-03 → R-04
 transition): once the project's `docs/analysis.md` was released with roadmap
@@ -10,6 +10,19 @@ inviting "must I amend it?" confusion, and the held survey gate's D6 reshape
 line even pointed at `amend --phases`, a channel that is inert for a round the
 roadmap covers — the fleet's driver-helper session moved the roadmap line
 instead, the working channel the message never named.
+
+This ruling Derives: **P2** (the person's surfaces name the working channel — the fleet
+incident was a stop line advising an inert `amend --phases`; the reshape line, the
+awaiting parenthetical and the primer authority-branch to the moved roadmap line a covered
+round actually reads), **P5** (single ownership — supersession named, never synced: once
+the released roadmap covers a round, its line is the one phase-list authority and nothing
+reads the key; the line grammar and released readers split into their one home
+`src/roadmap.ts`) and **P6** (derived state — a covered round's phases re-derive from the
+released line at every boundary, the specific round's coverage the truth, never "a roadmap
+exists"; the stale config value is never a second source). Tier touched: **mechanism
+only** — a config-key supersession over existing surfaces plus a module split (retiring
+plans/0101 D5's post-amend precedence note); no principle change; the INDEX release cell
+stays open until the next release event.
 
 ## The regimes (D1)
 

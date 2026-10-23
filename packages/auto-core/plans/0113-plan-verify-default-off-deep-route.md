@@ -1,11 +1,22 @@
 # 0113 — Plan verifier: default off, deep route when on
 
-> Renumbered from 0102 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0102 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+> Renumbered from 0102 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0102 was already the retained line's plan (0102 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 Status: **done.** The ruling was settled with the person on 2026-10-22, from the
 aster-mig fleet's evidence, and landed the same day. It amends plans/0080 §5 (the
 plan-step verifier's activation and model selection); nothing else of the
 guarantees machinery changes.
+
+This ruling Derives: **P19** (measured evidence — §The evidence: the fleet's three
+consecutive transfers fail-closed on the operator registry's classifier route, the verdict
+history of thirteen consistent against one genuine catch, and the one deep-route 120 s miss
+showing the wall itself reachable; the rejected alternatives recorded beside them) and
+**P12** (fail loud — default-off never silences the record: a skip still appends to
+`docs/R-NN/prompt-audit.md` so the audit wall never implies a verification that did not
+run, and the verifier's own failures retry once then fail closed, the wait visible in a
+start line). Tier touched: **mechanism only** — the activation, model route and wall of an
+existing check (amending plans/0080 §5); no principle, no requirement text, no contract
+change; the INDEX release cell stays open until the next release event.
 
 ## The evidence
 

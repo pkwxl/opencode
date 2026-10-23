@@ -1,6 +1,17 @@
 # 0116 — The clarify command
 
-> Renumbered from 0105 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0105 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+> Renumbered from 0105 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0105 was already the retained line's plan (0105 names the driver-helper brief there). The numbers here continue the retained line's series; the D-ids below are this document's own.
+
+This ruling Derives: **P5** (single ownership — one command produces exactly the bytes a
+correct hand edit would; the gates stay the sole authority and a hand-released project and
+a clarify-released project are indistinguishable to every later reader — never a second
+release path), **P14** (the seam — `clarifyGate` is the core's, the shell row a thin
+wrapper; flagless, inside the config-command family's live-lock refusal, never a lock of
+its own) and **P19** (measured evidence — §Evidence's three stacked stumble points from
+the field, the live smoke run's recorded correction among them). Tier touched: **mechanism
+only** — a new person-facing command over existing gate grammar (the awaiting surfaces'
+command-first clause rides the same ruling, its pinning tests updated in the same change);
+no principle change; the INDEX release cell stays open until the next release event.
 
 ## Evidence
 
