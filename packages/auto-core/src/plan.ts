@@ -871,7 +871,7 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
       `  then release it: ${bin} clarify ${directory} — it writes the \`${CLARIFIED_MARK}\` line to ${survey} and commits it (or add the line, commit, re-run yourself); ` +
         `the phase completes and the approved \`## Project brief\` section is installed`,
     )
-    // The reshape channel (plans/0101 D6, authority-branched by plans/0103
+    // The reshape channel (plans/0101 D6, authority-branched by plans/0114
     // D3): the survey's findings are the round's best evidence of what it
     // should still do — where they contradict its unstarted phases, this
     // held boundary is the designed amendment moment (the findings in
@@ -1152,7 +1152,7 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
   const { bin } = shellProfile()
   const setup = await establishRoundSetup(dir, round, opts)
   const ok = setup.type === "ok" ? setup : undefined
-  // The round-brief proposal channel (plans/0104 D3): m mode installs at
+  // The round-brief proposal channel (plans/0115 D3): m mode installs at
   // its own establishment — no construct step exists here for the advance's
   // apply seam to carry it. The driver's round-start commit sweeps the
   // setup, and the stop names the input step instead of the gate fill. The
@@ -1263,7 +1263,7 @@ function inputInvalidatedLine(dir: string, phase: PhaseUnit): string {
 // — exit 2, awaiting-person — while the round brief is the untouched stub; no
 // planning session dispatches against an empty round brief. The fill and the
 // transfer re-run are the answer (the reconstruct absorbs the filled brief;
-// --round re-points the guidance at the document), or — since plans/0104 —
+// --round re-points the guidance at the document), or — since plans/0115 —
 // the proposal channel: release an `### R-NN` subsection under `## Round
 // briefs` of docs/analysis.md and commit, and the next transfer installs it
 // verbatim ahead of the construct.

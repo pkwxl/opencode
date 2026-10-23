@@ -234,7 +234,7 @@ export async function planFix(dir: string): Promise<FixPlan> {
       for (const finding of provenanceFindings(comparison)) findings.push({ class: "manual", path: finding.path, problem: finding.problem })
     }
   }
-  // The roadmap supersession (plans/0103 D2): a released roadmap's line for
+  // The roadmap supersession (plans/0114 D2): a released roadmap's line for
   // the current round is that round's phase list (plans/0101 D5) — the config
   // key then silently loses its meaning for the round, this table's own
   // manual class ("report only, never guess"). Nothing to repair: the person

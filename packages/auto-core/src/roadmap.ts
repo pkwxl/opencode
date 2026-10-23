@@ -2,7 +2,7 @@
 // establishment authority since plans/0101 D5): the machine-parsed round
 // lines `- R-NN <phases> — <goal>` and the released readers over them — a
 // line rules only once the person released the document with a whole-line
-// `Clarified: yes`. Split from src/analysis.ts (plans/0103 D4, provenance's
+// `Clarified: yes`. Split from src/analysis.ts (plans/0114 D4, provenance's
 // precedent) so the runtime plane reaches the readers beside the pipeline
 // (`fix`'s supersession finding names the config key a covering roadmap
 // retires); analysis keeps the release grammar gates and the establishment

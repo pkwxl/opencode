@@ -1,4 +1,6 @@
-# 0104 — The round-brief proposal channel
+# 0115 — The round-brief proposal channel
+
+> Renumbered from 0104 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0104 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 ## Evidence
 
@@ -18,7 +20,7 @@ reads carried them; the person was the copy step.
 The round brief is the last person-gate artifact with no proposal channel. The project brief got
 one (the survey release, 0081 D15, generalized to the analysis release by 0084:
 `## Project brief` → released whole-line `Clarified: yes` → `installBriefProposal` installs
-verbatim). The roadmap lines are one (0101 D5: a released line is the round's phase list; 0103: a
+verbatim). The roadmap lines are one (0101 D5: a released line is the round's phase list; 0114: a
 covered round never reads the config key). The round brief — the one document every phase's
 planning session consumes — was still write-only-by-hand, which is exactly the residue the fleet
 session hit.
@@ -35,7 +37,7 @@ commit.
 The round-brief proposal is living governance exactly as the roadmap is: a subsection may be added
 to an already-released document later (drafted between rounds, refined after the previous round's
 findings — the re-derivable-tail philosophy extended from the phase tail to the brief), and the
-next advance installs it. No new release mark is needed for the edit, the same rule 0103 set for a
+next advance installs it. No new release mark is needed for the edit, the same rule 0114 set for a
 moved roadmap line.
 
 ## D2 — the grammar
@@ -130,8 +132,9 @@ repositories (establishment continuation with the round-start commit, the held-g
 never-clobber and idempotent shapes, the floors), m mode's establishment, the ratchet pins for
 the new guidance wording, the shell e2e walkthrough extended with a proposal.
 
-The deployed fleet binary is a sibling lineage (its plans/0103 is `release`, its plans/0105 the
-`driver-helper` brief; this branch's 0103 is the config-phases supersession — a number collision
-to resolve when the streams merge). Its driver-helper CHANNELS block does not yet name the
-analysis channel at the round-start stop; when the lineages merge, the brief's round-start
-channel row gains the same both-ways wording the guidance states carry here.
+The deployed fleet binary is a sibling lineage — the retained line, where plans/0114 is
+`destination containment` and plans/0116 (this plan's renumbered home) is the `clarify`
+command (the number collision this line's drafting flagged is resolved by the 2026-10-23
+merge's renumbering to 0113–0116). Its driver-helper CHANNELS block did not yet name the
+analysis channel at the round-start stop; the merge lands that follow-up — the brief's
+round-start channel row carries the same both-ways wording the guidance states carry here.

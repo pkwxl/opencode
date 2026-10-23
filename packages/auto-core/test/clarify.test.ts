@@ -1,4 +1,4 @@
-// clarify, the person's release command (plans/0105): the two surfaces —
+// clarify, the person's release command (plans/0116): the two surfaces —
 // the unreleased analysis at the project start, the held survey at a phase
 // boundary — each released by the command where the stops today instruct the
 // hand edit, proven byte-equivalent to that edit (the gate reads the mark the
@@ -125,7 +125,7 @@ async function surveyBoundary(dir: string, survey?: string[]): Promise<void> {
 
 const FORKED_SURVEY = ["# Survey", "", "The reference's map.", "", "Fork: scope — the journal too; Recommend: the core only.", "", "<!-- auto: eof -->", ""]
 
-describe("clarify: the analysis release (plans/0105 D1/D4)", () => {
+describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
   test("writes the mark on the unreleased analysis (the review prints the roadmap and forks) and commits it; the following transfer establishes R-01", async () => {
     const dir = await repo()
     // The novice state: init's never-committed config layer beside the whole
@@ -184,7 +184,7 @@ describe("clarify: the analysis release (plans/0105 D1/D4)", () => {
   })
 })
 
-describe("clarify: the survey release (plans/0105 D1/D4)", () => {
+describe("clarify: the survey release (plans/0116 D1/D4)", () => {
   test("the held boundary: the mark lands before the eof terminator, the gate passes, and the advance completes the phase with the brief installed", async () => {
     // The survey-gate walkthrough with the command in place of the hand
     // edit: run stops at the held boundary, clarify releases, the advance

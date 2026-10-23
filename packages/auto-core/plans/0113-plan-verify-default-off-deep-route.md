@@ -1,4 +1,6 @@
-# 0102 — Plan verifier: default off, deep route when on
+# 0113 — Plan verifier: default off, deep route when on
+
+> Renumbered from 0102 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0102 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 Status: **done.** The ruling was settled with the person on 2026-10-22, from the
 aster-mig fleet's evidence, and landed the same day. It amends plans/0080 §5 (the

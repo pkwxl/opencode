@@ -93,7 +93,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(plan.skipped).toBeUndefined()
   })
 
-  test("a released roadmap covering the current round makes the phases key a manual supersession finding; nothing is written (plans/0103 D2)", async () => {
+  test("a released roadmap covering the current round makes the phases key a manual supersession finding; nothing is written (plans/0114 D2)", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, phases: "mt" })
     await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", "", "Clarified: yes", ""].join("\n"))
     const plan = await planFix(dir)

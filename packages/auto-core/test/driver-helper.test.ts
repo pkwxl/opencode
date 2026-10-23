@@ -147,7 +147,10 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     // the pen discusses on request and never fills or commits it. The
     // former wording ("the person fills it and commits it") was read by
     // the field session as the pen's license.
-    expect(lines.some((line) => line.includes("the person's own writing for the new round — they write it and commit it (the commit is the review act); the pen discusses on request and never fills or commits it"))).toBe(true)
+    // 0115 D3's merge follow-up: the channel names the proposal path too —
+    // the authorship clause, then the both-ways wording, then the pen rule.
+    expect(lines.some((line) => line.includes("the person's own writing for the new round — they write it and commit it (the commit is the review act); the drafting can travel the released analysis instead"))).toBe(true)
+    expect(lines.some((line) => line.includes("installs verbatim when the round opens — this hand-written file is the round's own when no proposal covers it; the pen discusses on request and never fills or commits it"))).toBe(true)
     expect(lines.some((line) => line.includes("the person fills it"))).toBe(false)
     expect(lines).toContain(`- opencode-auto transfer ${dir} — it constructs the plan task and stops for review`)
     // The pre-establishment rhythm (analysis released, R-01 not yet opened).

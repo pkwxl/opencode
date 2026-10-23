@@ -313,7 +313,7 @@ afterEach(() => {
   for (const [key, value] of envSaved) if (value !== undefined) process.env[key] = value
 })
 // The plan verifier rides this suite (the ladder's `Consistent: yes` turn):
-// the switch defaults off since plans/0102, so the suite clamps it on for
+// the switch defaults off since plans/0113, so the suite clamps it on for
 // its own runs and restores the default after (the clampSwitches restore
 // idiom the remediate kill-switch tests use).
 beforeAll(() => {
@@ -350,7 +350,7 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(wrapup!.text).toContain("- O-01 | docs/R-01/P01-implement/plan-input.md |")
       expect(wrapup!.text).toContain("docs/T-001/coverage.md")
       expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
-      // Plans/0102: the verifier rides the deep planning route — the session
+      // Plans/0113: the verifier rides the deep planning route — the session
       // that judged this prompt ran on the deep entry's model (prov/a), not
       // the classifier route's (prov/free).
       const verifyPrompt = f.agent.prompts.find((prompt) => prompt.text.includes("You read one prompt that a planning step"))

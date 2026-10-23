@@ -23,11 +23,11 @@
 // Since plans/0101 D5 the released roadmap is also the establishment
 // authority: each round's line is applied as its phase list (the resolution
 // below), config `phases` the fallback for rounds the roadmap does not
-// cover. Since plans/0104 the document also carries the round-brief
+// cover. Since plans/0115 the document also carries the round-brief
 // proposals — the optional `## Round briefs` section whose released `### R-NN`
 // subsections install verbatim as each round's round.md at its open, the
 // proposal-install family's third member. The line grammar and the released
-// readers live in src/roadmap.ts (plans/0103 D4, provenance's precedent) so
+// readers live in src/roadmap.ts (plans/0114 D4, provenance's precedent) so
 // the runtime plane's detection sites reach them beside this module; the
 // release grammar gates, the round-brief proposals and the establishment
 // resolution stay here.
@@ -42,11 +42,11 @@ import { releasedRoadmapRound, roadmapRounds, ROADMAP_LINE, type RoadmapRound } 
 // free). `## Close` has no counterpart here — the analysis predates every
 // round and closes by its release, not by a section. `## Round briefs` is
 // deliberately absent: an optional section, present only when the person
-// drafts per-round brief proposals (plans/0104), checked by its own rules in
+// drafts per-round brief proposals (plans/0115), checked by its own rules in
 // analysisProblems rather than the required list.
 export const ANALYSIS_SECTIONS = ["## Analysis", "## Goals", "## Project brief", "## Roadmap"] as const
 
-// The optional round-brief proposal section (plans/0104): `### R-NN`
+// The optional round-brief proposal section (plans/0115): `### R-NN`
 // subsections, each the body that round's round.md installs verbatim when the
 // round opens — the proposal-install family's third member beside the project
 // brief (0081 D15) and the roadmap lines (0101 D5). Released by the same
@@ -115,7 +115,7 @@ export function roundBriefNearMisses(text: string): string[] {
 // decision and never installs), or when it holds no proposal (or an empty
 // one) for the round. The proposal is living governance: drafted between
 // rounds into the already-released document, it installs at that round's open
-// (the moved-roadmap-line rule, plans/0103).
+// (the moved-roadmap-line rule, plans/0114).
 export async function releasedRoundBriefProposal(dir: string, round: number): Promise<string | undefined> {
   const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
   if (raw === undefined || !clarifiedMark(raw)) return undefined
@@ -271,7 +271,7 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
     if (resolvePhases(entry.phases, types)) continue
     problems.push(`the roadmap line \`R-${String(entry.round).padStart(2, "0")} ${entry.phases}\` is not a phases value (a letter preset over admtvk, or a comma-separated type-id list; known types: ${known.join(", ")})`)
   }
-  // The optional round-brief proposals (plans/0104 D2): only when the section
+  // The optional round-brief proposals (plans/0115 D2): only when the section
   // is present — an absent section is the byte-identical floor. A drafted but
   // empty subsection reads as planned and would install nothing, and a
   // near-miss heading silently never matches its round; both are named, the

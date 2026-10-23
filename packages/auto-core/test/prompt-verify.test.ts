@@ -1,5 +1,5 @@
 // The plan verifier's routing and activation surface (plans/0080 §5 as
-// amended by plans/0102): the verifier's model comes from the registry's
+// amended by plans/0113): the verifier's model comes from the registry's
 // deep planning route — the `phase-plan` candidate list walked with the
 // classifierEntry discipline — never from the `classifier` route (the
 // fleet's recurring fail-closed timeouts lived there), and the switch
@@ -44,7 +44,7 @@ const routingOf = (registry: ModelRegistry): RoutingFacts => ({
   clock: services().clock,
 })
 
-describe("planningRouteEntry (plans/0102: the deep planning route, not the classifier)", () => {
+describe("planningRouteEntry (plans/0113: the deep planning route, not the classifier)", () => {
   const now = Date.parse("2026-10-22T12:00:00Z")
 
   test("picks the deep tier's first entry while the classifier route names a different model", () => {
@@ -83,13 +83,13 @@ describe("verifyPlanPrompt's activation surface (the switch default and the skip
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("the switch off (the default since plans/0102) skips naming the switch — the pool is never reached", async () => {
+  test("the switch off (the default since plans/0113) skips naming the switch — the pool is never reached", async () => {
     clampSwitches({ planVerify: false })
     try {
       const facts = promptFacts({ dir, intent: "verify" })
       const outcome = await verifyPlanPrompt({ pool: undefined as unknown as AgentPool, routing: routingOf(registryOf({ deep: ["deep-model"] })), facts, step: "formulation R-01.P01", prompt: "THE PROMPT" })
       expect(outcome).toMatchObject({ kind: "skipped" })
-      expect(outcome.kind === "skipped" && outcome.reason).toContain("OPENCODE_AUTO_PLAN_VERIFY=off — the semantic check is off (the default since plans/0102")
+      expect(outcome.kind === "skipped" && outcome.reason).toContain("OPENCODE_AUTO_PLAN_VERIFY=off — the semantic check is off (the default since plans/0113")
     } finally {
       clampSwitches({ planVerify: false })
     }

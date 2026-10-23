@@ -333,7 +333,7 @@ describe("constitution drift ratchet", () => {
     expect(GUIDANCE.ANALYSIS_STATE_PHASED).toContain("the next `transfer` installs the approved brief")
     expect(GUIDANCE.ANALYSIS_STATE).toContain("the next `plan` installs the approved brief")
     expect(GUIDANCE.ANALYSIS_STATE_PHASED).not.toContain("the next `plan` installs")
-    // The round-brief proposal channel (plans/0104): both analysis states
+    // The round-brief proposal channel (plans/0115): both analysis states
     // teach the section, the round state names the drafting alternative only
     // phased (m mode installs at its establishment, never later), and the
     // primer carries the channel once for both modes.

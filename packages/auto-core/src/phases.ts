@@ -331,7 +331,7 @@ export const CLARIFIED_MARK = "Clarified: yes"
 // The `Fork:` lines a survey records (D14.2), in document order: each a scope
 // fork stated with its options, project-level consequences and one
 // `Recommend:` default. A list marker before the word is accepted
-// ("- Fork: …"). Exported since plans/0105: the clarify command prints the
+// ("- Fork: …"). Exported since plans/0116: the clarify command prints the
 // lines it is about to accept the defaults of — the review is the command's
 // own output, so it reads the same scan the gate's counters share.
 export function forkLines(text: string): string[] {

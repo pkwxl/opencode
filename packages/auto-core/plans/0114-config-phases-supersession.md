@@ -1,4 +1,6 @@
-# 0103 — config `phases` under a released roadmap: supersession named, never synced
+# 0114 — config `phases` under a released roadmap: supersession named, never synced
+
+> Renumbered from 0103 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0103 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 Ruled 2026-10-23, from the aster-mig-root/common fleet session (the R-03 → R-04
 transition): once the project's `docs/analysis.md` was released with roadmap

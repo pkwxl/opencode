@@ -286,7 +286,7 @@ describe("renderStatus closed marks (plans/0053 D16)", () => {
   })
 })
 
-describe("renderStatus roadmap supersession (plans/0103 D2)", () => {
+describe("renderStatus roadmap supersession (plans/0114 D2)", () => {
   const superseded = (lines: string[]) =>
     lines.some((line) => line.includes('ℹ phases (config "mt"): superseded — R-01 establishes under the roadmap of docs/analysis.md; reshape the round by moving its `R-01 <phases> — <goal>` line there, never by amending the key'))
 

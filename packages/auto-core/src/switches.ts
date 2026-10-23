@@ -36,7 +36,7 @@ export const SWITCH_ENV = {
   // 0036 D13's "plan for parallelism, execute serially" trap.
   laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
   // Plan-step consistency verification (plans/0080 §5, default off since
-  // plans/0102): the AI verifier that judges each composed planning prompt
+  // plans/0113): the AI verifier that judges each composed planning prompt
   // against the active intent's charter — opt-in, running on the deep
   // planning route when on. The mechanical layers (the render gate, the
   // precedence blocks) keep running either way; only the semantic check
@@ -363,7 +363,7 @@ export type Switches = {
   // protocol, still strictly serially. The isolation rollout stage of the
   // lanes design: full machinery, zero concurrency, per-run only.
   laneIsolation: boolean
-  // Plan-step consistency verification (default off since plans/0102, the
+  // Plan-step consistency verification (default off since plans/0113, the
   // ruling recorded there; plans/0080 §5 the mechanism): before a planning
   // session runs, a verifier session judges the composed prompt against the
   // active pack's `### verify-plan` charter (fail-closed: a verifier that

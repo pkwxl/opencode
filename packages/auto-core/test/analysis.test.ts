@@ -200,7 +200,7 @@ describe("the project analysis document (plans/0084)", () => {
   })
 })
 
-describe("the round-brief proposals (plans/0104)", () => {
+describe("the round-brief proposals (plans/0115)", () => {
   const WITH_BRIEFS = [
     RELEASED.replace("\nClarified: yes", ""),
     "## Round briefs",

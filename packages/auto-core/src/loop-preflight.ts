@@ -576,7 +576,7 @@ export async function preflight(
       const index = phaseIndexPath(round)
       if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
         const phased = opts.phases !== undefined && opts.phases !== "m"
-        // The proposal channel's shortcut (plans/0104): with a released
+        // The proposal channel's shortcut (plans/0115): with a released
         // `### R-NN` round-brief proposal waiting and the brief still the
         // stub, committing the setup is all this gate asks — the next
         // transfer installs the proposal verbatim ahead of the construct.

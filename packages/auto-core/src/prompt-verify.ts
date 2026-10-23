@@ -10,18 +10,18 @@
 //
 // Activation: the pack's `### verify-plan` charter plus the switch — a pack
 // without a charter never verifies (the zero-intent floor), and the switch
-// (OPENCODE_AUTO_PLAN_VERIFY, default off since plans/0102) enables the
+// (OPENCODE_AUTO_PLAN_VERIFY, default off since plans/0113) enables the
 // check for a pack that declares one, never adds a charter. The model comes
 // from the registry's planning route — the `phase-plan` candidate list (the
 // deep tier), the same selection discipline the synthesis constructor's
-// planRouteEntry applies (plans/0097); plans/0102 moved it off the
+// planRouteEntry applies (plans/0097); plans/0113 moved it off the
 // `classifier` route (charter conformance over a large composed prompt is
 // deep work, and a flaky cheap endpoint fail-closing every planning step
 // was the fleet's recurring block). A run with no usable planning-route
 // entry skips the verifier with a log line — the mechanical layers (render
 // gate, precedence blocks) still hold, only the semantic check is absent.
 //
-// Fail-closed (the person's ruling, 0080; the time arm retired by plans/0102
+// Fail-closed (the person's ruling, 0080; the time arm retired by plans/0113
 // D3): a verifier that cannot produce a parsable verdict — a session error,
 // a garbage reply — is retried once and then blocks the planning step
 // (exit 2) with the last reply text. The verdict itself is waited for with
@@ -78,7 +78,7 @@ export function parseVerifyReply(text: string): { consistent: boolean; evidence?
   return undefined
 }
 
-// The first usable entry of the planning route (plans/0102): the `phase-plan`
+// The first usable entry of the planning route (plans/0113): the `phase-plan`
 // candidate list — the deep tier the planning sessions and the synthesis
 // constructor dispatch on — walked with the classifierEntry discipline (the
 // agent filter, the windows, the down marks, the key rings; the context cap
@@ -122,7 +122,7 @@ export async function verifyPlanPrompt(input: {
 }): Promise<PlanVerifyOutcome> {
   const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.entry))
   if (charter === undefined) return { kind: "inactive" }
-  if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is off (the default since plans/0102; the render gate and the precedence blocks still hold)` }
+  if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is off (the default since plans/0113; the render gate and the precedence blocks still hold)` }
   if (input.routing === undefined) {
     return { kind: "skipped", reason: "no model registry routing — no planning-route entry to run the verifier on (the render gate and the precedence blocks still hold)" }
   }
@@ -139,7 +139,7 @@ export async function verifyPlanPrompt(input: {
   log(`⏳ plan verification: ${input.step} — the verifier ${pick.name} is judging the composed prompt (no wall; the reply is awaited)`)
   let lastReason = "the verifier session produced no answer"
   for (let attempt = 1; attempt <= 2; attempt++) {
-    // No wall (plans/0102 D3): the reply is waited for; only the session's
+    // No wall (plans/0113 D3): the reply is waited for; only the session's
     // own end — idle, the stream's end, a failure event — terminates the
     // call, so no time limit ever fail-closes the step.
     const outcome = await oneShot(client, pick.entry, text, undefined, VERIFY_TITLE)

@@ -174,7 +174,7 @@ async function advanceToReview(directory: string, round: number, opts: RunAllOpt
   return await runAll(directory, { ...opts, stopBefore: "formulate" })
 }
 
-// The released round brief, installed ahead of the construction (plans/0104
+// The released round brief, installed ahead of the construction (plans/0115
 // D3): whenever the round's brief is still the untouched stub and the
 // released analysis carries an `### R-NN` proposal, the advance installs it
 // verbatim on its own `round-start` commit — the boundary's apply seam beside
@@ -247,7 +247,7 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
 // refuses the key mid-phase — the current phase holding pending execute work
 // with no formulation awaiting review, the one state that is not a review
 // moment (the same predicate as the nothing-to-advance refusal above).
-// Ahead of every other guard, the coverage refusal (plans/0103 D3): the
+// Ahead of every other guard, the coverage refusal (plans/0114 D3): the
 // round this amendment would shape — the live round, or the next one when
 // the live round is complete, the same target the shell's prefix guard
 // judges — never reads the config value when the released roadmap covers it
@@ -332,7 +332,7 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
   // The D5 sourced suffix (plans/0101 D5): a roadmap-established round names
   // the line that ruled, beside the config default it displaced.
   const sourceSuffix = ok?.resolved.roadmap ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(ok.resolved.roadmap.goal)}"; config default was "${opts.phases}")` : ""
-  // The round-brief proposal channel (plans/0104 D3): a released `### R-NN`
+  // The round-brief proposal channel (plans/0115 D3): a released `### R-NN`
   // proposal passes the round-start gate — the person's release was the
   // review — and the advance continues into the construction in the same
   // invocation, the install landing inside it (applyReleasedBrief) on the

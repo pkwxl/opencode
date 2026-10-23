@@ -1004,7 +1004,7 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
   )
 
   test(
-    "row 0d with a released round-brief proposal (plans/0104): m mode installs it at the establishment, the stop naming the input step",
+    "row 0d with a released round-brief proposal (plans/0115): m mode installs it at the establishment, the stop naming the input step",
     withDir(async (dir) => {
       analysisOn()
       await commitAll(dir)

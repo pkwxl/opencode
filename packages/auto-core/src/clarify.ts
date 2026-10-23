@@ -1,4 +1,4 @@
-// clarify, the person's release command (plans/0105) — the one command that
+// clarify, the person's release command (plans/0116) — the one command that
 // performs the awaiting stop's manual act: it writes the whole-line
 // `Clarified: yes` into the one document a gate is awaiting and commits it,
 // byte-identical to a correct hand edit plus its commit. The gates stay the
@@ -18,7 +18,7 @@
 //      Fork: lines, no mark: the same predicate transfer's boundary refusal
 //      and run's boundary stop check ahead of any session.
 //
-// The command is the review (plans/0105 D3): before writing it prints what
+// The command is the review (plans/0116 D3): before writing it prints what
 // the mark accepts — the survey's Fork: lines with their Recommend: defaults,
 // the analysis's roadmap lines and brief proposal. Overrides keep their
 // channel: an answer beside a fork line, written before (riding the release
@@ -186,7 +186,7 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
   return generalRefusal(directory, advance, raw !== undefined, atBoundary)
 }
 
-// The neither-gate refusal (plans/0105 D2): what was checked, where the mark
+// The neither-gate refusal (plans/0116 D2): what was checked, where the mark
 // is valid, and the next command.
 function generalRefusal(directory: string, advance: string, analysisPresent: boolean, stateLine: string): ClarifyResult {
   return {
@@ -201,7 +201,7 @@ function generalRefusal(directory: string, advance: string, analysisPresent: boo
   }
 }
 
-// The shared write-and-commit tail. The dirty check runs first (plans/0105
+// The shared write-and-commit tail. The dirty check runs first (plans/0116
 // D5): the target document's own changes, the driver-state leftovers and the
 // `.opencode/` config surfaces (init's never-committed config layer — the
 // manual release a person performs with `git add -A` sweeps them, and the

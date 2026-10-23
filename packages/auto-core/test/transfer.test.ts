@@ -186,7 +186,7 @@ describe("transfer: the phase-boundary refusals (plans/0101 D2)", () => {
     expect(out.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(out.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
-    // The reshape channel is the authority's (plans/0103 D3): this fixture's
+    // The reshape channel is the authority's (plans/0114 D3): this fixture's
     // round is config-governed (no released roadmap), so the held boundary
     // names `amend --phases` — the roadmap-covered wording lives in the
     // survey-gate suite's released fixture.
@@ -607,7 +607,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     expect(await amendPhasesHold(dir, "m")).toBeUndefined()
   })
 
-  test("a round the released roadmap covers never reads the key: amend --phases is refused outright naming the line-move channel, whatever the phase state (plans/0103 D3)", async () => {
+  test("a round the released roadmap covers never reads the key: amend --phases is refused outright naming the line-move channel, whatever the phase state (plans/0114 D3)", async () => {
     // Mid-phase (the timing refusal's own state): the coverage refusal wins —
     // the value is inert for a covered round at any phase state, so the
     // boundary-channel promise would name what never happens.
@@ -676,7 +676,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
   })
 })
 
-describe("transfer: the round-brief proposal channel (plans/0104)", () => {
+describe("transfer: the round-brief proposal channel (plans/0115)", () => {
   const BRIEFS = "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the e2e suite passes on the ported core.\n"
 
   // The project-start shape over a repo whose gitignore ignores AGENTS.md

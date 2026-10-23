@@ -37,7 +37,7 @@ export const REPO_LANE: readonly string[] = [
   "test/boundary.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
-  // The person's release command (plans/0105): real git repositories — the
+  // The person's release command (plans/0116): real git repositories — the
   // release commits, the fold of the person's uncommitted fill, and the
   // advance fixtures beside survey-gate's and transfer's.
   "test/clarify.test.ts",
@@ -166,7 +166,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/format.test.ts",
   "test/formulate.test.ts",
   "test/formulate-synthesis.test.ts",
-  // The plan verifier's routing and activation surface (plans/0102): pure
+  // The plan verifier's routing and activation surface (plans/0113): pure
   // registry walks and skip reasons over temp directories, no spawn.
   "test/prompt-verify.test.ts",
   "test/golden.test.ts",

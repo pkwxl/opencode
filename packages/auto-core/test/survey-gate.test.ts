@@ -247,7 +247,7 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // run completes the survey's work and stops at its boundary where the
     // gate holds: the awaiting lines name the reshape channel beside the
     // release — the survey's findings in hand, F10's evidence mechanically
-    // acted on. The channel is the authority's (plans/0103 D3): this round is
+    // acted on. The channel is the authority's (plans/0114 D3): this round is
     // roadmap-covered, so the stop names moving the roadmap's line — the
     // config amend wording never reaches a covered round.
     const held = await f.run()
@@ -258,7 +258,7 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // The held boundary admits the reshape (the hold's predicate is the
     // review moment): the person moves the released roadmap's line — the
     // authority for the round's tail — and releases the survey. An
-    // `amend --phases` on the covered round is refused outright (plans/0103
+    // `amend --phases` on the covered round is refused outright (plans/0114
     // D3): the value never applies to it.
     expect(await amendPhasesHold(f.dir, "survey,implement,test")).toContain("--phases cannot shape R-01: the released roadmap of docs/analysis.md covers the round")
     const analysis = join(f.dir, "docs/analysis.md")

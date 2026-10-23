@@ -60,7 +60,9 @@
 //   | 1  project start, analysis unreleased (analysisGate's    | docs/analysis.md — sections, Fork: lines, ## Project brief,         | transfer (m: plan)    |
 //   |    reads: analysisProblems, clarifiedMark)               | ## Roadmap; release by whole-line Clarified: yes                    |                       |
 //   | 2  round-start gate G1 (roundBriefText undefined on an   | docs/R-NN/round.md — the person's own writing, the pen never        | transfer              |
-//   |    established round, or the pre-establishment rhythm)   | fills it; their commit is the review act                             |                       |
+//   |    established round, or the pre-establishment rhythm)   | fills it; their commit is the review act; a released `### R-NN`     |                       |
+//   |                                                          | proposal under ## Round briefs of docs/analysis.md installs         |                       |
+//   |                                                          | verbatim at the round's open (0115 D3)                              |                       |
 //   | 3  formulation review stop (route plan, or               | the phase's plan-input.md (a changed text restarts the open step);  | edit, then transfer;  |
 //   |    awaitingFormulation)                                  | round brief and project brief the fixed inputs                      | then plan, run        |
 //   | 4  human gates (phaseGateProblems)                       | survey.md — fork answers, Recommend: defaults, Clarified: yes       | transfer              |
@@ -222,7 +224,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // recorded decisions (Clarified:/Accepted:/Choice:) stay delegable
   // channels elsewhere in the map; authorship does not.
   const roundBriefChannel = (n: number): string =>
-    `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person's own writing for the new round — they write it and commit it (the commit is the review act); the pen discusses on request and never fills or commits it`
+    `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person's own writing for the new round — they write it and commit it (the commit is the review act); the drafting can travel the released analysis instead: a \`### R-NN\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, committed, installs verbatim when the round opens — this hand-written file is the round's own when no proposal covers it; the pen discusses on request and never fills or commits it`
   const planInputChannel = (phase: PhaseUnit): string =>
     `${planInputPath(phase)} — the phase's planning input, free-form markdown (the active pack's scaffold: ${bin} plan ${dir} --scaffold prints it); written by the person, committed unchanged by the driver; a changed text restarts the open construction`
   // Row 6's renderer: the close checks (minus the build — the caveat names it

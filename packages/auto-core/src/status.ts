@@ -72,7 +72,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
     }
   }
   lines.push(...provenance)
-  // The roadmap supersession (plans/0103 D2): a released roadmap line
+  // The roadmap supersession (plans/0114 D2): a released roadmap line
   // covering the current round is that round's phase list (plans/0101 D5) —
   // the config key then never applies to the round, and the tree says so
   // once, naming the round's own channel so nobody amends the key "to clean
@@ -104,7 +104,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
     // the round is waiting on the person, and status says so, naming the
     // reshape channel beside the release (plans/0101 D6 — the held boundary
     // is the designed amendment moment; the channel authority-branched by
-    // plans/0103 D3: a roadmap-covered round reshapes by its moved line, the
+    // plans/0114 D3: a roadmap-covered round reshapes by its moved line, the
     // config value never reaching it). Beside it the review-seam note
     // (plans/0101 D3/D4): the current phase's plan task stands constructed
     // and not yet run — the round waits on the person's dispatch (plan) or

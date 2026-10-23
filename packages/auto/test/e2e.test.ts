@@ -1774,7 +1774,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("roadmap-driven establishment, the round-brief proposal channel, and the amend --phases coverage refusal (auto-core plans/0101 D5, 0103 D3, 0104)", async () => {
+  test("roadmap-driven establishment, the round-brief proposal channel, and the amend --phases coverage refusal (auto-core plans/0101 D5, 0114 D3, 0115)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     // The analysis flow is the opt-in half (CLI_ENV_BASE pins the switch off
     // for the direct-establishment flows); this walkthrough pins the
@@ -1789,7 +1789,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(stubbed.out).toContain("the project analysis is open")
       // The person releases an analysis whose R-01 roadmap line (amt)
       // differs from config (am), carrying a round-brief proposal for R-01
-      // (plans/0104): the release approves both the phase list and the brief.
+      // (plans/0115): the release approves both the phase list and the brief.
       await Bun.write(
         join(dir, "docs/analysis.md"),
         [
@@ -1832,7 +1832,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
         '✓ round R-01 established: P01-analysis, P02-implement, P03-test — phases from the roadmap of docs/analysis.md (R-01 line "port the core and its tests"; config default was "am")',
       )
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
-      // The released round brief passes the round-start gate (plans/0104):
+      // The released round brief passes the round-start gate (plans/0115):
       // installed verbatim on the driver's round-start commit, and the same
       // invocation continues into the construction's review stop — the
       // person's release was the review, no hand transcription left.
@@ -1843,7 +1843,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
       expect(round).toContain("Port the retry ladder and the protocol strings with their tests.")
       expect(round).toContain("## Close")
-      // The coverage refusal (auto-core plans/0103 D3, retiring D5's
+      // The coverage refusal (auto-core plans/0114 D3, retiring D5's
       // post-amend precedence note): the released line covers the round this
       // amendment targets, so the value never applies to it — the amend is
       // refused outright naming the line-move channel, agreeing values alike

@@ -1,4 +1,6 @@
-# 0105 — The clarify command
+# 0116 — The clarify command
+
+> Renumbered from 0105 at the 2026-10-23 merge of the parallel auto-core line: both streams numbered plans from the shared 0101 fork point, and this line's 0105 was already the retained line's plan (0113 names the deep review there). The numbers here continue the retained line's series; the D-ids below are this document's own.
 
 ## Evidence
 
@@ -83,7 +85,7 @@ review rather than pressing enter past a dialog:
   gate's own semantics named — the mark accepts every default, and an override is the person's
   answer written beside the fork line;
 - the analysis: the `## Roadmap` round lines being authorized (the round/phase commitments the
-  release puts in force, 0101 D5 / 0103), the `Fork:` lines if any, and the presence of the
+  release puts in force, 0101 D5 / 0114), the `Fork:` lines if any, and the presence of the
   `## Project brief` proposal whose verbatim install rides the release.
 
 Overrides keep their existing channel and their existing timing freedom: an answer written beside

@@ -3233,10 +3233,10 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
 // landed uncommitted between the input commit and the planning unit's entry
 // clean gate, blocking the very step it documents (src/loop-plan.ts — it now
 // commits on its own ahead of the session, the savePlanInput pattern).
-describe("the plan-step verifier (plans/0080 §5; routing and default per plans/0102)", () => {
+describe("the plan-step verifier (plans/0080 §5; routing and default per plans/0113)", () => {
   beforeAll(() => {
     // The verifier cases need the check on: the switch defaults off since
-    // plans/0102, so this suite clamps it on for its own runs and restores
+    // plans/0113, so this suite clamps it on for its own runs and restores
     // the default after.
     clampSwitches({ planVerify: true })
   })
@@ -3275,7 +3275,7 @@ describe("the plan-step verifier (plans/0080 §5; routing and default per plans/
 
   // A fixture over m mode with a pack overlay committed before the round: the
   // planning step verifies against the pack's charter, the deep planning
-  // route's first entry (a) serving the verifier session (plans/0102).
+  // route's first entry (a) serving the verifier session (plans/0113).
   async function verifierFixture(pack: string, turn: (dir: string) => TurnScript): Promise<LoopFixture> {
     const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: turn(dir) }))
     await mkdir(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
@@ -3414,7 +3414,7 @@ describe("the plan-step verifier (plans/0080 §5; routing and default per plans/
       const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(0)
       expect(lines.some((line) => line.includes("✓ plan verification: the formulation R-01.P01 prompt is consistent with the intent charter"))).toBe(true)
-      // The wait-visibility line (plans/0102 D3): the step and the deep-route
+      // The wait-visibility line (plans/0113 D3): the step and the deep-route
       // model named before the session, no wall in force.
       expect(lines.some((line) => line.includes("plan verification: formulation R-01.P01 — the verifier a is judging the composed prompt (no wall; the reply is awaited)"))).toBe(true)
       // Order: the admission check, the constructor session (0097), the

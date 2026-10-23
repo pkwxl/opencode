@@ -393,7 +393,7 @@ type OneShot =
 // step and variant; an entry without `model` runs on the agent's default)
 // and on the adapter's default agent — no `agent` key, so not the `auto`
 // contract — then read until the turn ends, fails or — when the caller
-// passes a wall — the timeout aborts it. The wall is optional (plans/0102
+// passes a wall — the timeout aborts it. The wall is optional (plans/0113
 // D3): the plan verifier passes none, its deep session's reply awaited, and
 // the overload makes that provable — a wall-less call cannot time out.
 export function oneShot(client: AgentClient, entry: ModelEntry, text: string, timeoutMs: number, title?: string): Promise<OneShot>

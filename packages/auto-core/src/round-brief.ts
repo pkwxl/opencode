@@ -8,7 +8,7 @@
 //     restatement listing of root plan D12 in its middle form (plans/0049 G8).
 // Only the `## Close` heading is protocol (0035, amendment M4.2); the other
 // stub headings are scaffolding, and the content under all of them is free.
-// Since plans/0104 the brief has a proposal channel beside the hand-written
+// Since plans/0115 the brief has a proposal channel beside the hand-written
 // one: a released `### R-NN` subsection under `## Round briefs` of
 // docs/analysis.md installs verbatim at the round's open (renderInstalled-
 // RoundBrief + installRoundBrief below, the brief-install family's third
@@ -99,7 +99,7 @@ export function closeSection(text: string): string | undefined {
   return body.join("\n").trim()
 }
 
-// The installed shape (plans/0104): the proposal body verbatim under the
+// The installed shape (plans/0115): the proposal body verbatim under the
 // round's title, the `## Close` stub section appended so the protocol heading
 // the round-close gate reads is in place by construction. The three-part
 // discipline of the stub (Goal / Acceptance criteria / Release criteria) stays
@@ -120,7 +120,7 @@ export type RoundBriefCommitter = (
 
 export type RoundBriefInstall = { installed: boolean; lines: string[] }
 
-// Install a released round-brief proposal (plans/0104 D3): write the composed
+// Install a released round-brief proposal (plans/0115 D3): write the composed
 // file over the untouched stub, land the driver's own `round-start` commit —
 // which sweeps the uncommitted round setup when the install runs at the
 // establishment, the driver's commit replacing the gate's person one — and

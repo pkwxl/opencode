@@ -79,7 +79,7 @@ const contraryTurn = (diagnosis: (file: string) => string | undefined): ((dir: s
 }
 
 // Every verifier-fail-closed case in this file needs the check on: the
-// switch defaults off since plans/0102, so the file clamps it on for its
+// switch defaults off since plans/0113, so the file clamps it on for its
 // own runs and restores the default after (the clampSwitches restore
 // idiom).
 beforeAll(() => {
