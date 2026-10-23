@@ -13,7 +13,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spyOn } from "bun:test"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
-import { releasedRoadmapRounds } from "../src/analysis"
+import { releasedRoadmapRounds } from "../src/roadmap"
 import { amendPhasesHold, runTransfer } from "../src/transfer"
 import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
@@ -208,6 +208,12 @@ describe("transfer: the phase-boundary refusals (plans/0101 D2)", () => {
     expect(out.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(out.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
+    // The reshape channel is the authority's (plans/0103 D3): this fixture's
+    // round is config-governed (no released roadmap), so the held boundary
+    // names `amend --phases` — the roadmap-covered wording lives in the
+    // survey-gate suite's released fixture.
+    expect(out.lines.some((line) => line.includes("to reshape the round from the findings: opencode-auto amend"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("--phases <value> — the round's unstarted phases re-derive when opencode-auto transfer"))).toBe(true)
     // No session ran: the handover document does not exist, the phase waits.
     expect(existsSync(join(dir, "docs/R-01/P01-survey/handover.md"))).toBe(false)
     expect(existsSync(join(dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
@@ -621,6 +627,38 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     await forkedSurvey(held)
     expect(await amendPhasesHold(held, "survey,implement,analysis")).toBeUndefined()
     expect(await amendPhasesHold(dir, "m")).toBeUndefined()
+  })
+
+  test("a round the released roadmap covers never reads the key: amend --phases is refused outright naming the line-move channel, whatever the phase state (plans/0103 D3)", async () => {
+    // Mid-phase (the timing refusal's own state): the coverage refusal wins —
+    // the value is inert for a covered round at any phase state, so the
+    // boundary-channel promise would name what never happens.
+    const dir = await repo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 implement — port the core"]))
+    await establishRound(dir, { phases: "implement", round: 1 })
+    const state = (await readPhases(dir, 1))!
+    await pendingTaskPhase(dir, "implement", state.phases[0]!)
+    const hold = await amendPhasesHold(dir, "implement,analysis")
+    expect(hold).toContain("--phases cannot shape R-01: the released roadmap of docs/analysis.md covers the round")
+    expect(hold).toContain("a config value alone never re-shapes a round the roadmap covers")
+    expect(hold).toContain("by moving its `R-01 <phases> — <goal>` line in docs/analysis.md")
+    expect(hold).toContain("applies it before constructing")
+    expect(hold).not.toContain("mid-phase")
+    // A held survey boundary of a covered round (the designed first use of
+    // the reshape): refused the same way — the moved line is the channel.
+    const held = await repo()
+    await Bun.write(join(held, "docs/analysis.md"), ANALYSIS(["- R-01 survey,implement — port the core"]))
+    await forkedSurvey(held)
+    expect(await amendPhasesHold(held, "survey,implement,analysis")).toContain("the released roadmap of docs/analysis.md covers the round")
+    // A round the released roadmap does not cover keeps today's shapes — the
+    // key is that round's live authority (the partial-coverage edge: the
+    // timing refusal mid-phase, quiet at a review moment).
+    const partial = await repo()
+    await Bun.write(join(partial, "docs/analysis.md"), ANALYSIS(["- R-02 mt — later round"]))
+    await establishRound(partial, { phases: "implement", round: 1 })
+    const partialState = (await readPhases(partial, 1))!
+    await pendingTaskPhase(partial, "implement", partialState.phases[0]!)
+    expect(await amendPhasesHold(partial, "implement,analysis")).toContain("--phases cannot change mid-phase: R-01.P01 implement holds 1 pending task(s)")
   })
 
   test("started and ticked phases are immutable: a moved roadmap line that would drop them fails naming them, nothing written", async () => {

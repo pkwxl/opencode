@@ -40,7 +40,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, releasedRoadmapRounds, renderAnalysisStub, resolveRoundPhases } from "./analysis"
+import { analysisProblems, renderAnalysisStub, resolveRoundPhases } from "./analysis"
 import { briefProposal, installBriefProposal } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
@@ -50,6 +50,7 @@ import { logGateStop } from "./loop-phase"
 import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
+import { releasedRoadmapRound, releasedRoadmapRounds } from "./roadmap"
 import {
   CLARIFIED_MARK,
   clarifiedMark,
@@ -61,6 +62,7 @@ import {
   phaseLabel,
   phaseTailDrift,
   type PhaseTailDrift,
+  readPhases,
   roundRoot,
   routePhase,
   surveyForks,
@@ -145,7 +147,7 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   if (gates.includes("human")) {
     const problems = await phaseGateProblems(directory, route.phase, ["human"])
     if (problems.length) {
-      logGateStop(directory, route.phase, problems, undefined)
+      await logGateStop(directory, route.phase, problems, undefined)
       return 2
     }
   }
@@ -221,14 +223,33 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
 // refuses the key mid-phase — the current phase holding pending execute work
 // with no formulation awaiting review, the one state that is not a review
 // moment (the same predicate as the nothing-to-advance refusal above).
-// undefined = the amendment may proceed (no round yet, a complete round, a
-// phase boundary, a construction's review stop); m mode never consults it
-// (D8 — no boundary vocabulary applies). A state the router cannot read
-// stays quiet: the amendment's own guards judge it.
+// Ahead of every other guard, the coverage refusal (plans/0103 D3): the
+// round this amendment would shape — the live round, or the next one when
+// the live round is complete, the same target the shell's prefix guard
+// judges — never reads the config value when the released roadmap covers it
+// (the D5 resolution: its line is the phase list), so the write is inert at
+// any phase state and is refused outright naming the round's own channel
+// (0101 D5's precedence note retired by it — the note accepted the inert
+// write). A target the roadmap does not cover keeps the key as its live
+// establishment authority and stays quiet. undefined = the amendment may
+// proceed; m mode never consults the roadmap (D8 — no boundary vocabulary
+// applies). A state the router cannot read stays quiet: the amendment's own
+// guards judge it.
 export async function amendPhasesHold(directory: string, phases: string): Promise<string | undefined> {
   if (phases === "m") return undefined
   const { bin } = shellProfile()
-  if (!(await Bun.file(join(directory, phaseIndexPath(await currentRound(directory)))).exists())) return undefined
+  const round = await currentRound(directory)
+  const state = await readPhases(directory, round).catch(() => undefined)
+  const complete = state !== undefined && state.phases.length > 0 && state.phases.every((unit) => state.done.has(unit.id))
+  const target = complete ? round + 1 : round
+  const covered = await releasedRoadmapRound(directory, target)
+  if (covered !== undefined) {
+    return (
+      `--phases cannot shape ${roundDirName(target)}: the released roadmap of ${ANALYSIS_DOC} covers the round — its line is the phase list the round establishes under, and a config value alone never re-shapes a round the roadmap covers. ` +
+      `Reshape the round's unstarted tail by moving its \`${roundDirName(target)} <phases> — <goal>\` line in ${ANALYSIS_DOC}; the next ${bin} transfer ${directory} applies it before constructing`
+    )
+  }
+  if (state === undefined) return undefined
   const route = await routePhase(directory, { loadPlan, bin }).catch(() => undefined)
   if (route === undefined || route.type !== "execute" || awaitingFormulation(route.plan.tasks, route.phase)) return undefined
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length

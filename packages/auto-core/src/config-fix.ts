@@ -36,7 +36,10 @@ import {
   type ProjectConfig,
 } from "./config"
 import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
+import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { provenanceFindings } from "./provenance"
+import { currentRound } from "./phases"
+import { releasedRoadmapRound } from "./roadmap"
 import { CONTRACT_AGENT } from "./opts"
 import { loadIntents } from "./intent/load"
 import { shellProfile } from "./shell"
@@ -229,6 +232,24 @@ export async function planFix(dir: string): Promise<FixPlan> {
     const comparison = await provenanceComparison(dir)
     if (comparison !== undefined) {
       for (const finding of provenanceFindings(comparison)) findings.push({ class: "manual", path: finding.path, problem: finding.problem })
+    }
+  }
+  // The roadmap supersession (plans/0103 D2): a released roadmap's line for
+  // the current round is that round's phase list (plans/0101 D5) — the config
+  // key then silently loses its meaning for the round, this table's own
+  // manual class ("report only, never guess"). Nothing to repair: the person
+  // reshapes rounds by moving roadmap lines, and a valid key is never
+  // rewritten. m mode never consults the roadmap; a round the roadmap does
+  // not cover keeps the key as its live establishment authority and names
+  // nothing.
+  if (config.phases !== "m") {
+    const round = await currentRound(dir)
+    if ((await releasedRoadmapRound(dir, round)) !== undefined) {
+      findings.push({
+        class: "manual",
+        path: CONFIG_FILE,
+        problem: `phases "${config.phases}" is superseded — ${roundDirName(round)} establishes under the released roadmap of ${ANALYSIS_DOC}; nothing to repair (reshape rounds by moving its lines)`,
+      })
     }
   }
   // A missing brief is no longer a finding (plans/0081 D11): omitted seed

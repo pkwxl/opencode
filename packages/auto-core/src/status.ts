@@ -12,10 +12,12 @@
 // parent run holds lanes (a killed parent's leftovers show here too, which
 // is the recovery story's first line).
 import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { provenanceComparison } from "./bundle"
 import { awaitingFormulation } from "./formulate"
 import { loadProjectConfig } from "./config"
 import { provenanceFindings } from "./provenance"
+import { releasedRoadmapRound } from "./roadmap"
 import { shellProfile } from "./shell"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
 
@@ -70,6 +72,20 @@ export async function renderStatus(dir: string): Promise<string[]> {
     }
   }
   lines.push(...provenance)
+  // The roadmap supersession (plans/0103 D2): a released roadmap line
+  // covering the current round is that round's phase list (plans/0101 D5) —
+  // the config key then never applies to the round, and the tree says so
+  // once, naming the round's own channel so nobody amends the key "to clean
+  // up". m mode never consults the roadmap; a config-governed round (no
+  // analysis, unreleased, or the roadmap plans no line for it) names
+  // nothing — the key is its live establishment authority.
+  const config = await loadProjectConfig(dir).catch(() => undefined)
+  const covered = config !== undefined && config.phases !== "m" ? await releasedRoadmapRound(dir, round) : undefined
+  if (covered !== undefined) {
+    lines.push(
+      `ℹ phases (config "${config!.phases}"): superseded — ${roundDirName(round)} establishes under the roadmap of ${ANALYSIS_DOC}; reshape the round by moving its \`${roundDirName(round)} <phases> — <goal>\` line there, never by amending the key`,
+    )
+  }
   const current = currentPhase(state)
   lines.push(`R-${String(round).padStart(2, "0")} (${state.done.size}/${state.phases.length} phases done)`)
   for (const phase of state.phases) {
@@ -87,14 +103,20 @@ export async function renderStatus(dir: string): Promise<string[]> {
     // whose tasks are all done but whose survey still records open forks —
     // the round is waiting on the person, and status says so, naming the
     // reshape channel beside the release (plans/0101 D6 — the held boundary
-    // is the designed amendment moment). Beside it the review-seam note
+    // is the designed amendment moment; the channel authority-branched by
+    // plans/0103 D3: a roadmap-covered round reshapes by its moved line, the
+    // config value never reaching it). Beside it the review-seam note
     // (plans/0101 D3/D4): the current phase's plan task stands constructed
     // and not yet run — the round waits on the person's dispatch (plan) or
     // its rejection (fix the todo's inputs, re-run transfer).
     const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
     const awaitingPlan = phase === current ? awaitingFormulation(tasks, phase) !== undefined : false
+    const reshapeNote =
+      covered !== undefined
+        ? `where the findings reshape the round, move its \`${roundDirName(round)} <phases> — <goal>\` line in ${ANALYSIS_DOC} (the unstarted phases re-derive at the next transfer)`
+        : "where the findings reshape the round, `amend --phases` re-derives its unstarted phases at the next transfer"
     lines.push(
-      `  [${mark}] ${phaseLabel(phase)}${awaiting ? " (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their `Recommend:` defaults with `Clarified: yes`; where the findings reshape the round, `amend --phases` re-derives its unstarted phases at the next transfer)" : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
+      `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\`; ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
     )
     for (const task of tasks) {
       const checklist = task.checklist ?? []

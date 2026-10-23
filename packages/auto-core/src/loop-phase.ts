@@ -12,7 +12,7 @@ import { requireArtifact } from "./artifact"
 import { briefProposal, installBriefProposal } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { reportForUserPath, roundDirName } from "./docpaths"
+import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
@@ -39,6 +39,7 @@ import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
+import { releasedRoadmapRound } from "./roadmap"
 import { renderPhaseHandover } from "./prompt"
 import { verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
@@ -323,7 +324,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       if (code === 0) return 0
       log(`⏸ the repair append did not complete (exit ${code}); the gate stop follows`)
     }
-    logGateStop(directory, phase, gated, acceptance)
+    await logGateStop(directory, phase, gated, acceptance)
     return 2
   }
   // The survey release's other half (plans/0081 D15.2): the person's
@@ -376,7 +377,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
 // distillation after the fix tasks. Exported since plans/0101 D1/D2: run's
 // boundary stop and transfer's phase-boundary refusal check the human gate
 // ahead of any session and print this same awaiting shape.
-export function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
+export async function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): Promise<void> {
   const { bin } = shellProfile()
   const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
   const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
@@ -390,13 +391,20 @@ export function logGateStop(directory: string, phase: PhaseUnit, problems: strin
     const survey = phaseSurveyDoc(phase)
     log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
     log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
-    // The reshape channel (plans/0101 D6): the survey's findings are the
-    // round's best evidence of what it should still do — where they
-    // contradict its unstarted phases, this held boundary is the designed
-    // amendment moment (the findings in hand), and the next transfer applies
-    // the value to the tail before constructing (started phases untouched).
+    // The reshape channel (plans/0101 D6, authority-branched by plans/0103
+    // D3): the survey's findings are the round's best evidence of what it
+    // should still do — where they contradict its unstarted phases, this
+    // held boundary is the designed amendment moment (the findings in
+    // hand), and the next transfer applies the value to the tail before
+    // constructing (started phases untouched). The channel is whichever
+    // authority covers the round (the D5 resolution): a covered round
+    // reshapes by its moved roadmap line — an `amend --phases` value never
+    // reaches it — while a config-governed round reshapes through the key.
+    const covered = await releasedRoadmapRound(directory, Number(phase.round.replace(/^R-/, "")))
     log(
-      `  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`,
+      covered !== undefined
+        ? `  to reshape the round from the findings: move its \`${phase.round} <phases> — <goal>\` line in ${ANALYSIS_DOC} — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs (the released roadmap covers the round; the config phases value never applies to it)`
+        : `  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`,
     )
   }
   if (acceptance) {
@@ -447,7 +455,7 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   if (gates.includes("human")) {
     const problems = await phaseGateProblems(ctx.directory, phase, ["human"])
     if (problems.length) {
-      logGateStop(ctx.directory, phase, problems, undefined)
+      await logGateStop(ctx.directory, phase, problems, undefined)
       return 2
     }
   }

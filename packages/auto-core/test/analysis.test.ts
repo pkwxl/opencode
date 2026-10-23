@@ -9,14 +9,12 @@ import {
   analysisProblems,
   analysisText,
   ANALYSIS_SECTIONS,
-  releasedRoadmapPhases,
   renderAnalysisStub,
   resolveRoundPhases,
-  roadmapPhases,
-  roadmapRounds,
 } from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
+import { releasedRoadmapRound, roadmapPhases, roadmapRounds } from "../src/roadmap"
 
 // A released, well-formed analysis: every section holds real content, one
 // open-recorded fork (answered beside, per the release recipe), a brief
@@ -179,7 +177,7 @@ describe("the project analysis document (plans/0084)", () => {
       // A filled but unreleased roadmap is not the person's decision yet.
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("\nClarified: yes", ""))
       expect(await resolveRoundPhases(dir, 1, "am")).toEqual({ phases: "am" })
-      expect(await releasedRoadmapPhases(dir, 1)).toBeUndefined()
+      expect(await releasedRoadmapRound(dir, 1)).toBeUndefined()
       // Released: the line for the round wins over the fallback, and rides
       // along for the sourced stop line; a round beyond the lines falls back.
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED)
@@ -188,7 +186,7 @@ describe("the project analysis document (plans/0084)", () => {
         roadmap: { round: 1, phases: "adm", goal: "port the core and its tests" },
       })
       expect(await resolveRoundPhases(dir, 3, "am")).toEqual({ phases: "am" })
-      expect(await releasedRoadmapPhases(dir, 2)).toBe("mtv")
+      expect((await releasedRoadmapRound(dir, 2))?.phases).toBe("mtv")
       // m mode has no phased roadmap: whatever the document plans, the
       // fallback stands (the guard lives in the resolution itself).
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("- R-01 adm —", "- R-01 amt —"))

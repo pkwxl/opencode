@@ -408,6 +408,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // task's mandated title and the D3 charter the self-heal's append input
   // composes — pure text over docpaths, consumed by loop-phase.
   "round-report": "driver",
+  // The roadmap grammar of docs/analysis.md (plans/0084, split from analysis
+  // by plans/0103 D4): the machine-parsed round lines and the released
+  // readers over them — the runtime plane's detection sites (fix's
+  // supersession finding) reach them beside the pipeline's establishment
+  // resolution; it reads only the provider domains (docpaths, phases).
+  roadmap: "driver",
   // The run-status event table (the headless direction's P2a, plans/0067
   // and its review): the frozen, additive-only vocabulary the P2 emitter
   // will publish — types and declaration tables only, importing nothing;
@@ -682,6 +688,13 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // init-time plane — no value edges at all today; runtime so the detection
   // sites (preflight, fix, status, sync) reach it without exception.
   provenance: "runtime",
+  // The roadmap grammar of docs/analysis.md (plans/0103 D4, provenance's
+  // precedent): the round-line parse and the released readers, split from
+  // analysis (pipeline) so the runtime plane reaches them — fix's
+  // supersession finding reads a covering line without binding a
+  // runtime → pipeline edge; it reaches only provider domains (docpaths,
+  // phases), so the placement adds no driver edge at all.
+  roadmap: "runtime",
   // The bundle sync core (plans/0100 D4/D5): the person's upgrade command's
   // plan/apply/format, reaching bundle (the resolve/map), provenance (the
   // stamp) and config (the bootstrap's intent key) — the config-fix seat.

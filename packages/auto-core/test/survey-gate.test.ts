@@ -275,15 +275,20 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // run completes the survey's work and stops at its boundary where the
     // gate holds: the awaiting lines name the reshape channel beside the
     // release — the survey's findings in hand, F10's evidence mechanically
-    // acted on.
+    // acted on. The channel is the authority's (plans/0103 D3): this round is
+    // roadmap-covered, so the stop names moving the roadmap's line — the
+    // config amend wording never reaches a covered round.
     const held = await f.run()
     expect(held.code).toBe(2)
-    expect(held.lines.some((line) => line.includes("to reshape the round from the findings: opencode-auto amend"))).toBe(true)
-    expect(held.lines.some((line) => line.includes("--phases <value> — the round's unstarted phases re-derive when opencode-auto transfer"))).toBe(true)
-    // The held boundary admits the amendment (the hold's predicate is the
+    expect(held.lines.some((line) => line.includes("to reshape the round from the findings: move its `R-01 <phases> — <goal>` line in docs/analysis.md"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("the config phases value never applies to it"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("--phases <value>"))).toBe(false)
+    // The held boundary admits the reshape (the hold's predicate is the
     // review moment): the person moves the released roadmap's line — the
-    // authority for the round's tail — and releases the survey.
-    expect(await amendPhasesHold(f.dir, "survey,implement,test")).toBeUndefined()
+    // authority for the round's tail — and releases the survey. An
+    // `amend --phases` on the covered round is refused outright (plans/0103
+    // D3): the value never applies to it.
+    expect(await amendPhasesHold(f.dir, "survey,implement,test")).toContain("--phases cannot shape R-01: the released roadmap of docs/analysis.md covers the round")
     const analysis = join(f.dir, "docs/analysis.md")
     writeFileSync(analysis, (await Bun.file(analysis).text()).replace("- R-01 survey,implement —", "- R-01 survey,implement,test —"))
     const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")

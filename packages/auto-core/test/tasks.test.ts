@@ -286,6 +286,36 @@ describe("renderStatus closed marks (plans/0053 D16)", () => {
   })
 })
 
+describe("renderStatus roadmap supersession (plans/0103 D2)", () => {
+  const superseded = (lines: string[]) =>
+    lines.some((line) => line.includes('ℹ phases (config "mt"): superseded — R-01 establishes under the roadmap of docs/analysis.md; reshape the round by moving its `R-01 <phases> — <goal>` line there, never by amending the key'))
+
+  test("a released roadmap covering the round names the config key superseded once, the line-move channel in the line", async () => {
+    await seedUnits(dir, "## T-001: a [pending]\nA.\n")
+    await mkdir(join(dir, ".opencode/auto"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "mt" }))
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+    const lines = await renderStatus(dir)
+    expect(superseded(lines)).toBe(true)
+    // Exactly once — not per phase.
+    expect(lines.filter((line) => line.includes("superseded")).length).toBe(1)
+  })
+
+  test("no analysis, an unreleased one, a round it does not cover, or m mode: no line — the key is the live authority", async () => {
+    await seedUnits(dir, "## T-001: a [pending]\nA.\n")
+    await mkdir(join(dir, ".opencode/auto"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "mt" }))
+    expect(superseded(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", ""].join("\n"))
+    expect(superseded(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 mt — later round", "", "Clarified: yes", ""].join("\n"))
+    expect(superseded(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "m" }))
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect(superseded(await renderStatus(dir))).toBe(false)
+  })
+})
+
 describe("renderStatus in-flight lanes section (plans/0068 D13, S4)", () => {
   test("lane registry entries open the tree with one section line per lane, worktree and pid beside the unit", async () => {
     await seedUnits(dir, "## T-001: a [pending]\nA.\n\n## T-002: b [pending]\nB.\n")

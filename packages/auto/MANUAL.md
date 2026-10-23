@@ -80,10 +80,13 @@ opencode-auto transfer <dir>
   A released roadmap governs the end: past its last line `transfer` stops pointing at
   `## Roadmap` as the place to extend, never silently opening a config round.
 - In `m` mode `transfer` refuses (exit 1): `plan` establishes the single phase as before.
-- **Reshaping the round**: `amend --phases` at a phase boundary (or with no phase in progress)
-  changes the config value, and the next `transfer` re-derives the round's **unstarted** phase tail
-  from it before constructing (a released roadmap's line still wins); mid-phase it refuses, naming
-  the boundary. Started or completed phases are never reshaped.
+- **Reshaping the round**: at a phase boundary (or with no phase in progress) the round's
+  **unstarted** phase tail is reshaping state, and the next `transfer` re-derives it before
+  constructing. The channel is the round's authority: a round the released roadmap covers is
+  reshaped by moving its `- R-NN <phases> — <goal>` line in `docs/analysis.md` (`amend --phases`
+  refuses there — the config value never applies to a covered round; `status` names the key
+  superseded), a config-governed round by `amend --phases` (mid-phase it refuses, naming the
+  boundary). Started or completed phases are never reshaped.
 
 ## 3. Cross a phase boundary — transfer → review → plan → run
 

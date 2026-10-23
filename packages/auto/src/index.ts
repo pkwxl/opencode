@@ -52,7 +52,6 @@ import {
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
-import { releasedRoadmapPhases } from "@opencode-ai/auto-core/analysis"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { loadIntents, planningInputScaffold } from "@opencode-ai/auto-core/intent/load"
@@ -1926,8 +1925,12 @@ if (command === "init" || command === "amend") {
   // tail reshapes at the advance's review moments, so the amend command
   // refuses the key while the current phase holds pending work — the person
   // amends at the boundary (or lets run finish the phase) and the next
-  // transfer applies the value to the tail before constructing. init keeps
-  // the prefix guard alone: its full overwrite is not the reshape channel.
+  // transfer applies the value to the tail before constructing. A round the
+  // released roadmap covers refuses outright (auto-core plans/0103 D3): the
+  // value never applies to it — the roadmap's line is moved instead —
+  // retiring 0101 D5's post-amend precedence note (the note accepted the
+  // inert write; the refusal names the round's own channel). init keeps the
+  // prefix guard alone: its full overwrite is not the reshape channel.
   if (amendCommand && flags.has("phases")) {
     const hold = await amendPhasesHold(directory, config.phases)
     if (hold) {
@@ -2112,23 +2115,6 @@ if (command === "init" || command === "amend") {
   if (amendCommand) {
     const given = CONFIG_FLAGS.filter((key) => flags.has(key)).map((key) => (key === "mode" ? "-m" : `--${key}`))
     console.log(`✓ amended (${given.join(" ")}); the other keys are unchanged. Review the change and commit it`)
-    // Roadmap precedence (auto-core plans/0101 D5): when a released roadmap
-    // line covers the round this amendment targets — the live round, or the
-    // next one when the live round is complete, the same round the prefix
-    // guard judges — round establishment takes the line's value over config.
-    // Name it, or the person amends, re-establishes, and is silently
-    // overridden. m mode never consults the roadmap, so the note stays quiet
-    // there; an agreeing line needs no divergence channel.
-    if (flags.has("phases") && config.phases !== "m") {
-      const target = roundComplete ? liveRound + 1 : liveRound
-      const roadmap = await releasedRoadmapPhases(directory, target)
-      if (roadmap !== undefined && roadmap !== config.phases) {
-        console.log(
-          `ℹ the roadmap of docs/analysis.md covers round ${roundDirName(target)} with phases "${roadmap}": round establishment takes the roadmap line over config ` +
-            `— edit the line to diverge (config phases applies to rounds the roadmap does not cover)`,
-        )
-      }
-    }
     process.exit(0)
   }
 
