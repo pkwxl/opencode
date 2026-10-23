@@ -697,3 +697,109 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     expect(existsSync(join(dir, "docs/R-01/P02-test"))).toBe(true)
   })
 })
+
+describe("transfer: the round-brief proposal channel (plans/0104)", () => {
+  const BRIEFS = "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the e2e suite passes on the ported core.\n"
+
+  // The project-start shape over a repo whose gitignore ignores AGENTS.md
+  // (the real init's set): the continuation's round-start commit must carry
+  // the setup, not the guidance render.
+  async function cleanRepo(): Promise<string> {
+    const dir = await repo()
+    await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\n/AGENTS.md\n")
+    await mkdirSync(join(dir, ".opencode/agent"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), "contract\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "ignore the render")
+    return dir
+  }
+
+  test("a released proposal passes the round-start gate: installed verbatim on the driver's round-start commit, the construct follows in the same invocation", async () => {
+    const dir = await cleanRepo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    // Established under the roadmap's line; the gate is skipped and named.
+    expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test — phases from the roadmap of docs/analysis.md"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("installs verbatim — the round-start gate passes (your release was its review)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("round-start gate: review the round setup"))).toBe(false)
+    // The install landed inside the continuation, its own commit.
+    expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)"))).toBe(true)
+    // The same invocation continued into the construction and stopped at the
+    // review seam — the release invocation advances to the next person gate.
+    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    // round.md carries the proposal verbatim under the title, the Close stub
+    // in place by construction.
+    const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
+    expect(round).toContain("Port the core with the retry ladder intact.")
+    expect(round).toContain("- Acceptance: the e2e suite passes on the ported core.")
+    expect(round).toContain("## Close")
+    expect(round.startsWith("# Round R-01\n")).toBe(true)
+    // The tree is clean — the driver's round-start commit swept the setup
+    // (the gate's person commit replaced by the release mark) — and the
+    // construct's todo landed after it.
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+    expect(subjects).toContain("PLAN start R-01 (round brief installed from docs/analysis.md)")
+    expect(subjects.some((subject) => subject.startsWith("PLAN formulate"))).toBe(true)
+  })
+
+  test("the floor stands: a released analysis without proposals keeps today's gate stop and the uncommitted setup", async () => {
+    const dir = await cleanRepo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("round-start gate): review the round setup, fill in docs/R-01/round.md"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("round brief installed verbatim"))).toBe(false)
+    expect((await git(dir, "status", "--porcelain")).trim()).not.toBe("")
+    // An unreleased proposal is not the person's decision yet: on a fresh
+    // project the release gate holds it with everything else.
+    const held = await cleanRepo()
+    await Bun.write(join(held, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"], false) + BRIEFS)
+    const awaiting = await capture(() => runTransfer(held, { phases: "mt" }))
+    expect(awaiting.code).toBe(2)
+    expect(awaiting.lines.some((line) => line.includes("the project analysis awaits you"))).toBe(true)
+    expect(existsSync(join(held, "docs/R-01"))).toBe(false)
+  })
+
+  test("the held gate's proposal-later path: a `### R-01` drafted into the released analysis after the gate installs at the next advance", async () => {
+    const dir = await cleanRepo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
+    const gate = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(gate.lines.some((line) => line.includes("round-start gate"))).toBe(true)
+    // The person commits the stub setup, then drafts the proposal into the
+    // living document (no new release mark needed — the moved-line rule).
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "round start")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "draft the round brief proposal")
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
+    expect(round).toContain("retry ladder")
+    expect(round).toContain("## Close")
+  })
+
+  test("a filled round.md stands: the released proposal is never installed over the person's writing", async () => {
+    const dir = await cleanRepo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Goal", "## Goal\n\nThe person's own goal for the round."))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "hand-written brief")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "proposal drafted later")
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("round brief installed verbatim"))).toBe(false)
+    const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
+    expect(round).toContain("The person's own goal for the round.")
+    expect(round).not.toContain("retry ladder")
+    // The person's brief is the construct's input: the advance proceeds.
+    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+  })
+})

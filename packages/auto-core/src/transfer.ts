@@ -40,7 +40,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, renderAnalysisStub, resolveRoundPhases } from "./analysis"
+import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases } from "./analysis"
 import { briefProposal, installBriefProposal } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
@@ -50,7 +50,10 @@ import { logGateStop } from "./loop-phase"
 import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
+import { loadIntents, planningInputScaffold } from "./intent/load"
+import { planInputPath } from "./plan-input"
 import { releasedRoadmapRound, releasedRoadmapRounds } from "./roadmap"
+import { installRoundBrief, roundBriefText } from "./round-brief"
 import {
   CLARIFIED_MARK,
   clarifiedMark,
@@ -59,6 +62,7 @@ import {
   phaseGates,
   phaseGateProblems,
   phaseIndexPath,
+  phaseKey,
   phaseLabel,
   phaseTailDrift,
   type PhaseTailDrift,
@@ -166,7 +170,28 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
 async function advanceToReview(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const stop = await rederiveTail(directory, round, opts)
   if (stop !== undefined) return stop
+  await applyReleasedBrief(directory, round)
   return await runAll(directory, { ...opts, stopBefore: "formulate" })
+}
+
+// The released round brief, installed ahead of the construction (plans/0104
+// D3): whenever the round's brief is still the untouched stub and the
+// released analysis carries an `### R-NN` proposal, the advance installs it
+// verbatim on its own `round-start` commit — the boundary's apply seam beside
+// rederiveTail. This is the held gate's later path (the person drafts the
+// proposal into the living document between rounds, commits, and the next
+// advance applies it) and the establishment continuation's install site in
+// one; the commit sweeps the uncommitted round setup when it runs there. A
+// round brief already on disk — the person's hand or a prior install —
+// stands, and no proposal is the common floor: both quiet. The install's own
+// failure lines log themselves; a failed commit leaves the tree dirty for
+// preflight's round-start gate, which names the channel too.
+async function applyReleasedBrief(directory: string, round: number): Promise<void> {
+  if ((await roundBriefText(directory, round)) !== undefined) return
+  const proposal = await releasedRoundBriefProposal(directory, round)
+  if (proposal === undefined) return
+  const done = await installRoundBrief(directory, round, ANALYSIS_DOC, proposal, commitTree)
+  for (const line of done.lines) log(line)
 }
 
 // The unstarted-tail re-derivation (plans/0101 D6): a round's phases.md tail
@@ -370,6 +395,35 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
   for (const line of before) log(line)
   log(`✓ round ${name} established: ${units.map(phaseLabel).join(", ")}${sourceSuffix}`)
   if (isolated.length) log(`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`)
+  // The round-brief proposal channel (plans/0104 D3): a released `### R-NN`
+  // proposal passes the round-start gate — the person's release was the
+  // review — and the advance continues into the construction in the same
+  // invocation, the install landing inside it (applyReleasedBrief) on the
+  // driver's own round-start commit, which sweeps this uncommitted setup: the
+  // gate's person commit is replaced by the release mark. A round.md already
+  // holding content, or no proposal, keeps today's gate stop.
+  if ((await roundBriefText(directory, round)) === undefined && (await releasedRoundBriefProposal(directory, round)) !== undefined) {
+    log(
+      `ℹ the released \`${roundDirName(round)}\` round-brief proposal of ${ANALYSIS_DOC} installs verbatim — the round-start gate passes (your release was its review); ` +
+        `revise the brief in place any time, every planning session reads the current file`,
+    )
+    // The guidance flips to the phase-preparation state (the states flip at
+    // command boundaries, and this continuation crosses one): the round
+    // brief's step is past, and the document of the moment is the phase's
+    // planning input — the todo's other person-owned input.
+    const scaffold = planningInputScaffold(loadIntents(directory), opts.intent ?? "default")
+    await ensurePointer(directory, {
+      testByDriver: opts.testByDriver,
+      guidance: {
+        kind: "phase",
+        phase: phaseKey(units[0]!).id,
+        inputPath: planInputPath(units[0]!),
+        scaffold: scaffold ?? "(the active intent pack carries no planning-input scaffold — free-form markdown)",
+        manual: false,
+      },
+    })
+    return await advanceToReview(directory, round, opts)
+  }
   log(
     `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
       `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`,

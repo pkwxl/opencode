@@ -17,7 +17,7 @@
 import { join } from "node:path"
 import { mkdir } from "node:fs/promises"
 import { ensurePointer } from "./agents-block"
-import { analysisProblems, renderAnalysisStub, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
+import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
 import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { log } from "./log"
@@ -50,7 +50,7 @@ import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
 import { awaitingFormulation } from "./formulate"
 import { commitTree, isolateRound } from "./git"
-import { renderRoundBrief, roundBriefText } from "./round-brief"
+import { installRoundBrief, renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
@@ -471,7 +471,8 @@ export async function planPrelude(dir: string, opts: {
     return stop(0, [
       filled
         ? `ℹ the round brief ${roundBriefPath(round)} is filled; revise it with your agent if the round's goals moved (this state's guidance is in AGENTS.md), then continue: ${next}`
-        : `ℹ the round brief ${roundBriefPath(round)} is the stub: work with your agent on its goal, acceptance and release criteria (this state's guidance is in AGENTS.md), review and commit, then continue: ${next}`,
+        : `ℹ the round brief ${roundBriefPath(round)} is the stub: work with your agent on its goal, acceptance and release criteria (this state's guidance is in AGENTS.md), review and commit, then continue: ${next}` +
+          (manual ? "" : ` — or draft it as a \`### ${roundDirName(round)}\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC} and commit: the next transfer installs it verbatim`),
     ])
   }
   // Row 15 (--phase, plans/0084): the assisted planning-input preparation
@@ -948,10 +949,21 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
     : ""
   const guideLine = `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`
   if (resolved.phases === "m") {
+    const lines = [...before, `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`, ...isolatedLine]
+    // The round-brief proposal channel (plans/0104 D3): m mode installs at
+    // its own establishment — no construct step exists here for the advance's
+    // apply seam to carry it. The driver's round-start commit sweeps the
+    // setup, and the stop names the input step instead of the gate fill.
+    if ((await roundBriefText(dir, round)) === undefined) {
+      const proposal = await releasedRoundBriefProposal(dir, round)
+      if (proposal !== undefined) {
+        const done = await installRoundBrief(dir, round, ANALYSIS_DOC, proposal, commitTree)
+        lines.push(...done.lines)
+        return stop(0, [...lines, `next: the round brief is your released proposal, installed and committed — plan the round with: ${bin} plan ${dir} -p <text> | --file <path>`, guideLine])
+      }
+    }
     return stop(0, [
-      ...before,
-      `✓ round ${name} established: single phase ${phaseLabel(units[0]!)}`,
-      ...isolatedLine,
+      ...lines,
       `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(units[0]!)} by hand, ` +
         `or run: ${bin} plan ${dir} -p <text> | --file <path>`,
       guideLine,
@@ -1047,13 +1059,17 @@ function inputInvalidatedLine(dir: string, phase: PhaseUnit): string {
 // — exit 2, awaiting-person — while the round brief is the untouched stub; no
 // planning session dispatches against an empty round brief. The fill and the
 // transfer re-run are the answer (the reconstruct absorbs the filled brief;
-// --round re-points the guidance at the document).
+// --round re-points the guidance at the document), or — since plans/0104 —
+// the proposal channel: release an `### R-NN` subsection under `## Round
+// briefs` of docs/analysis.md and commit, and the next transfer installs it
+// verbatim ahead of the construct.
 function stubRoundLines(dir: string, round: number): string[] {
   const { bin } = shellProfile()
   return [
     `⏸ the round brief ${roundBriefPath(round)} is still the untouched stub: no planning session dispatches against an empty round brief`,
     `next: fill it in (## Goal, ## Acceptance criteria, ## Release criteria — ${bin} plan ${dir} --round points the AGENTS.md guidance at it), commit, ` +
-      `then re-run: ${bin} transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again`,
+      `then re-run: ${bin} transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again; ` +
+      `or draft it as a \`### ${roundDirName(round)}\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, commit — the next ${bin} transfer ${dir} installs it verbatim`,
   ]
 }
 

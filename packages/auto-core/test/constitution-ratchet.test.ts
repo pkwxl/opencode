@@ -333,12 +333,22 @@ describe("constitution drift ratchet", () => {
     expect(GUIDANCE.ANALYSIS_STATE_PHASED).toContain("the next `transfer` installs the approved brief")
     expect(GUIDANCE.ANALYSIS_STATE).toContain("the next `plan` installs the approved brief")
     expect(GUIDANCE.ANALYSIS_STATE_PHASED).not.toContain("the next `plan` installs")
+    // The round-brief proposal channel (plans/0104): both analysis states
+    // teach the section, the round state names the drafting alternative only
+    // phased (m mode installs at its establishment, never later), and the
+    // primer carries the channel once for both modes.
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("## Round briefs")
+    expect(GUIDANCE.ANALYSIS_STATE_PHASED).toContain("## Round briefs")
+    expect(GUIDANCE.ANALYSIS_STATE).toContain("installs the round's proposal verbatim when the round opens")
     const phasedRound = renderAgentsBlock({ guidance: { kind: "round", round: "R-01", manual: false } })
+    expect(phasedRound).toContain("an `### R-01` proposal under `## Round briefs` of `docs/analysis.md`, committed, installs verbatim at the next `transfer`")
+    expect(phasedRound).toContain("The drafting can travel the released analysis instead")
     expect(phasedRound).toContain("run `transfer` again — it constructs the first phase's plan task")
     expect(phasedRound).not.toContain("it plans the round's first phase")
     const manualRound = renderAgentsBlock({ guidance: { kind: "round", round: "R-01", manual: true } })
     expect(manualRound).toContain("run `plan` again — it plans the round's first phase")
     expect(manualRound).not.toContain("run `transfer` again")
+    expect(manualRound).not.toContain("The drafting can travel the released analysis instead")
     const phasedPhase = renderAgentsBlock({
       guidance: { kind: "phase", phase: "R-01.P01", inputPath: "docs/R-01/P01-implement/plan-input.md", scaffold: "s", manual: false },
     })
@@ -352,5 +362,6 @@ describe("constitution drift ratchet", () => {
     expect(GUIDANCE.DRIVER_PRIMER).toContain("The commands bracket the boundaries")
     expect(GUIDANCE.DRIVER_PRIMER).toContain("re-derives it before constructing")
     expect(GUIDANCE.DRIVER_PRIMER).toContain("no boundary vocabulary")
+    expect(GUIDANCE.DRIVER_PRIMER).toContain("installs verbatim when its round opens")
   })
 })

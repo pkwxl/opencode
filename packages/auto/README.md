@@ -58,8 +58,8 @@ New-project flow, phased (`init` → `transfer` → fill in and commit → `tran
 ```sh
 opencode-auto init <dir> --phases "admtvk"   # 1. fix the project config (init writes only the config layer, no round directories)
 opencode-auto transfer <dir>                  # 2. open docs/analysis.md (the assisted first-run step) — or, with OPENCODE_AUTO_ANALYSIS=off, establish docs/R-01/ and stop at the round-start gate
-#                                              3. by hand: with your agent fill docs/analysis.md (analysis, goals, brief proposal, roadmap), add the line `Clarified: yes`, commit
-opencode-auto transfer <dir>                  # 4. install the approved brief, establish docs/R-01/ under the roadmap's line, stop at the round-start gate; by hand: fill in docs/R-01/round.md (goals/acceptance/release criteria), commit
+#                                              3. by hand: with your agent fill docs/analysis.md (analysis, goals, brief proposal, roadmap — and optionally each round's `### R-NN` brief under ## Round briefs), add the line `Clarified: yes`, commit
+opencode-auto transfer <dir>                  # 4. install the approved brief, establish docs/R-01/ under the roadmap's line; a released `### R-01` brief installs verbatim and the same invocation constructs the plan task — otherwise stop at the round-start gate, by hand: fill in docs/R-01/round.md (goals/acceptance/release criteria), commit
 opencode-auto transfer <dir>                  # 5. construct R-01.P01's plan task (the formulation todo, from round.md and the phase's plan-input.md) and stop for review
 opencode-auto plan <dir>                      # 6. dispatch it: the planning session writes the phase's tasks
 opencode-auto run <dir>                       # 7. execute the phase's tasks; stop at its clean end — then transfer again for the next boundary (after the round's last phase: fill ## Close, transfer opens the next round)
@@ -558,10 +558,17 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   (`- R-NN <phases> — <goal>` per round, the exact `amend --phases` value), then add the whole line
   `Clarified: yes` and commit; the next `transfer` installs the approved brief verbatim and establishes
   `R-01` under the roadmap's line (the config `phases` value the fallback when no released line covers
-  the round — the established line names its source). `OPENCODE_AUTO_ANALYSIS=off` skips the analysis
-  and establishes directly from config. Either way it stops at the **round-start gate** (exit 0):
-  review the setup, fill in `docs/R-NN/round.md` (`## Goal`, `## Acceptance criteria`, `## Release
-  criteria`), and commit — the commit is your veto.
+  the round — the established line names its source). The analysis may also carry the optional
+  `## Round briefs` section — one `### R-NN` subsection per round, its body that round's brief
+  (auto-core plans/0104): a released proposal **installs verbatim** into `docs/R-NN/round.md` when the
+  round opens, on the driver's own round-start commit, and the round-start gate passes (your release
+  was the review) — the same invocation continues into the construction and stops at its review; a
+  subsection drafted into the released document later (between rounds, after the previous round's
+  findings — no new release mark needed) installs at that round's open. A round without a proposal
+  keeps the hand-written gate below. `OPENCODE_AUTO_ANALYSIS=off` skips the analysis and establishes
+  directly from config. Without an installed proposal either shape stops at the **round-start gate**
+  (exit 0): review the setup, fill in `docs/R-NN/round.md` (`## Goal`, `## Acceptance criteria`,
+  `## Release criteria`), and commit — the commit is your veto.
 - **Phase boundary (the current phase's tasks all done)**: the human gate first — a survey phase with
   open `Fork:` lines refuses exit 2 before any session runs (write your answers beside them, then the
   release line `Clarified: yes`, commit, re-run; the release also installs the survey's approved
@@ -574,7 +581,9 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
 - **Round open (the round closed)**: `transfer` runs the round-close check (whole-tree P1 scan, build
   if configured, `## Close` filled, the round report present; failing → itemized listing, exit 2,
   nothing opens), then establishes `docs/R-(N+1)/` from the roadmap's next line and stops at the
-  round-start gate. A released roadmap governs the sequence's end: past its last planned line the
+  round-start gate — unless a released `### R-(N+1)` round-brief proposal waits, which installs
+  verbatim and continues into the construction (the project-start shape's channel, above). A released
+  roadmap governs the sequence's end: past its last planned line the
   stop names `## Roadmap` of `docs/analysis.md` as the document to extend — never a silent config
   round (a project with no released roadmap keeps falling back to config `phases` forever).
 - **The review stop and its channel**: a constructed todo is reviewed, never edited — a rejection is
@@ -582,7 +591,8 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   roadmap line) and the re-run reconstructs (idempotent rewrite-on-diff; an unchanged floor is kept by
   its digest); `transfer --resynthesize` re-voices a rejected synthesized ledger past the digest-keep.
   A still-stub `round.md` refuses the dispatch — plan's side of the same guard, so no planning session
-  ever runs against an empty round brief.
+  ever runs against an empty round brief (the refusal also names the proposal channel: a released
+  `### R-NN` subsection installs verbatim at the next `transfer`).
 - **The re-derivable tail**: a round's unstarted phase tail (every phase with no directory work and no
   planning yet) is reshaping state, not commitment: the reshaping value is set at a phase boundary
   (or with the round complete) and the next `transfer` re-derives the tail from it before

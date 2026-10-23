@@ -24,7 +24,7 @@ The four things you "open":
 | You want to open | Command | What happens |
 | --- | --- | --- |
 | a project | `init [dir]` | writes the config layer, prepares git; no AI session, nothing under `docs/` |
-| a round | `transfer [dir]` | establishes `docs/R-NN/` (phase index, phase directories, round brief); stops at the round-start gate for your review + commit |
+| a round | `transfer [dir]` | establishes `docs/R-NN/` (phase index, phase directories, round brief); a released `### R-NN` round-brief proposal in `docs/analysis.md` installs verbatim and the advance continues to the plan task's review, otherwise stops at the round-start gate for your review + commit |
 | a phase | `transfer [dir]` → review → `plan [dir]` → `run [dir]` | `transfer` closes the finished phase and constructs the next one's plan task, stopping for review; `plan` dispatches it (the planning session lists the tasks); `run` executes the phase and stops at its clean end |
 | one task / a group | `plan [dir] --new-task "<title>"` / `plan [dir] --append -p "<text>"` | adds one task with no session / appends a group planned from an input, then stops for review |
 
@@ -68,6 +68,12 @@ opencode-auto transfer <dir>
   value the fallback), and the round brief stub `round.md`. It stops there (exit 0) — **the
   round-start gate**: review the setup, fill in `round.md` (`## Goal`, `## Acceptance criteria`,
   `## Release criteria`), and commit. The next `transfer` constructs P01's plan task (see §3).
+  The drafting can travel the analysis instead: a `### R-01` subsection under `## Round briefs` of
+  `docs/analysis.md`, released with the document (or drafted into it later between rounds — no new
+  release mark needed), **installs verbatim** into `round.md` on the driver's own commit when the
+  round opens — the gate passes and the same invocation already constructs the plan task. Your
+  hand-written file always wins: a filled `round.md` is never overwritten, and after an install the
+  file is yours to revise in place.
 - Everything inside `docs/R-NN/` is permanent once written — never renamed or moved.
 - With config `isolate`, designated nested repositories are switched onto the round branch `auto/R-NN`
   at establishment (a dirty one blocks, exit 2); `opencode-auto land` returns their work to the original
@@ -77,8 +83,10 @@ opencode-auto transfer <dir>
   commit; `transfer` then runs the round-close check (whole-tree reference scan, `build` if
   configured, `## Close` filled, the round user report in place) and establishes `docs/R-(N+1)/` from
   the roadmap's next line — failing items are listed, exit 2, and nothing opens until they are fixed.
-  A released roadmap governs the end: past its last line `transfer` stops pointing at
-  `## Roadmap` as the place to extend, never silently opening a config round.
+  A released `### R-(N+1)` round-brief proposal drafted into the analysis installs verbatim at that
+  open (the gate passes, the construction follows); without one the round-start gate waits for your
+  hand-written brief as above. A released roadmap governs the end: past its last line `transfer` stops
+  pointing at `## Roadmap` as the place to extend, never silently opening a config round.
 - In `m` mode `transfer` refuses (exit 1): `plan` establishes the single phase as before.
 - **Reshaping the round**: at a phase boundary (or with no phase in progress) the round's
   **unstarted** phase tail is reshaping state, and the next `transfer` re-derives it before
