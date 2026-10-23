@@ -390,7 +390,10 @@ export async function logGateStop(directory: string, phase: PhaseUnit, problems:
     // release simultaneously approves the proposed project brief (D15.2).
     const survey = phaseSurveyDoc(phase)
     log(`  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override, or pass the next phase's planning input with ${bin} plan ${directory} --file <path>)`)
-    log(`  then add the line \`${CLARIFIED_MARK}\` to ${survey}, commit, re-run — the phase completes and the approved \`## Project brief\` section is installed`)
+    log(
+      `  then release it: ${bin} clarify ${directory} — it writes the \`${CLARIFIED_MARK}\` line to ${survey} and commits it (or add the line, commit, re-run yourself); ` +
+        `the phase completes and the approved \`## Project brief\` section is installed`,
+    )
     // The reshape channel (plans/0101 D6, authority-branched by plans/0103
     // D3): the survey's findings are the round's best evidence of what it
     // should still do — where they contradict its unstarted phases, this

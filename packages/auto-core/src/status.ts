@@ -116,7 +116,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
         ? `where the findings reshape the round, move its \`${roundDirName(round)} <phases> — <goal>\` line in ${ANALYSIS_DOC} (the unstarted phases re-derive at the next transfer)`
         : "where the findings reshape the round, `amend --phases` re-derives its unstarted phases at the next transfer"
     lines.push(
-      `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\`; ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
+      `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\` (${shellProfile().bin} clarify <dir> writes and commits the line); ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
     )
     for (const task of tasks) {
       const checklist = task.checklist ?? []

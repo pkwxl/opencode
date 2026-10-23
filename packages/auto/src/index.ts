@@ -24,6 +24,7 @@ import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-cor
 import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
+import { clarifyGate } from "@opencode-ai/auto-core/clarify"
 import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { landUnit } from "@opencode-ai/auto-core/land"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
@@ -394,9 +395,10 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent", "tree-lanes"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); status and install-prompts stay flagless.
+// agents and spends tokens); status, install-prompts and clarify stay
+// flagless.
 const MODELS_FLAGS = new Set(["probe"])
-const FLAGLESS = command === "status" || command === "models" || command === "install-prompts"
+const FLAGLESS = command === "status" || command === "models" || command === "install-prompts" || command === "clarify"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skips the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
@@ -570,7 +572,7 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "run" || command === "clarify") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -587,9 +589,12 @@ if (command === "init" || command === "amend" || command === "plan" || command =
 // and prints only, so it runs beside a live run (the one write-side gate it
 // skips); sync joins the family beside fix (it rewrites the materialized
 // bundle files a run's sessions read, plans/0100 D4) with the same dryrun
-// exemption. (`continue` and `check` used to refuse here too; both retired
-// ahead of every check, their notices above.)
-if (command === "init" || command === "amend" || command === "reset" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
+// exemption; clarify (plans/0105 D6) writes the gate documents a running
+// driver re-reads (docs/analysis.md, a held survey.md), amend's reason, and
+// never takes the lock itself — one atomic check → write → commit. (`continue`
+// and `check` used to refuse here too; both retired ahead of every check,
+// their notices above.)
+if (command === "init" || command === "amend" || command === "reset" || command === "clarify" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
   const holder = liveRunLock(directory)
   if (holder) {
     for (const line of lockLines(directory, holder)) console.error(line)
@@ -1058,6 +1063,39 @@ if (command === "close") {
   lock.release()
   for (const line of result.lines) (result.type === "closed" ? console.log : console.error)(line)
   process.exit(result.type === "closed" ? 0 : result.type === "refused" ? 1 : 2)
+}
+
+// clarify (auto-core plans/0105): the person's release command — the one act
+// every awaiting stop names by hand, performed: it writes the whole-line
+// `Clarified: yes` into the one document a gate is awaiting (the unreleased
+// docs/analysis.md at the project start, or the held survey.md of the current
+// human-gated phase) and commits it, byte-identical to a correct hand edit.
+// The gates stay the mechanical authority and the manual path stays fully
+// supported; the command is sugar over the edit plus its commit — the thing a
+// novice could not do (find the document, write the marker exactly, commit
+// it), the thing the tool can. It prints what the release accepts (the
+// survey's Fork: lines with their Recommend: defaults; the analysis's roadmap
+// lines) before writing, so running it is the review; no confirmation prompt
+// — the deliberate invocation at a stop that named it is the confirmation.
+// Flagless (a directory argument only), legacy-layout and run-lock refused
+// above, no run log and no lock of its own (the status/install-prompts
+// family). Exit codes: 0 released; 1 usage/environment (a missing config, an
+// unreadable phase index); 2 held — nothing awaiting, problems holding the
+// release, bare Fork: lines, a dirty tree beyond the target, or a failed
+// commit (the mark is written, the manual commit named).
+if (command === "clarify") {
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    const legacy = await legacyModeFallback(directory)
+    console.error(
+      `nothing to clarify: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
+        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+    )
+    process.exit(1)
+  }
+  const { config } = await loadRunConfig(directory)
+  const result = await clarifyGate(directory, { phases: config.phases })
+  for (const line of result.lines) (result.type === "released" ? console.log : console.error)(line)
+  process.exit(result.type === "released" ? 0 : result.type === "error" ? 1 : 2)
 }
 
 // land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5): the person-invoked
@@ -2401,6 +2439,7 @@ console.error(`usage:
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--round | --phase] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto transfer [dir] [--resynthesize] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto clarify [dir]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto land [dir] [--keep] [--abandon] [--merge]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]
@@ -2421,9 +2460,10 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); --phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); the existing gates check the result — the round-start gate for the brief, the construct's own input read for the input (phased: transfer reads it and stops for review; m mode: plan's session). In m mode on a fresh target (no rounds yet) the first plan opens the assisted project analysis instead — the phased project-start shape is transfer's below; OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did in m mode
          transfer [dir] is the single advance command of the person-bracketed boundaries (auto-core plans/0101): one advance per invocation, resolved by state — the project start (the assisted project analysis re-homed from plan: the stub, the release gate, the brief install, R-01 established under the released roadmap's line for the round, stopping at the round-start gate — review the setup, fill docs/R-NN/round.md, commit), the phase boundary (a survey with open forks refuses exit 2 ahead of any session until your "Clarified: yes"; released, the advance distills the handover, closes the phase — installing the approved project brief — and constructs the next phase's plan task docs/T-NNN/todo.md, stopping for your review: the todo is driver-owned, a rejection is fixed through its inputs — round.md, plan-input.md, the brief, the roadmap line — and transfer re-run), the round close (the same invocation when the closed phase was the round's last: the round-close checks gate it, and the stop is your moment with the round's report docs/R-NN/report-for-user.md), and the round open (the roadmap's next line applied, the establish stop naming its source; a released roadmap that plans no line for the next round is exhausted — extend ## Roadmap and re-run, exit 0). plan dispatches the reviewed plan task, run executes the phase and stops at its clean end. --resynthesize bypasses the digest keep of a standing plan task: the constructor session re-voices the sources under the charter and the reconstruct lands the new todo for review — the channel for a rejected synthesized ledger (a rejected input needs no flag, the plain re-run absorbs it). m mode refuses (its plan/run shapes stand); it takes run's session options only
+         clarify [dir] is the person's release command (auto-core plans/0105): it writes the whole-line "Clarified: yes" into the one document a gate is awaiting and commits it — the unreleased docs/analysis.md at the project start, or the held survey.md of the current human-gated phase (open "Fork:" lines) at a phase boundary — byte-identical to a correct hand edit plus its commit, which is exactly what it saves you: finding the document, writing the marker exactly (an inline or lowercase form does not release), and committing the edit (the advance runs only on a committed state). Before writing it prints what the release accepts — the survey's Fork: lines with their "Recommend:" defaults, the analysis's roadmap lines — so running it is the review; the mark accepts every default, and your own answers sit beside the fork lines (before, riding the release commit, or after, as a plain committed edit the planners read). The gates stay the mechanical authority and the manual path stays fully supported. It refuses (exit 2) when nothing awaits, when problems hold the release, when a Fork: line lacks its Recommend: default, or when the worktree is dirty beyond the target document; it takes a directory argument only, refuses beside a live run, and never starts a session
          close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
          land [dir] lands each branch-isolated repository's round of work (config isolate, the auto/R-NN branch round establishment switched it onto) back onto its original branch as one commit — default git merge --squash (the deliverable's history gains exactly one commit; --merge takes a true merge commit instead) — deletes the round branch and prints the landed SHA. Landing mid-round is allowed with --keep: the branch is retained and checked back out — the round simply continues on it; a later land recognizes the previous landing and folds only the new commits. --abandon discards the round branch after a person-reviewed reset — the undo path: it checks the original branch back out, deletes auto/R-NN (its tip printed, recoverable via git reflog) and lands nothing. Refusal is never an automated merge resolution: the original branch moved, foreign commits mixed into auto/R-NN's range, a dirty repository or an ambiguous original branch all block (exit 2) naming what to settle; preflight warns about a leftover auto/R-NN of an abandoned round (recoverable state — land --abandon and plain git both address it). The audit-trail trade-off is stated, not hidden: one commit on the deliverable, the full per-unit trail in the driven root's git. Exit codes: 0 landed; 1 usage error; 2 blocked for human
-         run lock: run, plan and transfer hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike; transfer holds it across its state checks and the advance), close holds it around its writes, and land around its branch moves; init, amend, fix, sync and reset refuse while another process holds it (fix/sync --dryrun read and print only, so they run beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
+         run lock: run, plan and transfer hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike; transfer holds it across its state checks and the advance), close holds it around its writes, and land around its branch moves; init, amend, clarify, fix, sync and reset refuse while another process holds it (fix/sync --dryrun read and print only, so they run beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. The project brief .opencode/auto/brief.md is seeded with init --brief <text> | --brief-file <path> (written verbatim; omitted writes no file) and revised with amend's --brief/--brief-file or installed from the survey phase's approved proposal — never hand-edited mid-run; every planning session reads it. State the migration source and target there — --source-dir/--source-path/--dest-dir are retired

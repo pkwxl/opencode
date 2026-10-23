@@ -37,6 +37,10 @@ export const REPO_LANE: readonly string[] = [
   "test/boundary.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
+  // The person's release command (plans/0105): real git repositories — the
+  // release commits, the fold of the person's uncommitted fill, and the
+  // advance fixtures beside survey-gate's and transfer's.
+  "test/clarify.test.ts",
   // Doc lanes (plans/0099): the loop-shape cases drive real git repositories
   // (the same-tree commit boundary the decorator scopes); the pure halves
   // need no repository, the lane is the honest one.

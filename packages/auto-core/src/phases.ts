@@ -326,11 +326,19 @@ export const phaseSurveyDoc = (unit: PhaseUnit): string => join(unit.dir, SURVEY
 // releases the phase and approves the proposed project brief (D15.2).
 export const CLARIFIED_MARK = "Clarified: yes"
 
-// The `Fork:` lines a survey records (D14.2): each a scope fork stated with
-// its options, project-level consequences and one `Recommend:` default. A
-// list marker before the word is accepted ("- Fork: …").
+// The `Fork:` lines a survey records (D14.2), in document order: each a scope
+// fork stated with its options, project-level consequences and one
+// `Recommend:` default. A list marker before the word is accepted
+// ("- Fork: …"). Exported since plans/0105: the clarify command prints the
+// lines it is about to accept the defaults of — the review is the command's
+// own output, so it reads the same scan the gate's counters share.
+export function forkLines(text: string): string[] {
+  return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line))
+}
+
+// The count of the survey's `Fork:` lines (the gate's open-fork check).
 export function surveyForks(text: string): number {
-  return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line)).length
+  return forkLines(text).length
 }
 
 // Fork lines missing their `Recommend:` default (plans/0085 A3): the person
@@ -338,7 +346,7 @@ export function surveyForks(text: string): number {
 // problem, not merely poor style — the check is the marker's presence, the
 // same tolerance as every other protocol string.
 export function forksWithoutRecommend(text: string): number {
-  return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line) && !line.includes("Recommend:")).length
+  return forkLines(text).filter((line) => !line.includes("Recommend:")).length
 }
 
 // Whether the person released the survey (D14.3): at least one whole-line

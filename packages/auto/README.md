@@ -45,6 +45,7 @@ opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-f
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
 opencode-auto transfer [dir] [--resynthesize]   # advance one boundary, resolved by state: with no round yet the project analysis / direct establishment stopping at the round-start gate; at a phase boundary the human gate first (open survey Fork: lines refuse), then the handover distillation, the phase close and the next phase's plan task constructed and stopped for review; at a completed round the round close and the next round from the roadmap's line (one advance per invocation; m mode refuses — its plan/run shapes stand), see "The advance command (transfer)"
+opencode-auto clarify [dir]   # release the awaiting gate: write the whole-line `Clarified: yes` into the one document a gate is waiting on (the unreleased docs/analysis.md at the project start, or the held survey.md of a human-gated phase) and commit it — printing what the release accepts (the Fork: lines with their `Recommend:` defaults, the roadmap lines) before writing, so running it is the review; the gates stay the mechanical authority and adding the line by hand remains fully supported
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # dispatch the reviewed plan task: the planning session runs and stops before execution for human review (m mode: also establishes rounds, stores a planning input and appends), see "Planning and the round lifecycle (plan)"
 opencode-auto run [dir] [--boundary stop|flow]   # execute the current phase's tasks one by one and stop at its clean end — the boundary — naming transfer as the advance command (--boundary flow crosses the boundaries continuously as before; agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
@@ -58,7 +59,7 @@ New-project flow, phased (`init` → `transfer` → fill in and commit → `tran
 ```sh
 opencode-auto init <dir> --phases "admtvk"   # 1. fix the project config (init writes only the config layer, no round directories)
 opencode-auto transfer <dir>                  # 2. open docs/analysis.md (the assisted first-run step) — or, with OPENCODE_AUTO_ANALYSIS=off, establish docs/R-01/ and stop at the round-start gate
-#                                              3. by hand: with your agent fill docs/analysis.md (analysis, goals, brief proposal, roadmap — and optionally each round's `### R-NN` brief under ## Round briefs), add the line `Clarified: yes`, commit
+#                                              3. with your agent fill docs/analysis.md (analysis, goals, brief proposal, roadmap — and optionally each round's `### R-NN` brief under ## Round briefs), then release it: opencode-auto clarify <dir> writes the `Clarified: yes` line and commits it (or add the line and commit by hand)
 opencode-auto transfer <dir>                  # 4. install the approved brief, establish docs/R-01/ under the roadmap's line; a released `### R-01` brief installs verbatim and the same invocation constructs the plan task — otherwise stop at the round-start gate, by hand: fill in docs/R-01/round.md (goals/acceptance/release criteria), commit
 opencode-auto transfer <dir>                  # 5. construct R-01.P01's plan task (the formulation todo, from round.md and the phase's plan-input.md) and stop for review
 opencode-auto plan <dir>                      # 6. dispatch it: the planning session writes the phase's tasks
@@ -555,8 +556,9 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
 - **Project start (no round yet)**: with the assisted analysis on (`OPENCODE_AUTO_ANALYSIS`, default)
   the first `transfer` opens `docs/analysis.md` — work with your agent on the analysis, the goals, one
   `Fork:` line per open decision, the `## Project brief` proposal and the multi-round `## Roadmap`
-  (`- R-NN <phases> — <goal>` per round, the exact `amend --phases` value), then add the whole line
-  `Clarified: yes` and commit; the next `transfer` installs the approved brief verbatim and establishes
+  (`- R-NN <phases> — <goal>` per round, the exact `amend --phases` value), then release it: `clarify`
+  writes the whole line `Clarified: yes` and commits it (adding the line and committing by hand remains
+  fully supported); the next `transfer` installs the approved brief verbatim and establishes
   `R-01` under the roadmap's line (the config `phases` value the fallback when no released line covers
   the round — the established line names its source). The analysis may also carry the optional
   `## Round briefs` section — one `### R-NN` subsection per round, its body that round's brief
@@ -570,8 +572,9 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   (exit 0): review the setup, fill in `docs/R-NN/round.md` (`## Goal`, `## Acceptance criteria`,
   `## Release criteria`), and commit — the commit is your veto.
 - **Phase boundary (the current phase's tasks all done)**: the human gate first — a survey phase with
-  open `Fork:` lines refuses exit 2 before any session runs (write your answers beside them, then the
-  release line `Clarified: yes`, commit, re-run; the release also installs the survey's approved
+  open `Fork:` lines refuses exit 2 before any session runs (write your answers beside them, then
+  release: `clarify` writes the `Clarified: yes` line and commits it, or add the line, commit, re-run
+  by hand; the release also installs the survey's approved
   `## Project brief` proposal). Then, in one invocation: the finished phase's `handover.md`
   distillation, its `todo.md` → `done.md` close, and the **next phase's plan task constructed and
   stopped for review** — the formulation todo, driver-owned, built from the round brief and the
@@ -613,6 +616,28 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   past `run`'s boundary stop) and `--boundary` (transfer **is** the boundary). It holds the run lock
   (command recorded as `transfer`), and questions in its sessions wait for a human without timeout —
   `plan`'s policy.
+
+### The release command (clarify)
+
+`clarify [dir]` is the person's release act as one command (auto-core plans/0105): the awaiting stop's
+manual instruction — add the whole-line `Clarified: yes` to the document of the moment, commit it —
+performed for you, byte-identically. It is state-resolving like `transfer`: it finds the one gate that
+is waiting (the unreleased `docs/analysis.md` at the project start — in `m` mode too, where the next
+command is `plan` — or the held `survey.md` of the current human-gated phase) and prints what the
+release accepts before writing — every `Fork:` line with its `Recommend:` default, the roadmap lines —
+so running it **is** the review. The mark accepts every recorded default; your own answers sit beside
+the fork lines, written before (riding the release commit) or after (a plain committed edit the
+planners read). The release commit is the driver's own (`Auto-Stage: clarify`) and folds the target
+document's own uncommitted changes — your just-written analysis fill included; a worktree dirty beyond
+the target refuses (exit 2, the files listed). Refusals are honest, never writes: nothing awaiting,
+grammar problems holding the release, a `Fork:` line without its `Recommend:` default, a missing
+survey, an already-released document (naming `transfer` as the next step). The gates stay the
+mechanical authority — `clarify` only produces the state they read, and adding the line by hand
+remains fully supported. It takes a directory argument only, and refuses beside a live run.
+
+```sh
+opencode-auto clarify <dir>    # review the printed defaults, release the gate, commit — then transfer/plan
+```
 
 ### Planning and the round lifecycle (plan)
 

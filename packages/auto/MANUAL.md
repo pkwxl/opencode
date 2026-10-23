@@ -61,7 +61,8 @@ opencode-auto transfer <dir>
 
 - With the assisted analysis on (`OPENCODE_AUTO_ANALYSIS`, default), a fresh project's first
   `transfer` opens `docs/analysis.md` instead — work with your agent on the analysis, the goals, the
-  project-brief proposal and the multi-round roadmap, then add the line `Clarified: yes` and commit;
+  project-brief proposal and the multi-round roadmap, then release it: `opencode-auto clarify <dir>`
+  writes the `Clarified: yes` line and commits it (or add the line and commit by hand);
   the next `transfer` installs the approved brief and establishes R-01 under the roadmap's line.
 - `transfer` establishes `docs/R-01/`: the phase index `phases.md`, one phase directory
   `P<nn>-<type>/` per phase (the released roadmap's line for the round rules; the config `phases`
@@ -108,7 +109,9 @@ opencode-auto run <dir>         # 4. execute the tasks; stop at the phase's clea
 ```
 
 - **Step 1 — the advance**: `transfer` performs one boundary step: a survey phase with open `Fork:`
-  lines refuses first (exit 2, no session run) — resolve them, write `Clarified: yes`, commit, re-run;
+  lines refuses first (exit 2, no session run) — resolve them (write your answers beside the lines),
+  then release: `opencode-auto clarify <dir>` prints the forks with their `Recommend:` defaults and
+  writes the `Clarified: yes` line and its commit (the hand edit remains fully supported);
   otherwise the finished phase's `handover.md` is distilled, its `todo.md` → `done.md`, and the next
   phase's **plan task** (the formulation todo, driver-owned) is constructed and stopped for review.
   A rejected todo is fixed through its inputs (the round brief, the phase's `plan-input.md`, the
@@ -222,6 +225,7 @@ driver's unified commit is the completion condition.
 | `sync [dir] [-f] [--dryrun] [--from-bundle]` | upgrade a materialized intent bundle to the running binary's (never writes person-edited files, never deletes extras; `--from-bundle` overwrites differing unstamped files) |
 | `reset [dir] [-f]` | de-initialize (remove exactly init's artifacts) |
 | `transfer [dir] [--resynthesize]` | advance one boundary: open the round, or close the finished phase and construct the next one's plan task (stops for review) |
+| `clarify [dir]` | release the awaiting gate: write `Clarified: yes` into the unreleased analysis / held survey and commit it (prints the defaults it accepts) |
 | `plan [dir]` | dispatch the reviewed plan task (m mode: also establishes and plans) |
 | `plan [dir] --phase` / `--round` | prepare the next phase's planning input / the round brief with your agent |
 | `plan [dir] --append -p "…"` | append tasks to the current phase |

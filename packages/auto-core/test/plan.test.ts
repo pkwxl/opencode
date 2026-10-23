@@ -958,7 +958,7 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       expect(result.code).toBe(0)
       expect(result.lines[0]).toBe("✓ the project analysis is open: docs/analysis.md written (a stub with section hints)")
       expect(result.lines.at(-1)).toBe(
-        `then add the line \`Clarified: yes\`, commit, and re-run: opencode-auto plan ${dir} — the approved brief is installed and round R-01 opens`,
+        `then release it: opencode-auto clarify ${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself), and re-run: opencode-auto plan ${dir} — the approved brief is installed and round R-01 opens`,
       )
       expect(await exists(dir, "docs/analysis.md")).toBe(true)
       expect(await exists(dir, "docs/R-01")).toBe(false)
@@ -982,7 +982,8 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       const awaiting = await planPrelude(dir, { phases: "m" })
       expect(awaiting.type === "stop" && awaiting.code).toBe(2)
       expect(awaiting.type === "stop" && awaiting.lines[0]).toBe(
-        "⏸ the project analysis awaits you: review docs/analysis.md, resolve its 1 open Fork: line(s) (append your answers beside them), then add the line `Clarified: yes` and commit",
+        "⏸ the project analysis awaits you: review docs/analysis.md, resolve its 1 open Fork: line(s) (append your answers beside them), then release it — opencode-auto clarify " +
+          `${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself)`,
       )
       // A document that fails the grammar is told so before the release check.
       writeFileSync(join(dir, "docs/analysis.md"), "# no sections\n")

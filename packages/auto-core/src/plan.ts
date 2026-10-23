@@ -270,7 +270,7 @@ export async function planPrelude(dir: string, opts: {
       return stop(0, [
         `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
         `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
-        `then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} plan ${dir} — the approved brief is installed and round R-01 opens`,
+        `then release it: ${bin} clarify ${dir} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself), and re-run: ${bin} plan ${dir} — the approved brief is installed and round R-01 opens`,
       ])
     }
     let types: ReturnType<typeof loadPhaseTypes>
@@ -294,7 +294,7 @@ export async function planPrelude(dir: string, opts: {
       return stop(2, [
         `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
           (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
-          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
+          `, then release it — ${bin} clarify ${dir} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself)`,
         `then re-run: ${bin} plan ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
       ])
     }

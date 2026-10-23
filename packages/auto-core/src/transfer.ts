@@ -305,7 +305,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
       await ensurePointer(directory, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: false } })
       log(`✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`)
       log(`next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`)
-      log(`then add the line \`${CLARIFIED_MARK}\`, commit, and re-run: ${bin} transfer ${directory} — the approved brief is installed and round R-01 opens`)
+      log(`then release it: ${bin} clarify ${directory} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself), and re-run: ${bin} transfer ${directory} — the approved brief is installed and round R-01 opens`)
       return 0
     }
     let types: ReturnType<typeof loadPhaseTypes>
@@ -329,7 +329,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
       log(
         `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
           (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
-          `, then add the line \`${CLARIFIED_MARK}\` and commit`,
+          `, then release it — ${bin} clarify ${directory} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself)`,
       )
       log(`then re-run: ${bin} transfer ${directory} — the approved \`## Project brief\` proposal is installed and round R-01 opens`)
       return 2

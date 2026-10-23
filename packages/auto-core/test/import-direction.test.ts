@@ -164,6 +164,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // one-shot tool-less session; watch asks it beside the event stream.
   classify: "driver",
   clean: "driver",
+  // The person's release command (plans/0105): clarifyGate — the state-
+  // resolving write of `Clarified: yes` into the one document a gate awaits,
+  // its commit. Sits with close/transfer at the person-command plane.
+  clarify: "driver",
   // Closing units: closeUnit, the mechanical handover, the close commit
   // (plans/0053 D17–D21).
   close: "driver",
@@ -640,6 +644,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // runAll it delegates to is the pipeline's top, and its shape resolution
   // reads the same round/phase machinery plan's rows do.
   transfer: "pipeline",
+  // clarify, the person's release command (plans/0105): pipeline beside
+  // close — one state-resolving write over the same gate readers, reaching
+  // no session-driving layer.
+  clarify: "pipeline",
   "plan-input": "pipeline",
   // The pre-round project analysis docs/analysis.md (plans/0084): stub and
   // grammar of the analysis route — pipeline beside plan, its only consumer;
