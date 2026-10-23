@@ -39,7 +39,8 @@
 // clean-tree refusals are preflight's (the advance runs only on a committed
 // state — establishment deliberately does not, its G1 stop is the point).
 import { join } from "node:path"
-import { releasedRoadmapRounds } from "./analysis"
+import { ensurePointer } from "./agents-block"
+import { releasedRoundBriefProposal } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { commitTree } from "./git"
@@ -48,6 +49,10 @@ import { logGateStop } from "./loop-phase"
 import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
+import { loadIntents, planningInputScaffold } from "./intent/load"
+import { planInputPath } from "./plan-input"
+import { releasedRoadmapRound, releasedRoadmapRounds } from "./roadmap"
+import { installRoundBrief, roundBriefText } from "./round-brief"
 import {
   currentRound,
   legacyLayoutProblem,
@@ -55,7 +60,9 @@ import {
   phaseGates,
   phaseGateProblems,
   phaseIndexPath,
+  phaseKey,
   phaseLabel,
+  readPhases,
   roundRoot,
   routePhase,
 } from "./phases"
@@ -144,7 +151,7 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   if (gates.includes("human")) {
     const problems = await phaseGateProblems(directory, route.phase, ["human"])
     if (problems.length) {
-      logGateStop(directory, route.phase, problems, undefined)
+      await logGateStop(directory, route.phase, problems, undefined)
       return 2
     }
   }
@@ -163,7 +170,28 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
 async function advanceToReview(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const stop = await rederiveTail(directory, round, opts)
   if (stop !== undefined) return stop
+  await applyReleasedBrief(directory, round)
   return await runAll(directory, { ...opts, stopBefore: "formulate" })
+}
+
+// The released round brief, installed ahead of the construction (plans/0104
+// D3): whenever the round's brief is still the untouched stub and the
+// released analysis carries an `### R-NN` proposal, the advance installs it
+// verbatim on its own `round-start` commit — the boundary's apply seam beside
+// rederiveTail. This is the held gate's later path (the person drafts the
+// proposal into the living document between rounds, commits, and the next
+// advance applies it) and the establishment continuation's install site in
+// one; the commit sweeps the uncommitted round setup when it runs there. A
+// round brief already on disk — the person's hand or a prior install —
+// stands, and no proposal is the common floor: both quiet. The install's own
+// failure lines log themselves; a failed commit leaves the tree dirty for
+// preflight's round-start gate, which names the channel too.
+async function applyReleasedBrief(directory: string, round: number): Promise<void> {
+  if ((await roundBriefText(directory, round)) !== undefined) return
+  const proposal = await releasedRoundBriefProposal(directory, round)
+  if (proposal === undefined) return
+  const done = await installRoundBrief(directory, round, ANALYSIS_DOC, proposal, commitTree)
+  for (const line of done.lines) log(line)
 }
 
 // The unstarted-tail re-derivation (plans/0101 D6): a round's phases.md tail
@@ -219,14 +247,33 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
 // refuses the key mid-phase — the current phase holding pending execute work
 // with no formulation awaiting review, the one state that is not a review
 // moment (the same predicate as the nothing-to-advance refusal above).
-// undefined = the amendment may proceed (no round yet, a complete round, a
-// phase boundary, a construction's review stop); m mode never consults it
-// (D8 — no boundary vocabulary applies). A state the router cannot read
-// stays quiet: the amendment's own guards judge it.
+// Ahead of every other guard, the coverage refusal (plans/0103 D3): the
+// round this amendment would shape — the live round, or the next one when
+// the live round is complete, the same target the shell's prefix guard
+// judges — never reads the config value when the released roadmap covers it
+// (the D5 resolution: its line is the phase list), so the write is inert at
+// any phase state and is refused outright naming the round's own channel
+// (0101 D5's precedence note retired by it — the note accepted the inert
+// write). A target the roadmap does not cover keeps the key as its live
+// establishment authority and stays quiet. undefined = the amendment may
+// proceed; m mode never consults the roadmap (D8 — no boundary vocabulary
+// applies). A state the router cannot read stays quiet: the amendment's own
+// guards judge it.
 export async function amendPhasesHold(directory: string, phases: string): Promise<string | undefined> {
   if (phases === "m") return undefined
   const { bin } = shellProfile()
-  if (!(await Bun.file(join(directory, phaseIndexPath(await currentRound(directory)))).exists())) return undefined
+  const round = await currentRound(directory)
+  const state = await readPhases(directory, round).catch(() => undefined)
+  const complete = state !== undefined && state.phases.length > 0 && state.phases.every((unit) => state.done.has(unit.id))
+  const target = complete ? round + 1 : round
+  const covered = await releasedRoadmapRound(directory, target)
+  if (covered !== undefined) {
+    return (
+      `--phases cannot shape ${roundDirName(target)}: the released roadmap of ${ANALYSIS_DOC} covers the round — its line is the phase list the round establishes under, and a config value alone never re-shapes a round the roadmap covers. ` +
+      `Reshape the round's unstarted tail by moving its \`${roundDirName(target)} <phases> — <goal>\` line in ${ANALYSIS_DOC}; the next ${bin} transfer ${directory} applies it before constructing`
+    )
+  }
+  if (state === undefined) return undefined
   const route = await routePhase(directory, { loadPlan, bin, phases }).catch(() => undefined)
   if (route === undefined || route.type !== "execute" || awaitingFormulation(route.plan.tasks, route.phase)) return undefined
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
@@ -285,6 +332,38 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
   // The D5 sourced suffix (plans/0101 D5): a roadmap-established round names
   // the line that ruled, beside the config default it displaced.
   const sourceSuffix = ok?.resolved.roadmap ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(ok.resolved.roadmap.goal)}"; config default was "${opts.phases}")` : ""
+  // The round-brief proposal channel (plans/0104 D3): a released `### R-NN`
+  // proposal passes the round-start gate — the person's release was the
+  // review — and the advance continues into the construction in the same
+  // invocation, the install landing inside it (applyReleasedBrief) on the
+  // driver's own round-start commit, which sweeps this uncommitted setup: the
+  // gate's person commit is replaced by the release mark. A round.md already
+  // holding content, or no proposal, keeps today's gate stop.
+  if (ok && (await roundBriefText(directory, round)) === undefined && (await releasedRoundBriefProposal(directory, round)) !== undefined) {
+    for (const line of before) log(line)
+    log(`✓ round ${name} established: ${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}`)
+    if (ok.isolated.length) log(`✓ branch isolation: ${ok.isolated.join(", ")} on ${ok.branch} (the driver's commits land there; the original branch stays untouched)`)
+    log(
+      `ℹ the released \`${roundDirName(round)}\` round-brief proposal of ${ANALYSIS_DOC} installs verbatim — the round-start gate passes (your release was its review); ` +
+        `revise the brief in place any time, every planning session reads the current file`,
+    )
+    // The guidance flips to the phase-preparation state (the states flip at
+    // command boundaries, and this continuation crosses one): the round
+    // brief's step is past, and the document of the moment is the phase's
+    // planning input — the todo's other person-owned input.
+    const scaffold = planningInputScaffold(loadIntents(directory), opts.intent ?? "default")
+    await ensurePointer(directory, {
+      testByDriver: opts.testByDriver,
+      guidance: {
+        kind: "phase",
+        phase: phaseKey(ok.units[0]!).id,
+        inputPath: planInputPath(ok.units[0]!),
+        scaffold: scaffold ?? "(the active intent pack carries no planning-input scaffold — free-form markdown)",
+        manual: false,
+      },
+    })
+    return await advanceToReview(directory, round, opts)
+  }
   const lines = establishStopLines(
     directory,
     round,

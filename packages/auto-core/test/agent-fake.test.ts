@@ -10,7 +10,7 @@
 // adapter's mapping end to end; test/agent-claude.test.ts does the same for
 // claude. This file is the agent-neutral layer between them.
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -3233,7 +3233,16 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
 // landed uncommitted between the input commit and the planning unit's entry
 // clean gate, blocking the very step it documents (src/loop-plan.ts — it now
 // commits on its own ahead of the session, the savePlanInput pattern).
-describe("the plan-step verifier (plans/0080 §5)", () => {
+describe("the plan-step verifier (plans/0080 §5; routing and default per plans/0102)", () => {
+  beforeAll(() => {
+    // The verifier cases need the check on: the switch defaults off since
+    // plans/0102, so this suite clamps it on for its own runs and restores
+    // the default after.
+    clampSwitches({ planVerify: true })
+  })
+  afterAll(() => {
+    clampSwitches({ planVerify: false })
+  })
   const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
   const routing = (): RoutingFacts => ({
@@ -3265,8 +3274,8 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
   const CHARTER_PACK = `# verify\n\n## guarantees\n\n### verify-plan\n\n${CHARTER}\n`
 
   // A fixture over m mode with a pack overlay committed before the round: the
-  // planning step verifies against the pack's charter, the classifier entry
-  // (free) serves the verifier session.
+  // planning step verifies against the pack's charter, the deep planning
+  // route's first entry (a) serving the verifier session (plans/0102).
   async function verifierFixture(pack: string, turn: (dir: string) => TurnScript): Promise<LoopFixture> {
     const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: turn(dir) }))
     await mkdir(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
@@ -3405,6 +3414,9 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(0)
       expect(lines.some((line) => line.includes("✓ plan verification: the formulation R-01.P01 prompt is consistent with the intent charter"))).toBe(true)
+      // The wait-visibility line (plans/0102 D3): the step and the deep-route
+      // model named before the session, no wall in force.
+      expect(lines.some((line) => line.includes("plan verification: formulation R-01.P01 — the verifier a is judging the composed prompt (no wall; the reply is awaited)"))).toBe(true)
       // Order: the admission check, the constructor session (0097), the
       // verifier's bare session, then the formulation task's own session
       // (plans/0095: the todo is its single input, judged by the verifier
@@ -3457,7 +3469,7 @@ describe("the plan-step verifier (plans/0080 §5)", () => {
       expect(f.agent.prompts).toHaveLength(7)
       for (const prompt of f.agent.prompts.slice(0, 5)) expect(prompt.bare).toBe(true)
       const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/formulation R-01\.P01: FAILED — the verifier free replied without a parsable Consistent line/)
+      expect(audit).toMatch(/formulation R-01\.P01: FAILED — the verifier a replied without a parsable Consistent line/)
       expect(audit).toContain("(after one retry — fail-closed, plans/0080 §5)")
       expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(false)
     } finally {

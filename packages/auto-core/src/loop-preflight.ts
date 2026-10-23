@@ -45,12 +45,13 @@ import {
 import { liveRunLock } from "./lock"
 import { log } from "./log"
 import { leftoverIsolationLines } from "./land"
-import { resolveRoundPhases } from "./analysis"
+import { releasedRoundBriefProposal, resolveRoundPhases } from "./analysis"
 import { checkModelReferences, loadModels } from "./models"
 import type { ModelRegistry } from "./models-schema"
 import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
 import { phaseKey, readPhases, currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
-import { roundBriefPath, roundDirName } from "./docpaths"
+import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
+import { roundBriefText } from "./round-brief"
 import { loadPhaseTypes } from "./phases/custom"
 import { phaseType, REQUIRED_TYPE, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import { trackSubtasks, watchFiles } from "./loop-progress"
@@ -575,9 +576,17 @@ export async function preflight(
       const index = phaseIndexPath(round)
       if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
         const phased = opts.phases !== undefined && opts.phases !== "m"
+        // The proposal channel's shortcut (plans/0104): with a released
+        // `### R-NN` round-brief proposal waiting and the brief still the
+        // stub, committing the setup is all this gate asks — the next
+        // transfer installs the proposal verbatim ahead of the construct.
+        const proposal = phased && (await roundBriefText(directory, round)) === undefined ? await releasedRoundBriefProposal(directory, round) : undefined
         log(
           `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
-            `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:`,
+            `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:` +
+            (proposal !== undefined
+              ? ` (a released \`### R-${String(round).padStart(2, "0")}\` round-brief proposal of ${ANALYSIS_DOC} waits — committing the setup is enough, the next transfer installs it verbatim)`
+              : ""),
         )
       } else {
         log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")

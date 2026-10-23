@@ -8,38 +8,47 @@
 // and no dependency on the session-driving machinery (the classify.ts
 // precedent's import discipline holds here too).
 //
-// Activation: the pack's `### verify-plan` charter — a pack without it never
-// verifies (the zero-intent floor), and the switch (OPENCODE_AUTO_PLAN_VERIFY,
-// default on) can only remove the check, never add one. The model comes from
-// the registry's `classifier` list (the same entry selection the failure
-// classifier uses); a run without a classifier list skips the verifier with a
-// log line — the mechanical layers (render gate, precedence blocks) still
-// hold, only the semantic check is absent.
+// Activation: the pack's `### verify-plan` charter plus the switch — a pack
+// without a charter never verifies (the zero-intent floor), and the switch
+// (OPENCODE_AUTO_PLAN_VERIFY, default off since plans/0102) enables the
+// check for a pack that declares one, never adds a charter. The model comes
+// from the registry's planning route — the `phase-plan` candidate list (the
+// deep tier), the same selection discipline the synthesis constructor's
+// planRouteEntry applies (plans/0097); plans/0102 moved it off the
+// `classifier` route (charter conformance over a large composed prompt is
+// deep work, and a flaky cheap endpoint fail-closing every planning step
+// was the fleet's recurring block). A run with no usable planning-route
+// entry skips the verifier with a log line — the mechanical layers (render
+// gate, precedence blocks) still hold, only the semantic check is absent.
 //
-// Fail-closed (the person's ruling): a verifier that cannot produce a
-// parsable verdict — error, timeout, garbage reply — is retried once and then
-// blocks the planning step (exit 2) with the last reply text. A guarantee
-// that can be slept through is not a guarantee; flakiness surfaces loudly.
+// Fail-closed (the person's ruling, 0080; the time arm retired by plans/0102
+// D3): a verifier that cannot produce a parsable verdict — a session error,
+// a garbage reply — is retried once and then blocks the planning step
+// (exit 2) with the last reply text. The verdict itself is waited for with
+// no wall: a deep session is not a classification call on a timer, and the
+// fleet's fail-closed blocks were walls, never content. A guarantee that
+// can be slept through is not a guarantee; flakiness surfaces loudly.
 // The token cost of the two calls is not booked to a stats bucket in v1 (one
-// cheap call per planning step; noted in plans/0080 §5's explicitly-not).
+// deep-route call per planning step; noted in plans/0080 §5's explicitly-not).
 import { join } from "node:path"
 import { classifierEntry, oneShot } from "./classify"
 import type { GitOps } from "./git"
 import { log } from "./log"
 import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { packSubsection } from "./intent/load"
+import { candidateList } from "./model-route"
+import { usableAt } from "./model-window"
+import type { ModelEntry } from "./models-schema"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { renderPrompt } from "./prompt"
 import type { RoutingFacts } from "./routing"
+import { entryPassesAgentFilter } from "./select"
 import { SWITCH_ENV, autoSwitches } from "./switches"
 import type { AgentPool } from "./agent-pool"
 import type { ClientSource } from "./opts"
 
-// The verifier's wall clock: the composed planning prompt can be large, so
-// this is the classifier's 30 s raised, not shared.
-const VERIFY_TIMEOUT_MS = 120_000
 const VERIFY_TITLE = "auto: plan consistency check"
 
 type PlanVerifyOutcome =
@@ -69,6 +78,31 @@ export function parseVerifyReply(text: string): { consistent: boolean; evidence?
   return undefined
 }
 
+// The first usable entry of the planning route (plans/0102): the `phase-plan`
+// candidate list — the deep tier the planning sessions and the synthesis
+// constructor dispatch on — walked with the classifierEntry discipline (the
+// agent filter, the windows, the down marks, the key rings; the context cap
+// does not — the entry list already encodes fitness, the formulate-synthesis
+// planRouteEntry precedent). The verifier judges the prompt the planning
+// sessions run under; it rides their route, not the classifier's.
+export function planningRouteEntry(
+  routing: RoutingFacts,
+  entry: PhaseTypeEntry | undefined,
+  now: number,
+): { name: string; entry: ModelEntry } | undefined {
+  const list = candidateList(routing.registry, entry, "phase-plan")
+  for (const name of list.names) {
+    const model = routing.registry.models.get(name)
+    if (model === undefined) continue
+    if (!entryPassesAgentFilter(routing.registry, routing.agentFilter, model)) continue
+    if (!usableAt(model, routing.registry.tz, now)) continue
+    if (routing.router.isModelDown(name, now)) continue
+    if (model.provider !== undefined && !routing.router.ringHasUsableKey(model.provider, now)) continue
+    return { name, entry: model }
+  }
+  return undefined
+}
+
 // Judge one composed planning prompt. pool is the run's server control (the
 // entry's agent resolves its host through it); routing carries the registry
 // and the router the entry selection reads; step names the planning step in
@@ -88,24 +122,27 @@ export async function verifyPlanPrompt(input: {
 }): Promise<PlanVerifyOutcome> {
   const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.entry))
   if (charter === undefined) return { kind: "inactive" }
-  if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is switched off (the render gate and the precedence blocks still hold)` }
+  if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is off (the default since plans/0102; the render gate and the precedence blocks still hold)` }
   if (input.routing === undefined) {
-    return { kind: "skipped", reason: "no model registry routing — no classifier entry to run the verifier on (the render gate and the precedence blocks still hold)" }
+    return { kind: "skipped", reason: "no model registry routing — no planning-route entry to run the verifier on (the render gate and the precedence blocks still hold)" }
   }
   const now = input.routing.clock.now()
-  const pick = classifierEntry(input.routing.router, input.routing.registry, input.routing.agentFilter, now)
+  const pick = planningRouteEntry(input.routing, input.entry, now)
   if (pick === undefined) {
-    return { kind: "skipped", reason: "no usable classifier entry (the registry names none, or none is up) — the render gate and the precedence blocks still hold" }
+    return { kind: "skipped", reason: "no usable planning-route entry (the registry names none, or none is up) — the render gate and the precedence blocks still hold" }
   }
   const client = await input.pool.client(pick.entry.agent)
   const text = renderPrompt(input.facts, "plan-verify", { charter, prompt: input.prompt, step: input.step })
+  // The wait is visible (the constructor's start-line discipline, 0097): one
+  // line naming the step and the model before the session, so an operator
+  // watching a long judgment knows where the run sits.
+  log(`⏳ plan verification: ${input.step} — the verifier ${pick.name} is judging the composed prompt (no wall; the reply is awaited)`)
   let lastReason = "the verifier session produced no answer"
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const outcome = await oneShot(client, pick.entry, text, VERIFY_TIMEOUT_MS, VERIFY_TITLE)
-    if (outcome.kind === "timeout") {
-      lastReason = `the verifier ${pick.name} gave no verdict within ${Math.round(VERIFY_TIMEOUT_MS / 1000)} s`
-      continue
-    }
+    // No wall (plans/0102 D3): the reply is waited for; only the session's
+    // own end — idle, the stream's end, a failure event — terminates the
+    // call, so no time limit ever fail-closes the step.
+    const outcome = await oneShot(client, pick.entry, text, undefined, VERIFY_TITLE)
     if (outcome.kind === "failed") {
       lastReason = `the verifier ${pick.name} failed: ${outcome.error.message ?? "session error"}`
       continue

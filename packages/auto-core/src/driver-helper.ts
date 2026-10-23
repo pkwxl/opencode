@@ -94,7 +94,8 @@
 // the target's build — and say so when one is configured.
 import { join } from "node:path"
 import { GUIDANCE } from "./agents-block"
-import { analysisProblems, releasedRoadmapRounds } from "./analysis"
+import { analysisProblems } from "./analysis"
+import { releasedRoadmapRounds } from "./roadmap"
 import { choiceMark, readBlockageDocs, rejectedMark } from "./blockage"
 import { provenanceComparison } from "./bundle"
 import { CONFIG_FILE } from "./config"
@@ -411,7 +412,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         const problems = await phaseGateProblems(dir, phase, gates)
         if (problems.length) {
           const acceptance = gates.includes("acceptance") ? phaseAcceptanceDoc(phase) : undefined
-          stopLines.push(...gateStopLines(dir, phase, problems, acceptance))
+          stopLines.push(...(await gateStopLines(dir, phase, problems, acceptance)))
           if (problems.some((problem) => problem.startsWith("clarification:"))) {
             channels.push(
               `${phaseSurveyDoc(phase)} — resolve the recorded \`Fork:\` lines (each carries a \`Recommend:\` default; append your answers beside any line you override), then add the whole line \`Clarified: yes\` and commit — the release also approves the proposed \`## Project brief\``,

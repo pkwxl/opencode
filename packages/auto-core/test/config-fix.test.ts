@@ -93,6 +93,24 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(plan.skipped).toBeUndefined()
   })
 
+  test("a released roadmap covering the current round makes the phases key a manual supersession finding; nothing is written (plans/0103 D2)", async () => {
+    await seedInit(dir, { ...CONFIG_DEFAULTS, phases: "mt" })
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", "", "Clarified: yes", ""].join("\n"))
+    const plan = await planFix(dir)
+    expect(manual(plan).map((finding) => finding.problem)).toContain(
+      'phases "mt" is superseded — R-01 establishes under the released roadmap of docs/analysis.md; nothing to repair (reshape rounds by moving its lines)',
+    )
+    expect(fixable(plan)).toEqual([])
+    expect(plan.writes).toEqual([])
+    // The finding follows the coverage, not the document: a round the
+    // released roadmap does not cover keeps the key as its live authority.
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 svai — later round", "", "Clarified: yes", ""].join("\n"))
+    expect(manual(await planFix(dir))).toEqual([])
+    // And an unreleased roadmap never rules.
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", ""].join("\n"))
+    expect(manual(await planFix(dir))).toEqual([])
+  })
+
   test("retired keys are dropped, renamed or moved; other keys, unknown keys included, survive", async () => {
     await seedInit(dir, {
       mode: "migrate",

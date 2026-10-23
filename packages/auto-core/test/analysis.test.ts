@@ -9,14 +9,15 @@ import {
   analysisProblems,
   analysisText,
   ANALYSIS_SECTIONS,
-  releasedRoadmapPhases,
   renderAnalysisStub,
+  releasedRoundBriefProposal,
   resolveRoundPhases,
-  roadmapPhases,
-  roadmapRounds,
+  roundBriefNearMisses,
+  roundBriefProposals,
 } from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
+import { releasedRoadmapRound, roadmapPhases, roadmapRounds } from "../src/roadmap"
 
 // A released, well-formed analysis: every section holds real content, one
 // open-recorded fork (answered beside, per the release recipe), a brief
@@ -179,7 +180,7 @@ describe("the project analysis document (plans/0084)", () => {
       // A filled but unreleased roadmap is not the person's decision yet.
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("\nClarified: yes", ""))
       expect(await resolveRoundPhases(dir, 1, "am")).toEqual({ phases: "am" })
-      expect(await releasedRoadmapPhases(dir, 1)).toBeUndefined()
+      expect(await releasedRoadmapRound(dir, 1)).toBeUndefined()
       // Released: the line for the round wins over the fallback, and rides
       // along for the sourced stop line; a round beyond the lines falls back.
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED)
@@ -188,11 +189,94 @@ describe("the project analysis document (plans/0084)", () => {
         roadmap: { round: 1, phases: "adm", goal: "port the core and its tests" },
       })
       expect(await resolveRoundPhases(dir, 3, "am")).toEqual({ phases: "am" })
-      expect(await releasedRoadmapPhases(dir, 2)).toBe("mtv")
+      expect((await releasedRoadmapRound(dir, 2))?.phases).toBe("mtv")
       // m mode has no phased roadmap: whatever the document plans, the
       // fallback stands (the guard lives in the resolution itself).
       await Bun.write(join(dir, "docs/analysis.md"), RELEASED.replace("- R-01 adm —", "- R-01 amt —"))
       expect(await resolveRoundPhases(dir, 1, "m")).toEqual({ phases: "m" })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the round-brief proposals (plans/0104)", () => {
+  const WITH_BRIEFS = [
+    RELEASED.replace("\nClarified: yes", ""),
+    "## Round briefs",
+    "",
+    "### R-01",
+    "",
+    "Port the retry ladder and the protocol strings with their tests.",
+    "",
+    "- Acceptance: the e2e suite passes on the ported core.",
+    "",
+    "### R-02",
+    "",
+    "The acceptance pass and the knowledge distillation.",
+    "",
+  ].join("\n")
+
+  test("the section is optional and its subsections parse with bodies to the next heading; comments strip", () => {
+    // No section: the floor — nothing parsed, no problems from it.
+    expect(roundBriefProposals(RELEASED).size).toBe(0)
+    expect(roundBriefNearMisses(RELEASED)).toEqual([])
+    expect(analysisProblems(RELEASED, BUILTIN_PHASE_TYPES)).toEqual([])
+    // With it: each subsection's body runs to the next `###`/`##` heading.
+    const briefs = roundBriefProposals(WITH_BRIEFS)
+    expect(briefs.get(1)).toBe("Port the retry ladder and the protocol strings with their tests.\n\n- Acceptance: the e2e suite passes on the ported core.")
+    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    // Unpadded ids parse, the roadmap's rule; a commented-out subsection is
+    // not content.
+    const unpadded = WITH_BRIEFS.replace("### R-02", "### R-2").replace("### R-01", "<!-- ### R-09 -->\n### R-1")
+    const parsed = roundBriefProposals(unpadded)
+    expect(parsed.get(1)).toContain("retry ladder")
+    expect(parsed.get(2)).toContain("acceptance pass")
+    expect(parsed.has(9)).toBe(false)
+  })
+
+  test("an empty subsection and a near-miss heading are named problems — only when the section is present", () => {
+    const empty = WITH_BRIEFS.replace("The acceptance pass and the knowledge distillation.\n", "")
+    expect(analysisProblems(empty, BUILTIN_PHASE_TYPES)).toEqual([
+      "round-brief proposals that hold no content: `### R-02` — fill each with that round's brief (goal, acceptance and release criteria) or remove it; an empty proposal installs nothing",
+    ])
+    // Near-misses: a level-4 heading or a suffix on the line reads as drafted
+    // and never matches its round.
+    const near = WITH_BRIEFS.replace("### R-02", "#### R-02").replace("### R-01", "### R-01 — the port round")
+    expect(roundBriefNearMisses(near)).toEqual(["### R-01 — the port round", "#### R-02"])
+    const problems = analysisProblems(near, BUILTIN_PHASE_TYPES)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain("round-brief proposal headings that do not parse")
+    expect(problems[0]).toContain("`### R-01 — the port round`; `#### R-02`")
+    // The stub's hint section is comments only: no subsections, no problems.
+    expect(roundBriefProposals(renderAnalysisStub()).size).toBe(0)
+    expect(analysisProblems(renderAnalysisStub(), BUILTIN_PHASE_TYPES).some((problem) => problem.includes("round-brief"))).toBe(false)
+  })
+
+  test("the stub teaches the channel; a well-formed section passes the grammar checks", () => {
+    const stub = renderAnalysisStub()
+    expect(stub).toContain("## Round briefs")
+    expect(stub).toContain("installs the round's proposal verbatim when the round opens")
+    expect(analysisProblems(WITH_BRIEFS.replace("\nClarified: yes", "") + "\nClarified: yes\n", BUILTIN_PHASE_TYPES)).toEqual([])
+  })
+
+  test("releasedRoundBriefProposal: released only, empty never installs, the floor is undefined", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "analysis-briefs-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      // No document, or unreleased: never the person's decision yet.
+      expect(await releasedRoundBriefProposal(dir, 1)).toBeUndefined()
+      await Bun.write(join(dir, "docs/analysis.md"), WITH_BRIEFS)
+      expect(await releasedRoundBriefProposal(dir, 1)).toBeUndefined()
+      // Released: the round's proposal body; an empty subsection and a
+      // round without one stay undefined.
+      await Bun.write(join(dir, "docs/analysis.md"), WITH_BRIEFS + "\nClarified: yes\n")
+      expect(await releasedRoundBriefProposal(dir, 1)).toContain("retry ladder")
+      expect(await releasedRoundBriefProposal(dir, 2)).toContain("acceptance pass")
+      expect(await releasedRoundBriefProposal(dir, 3)).toBeUndefined()
+      const empty = WITH_BRIEFS.replace("The acceptance pass and the knowledge distillation.\n", "") + "\nClarified: yes\n"
+      await Bun.write(join(dir, "docs/analysis.md"), empty)
+      expect(await releasedRoundBriefProposal(dir, 2)).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

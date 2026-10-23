@@ -618,7 +618,8 @@ describe("planPrelude: the dispatch seam (plans/0101 D3/D4)", () => {
       lines: [
         "⏸ the round brief docs/R-01/round.md is still the untouched stub: no planning session dispatches against an empty round brief",
         `next: fill it in (## Goal, ## Acceptance criteria, ## Release criteria — opencode-auto plan ${dir} --round points the AGENTS.md guidance at it), commit, ` +
-          `then re-run: opencode-auto transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again`,
+          `then re-run: opencode-auto transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again; ` +
+          `or draft it as a \`### R-01\` proposal under \`## Round briefs\` of docs/analysis.md, commit — the next opencode-auto transfer ${dir} installs it verbatim`,
       ],
     })
     // The fill releases it: the dispatch routes.
@@ -946,7 +947,7 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       expect(result.code).toBe(0)
       expect(result.lines[0]).toBe("✓ the project analysis is open: docs/analysis.md written (a stub with section hints)")
       expect(result.lines.at(-1)).toBe(
-        `then add the line \`Clarified: yes\`, commit, and re-run: opencode-auto plan ${dir} — the approved brief is installed and round R-01 opens`,
+        `then release it: opencode-auto clarify ${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself), and re-run: opencode-auto plan ${dir} — the approved brief is installed and round R-01 opens`,
       )
       expect(await exists(dir, "docs/analysis.md")).toBe(true)
       expect(await exists(dir, "docs/R-01")).toBe(false)
@@ -970,7 +971,8 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       const awaiting = await planPrelude(dir, { phases: "m" })
       expect(awaiting.type === "stop" && awaiting.code).toBe(2)
       expect(awaiting.type === "stop" && awaiting.lines[0]).toBe(
-        "⏸ the project analysis awaits you: review docs/analysis.md, resolve its 1 open Fork: line(s) (append your answers beside them), then add the line `Clarified: yes` and commit",
+        "⏸ the project analysis awaits you: review docs/analysis.md, resolve its 1 open Fork: line(s) (append your answers beside them), then release it — opencode-auto clarify " +
+          `${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself)`,
       )
       // A document that fails the grammar is told so before the release check.
       writeFileSync(join(dir, "docs/analysis.md"), "# no sections\n")
@@ -996,6 +998,35 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       expect((await read(dir, ".opencode/auto/brief.md")).trim()).toBe("A faithful port of the core into the monorepo, tests included.")
       expect(await read(dir, "AGENTS.md")).toContain("round R-01 preparation")
       // The round routes on after the release: an input plans against it.
+      const again = await planPrelude(dir, { phases: "m", input: INPUT })
+      expect(again).toEqual({ type: "loop" })
+    }),
+  )
+
+  test(
+    "row 0d with a released round-brief proposal (plans/0104): m mode installs it at the establishment, the stop naming the input step",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(
+        join(dir, "docs/analysis.md"),
+        FILLED_ANALYSIS.replace("\nClarified: yes", "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\nClarified: yes"),
+      )
+      const result = await planPrelude(dir, { phases: "m" })
+      expect(result.type).toBe("stop")
+      if (result.type !== "stop") return
+      expect(result.code).toBe(0)
+      expect(result.lines).toContain("✓ round R-01 established: single phase P01-implement")
+      expect(result.lines).toContain("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)")
+      expect(result.lines.some((line) => line.includes("next: the round brief is your released proposal, installed and committed — plan the round with:"))).toBe(true)
+      expect(result.lines.some((line) => line.includes("round-start gate"))).toBe(false)
+      // The installed brief carries the proposal verbatim, the Close section
+      // in place by construction — m mode's planning sessions read it.
+      const round = await read(dir, "docs/R-01/round.md")
+      expect(round).toContain("Port the core with the retry ladder intact.")
+      expect(round).toContain("## Close")
+      // The dispatch guard passes on the installed brief: an input plans.
       const again = await planPrelude(dir, { phases: "m", input: INPUT })
       expect(again).toEqual({ type: "loop" })
     }),

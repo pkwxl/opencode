@@ -8,11 +8,32 @@
 //     restatement listing of root plan D12 in its middle form (plans/0049 G8).
 // Only the `## Close` heading is protocol (0035, amendment M4.2); the other
 // stub headings are scaffolding, and the content under all of them is free.
+// Since plans/0104 the brief has a proposal channel beside the hand-written
+// one: a released `### R-NN` subsection under `## Round briefs` of
+// docs/analysis.md installs verbatim at the round's open (renderInstalled-
+// RoundBrief + installRoundBrief below, the brief-install family's third
+// member) — the round-start gate appears only for rounds without a released
+// proposal.
 import { join } from "node:path"
 import { roundBriefPath, roundDirName } from "./docpaths"
 
 // Driver protocol string: the heading whose body the round-close gate requires.
 export const ROUND_CLOSE_HEADING = "## Close"
+
+// AUTO-DECISION (wording, 0106): two repairs from one field round — the
+// enforcer naming caught up to 0101 (`transfer` opens rounds since; m
+// mode keeps plan; the hint still said `plan`), and the depth clause
+// added after a proxy session filled the section structurally but
+// shallow: each restated decision names where it landed, each accepted
+// loss names what it cost. The heading stays the protocol; this text is a
+// stripped comment hint only. Shared by the stub and the installed brief —
+// the round-close gate reads the heading wherever the file came from.
+const CLOSE_HINT = [
+  "<!-- Fill in before the next round: list the decisions of this round that were restated into the target's own",
+  "     documentation, and the ones accepted as lost with the process documents — each restated decision names",
+  "     where it landed, each accepted loss names what it cost. `transfer` (m mode: `plan`) refuses to open the",
+  "     next round while this section is empty. -->",
+]
 
 // The stub: four sections, each holding only a comment hint, so an untouched
 // stub injects nothing into planning and fails the close check.
@@ -36,17 +57,7 @@ export function renderRoundBrief(round: number): string {
     "",
     ROUND_CLOSE_HEADING,
     "",
-    // AUTO-DECISION (wording, 0106): two repairs from one field round — the
-    // enforcer naming caught up to 0101 (`transfer` opens rounds since; m
-    // mode keeps plan; the hint still said `plan`), and the depth clause
-    // added after a proxy session filled the section structurally but
-    // shallow: each restated decision names where it landed, each accepted
-    // loss names what it cost. The heading above stays the protocol; this
-    // text is a stripped comment hint only.
-    "<!-- Fill in before the next round: list the decisions of this round that were restated into the target's own",
-    "     documentation, and the ones accepted as lost with the process documents — each restated decision names",
-    "     where it landed, each accepted loss names what it cost. `transfer` (m mode: `plan`) refuses to open the",
-    "     next round while this section is empty. -->",
+    ...CLOSE_HINT,
     "",
   ].join("\n")
 }
@@ -86,4 +97,68 @@ export function closeSection(text: string): string | undefined {
     body.push(line)
   }
   return body.join("\n").trim()
+}
+
+// The installed shape (plans/0104): the proposal body verbatim under the
+// round's title, the `## Close` stub section appended so the protocol heading
+// the round-close gate reads is in place by construction. The three-part
+// discipline of the stub (Goal / Acceptance criteria / Release criteria) stays
+// the guidance's bar — the body is the person's released words, structured as
+// they structured them.
+export function renderInstalledRoundBrief(round: number, proposal: string): string {
+  return [`# Round ${roundDirName(round)}`, "", proposal.trimEnd(), "", ROUND_CLOSE_HEADING, "", ...CLOSE_HINT, ""].join("\n")
+}
+
+// The commit seam the install runs through — brief.ts BriefCommitter's shape,
+// restated locally so this module (the document layer) imports nothing above
+// it: the free commitTree of git.ts and the run's git service both satisfy it.
+export type RoundBriefCommitter = (
+  dir: string,
+  task: { id: string; title: string },
+  info: { stage: string; subject: string },
+) => Promise<{ ok: boolean; failures?: Array<{ rel: string; error: string }> }>
+
+export type RoundBriefInstall = { installed: boolean; lines: string[] }
+
+// Install a released round-brief proposal (plans/0104 D3): write the composed
+// file over the untouched stub, land the driver's own `round-start` commit —
+// which sweeps the uncommitted round setup when the install runs at the
+// establishment, the driver's commit replacing the gate's person one — and
+// return the log lines. Never clobbers: a round.md that already holds real
+// content stands (the person's file wins, an ℹ line saying so). An equal
+// re-run writes nothing and only re-commits (the interrupted-install shape:
+// the write landed, the commit did not). The commit failure is a ⚠ line,
+// never a throw — the caller's stop owns the exit code.
+export async function installRoundBrief(
+  dir: string,
+  round: number,
+  source: string,
+  proposal: string,
+  commit: RoundBriefCommitter,
+): Promise<RoundBriefInstall> {
+  const target = join(dir, roundBriefPath(round))
+  const name = roundDirName(round)
+  const composed = renderInstalledRoundBrief(round, proposal)
+  const existing = await Bun.file(target).text().catch(() => undefined)
+  if (existing !== undefined && existing !== composed && stubbedText(existing) !== undefined) {
+    return { installed: false, lines: [`ℹ the released round-brief proposal was not installed: ${roundBriefPath(round)} already holds content — the file on disk stands`] }
+  }
+  if (existing !== composed) await Bun.write(target, composed)
+  const settled = await commit(dir, { id: "PLAN", title: `round start (${name})` }, {
+    stage: "round-start",
+    subject: `PLAN start ${name} (round brief installed from ${source})`,
+  })
+  if (!settled.ok) {
+    return {
+      installed: true,
+      lines: [
+        `⚠ the round brief was written to ${roundBriefPath(round)} but its commit failed: ` +
+          `${(settled.failures ?? []).map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Commit manually and re-run`,
+      ],
+    }
+  }
+  return {
+    installed: true,
+    lines: [`✓ round brief installed verbatim: ${source} \`### ${name}\` → ${roundBriefPath(round)} (the round-start commit; your release approved it)`],
+  }
 }

@@ -168,6 +168,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // one-shot tool-less session; watch asks it beside the event stream.
   classify: "driver",
   clean: "driver",
+  // The person's release command (plans/0105): clarifyGate — the state-
+  // resolving write of `Clarified: yes` into the one document a gate awaits,
+  // its commit. Sits with close/transfer at the person-command plane.
+  clarify: "driver",
   // Closing units: closeUnit, the mechanical handover, the close commit
   // (plans/0053 D17–D21).
   close: "driver",
@@ -428,6 +432,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // destinations, build, close listing (the round-report check retired,
   // plans/0109 D1).
   "round-close": "driver",
+  // The roadmap grammar of docs/analysis.md (plans/0084, split from analysis
+  // by plans/0103 D4): the machine-parsed round lines and the released
+  // readers over them — the runtime plane's detection sites (fix's
+  // supersession finding) reach them beside the pipeline's establishment
+  // resolution; it reads only the provider domains (docpaths, phases).
+  roadmap: "driver",
   // The run-status event table (the headless direction's P2a, plans/0067
   // and its review): the frozen, additive-only vocabulary the P2 emitter
   // will publish — types and declaration tables only, importing nothing;
@@ -677,6 +687,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // runAll it delegates to is the pipeline's top, and its shape resolution
   // reads the same round/phase machinery plan's rows do.
   transfer: "pipeline",
+  // clarify, the person's release command (plans/0105): pipeline beside
+  // close — one state-resolving write over the same gate readers, reaching
+  // no session-driving layer.
+  clarify: "pipeline",
   "plan-input": "pipeline",
   // The pre-round project analysis docs/analysis.md (plans/0084): stub and
   // grammar of the analysis route — pipeline beside plan, its only consumer;
@@ -722,6 +736,13 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // init-time plane — no value edges at all today; runtime so the detection
   // sites (preflight, fix, status, sync) reach it without exception.
   provenance: "runtime",
+  // The roadmap grammar of docs/analysis.md (plans/0103 D4, provenance's
+  // precedent): the round-line parse and the released readers, split from
+  // analysis (pipeline) so the runtime plane reaches them — fix's
+  // supersession finding reads a covering line without binding a
+  // runtime → pipeline edge; it reaches only provider domains (docpaths,
+  // phases), so the placement adds no driver edge at all.
+  roadmap: "runtime",
   // The bundle sync core (plans/0100 D4/D5): the person's upgrade command's
   // plan/apply/format, reaching bundle (the resolve/map), provenance (the
   // stamp) and config (the bootstrap's intent key) — the config-fix seat.

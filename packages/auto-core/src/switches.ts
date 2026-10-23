@@ -35,10 +35,12 @@ export const SWITCH_ENV = {
   // the landing protocol) with zero concurrency. The rollout/testing answer to
   // 0036 D13's "plan for parallelism, execute serially" trap.
   laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
-  // Plan-step consistency verification (plans/0080 §5): the AI verifier that
-  // judges each composed planning prompt against the active intent's charter.
-  // off is the emergency exit — the mechanical layers (the render gate, the
-  // precedence blocks) keep running; only the semantic check goes away.
+  // Plan-step consistency verification (plans/0080 §5, default off since
+  // plans/0102): the AI verifier that judges each composed planning prompt
+  // against the active intent's charter — opt-in, running on the deep
+  // planning route when on. The mechanical layers (the render gate, the
+  // precedence blocks) keep running either way; only the semantic check
+  // goes away.
   planVerify: "OPENCODE_AUTO_PLAN_VERIFY",
   // Consented remediation (plans/0082 §5 D8): the blockage dossier's
   // diagnosis session, the blockage document and the prelude executor — the
@@ -361,12 +363,13 @@ export type Switches = {
   // protocol, still strictly serially. The isolation rollout stage of the
   // lanes design: full machinery, zero concurrency, per-run only.
   laneIsolation: boolean
-  // Plan-step consistency verification (default on, plans/0080 §5): before a
-  // planning session runs, a verifier session judges the composed prompt
-  // against the active pack's `### verify-plan` charter (fail-closed: a
-  // verifier that cannot answer blocks the step). No charter declared ⇒ no
-  // verifier, whatever the switch says — the switch only removes the check,
-  // never adds one to a pack that declares none.
+  // Plan-step consistency verification (default off since plans/0102, the
+  // ruling recorded there; plans/0080 §5 the mechanism): before a planning
+  // session runs, a verifier session judges the composed prompt against the
+  // active pack's `### verify-plan` charter (fail-closed: a verifier that
+  // cannot answer blocks the step) on the deep planning route. No charter
+  // declared ⇒ no verifier, whatever the switch says — the switch only
+  // enables the check for a pack that declares one, never adds a charter.
   planVerify: boolean
   // Consented remediation (default on, plans/0082 §5 D8): the blockage
   // dossier's diagnosis session, the `docs/R-NN/blockage-<seq>.md` document
@@ -433,7 +436,7 @@ const SWITCH_DEFAULTS: Switches = {
   hibernate: undefined,
   agent: undefined,
   laneIsolation: false,
-  planVerify: true,
+  planVerify: false,
   remediate: true,
   analysis: true,
   park: true,

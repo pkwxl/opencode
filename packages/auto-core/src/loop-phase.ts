@@ -12,7 +12,7 @@ import { requireArtifact } from "./artifact"
 import { briefProposal, installBriefProposal } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { reportForUserPath, roundDirName } from "./docpaths"
+import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
@@ -40,6 +40,7 @@ import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
+import { releasedRoadmapRound } from "./roadmap"
 import { renderPhaseHandover } from "./prompt"
 import { appendAudit, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
@@ -311,7 +312,7 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       if (code === 0) return 0
       log(`⏸ the repair append did not complete (exit ${code}); the gate stop follows`)
     }
-    logGateStop(directory, phase, gated, acceptance)
+    await logGateStop(directory, phase, gated, acceptance)
     return 2
   }
   // The survey release's other half (plans/0081 D15.2): the person's
@@ -366,8 +367,8 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // ahead of any session and print this same awaiting shape. The lines
 // compose in plan's gateStopLines (plans/0105 D3) so the person-proxy brief
 // renders the same bytes; this prints them.
-export function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
-  for (const line of gateStopLines(directory, phase, problems, acceptance)) log(line)
+export async function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): Promise<void> {
+  for (const line of await gateStopLines(directory, phase, problems, acceptance)) log(line)
 }
 
 // Whether run's boundary-stop shape is in force (plans/0101 D1): plain run
@@ -403,7 +404,7 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   if (gates.includes("human")) {
     const problems = await phaseGateProblems(ctx.directory, phase, ["human"])
     if (problems.length) {
-      logGateStop(ctx.directory, phase, problems, undefined)
+      await logGateStop(ctx.directory, phase, problems, undefined)
       return 2
     }
   }

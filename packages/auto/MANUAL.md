@@ -24,7 +24,7 @@ The four things you "open":
 | You want to open | Command | What happens |
 | --- | --- | --- |
 | a project | `init [dir]` | writes the config layer, prepares git; no AI session, nothing under `docs/` |
-| a round | `transfer [dir]` | establishes `docs/R-NN/` (phase index, phase directories, round brief); stops at the round-start gate for your review + commit |
+| a round | `transfer [dir]` | establishes `docs/R-NN/` (phase index, phase directories, round brief); a released `### R-NN` round-brief proposal in `docs/analysis.md` installs verbatim and the advance continues to the plan task's review, otherwise stops at the round-start gate for your review + commit |
 | a phase | `transfer [dir]` → review → `plan [dir]` → `run [dir]` | `transfer` closes the finished phase and constructs the next one's plan task, stopping for review; `plan` dispatches it (the planning session lists the tasks); `run` executes the phase and stops at its clean end |
 | one task / a group | `plan [dir] --new-task "<title>"` / `plan [dir] --append -p "<text>"` | adds one task with no session / appends a group planned from an input, then stops for review |
 
@@ -61,13 +61,20 @@ opencode-auto transfer <dir>
 
 - With the assisted analysis on (`OPENCODE_AUTO_ANALYSIS`, default), a fresh project's first
   `transfer` opens `docs/analysis.md` instead — work with your agent on the analysis, the goals, the
-  project-brief proposal and the multi-round roadmap, then add the line `Clarified: yes` and commit;
+  project-brief proposal and the multi-round roadmap, then release it: `opencode-auto clarify <dir>`
+  writes the `Clarified: yes` line and commits it (or add the line and commit by hand);
   the next `transfer` installs the approved brief and establishes R-01 under the roadmap's line.
 - `transfer` establishes `docs/R-01/`: the phase index `phases.md`, one phase directory
   `P<nn>-<type>/` per phase (the released roadmap's line for the round rules; the config `phases`
   value the fallback), and the round brief stub `round.md`. It stops there (exit 0) — **the
   round-start gate**: review the setup, fill in `round.md` (`## Goal`, `## Acceptance criteria`,
   `## Release criteria`), and commit. The next `transfer` constructs P01's plan task (see §3).
+  The drafting can travel the analysis instead: a `### R-01` subsection under `## Round briefs` of
+  `docs/analysis.md`, released with the document (or drafted into it later between rounds — no new
+  release mark needed), **installs verbatim** into `round.md` on the driver's own commit when the
+  round opens — the gate passes and the same invocation already constructs the plan task. Your
+  hand-written file always wins: a filled `round.md` is never overwritten, and after an install the
+  file is yours to revise in place.
 - Everything inside `docs/R-NN/` is permanent once written — never renamed or moved.
 - With config `isolate`, designated nested repositories are switched onto the round branch `auto/R-NN`
   at establishment (a dirty one blocks, exit 2); `opencode-auto land` returns their work to the original
@@ -77,13 +84,18 @@ opencode-auto transfer <dir>
   commit; `transfer` then runs the round-close check (whole-tree reference scan, `build` if
   configured, `## Close` filled, the round user report in place) and establishes `docs/R-(N+1)/` from
   the roadmap's next line — failing items are listed, exit 2, and nothing opens until they are fixed.
-  A released roadmap governs the end: past its last line `transfer` stops pointing at
-  `## Roadmap` as the place to extend, never silently opening a config round.
+  A released `### R-(N+1)` round-brief proposal drafted into the analysis installs verbatim at that
+  open (the gate passes, the construction follows); without one the round-start gate waits for your
+  hand-written brief as above. A released roadmap governs the end: past its last line `transfer` stops
+  pointing at `## Roadmap` as the place to extend, never silently opening a config round.
 - In `m` mode `transfer` refuses (exit 1): `plan` establishes the single phase as before.
-- **Reshaping the round**: `amend --phases` at a phase boundary (or with no phase in progress)
-  changes the config value, and the next `transfer` re-derives the round's **unstarted** phase tail
-  from it before constructing (a released roadmap's line still wins); mid-phase it refuses, naming
-  the boundary. Started or completed phases are never reshaped.
+- **Reshaping the round**: at a phase boundary (or with no phase in progress) the round's
+  **unstarted** phase tail is reshaping state, and the next `transfer` re-derives it before
+  constructing. The channel is the round's authority: a round the released roadmap covers is
+  reshaped by moving its `- R-NN <phases> — <goal>` line in `docs/analysis.md` (`amend --phases`
+  refuses there — the config value never applies to a covered round; `status` names the key
+  superseded), a config-governed round by `amend --phases` (mid-phase it refuses, naming the
+  boundary). Started or completed phases are never reshaped.
 
 ## 3. Cross a phase boundary — transfer → review → plan → run
 
@@ -97,7 +109,9 @@ opencode-auto run <dir>         # 4. execute the tasks; stop at the phase's clea
 ```
 
 - **Step 1 — the advance**: `transfer` performs one boundary step: a survey phase with open `Fork:`
-  lines refuses first (exit 2, no session run) — resolve them, write `Clarified: yes`, commit, re-run;
+  lines refuses first (exit 2, no session run) — resolve them (write your answers beside the lines),
+  then release: `opencode-auto clarify <dir>` prints the forks with their `Recommend:` defaults and
+  writes the `Clarified: yes` line and its commit (the hand edit remains fully supported);
   otherwise the finished phase's `handover.md` is distilled, its `todo.md` → `done.md`, and the next
   phase's **plan task** (the formulation todo, driver-owned) is constructed and stopped for review.
   A rejected todo is fixed through its inputs (the round brief, the phase's `plan-input.md`, the
@@ -215,6 +229,7 @@ driver's unified commit is the completion condition.
 | `release [dir]` | the release gate: certify a destination repository (nested git repository) stands alone — the task-id/out-of-root/process-path findings the rounds recorded now block, beside a clean-tree check (read-only; fix with your agent, commit, re-run) |
 | `reset [dir] [-f]` | de-initialize (remove exactly init's artifacts) |
 | `transfer [dir] [--resynthesize]` | advance one boundary: open the round, or close the finished phase and construct the next one's plan task (stops for review) |
+| `clarify [dir]` | release the awaiting gate: write `Clarified: yes` into the unreleased analysis / held survey and commit it (prints the defaults it accepts) |
 | `plan [dir]` | dispatch the reviewed plan task (m mode: also establishes and plans) |
 | `plan [dir] --phase` / `--round` | prepare the next phase's planning input / the round brief with your agent |
 | `plan [dir] --append -p "…"` | append tasks to the current phase |

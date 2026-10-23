@@ -123,7 +123,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const dir = await repo()
     write(dir, ANALYSIS_DOC, ANALYSIS(["- R-01 mt — port the core"]))
     const lines = await renderHelperBrief(dir, { phases: "mt" })
-    expect(lines).toContain("⏸ the project analysis awaits you: review docs/analysis.md, then add the line `Clarified: yes` and commit")
+    expect(lines).toContain(`⏸ the project analysis awaits you: review docs/analysis.md, then release it — opencode-auto clarify ${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself)`)
     expect(lines).toContain(`then re-run: opencode-auto transfer ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`)
     expect(lines.some((line) => line.startsWith("- docs/analysis.md — its sections"))).toBe(true)
     expect(lines).toContain(`- opencode-auto transfer ${dir}`)

@@ -27,7 +27,7 @@ export const BRIEF_TARGET_HEADING = "## Target"
 // The survey's brief proposal heading (plans/0081 D15.1): the section the
 // survey phase's closing task writes beside its evidence, approved by the
 // person's `Clarified: yes` and installed verbatim on release (D15.2).
-const BRIEF_PROPOSAL_HEADING = "## Project brief"
+export const BRIEF_PROPOSAL_HEADING = "## Project brief"
 
 // The brief as planning input: undefined when the file is missing, empty or
 // holds only comments (comment-only text injects nothing — a seed or a
