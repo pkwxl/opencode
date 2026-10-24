@@ -389,8 +389,12 @@ order — afterwards git cannot tell the two runs apart; what changes is who was
 `<minutes>` is the wall, the one-hour child budget's whole-session replacement: record your start time
 at your first action; the wall is start + <minutes>, set below the platform's own kill of this session
 so the gap between them is the wrap-up's room (a 3-hour kill → `single 175`, sprint's arithmetic). Check
-the clock (`date`) at every role boundary: take up a new task or a fix round only with at least 10
-minutes of runway, a verification, handover or planning role only with at least 15. The wall stops new
+the clock (`date`) at every role boundary, and let the printed reading alone decide it: compute the
+runway in the open — start + <minutes> − the printed now — never a remembered remaining figure or
+elapsed-time arithmetic between readings; when your own estimate and a fresh `date` output disagree,
+the output wins unconditionally — there is no second clock to reconcile it against, only arithmetic
+gone adrift. Take up a new task or a fix round only with at least 10 minutes of runway, a
+verification, handover or planning role only with at least 15. The wall stops new
 work, never the wrap-up: finish the step in flight (never end with a lane process running — wait it out
 or kill it deliberately with its log state recorded), write the handover document when mid-task
 (`Status: continue` — the successor session continues from it exactly as a successor child would), land

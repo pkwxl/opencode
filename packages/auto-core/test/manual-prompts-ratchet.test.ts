@@ -277,6 +277,17 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("a wave needs child sessions")
     expect(run).toContain("rides with `window` alone")
     expect(run).toContain("the whole design rests on one of the two")
+    // The clock rule hardened in place after the 0117 field incident: a run
+    // whose accumulated time estimate drifted an hour ahead overrode forty
+    // correct `date` readings as "a lagging container clock" and stopped
+    // 80 minutes before its wall. The wall is read, never remembered: the
+    // printed `date` output alone decides the runway, computed in the open
+    // from the recorded start, and a disagreement between estimate and
+    // reading resolves for the reading — there is no second clock.
+    expect(run).toContain("let the printed reading alone decide it")
+    expect(run).toContain("start + <minutes> − the printed now")
+    expect(run).toContain("the output wins unconditionally")
+    expect(run).toContain("there is no second clock to reconcile it against")
   })
 
   test("the facility-keyed launch: background-first for every run, foreground only forced (plans/0092)", () => {
