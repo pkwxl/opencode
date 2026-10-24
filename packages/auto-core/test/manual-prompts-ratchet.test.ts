@@ -309,6 +309,49 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("poll your log in short steps — never sit waiting on a long command")
   })
 
+  test("the notification wait: a running child's output is never read (plans/0118)", () => {
+    // The field incident: a plain serial run on a notification-delivering
+    // host — the master launched its task child background-first as 0092
+    // rules and then kept fetching the running child's live output instead
+    // of waiting for the completion notification. Three inductions in the
+    // copy caused it: the loop said "When it ends" without naming the
+    // wait's mechanism (the completion notification appeared once, as a
+    // labeling rationale, never as the wait); the mid-flight quiet nudge
+    // ("has been quiet past ~10 minutes") could only be discharged by
+    // watching the transcript; and the budget wall's "without ending" left
+    // the master to improvise how it knows. The ruling: the completion
+    // notification is the wait — a running child's transcript is never
+    // fetched, tailed or polled for quietness, progress or liveness (the
+    // transcript is the child's context; no mechanical check reads it; a
+    // background child cannot be quiet-killed, so silence endangers
+    // nothing); a clock that must be held (the budget wall, a mode's
+    // gates) reads `date` in the pace idiom's short sleep steps, never the
+    // child's output; the budget wall keys on clock arithmetic alone (the
+    // recorded launch time plus the budget the master itself filled); the
+    // mid-flight quiet nudge is retired — no nudge is ever sent to a
+    // running background child, the wall the sole backstop, while 0090
+    // D2's relaunch-time nudge on the forced-foreground host stands
+    // verbatim; and where a host's wait call blocks on the child yet
+    // returns its output, the final reply alone is the intake — the
+    // verdict line plus the mechanical checks, as the context rule says.
+    const run = text("run.md")
+    expect(run).toContain("The wait is the completion notification, never the child's live output")
+    expect(run).toContain("Never fetch, tail or poll a running child's transcript")
+    expect(run).toContain("hold it the pace idiom's way")
+    expect(run).toContain("a fact of clock arithmetic")
+    expect(run).toContain("no mid-flight nudge is ever sent")
+    expect(run).toContain("the completion notification of the background launch, the call's return of a")
+    // The loop's step 3 and the context rule carry the cross-ties: the
+    // step names the wait's two shapes, the context rule names the
+    // prohibition against the transcript channel.
+    expect(run).toContain("(the launching section's wait)")
+    expect(run).toContain("never through a running child's transcript")
+    // The retired mid-flight nudge stays retired: the "still there?" shape
+    // must not return (the relaunch-time nudge string, pinned in the 0092
+    // test above, is the survivor).
+    expect(run).not.toContain("still there?")
+  })
+
   test("the phase boundary is a stop by default; `phases: all` lifts it (plans/0091)", () => {
     // One phase per hand-over: the master control ends the run at every
     // phase boundary — the phase closed and landed, the report naming

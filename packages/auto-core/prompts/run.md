@@ -75,7 +75,7 @@ picked task's `todo.md`, and file-existence checks (`todo.md` / `done.md` / `sub
 check, not a read); content judgment belongs to the child sessions: the task session reads its task document
 and the sources, the verification session reads the work, the fix session reads the gap list. Fill child
 prompts with short facts only, take a child's outcome only through its verdict line plus the mechanical checks
-below, and keep every
+below — never through a running child's transcript (the launching section's wait) — and keep every
 reply a child sends you to a few lines (the companions instruct them so). (Under `mode: single` the unit in
 flight is the one exception — you hold the worker's role too, and its task document, handoff and diff are
 yours to read; every other unit's documents stay pointer-only as ever, the Single-session runs section.)
@@ -112,20 +112,35 @@ yours to read; every other unit's documents stay pointer-only as ever, the Singl
   companions. When a child is killed by the harness anyway or lost to an infrastructure error (inactivity
   timeout, quota ticket, cancellation), relaunch the same role through the channel it launched on — the
   background facility where the host has one (no inactivity kill, but no host visibility either),
-  foreground where it does not — with one line of feedback to continue on the dirty tree it left, plus on
-  the forced-foreground host the quiet-child nudge ("poll your log in short steps — never sit waiting on a
-  long command"): the companions' polling discipline is the child's only shield there, and a sprint wall
-  bounds one that keeps getting killed. That retry is separate from the relaunch budget in the loop
-  below. The same stop-and-relaunch applies to a background child that runs past its
-  session budget without ending: stop it and relaunch with the continue line — its checkpointed tree
-  makes that safe, and its successor picks up from the handover or the tree. A killed session's writes
-  stay unlanded — its successor's share commit absorbs them; shares land at clean session ends only.
-- Quietness is never a stop condition of yours: a child sitting silent on a long test or build run is doing
-  its work, the budget wall above is the only stop you ever make, and the harness's own quiet kill of a
-  foreground child is beyond your control — the companions' polling discipline is the prevention. When your
-  platform can message a running background child and it has been quiet past ~10 minutes, prefer one nudge
-  line ("still there? poll your log in short steps — never sit waiting on a long command") over anything
-  harder; a platform without messaging changes nothing — the budget wall remains the backstop.
+  foreground where it does not — with one line of feedback to continue on the dirty tree it left, plus
+  on the forced-foreground host the quiet-child nudge
+  ("poll your log in short steps — never sit waiting on a long command"): the companions' polling
+  discipline is the child's only shield there, and a sprint wall bounds one that keeps getting killed.
+  That retry is separate from the relaunch budget in the loop below. The same stop-and-relaunch applies
+  to a background child that runs past its session budget without ending — a fact of clock arithmetic
+  alone, the launch time you recorded plus the budget you filled against `date`, never a fact of the
+  child's output: when the clock passes it, stop the child and relaunch with the continue line — its
+  checkpointed tree makes that safe, and its successor picks up from the handover or the tree. A
+  killed session's writes stay unlanded — its successor's share commit absorbs them; shares land at
+  clean session ends only.
+- The wait is the completion notification, never the child's live output. After launching a child you
+  act on it again only when its completion notification arrives; a foreground launch needs no separate
+  wait — its call blocks and returns with the child's final reply.
+  Never fetch, tail or poll a running child's transcript, whatever the question you would ask of it —
+  quietness, progress, liveness: the transcript is the child session's context, fetching it spends your
+  own scarce context (the rule above) on content no mechanical check below ever reads, and a background
+  child cannot be quiet-killed, so its silence endangers nothing. Where you must hold a clock while a
+  child runs (the budget wall above, a mode's gates), hold it the pace idiom's way — short sleep
+  steps reading `date` — and never the child's output; and where the host's only wait shape is a call
+  that blocks on the child yet returns its output, take from the return the final reply alone — the
+  verdict line plus the mechanical checks are your whole intake from a child, as the context rule says.
+- Quietness is never a stop condition of yours, and never a fact you learn: you do not watch a running
+  child (the wait above), so a child sitting silent on a long test or build run is simply one whose
+  completion notification has not arrived — it is doing its work, and the budget wall above is the only
+  stop you ever make. The harness's own quiet kill of a foreground child is beyond your control — the
+  companions' polling discipline is the prevention, and the relaunch line's nudge (this section above)
+  the lesson its successor gets; no mid-flight nudge is ever sent — a background child cannot be
+  quiet-killed, a silent one needs nothing from you, and the wall remains the sole backstop.
 - The session budget turns the handover on: fill `<session budget>` in `run-task.md` / `run-fix.md` with
   `60 minutes` unless the person directed another figure (a sprint mode's runway fit counts as one, a
   window's remaining runway likewise). A
@@ -199,11 +214,12 @@ iteration.
    share left committed, with the handover document as the seam between them.
 2. Launch the task child session: `run-task.md` with `<task id>` and `<session budget>` filled — the session
    reads `docs/T-NNN/todo.md` itself.
-3. When it ends: the session changed something — `git status --porcelain` must list something besides the
-   session files (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`; a handover document alone is not a
-   share — it rides one, never forms one): a
-   zero-write session is never completion. Zero writes → relaunch the task child session once, appending one
-   line of feedback ("your previous session ended without writing anything — carry the task out"); still
+3. When the child ends — the completion notification of the background launch, the call's return of a
+   foreground one (the launching section's wait): the session changed something — `git status --porcelain`
+   must list something besides the session files (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`; a
+   handover document alone is not a share — it rides one, never forms one): a zero-write session is never
+   completion. Zero writes → relaunch the task child session once, appending one line of feedback ("your
+   previous session ended without writing anything — carry the task out"); still
    zero writes → stop and report. Otherwise land the share — the driver's unified commit after a session: the
    same add + commit pass the verification's close-out makes, one commit per repository that changed (nested
    repositories first, then this one), with `docs/T-NNN/gaps.md` unstaged back out first in this repository
