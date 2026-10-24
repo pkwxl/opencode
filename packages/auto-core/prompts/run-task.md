@@ -19,7 +19,10 @@ already did.
 
 1. Carry the task towards completion: everything its `## Scope` requires, producing every artifact its
    `## Acceptance` requires. Code goes directly into the source tree; documents you create for this task go
-   inside its own directory `docs/<task id>/` — a permanent path, never a flat file at the top of docs/. You may
+   inside its own directory `docs/<task id>/` — a permanent path, never a flat file at the top of docs/.
+   One name in that directory is reserved: `report.md` is the verification child's wrap-up report alone
+   — never create or edit it; your deliverable documents carry their own names, the ones your task
+   document declares. You may
    add to the content of docs/ but not modify existing documents (if a modification is unavoidable, annotate it
    AUTO-DECISION and record it in the relevant document). When your prompt carries the parallel line
    (sibling task sessions run beside yours), your writes stay inside your task's declared scope — every

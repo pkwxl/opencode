@@ -42,7 +42,9 @@ Read first, in this order:
    — also carries a `Touches:` field line listing those paths (its own `docs/T-NNN/` implied) and
    `Depends: none` where its work really is independent;
    the declarations are what the master control's parallel wave admits on, and a task without them runs one at a time. Name real paths and real
-   prerequisites — never restructure the plan to create independent tasks.
+   prerequisites — never restructure the plan to create independent tasks. `docs/T-NNN/report.md` is a reserved name — the verification child's
+   wrap-up report, the verdict's durable record, written only at close-out: never a task's artifact or `Touches:` path; a task's deliverable
+   document carries its own name, the phase type's duty text naming its conventions (an audit dimension's findings live in `findings.md`).
 2. Scan `docs/` for the task numbers already taken — the new tasks' numbers continue after the highest
    existing `T-NNN`, never reusing a taken number.
 3. Write the task index `<phase dir>/tasks.md`: one line per task, exactly `- [ ] T-NNN <task title>`, at

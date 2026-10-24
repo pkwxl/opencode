@@ -118,7 +118,9 @@ plan only, do not implement anything.
 6. Each new task focuses on one independently deliverable outcome. Do not hand-write subtask checklists —
    whether and how a task is split is decided at execution time. Deliverable files the tasks will create must
    not reference process documents (`docs/T-*`, `docs/R-*`, `docs/phases/`, PLAN.md, `.auto/`) — process
-   documents are not design dependencies. When the config sets a parallel level, plan so that tasks whose
+   documents are not design dependencies. A deliverable never lives at `docs/T-NNN/report.md` — that
+   path is the verification's wrap-up report, reserved; each deliverable carries its own name. When the
+   config sets a parallel level, plan so that tasks whose
    `Touches:` paths do not overlap can run side by side.
 7. The append must add at least one new task: even if the input turns out to be covered by the existing tasks,
    write one explanatory task and state the reason in its document.

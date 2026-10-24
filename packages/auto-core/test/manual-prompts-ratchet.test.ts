@@ -572,4 +572,24 @@ describe("manual-driver prompt ratchet", () => {
     expect(plan).toContain("`Touches:`")
     expect(plan).toContain("the declarations are what the master control's parallel wave admits on")
   })
+
+  test("report.md is the verification's alone — a task deliverable never lives there (plans/0120)", () => {
+    // The field incident (the aster-mig cleanroom round): the audit tasks'
+    // deliverable was named `docs/T-NNN/report.md`, so the task session and
+    // the verification child became two writers of one file — the exec
+    // commits created the reports (316/439 lines of audit findings), the
+    // wrapup commits then appended (+112) or revised (+212/−46) them — and
+    // with no deliverable path distinct from the implied own directory
+    // there was nothing to declare in `Touches:`, so the wave never formed.
+    // The ruling: `report.md` is the verification's wrap-up report alone
+    // (the verdict's durable record — a Result line authored by the work
+    // session would be self-report), one writer per file; a task's
+    // deliverable carries its own name, the phase duty text naming its
+    // conventions (the cleanroom audit phase's findings.md, pinned by its
+    // own bundle file — this ratchet holds the suite copy alone). Pinned on
+    // all three copy sites: the planner, the worker, the append planner.
+    expect(text("run-plan.md")).toContain("`docs/T-NNN/report.md` is a reserved name")
+    expect(text("run-task.md")).toContain("One name in that directory is reserved")
+    expect(text("plan-append.md")).toContain("the verification's wrap-up report, reserved")
+  })
 })
