@@ -157,14 +157,16 @@ describe("round-close gate (plans/0049 G8)", () => {
       writeFileSync(join(dir, ".gitignore"), "tmp/\n.auto/\n")
       // The destination: a nested repository whose own file references the
       // process side — the deliverable, the one side the scan reads, and a
-      // recorded finding like every other family.
+      // recorded finding like every other family. Since 0119 the ledger is
+      // git's modified view: the finding must sit in a driver commit (the
+      // unified commit's own trailers) for the round to answer for it.
       mkdirSync(join(dir, "dest", "src"), { recursive: true })
       await git(join(dir, "dest"), "init", "-q")
       await git(join(dir, "dest"), "config", "user.email", "t@example.com")
       await git(join(dir, "dest"), "config", "user.name", "t")
       writeFileSync(join(dir, "dest", "src", "lib.rs"), "// see docs/T-004/report.md for the reason\nfn main() {}\n")
       await git(join(dir, "dest"), "add", "-A")
-      await git(join(dir, "dest"), "commit", "-qm", "destination")
+      await git(join(dir, "dest"), "commit", "-qm", "destination\n\nAuto-Task: T-001\nAuto-Stage: implement")
       writeReport(dir, 1)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
@@ -197,7 +199,9 @@ describe("round-close gate (plans/0049 G8)", () => {
       writeReport(dir, 1)
       // A nested destination repository carrying exactly the recorded
       // findings: a process-document citation, a task-id citation and a
-      // path climbing out of its root.
+      // path climbing out of its root — landed by the driver's own commit
+      // (plans/0119: the ledger is git's modified view, the run of driver
+      // commits back from HEAD).
       mkdirSync(join(dir, "vendor", "src"), { recursive: true })
       await git(join(dir, "vendor"), "init", "-q")
       await git(join(dir, "vendor"), "config", "user.email", "t@example.com")
@@ -206,7 +210,7 @@ describe("round-close gate (plans/0049 G8)", () => {
       writeFileSync(join(dir, "vendor", "src", "b.c"), 'path = "../../outside"\n')
       writeFileSync(join(dir, "vendor", "src", "c.rs"), "//! Layout per docs/T-009/report.md.\n")
       await git(join(dir, "vendor"), "add", "-A")
-      await git(join(dir, "vendor"), "commit", "-qm", "destination")
+      await git(join(dir, "vendor"), "commit", "-qm", "destination\n\nAuto-Task: T-001\nAuto-Stage: implement")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const close = await roundCloseProblems(dir, 1)
@@ -241,7 +245,7 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
-    "scan exemptions (config scanExempt, plans/0059 X2): an exempted destination path is left out of the whole-tree scan",
+    "scan exemptions (config scanExempt, plans/0059 X2): an exempted destination path is left out of the destination scan",
     withDir(async (dir) => {
       await gitRepo(dir)
       await establishRound(dir, { phases: "am" })
@@ -253,13 +257,47 @@ describe("round-close gate (plans/0049 G8)", () => {
       await git(join(dir, "dest"), "config", "user.name", "t")
       writeFileSync(join(dir, "dest", "test/fixtures/sample.md"), "a sample task record: docs/T-004/report.md\n")
       await git(join(dir, "dest"), "add", "-A")
-      await git(join(dir, "dest"), "commit", "-qm", "destination")
+      await git(join(dir, "dest"), "commit", "-qm", "fixtures\n\nAuto-Task: T-001\nAuto-Stage: implement")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round")
       const scanned = await roundCloseProblems(dir, 1, { build: "true" })
       expect(scanned.problems).toEqual([])
       expect(scanned.warnings[0]).toStartWith("containment: 1 reference(s) recorded for release")
       expect(await roundCloseProblems(dir, 1, { build: "true", scanExempt: ["dest/test/fixtures/**"] })).toEqual({ problems: [], warnings: [] })
+    }),
+  )
+
+  test(
+    "the ledger is git's modified view (plans/0119): a destination's person-committed content is never the round's record, the driver's commit run is, and a pristine upstream checkout costs nothing",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      await establishRound(dir, { phases: "am" })
+      writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      writeReport(dir, 1)
+      // The person brought a finished upstream repository in: committed
+      // content with references everywhere, a clean tree — the migration
+      // never wrote a line of it, so the round records nothing. This is the
+      // cleanroom shape (a kernel-sized pristine checkout) that OOMed under
+      // 0108's whole-tree scan.
+      mkdirSync(join(dir, "upstream", "src"), { recursive: true })
+      await git(join(dir, "upstream"), "init", "-q")
+      await git(join(dir, "upstream"), "config", "user.email", "t@example.com")
+      await git(join(dir, "upstream"), "config", "user.name", "t")
+      writeFileSync(join(dir, "upstream", "src/old.c"), "// see docs/T-001/report.md and .auto/plan.json\n")
+      await git(join(dir, "upstream"), "add", "-A")
+      await git(join(dir, "upstream"), "commit", "-qm", "person history")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round")
+      const person = await roundCloseProblems(dir, 1, { build: "true" })
+      expect(person.warnings).toEqual([])
+      // The driver's own commit into the same repository is the round's
+      // record — the reference it wrote counts; the person's still does not.
+      writeFileSync(join(dir, "upstream", "src/wired.c"), "// wiring per docs/T-002/report.md\n")
+      await git(join(dir, "upstream"), "add", "-A")
+      await git(join(dir, "upstream"), "commit", "-qm", "wire the driver\n\nAuto-Task: T-002\nAuto-Stage: implement")
+      const driven = await roundCloseProblems(dir, 1, { build: "true" })
+      expect(driven.problems).toEqual([])
+      expect(driven.warnings[0]).toStartWith("containment: 1 reference(s) recorded for release")
     }),
   )
 

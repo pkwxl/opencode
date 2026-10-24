@@ -18,9 +18,11 @@ async function repo(dir: string) {
   await git(dir, "config", "user.name", "t")
 }
 
-// A destination repository under <dir>/vendor with the given files
-// committed on top of a seed commit.
-async function destination(dir: string, files: Record<string, string>) {
+// A destination repository under <dir>/vendor: a person seed commit, then
+// the given files landed as the driver's own commit (the unified commit's
+// trailer shape — plans/0119: the release scan reads git's modified view,
+// the run of driver commits back from HEAD, never the whole tree).
+async function destination(dir: string, files: Record<string, string>, commitMessage = "work\n\nAuto-Task: T-001\nAuto-Stage: implement") {
   mkdirSync(join(dir, "vendor"), { recursive: true })
   await repo(join(dir, "vendor"))
   writeFileSync(join(dir, "vendor", "seed.txt"), "seed\n")
@@ -32,7 +34,7 @@ async function destination(dir: string, files: Record<string, string>) {
   }
   if (Object.keys(files).length) {
     await git(join(dir, "vendor"), "add", "-A")
-    await git(join(dir, "vendor"), "commit", "-qm", "work")
+    await git(join(dir, "vendor"), "commit", "-qm", commitMessage)
   }
 }
 
@@ -103,10 +105,29 @@ describe("releaseCheck (plans/0103 D2/D3)", () => {
       mkdirSync(join(dir, "vendor", "fixtures"), { recursive: true })
       writeFileSync(join(dir, "vendor", "fixtures", "sample.txt"), "docs/T-004/report.md (T-004)\n")
       await git(join(dir, "vendor"), "add", "-A")
-      await git(join(dir, "vendor"), "commit", "-qm", "fixtures")
+      await git(join(dir, "vendor"), "commit", "-qm", "fixtures\n\nAuto-Task: T-001\nAuto-Stage: implement")
       const exempt = await releaseCheck(dir, { scanExempt: ["vendor/fixtures"] })
       expect(exempt.problems).toEqual([])
       expect(exempt.certified).toHaveLength(1)
+    }),
+  )
+
+  test(
+    "person-committed content is the person's own, never the migration's debt (plans/0119): a clean upstream history certifies untouched",
+    withDir(async (dir) => {
+      await repo(dir)
+      // The destination the migration only reads: committed references
+      // everywhere, none of them the project's writing — the cleanroom
+      // shape whose whole-tree scan OOMed and whose findings were never
+      // the migration's to answer for.
+      await destination(dir, {
+        "src/old.rs": "//! The slot (T-012 §2.2).\n",
+        "src/old.c": 'path = "../../outside"\n',
+      }, "person history")
+      const check = await releaseCheck(dir)
+      expect(check.nothing).toBeUndefined()
+      expect(check.problems).toEqual([])
+      expect(check.certified).toHaveLength(1)
     }),
   )
 

@@ -274,7 +274,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     for (const note of implicitDependentNotes(ownerPlan, new Set(closingTasks.map((task) => task.id)))) lines.push(note)
   }
   if (roundMatch) lines.push(`✓ round ${roundDirName(round)} counts as complete (its open phases were closed above)`)
-  lines.push("⚠ closed units skip the unit-close reference scan; the whole-tree scan at round close still applies")
+  lines.push("⚠ closed units skip the unit-close reference scan; the destination scan at round close still applies")
 
   if (!(await repoRoots(dir)).length) {
     lines.push("ℹ not a git repository: the closing changes are written but not committed")

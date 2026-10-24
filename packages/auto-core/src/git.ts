@@ -556,6 +556,62 @@ export async function foreignCommits(root: string, sha: string, to: string = "HE
     .filter((body) => !body.includes("Auto-Stage:")).length
 }
 
+// The SHA a destination-wide scan diffs from: the repository's pre-driver
+// state, derived from git alone (plans/0119, the maintainer's ruling from
+// the cleanroom OOM — "We should not check the full tree, instead, check
+// those that has been modified which can be shown via git"). Walk HEAD's
+// history while commits carry the Auto-Stage trailer (the machine criterion
+// for a driver commit, foreignCommits' own) and return the first commit
+// without it: everything after that SHA is what the project wrote. HEAD
+// itself foreign → HEAD (the tracked side contributes nothing; the scan
+// reduces to uncommitted and untracked state); every commit a driver
+// commit, or a repository with none at all → the empty baseline (the whole
+// history is the project's writing). The log is read as a stream and git is
+// killed at the stop commit — a pristine upstream checkout (a kernel tree
+// the migration only reads) stops at HEAD without walking its history, and
+// no caller materializes a tree the project never touched. Driver commits
+// buried under a person's later commits sit outside the contiguous run and
+// stay unscanned — the same linear-range simplification foreignCommits and
+// `land`'s foreign-commit refusal already make; the person's commits are
+// the person's content, never the migration's ledger.
+export async function driverBaseline(root: string): Promise<string> {
+  const proc = Bun.spawn(["git", "-C", root, "log", "-z", "--format=%H %B", "HEAD"], {
+    stdout: "pipe",
+    stderr: "ignore",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+  })
+  // Each NUL-terminated record is "<sha> <subject>\n…<trailers>\n"; the SHA
+  // is the first token, the trailer check spans the whole body. A record
+  // without the trailer answers itself as the baseline and stops the walk.
+  let baseline: string | undefined
+  const inspect = (entry: string): boolean => {
+    const sha = entry.slice(0, entry.indexOf(" "))
+    if (sha && !entry.includes("Auto-Stage:")) baseline = sha
+    return baseline === undefined
+  }
+  const reader = proc.stdout.getReader()
+  const decode = new TextDecoder()
+  let carry = ""
+  try {
+    while (baseline === undefined) {
+      const { done, value } = await reader.read()
+      if (done) break
+      carry += decode.decode(value, { stream: true })
+      const entries = carry.split("\0")
+      carry = entries.pop() ?? ""
+      if (!entries.every(inspect)) break
+    }
+    // git -z terminates every record, the last included; a defensive pass in
+    // case one ever arrives unterminated.
+    if (baseline === undefined && carry.trim()) inspect(carry)
+  } finally {
+    await reader.cancel().catch(() => {})
+    proc.kill()
+    await proc.exited
+  }
+  return baseline ?? ""
+}
+
 // —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md) ——
 
 // Baseline check on recovery (design 3.1 ③): every repository's HEAD ==

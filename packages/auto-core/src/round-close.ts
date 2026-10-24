@@ -2,17 +2,23 @@
 // question 15-⑦ ruled "middle form"): whether a round whose phases are all
 // done may be closed, i.e. whether the next round may start. Three checks,
 // all read-only — two hold the gate, one rides as the ledger:
-//   1. the whole-tree destination scan — the unit close-out scan
-//      (document/process-refs.ts) widened from "lines the unit added" to every
-//      line of every tracked and untracked file, in every nested repository
-//      alone (plans/0108: the deliverable is the destination repositories'
-//      own files; the working directory's tree is process workspace and is
-//      not scanned). It answers the recorded containment count alone — never
-//      a problem (plans/0103 D2 read whole, its second addendum: every
-//      finding family, the process-document references included, defers to
-//      `release`; the blocking form of "the destination must not reference
-//      process documents" is release-time truth), so this is the one moment
-//      the whole-tree price buys the running ledger the person reads;
+//   1. the destination scan — the containment ledger over what the project
+//      wrote into the destination repositories: git's own modified set, the
+//      run of driver commits back from HEAD plus the uncommitted and
+//      untracked state, in every nested repository alone (plans/0108 keeps
+//      the destination scoping; plans/0119 re-derives the content set from
+//      git after the cleanroom OOM — 0108's whole-tree form read every line
+//      of a pristine kernel-sized checkout the migration had never touched,
+//      and died of it; the maintainer ruled: "We should not check the full
+//      tree, instead, check those that has been modified which can be shown
+//      via git" — a destination's pre-existing content was never the
+//      migration's to answer for). It answers the recorded containment
+//      count alone — never a problem (plans/0103 D2 read whole, its second
+//      addendum: every finding family, the process-document references
+//      included, defers to `release`; the blocking form of "the destination
+//      must not reference process documents" is release-time truth), so
+//      this is the one moment the scan's price buys the running ledger the
+//      person reads;
 //   2. the target's own build (config `build`), when one is configured;
 //   3. the restatement listing: round.md's `## Close` section must say which
 //      decisions were restated into the target's own documentation and which
@@ -28,7 +34,7 @@
 import { join } from "node:path"
 import { roundBriefPath } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
-import { nestedRepoPrefixes, repoRoots, unitAddedLines } from "./git"
+import { nestedRepoPrefixes, repoRoots, unitAddedLines, driverBaseline, type UnitBaseline } from "./git"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
 
 // The build's wall-clock cap: generous for a real target build, but a hung
@@ -46,17 +52,22 @@ export type RoundClose = {
 }
 
 // scanExempt = config scanExempt (plans/0059 X2): deliverable paths whose
-// process-shaped strings are content, skipped by the whole-tree scan too.
+// process-shaped strings are content, skipped by the destination scan too.
 export async function roundCloseProblems(dir: string, round: number, opts: { build?: string; scanExempt?: readonly string[] } = {}): Promise<RoundClose> {
   const problems: string[] = []
   const warnings: string[] = []
-  // 1. Whole tree of the destinations: an empty baseline per repository
-  // makes every tracked line "added"; untracked files are added whole by
-  // unitAddedLines itself. The nested repositories alone enter the scan
-  // (plans/0108) — the prefixes ride along for the containment rules
+  // 1. The destinations' driver-written content: an empty baseline per
+  // repository made every tracked line "added" (0108's whole-tree form); the
+  // 0119 ruling narrows the same scan to git's modified set — the driver
+  // baseline (the run of Auto-Stage commits back from HEAD, git.ts
+  // driverBaseline) with unitAddedLines' worktree diff and untracked walk
+  // covering the uncommitted half. The nested repositories alone enter the
+  // scan (plans/0108) — the prefixes ride along for the containment rules
   // (plans/0103: the destination answers rules the workspace does not).
   const nestedRoots = (await repoRoots(dir)).filter((root) => root !== dir)
-  const scan = processReferenceScan(await unitAddedLines(dir, nestedRoots.map((root) => ({ root, sha: "" }))), opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
+  const baseline: UnitBaseline = []
+  for (const root of nestedRoots) baseline.push({ root, sha: await driverBaseline(root) })
+  const scan = processReferenceScan(await unitAddedLines(dir, baseline), opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
   // The scan answers the count alone at round time — never a problem (every
   // family defers to release). Destination containment rides as one
   // aggregate warning (plans/0103 D2 recording, plans/0109 D6 shape): the

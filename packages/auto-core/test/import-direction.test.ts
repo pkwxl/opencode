@@ -320,10 +320,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // preflight leftover report; pipeline beside close, the person-invoked
   // command core it mirrors.
   land: "driver",
-  // The release gate (plans/0103 D2/D3): releaseCheck — per destination
-  // repository the clean-tree check and the whole-tree containment scan
-  // under the release posture; read-only beside land, the person-invoked
-  // gate it mirrors.
+  // The release gate (plans/0103 D2/D3; the scan's set 0119): releaseCheck
+  // — per destination repository the clean-tree check and the destination
+  // containment scan under the release posture; read-only beside land, the
+  // person-invoked gate it mirrors.
   release: "driver",
   interactive: "driver",
   // Key rings of the model registry (plans/0055 §4.3): per-provider rings,
@@ -428,9 +428,9 @@ const CLASSIFIED: Record<string, Domain> = {
   // verdict policy as data; src/tier.ts's role table and the driving call
   // sites' usage-policy reads resolve through it.
   "roles/registry": "driver",
-  // The round-close gate (M4.2, plans/0049 G8): whole-tree P1 scan of the
-  // destinations, build, close listing (the round-report check retired,
-  // plans/0109 D1).
+  // The round-close gate (M4.2, plans/0049 G8; the scan's set 0119): the
+  // destinations' P1 scan (git's modified view), build, close listing (the
+  // round-report check retired, plans/0109 D1).
   "round-close": "driver",
   // The roadmap grammar of docs/analysis.md (plans/0084, split from analysis
   // by plans/0114 D4): the machine-parsed round lines and the released

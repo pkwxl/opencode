@@ -54,7 +54,7 @@
 // be self-contained — a mark is legal, a pointer into the process side is
 // not. Enforcement: the prompt-side discipline is intent (`## governance` /
 // `### process-references`), the mechanical side is the prohibition scan at
-// unit close-out (process-refs.ts), and the whole-tree scan at round close
+// unit close-out (process-refs.ts), and the destination scan at round close
 // belongs to M4.
 import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, REPORT_FOR_USER_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"

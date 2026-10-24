@@ -271,7 +271,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await git(join(dir, "dest"), "config", "user.email", "t@example.com")
     await git(join(dir, "dest"), "config", "user.name", "t")
     await git(join(dir, "dest"), "add", "-A")
-    await git(join(dir, "dest"), "commit", "-qm", "destination")
+    await git(join(dir, "dest"), "commit", "-qm", "destination\n\nAuto-Task: T-001\nAuto-Stage: implement")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "plant destination findings")
     const lines = await renderHelperBrief(dir, { phases: "mt" })

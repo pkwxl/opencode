@@ -79,7 +79,7 @@ describe("closeUnit: task targets (D17–D18, D21)", () => {
       expect(result.type).toBe("closed")
       if (result.type !== "closed") return
       expect(result.lines[0]).toBe(`✓ closed T-002: ${REASON}`)
-      expect(result.lines).toContain("⚠ closed units skip the unit-close reference scan; the whole-tree scan at round close still applies")
+      expect(result.lines).toContain("⚠ closed units skip the unit-close reference scan; the destination scan at round close still applies")
       expect(result.lines.at(-2)).toBe(`to undo before anything else runs: git revert ${(await head(dir)).slice(0, 7)}`)
       expect(result.lines.at(-1)).toBe(`next: opencode-auto run ${dir} to continue, or opencode-auto plan ${dir}`)
       // State: done.md with the Closed: field as the last line of the field block.

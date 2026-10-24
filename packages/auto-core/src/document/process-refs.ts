@@ -15,8 +15,8 @@
 // (roles.ts p1Scope — non-process roles minus the project's scan exemptions,
 // plans/0059 X2). All three finding families key on destination membership.
 // Never the existing tree as a blocker: retroactively failing older content
-// is not the driver's business at round time (the whole-tree scan is the
-// round-close gate's running ledger, M4).
+// is not the driver's business at round time (the destination scan is the
+// round-close gate's running ledger, M4 — git's modified view since 0119).
 //
 // Keyed on tool-owned path shapes, not on the bare word `docs/`, so the scan
 // is safe in a tree with its own documentation directory:

@@ -2,7 +2,7 @@
 // role-derived policies (eof scan exemption, protect list, P1 scope), and the
 // P1 prohibition scan with its git input (unitAddedLines). The relocated
 // handoff protocol checks keep their cases in handover/phases tests.
-import { rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
@@ -10,7 +10,7 @@ import { processReferenceScan } from "../src/document/process-refs"
 import { eofScanExempt, p1Scope, PROTECTED_FILES, roleOf, ROLE_POLICIES, scanExempted } from "../src/document/roles"
 import { subtaskStateSpec } from "../src/document/spec"
 import type { AddedLine } from "../src/document/types"
-import { unitAddedLines, unitBaseline } from "../src/git"
+import { driverBaseline, unitAddedLines, unitBaseline } from "../src/git"
 import { phaseAcceptanceDoc, phaseArtifacts, phaseHandoverDoc, phaseIndexPath, syncPhaseIndex } from "../src/phases"
 import { planInputPath } from "../src/plan-input"
 import { freshRepo, git } from "./fixtures/runner"
@@ -365,5 +365,77 @@ describe("unitAddedLines", () => {
 
   test("empty baseline (non-git / gate off) yields nothing from git", async () => {
     expect((await unitAddedLines(join(tmpdir(), "nonexistent-dir"), [])).size).toBe(0)
+  })
+})
+
+describe("driverBaseline (plans/0119: git's modified view replaces the whole tree)", () => {
+  // The driver commit shape the unified commit writes (git.ts message): a
+  // subject plus the Auto-Task/Auto-Stage trailers.
+  const driverMessage = (subject: string) => `${subject}\n\nAuto-Task: T-001\nAuto-Stage: implement`
+
+  test("a pristine person history never enters the scan: the baseline is HEAD itself", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "a.c"), "// see docs/T-001/report.md\nint a;\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "person work")
+      const head = (await git(dir, "rev-parse", "HEAD")).trim()
+      expect(await driverBaseline(dir)).toBe(head)
+      // The scan that follows sees only uncommitted/untracked state — the
+      // committed person content is not the migration's ledger.
+      const added = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      expect(added.size).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the run of driver commits back from HEAD is the scan's range; a person commit on top closes it", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "seed.c"), "int s;\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "person seed")
+      const seed = (await git(dir, "rev-parse", "HEAD")).trim()
+      await Bun.write(join(dir, "first.c"), "// wiring per docs/T-002/report.md\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", driverMessage("first driver write"))
+      await Bun.write(join(dir, "second.c"), "int n;\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", driverMessage("second driver write"))
+      expect(await driverBaseline(dir)).toBe(seed)
+      const added = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      expect(added.has("first.c")).toBe(true)
+      expect(added.has("second.c")).toBe(true)
+      expect(added.has("seed.c")).toBe(false)
+      // A person commit on top of the run closes it: the baseline moves to
+      // their commit, the buried driver run stays unscanned.
+      await Bun.write(join(dir, "person.c"), "// the T-009 slot\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "person on top")
+      const top = (await git(dir, "rev-parse", "HEAD")).trim()
+      expect(await driverBaseline(dir)).toBe(top)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a history of driver commits alone, and a repository without any commit, take the empty baseline", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "a.c"), "int a;\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", driverMessage("the whole history is the project's"))
+      expect(await driverBaseline(dir)).toBe("")
+      const empty = await mkdtemp(join(tmpdir(), "auto-runner-"))
+      try {
+        await git(empty, "init", "-q")
+        expect(await driverBaseline(empty)).toBe("")
+      } finally {
+        await rm(empty, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
