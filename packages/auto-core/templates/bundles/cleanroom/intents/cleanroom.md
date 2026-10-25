@@ -23,6 +23,61 @@ once the whole task is complete, check that every specified behavior is implemen
 every acceptance criterion is actually observed to pass, and that every specified
 behavior maps to a stated contract or a recorded deferral
 
+### test-lanes
+
+# The lane table is the project's own declaration, never shipped content: the rows below are
+# commented examples that teach the shape, and every command in them is a neutral placeholder,
+# not a runnable one. Real commands are per-project — the person fills them in the materialized
+# pack after `init --intent` (pack edits are the person's; `sync` carries upstream duty-text
+# changes). The surfaces are the project's own paths; a row marked Exclusive must run alone in
+# the tree. A task's `## Acceptance` names its anchor row. A regression-cost row is never part
+# of a task's wrap-up lane set and never an anchor: the driver alone runs it, in the background
+# against committed trees and once more at phase close, and the phase cannot complete while its
+# round-scoped receipt is red.
+
+# build — the cheapest tree-wide consistency check, green before deeper lanes run.
+# build:
+# Command: build
+# Cost: cheap
+# Surfaces: .
+# Exclusive: yes
+
+# paradigm-constraints — the target platform's safety and forbidden-construct checks, the
+# mechanical half of the paradigm boundary; the command is the overlay's own content, naming
+# no particular toolchain.
+# paradigm-constraints:
+# Command: paradigm-constraints
+# Cost: cheap
+# Surfaces: src/
+# Exclusive: no
+
+# properties — the property suites' cheap smoke over the delivered contracts; the proof-class
+# run may be declared as an anchor row of its own.
+# properties:
+# Command: properties
+# Cost: cheap
+# Surfaces: src/
+# Exclusive: no
+
+# divergence — the similarity scan of the deliverable and the specification notes against the
+# reference corpus, at regression cost (the rules above). Its command is a bare target name —
+# a single neutral token, no path, no toolchain word, no corpus path inline: the command's
+# implementation lives driver-side and holds the corpus location, and the worktree carries at
+# most a bare stub that invokes it and names no corpus path. The tool's configured scope
+# includes the specification notes, so the spec-read close runs the scan like any phase close.
+# divergence:
+# Command: divergence-scan
+# Cost: regression
+# Surfaces: .
+# Exclusive: no
+
+# acceptance — the black-box acceptance anchor.
+# acceptance:
+# Command: acceptance
+# Cost: anchor
+# Surfaces: .
+# Exclusive: yes
+
 ## phase duties
 
 ### spec-read

@@ -41,4 +41,16 @@ fork's recommended default. The survey decides what the person's approved decisi
 decide and records the derivation for the person to veto; the person disposes only of the
 genuine forks — never write the person's `Clarified:` line.
 
+The survey also proposes the declarations a cleanroom project owes, as part of its environment
+facts and its `## Project brief` proposal: the lane rows — build, the paradigm-constraint
+suite (the target platform's safety and forbidden-construct checks), the property suite, the
+divergence scan behind a bare target name, and the acceptance anchor — named and commanded in
+the project's own toolchain terms, never the bundle's; the divergence corpus location — a
+driver-side location outside the platform boundary, recorded as an environment fact for the
+person, the person's fact to hold driver-side, never session-visible content; and the platform
+contract — the target platform's abstractions the deliverable must build on: its execution
+model, its memory/isolation discipline, its interface shapes — proposed into the brief's
+constants. The person approves these through the fork flow like any other decision, and
+installs the approved lane rows into the materialized pack.
+
 <!-- auto: eof -->

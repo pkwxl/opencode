@@ -9,8 +9,9 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
-import { loadIntents, packSubsection, planningInputScaffold } from "../src/intent/load"
+import { loadIntents, packSubsection, parseIntentFile, planningInputScaffold } from "../src/intent/load"
 import { parseGuaranteeAsserts } from "../src/intent/guarantees"
+import { parseTestLanes, testLanesProblem } from "../src/intent/test-lanes"
 import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
 import { resolvePhases } from "../src/phases/registry"
@@ -254,6 +255,55 @@ describe("bundle sources", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // The lane table ships as the floor (plans/0121 D7): comments-only in the
+  // shipped pack, so a project declaring no lanes is byte-identically
+  // unaffected; the comments teach the shape with the five example rows a
+  // cleanroom project owes, each a commented-out field block in the exact
+  // grammar parseTestLanes accepts once uncommented.
+  test("the shipped cleanroom lane section is the comments-only floor: no lanes parsed, the five rows taught, the examples parse once uncommented (plans/0121 D7)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const pack = parseIntentFile("cleanroom", files!["intents/cleanroom.md"]!)
+    // The floor: a section of comments and blanks parses to undefined — no
+    // table renders anywhere (P10).
+    expect(parseTestLanes(pack)).toBeUndefined()
+    const section = packSubsection(pack, "quality", "test-lanes")!
+    expect(section).toBeDefined()
+    // The commented examples name the five rows the declarations owe.
+    for (const name of ["build", "paradigm-constraints", "properties", "divergence", "acceptance"]) {
+      expect(section).toContain(`# ${name}:`)
+    }
+    // Uncommented into a scratch pack: each commented line whose stripped form
+    // already matches the row grammar (a suite header or a field line)
+    // activates, the teaching prose and the per-row descriptions staying
+    // comments — and the five example rows parse clean, every command a bare
+    // neutral token, the divergence row the regression-cost row whose command
+    // carries no path and no corpus location (D5's shape).
+    const rowHead = /^([a-z][a-z0-9-]*):\s*$/
+    const rowField = /^(Command|Cost|Surfaces|Exclusive|Strict):/
+    const active = section
+      .split("\n")
+      .map((line) => {
+        const marked = /^# (.*)$/.exec(line)
+        if (!marked) return line
+        return rowHead.test(marked[1]!) || rowField.test(marked[1]!) ? marked[1]! : line
+      })
+      .join("\n")
+    const scratch = parseIntentFile("cleanroom", `# cleanroom\n\n## quality\n\n### test-lanes\n\n${active}\n`)
+    expect(testLanesProblem(scratch)).toBeUndefined()
+    const lanes = parseTestLanes(scratch)!
+    expect(lanes.map((lane) => [lane.name, lane.cost])).toEqual([
+      ["build", "cheap"],
+      ["paradigm-constraints", "cheap"],
+      ["properties", "cheap"],
+      ["divergence", "regression"],
+      ["acceptance", "anchor"],
+    ])
+    // Bare commands: a single token each — no whitespace, no path separator,
+    // nothing a clean-room session could read a corpus location from.
+    for (const lane of lanes) expect(lane.command).toMatch(/^[a-z0-9-]+$/)
+    expect(lanes.find((lane) => lane.name === "divergence")!.command).toBe("divergence-scan")
   })
 
   // The intent family's faithful postures (0080 §6): the builtin admtv

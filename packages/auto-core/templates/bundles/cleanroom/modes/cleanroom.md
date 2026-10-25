@@ -18,6 +18,16 @@ produced); the deliverable is an independent implementation satisfying the
 specification's external contracts — public interfaces, observable
 behavior, state and lifecycle contracts, and error semantics.
 
+After materialization the project owes its own declarations, none of them shipped content:
+the lane rows commented in the shipped pack become the project's own declared rows — the
+person installs them, commanded in the project's own terms (build, the paradigm-constraint
+suite, the property suite, the divergence scan behind a bare target name, the acceptance
+anchor); the brief states the wall kind and the divergence corpus location — a driver-side
+location outside the platform boundary, whose exact path is the person's driver-side fact
+and never a session-visible one; and the brief declares the platform contract — the target
+platform's abstractions the deliverable must build on: its execution model, its
+memory/isolation discipline, its interface shapes.
+
 ## exec
 
 Two-room clean room. The specification room is the spec-read phase: its
