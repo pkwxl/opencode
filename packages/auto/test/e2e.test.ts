@@ -2690,6 +2690,93 @@ describe("CLI: check retired", () => {
   })
 })
 
+// The help surface (the COMMANDS/OPTION_HELP table of src/index.ts): --help
+// and -h print the full usage to stdout with exit 0, <command> --help (or
+// -h) one command's row — synopsis, summary, its option paragraphs — from
+// the same table, and an unknown command is refused with one line naming
+// the closest commands instead of the full usage dump. The retirement
+// notices stay ahead of --help (a retired command has no help), the hidden
+// _lane never gains a help surface, and the missing-subcommand fallback
+// keeps the full usage on stderr with exit 1 — the channel the retirement
+// lines above are pinned through.
+describe("CLI: help and unknown commands", () => {
+  test("--help and -h print the full usage to stdout with exit 0; the bare invocation keeps it on stderr with exit 1", async () => {
+    const help = await runCli(["--help"])
+    expect(help.code).toBe(0)
+    expect(help.out).toContain("usage:")
+    expect(help.out).toContain("opencode-auto init [dir]")
+    expect(help.out).toContain("check is retired: the principle scan and the reference check were removed; opencode-auto fix --dryrun <dir> lists the configuration findings")
+    expect(help.out).toContain("exit codes: 0 all complete")
+    const short = await runCli(["-h"])
+    expect(short.code).toBe(0)
+    expect(short.out).toContain("usage:")
+    const bare = await runCli([])
+    expect(bare.code).toBe(1)
+    expect(bare.err).toContain("usage:")
+    expect(bare.err).toContain("opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]")
+    expect(bare.out).toBe("")
+  })
+
+  test("<command> --help / -h prints that command's row only — synopsis, summary, its option paragraphs — and outranks the option refusals", async () => {
+    const plan = await runCli(["plan", "--help"])
+    expect(plan.code).toBe(0)
+    expect(plan.out).toContain("opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append]")
+    expect(plan.out).toContain("plan — plan the current phase and stop before execution")
+    expect(plan.out).toContain("plan --force-close <ref> --reason <text> closes a unit")
+    expect(plan.out).toContain("run 'opencode-auto --help' for all commands")
+    // The view carries its command's row alone, never another command's
+    expect(plan.out).not.toContain("opencode-auto init [dir]")
+    expect(plan.out).not.toContain("opencode-auto close <ref> [dir]")
+    const close = await runCli(["close", "-h"])
+    expect(close.code).toBe(0)
+    expect(close.out).toContain("opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]")
+    expect(close.out).not.toContain("opencode-auto plan [dir]")
+    // --help outranks the unknown-option refusal: a person asking for help
+    // is answered, whatever else rides the line
+    const flagged = await runCli(["run", "--frobnicate", "--help"])
+    expect(flagged.code).toBe(0)
+    expect(flagged.out).toContain("opencode-auto run [dir]")
+  })
+
+  test("an unknown command is a one-line refusal with the closest command named — never the usage dump", async () => {
+    const typo = await runCli(["pla"])
+    expect(typo.code).toBe(1)
+    expect(typo.err).toContain("'pla' is not a command")
+    expect(typo.err).toContain("did you mean 'plan'?")
+    expect(typo.err).not.toContain("usage:")
+    const unknown = await runCli(["frobnicate"])
+    expect(unknown.code).toBe(1)
+    expect(unknown.err).toContain("'frobnicate' is not a command")
+    expect(unknown.err).toContain("run 'opencode-auto --help' to see all commands")
+    expect(unknown.err).not.toContain("usage:")
+    // A path-shaped first word is the command-after-directory mistake: the
+    // message names the shape
+    const pathShaped = await runCli(["./some/project"])
+    expect(pathShaped.code).toBe(1)
+    expect(pathShaped.err).toContain("'./some/project' is not a command")
+    expect(pathShaped.err).toContain("the command comes first: opencode-auto <command> [dir] [options]")
+  })
+
+  test("the retirement notices stay ahead of --help (a retired command has no help); _lane never gains a help surface", async () => {
+    const cont = await runCli(["continue", "--help"])
+    expect(cont.code).toBe(1)
+    expect(cont.err).toContain("continue is retired")
+    const check = await runCli(["check", "-h"])
+    expect(check.code).toBe(1)
+    expect(check.err).toContain("check is retired")
+    const lane = await runCli(["_lane", "--help"])
+    expect(lane.code).toBe(1)
+    expect(lane.err).toContain("unknown option --help")
+  })
+
+  test("the unknown-option refusal points at the command's own --help view", async () => {
+    const refused = await runCli(["run", "some-dir", "--frobnicate"])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain("unknown option --frobnicate")
+    expect(refused.err).toContain("run 'opencode-auto run --help' to see this command's usage")
+  })
+})
+
 describe("CLI: amend (plans/0052 D25)", () => {
   async function readConfig(dir: string) {
     return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())

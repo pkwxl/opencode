@@ -58,6 +58,12 @@ opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (r
 opencode-auto driver-helper [dir]   # render the person-proxy brief (plans/0105): the six-block context — role pin (never the driver; prompts/ is reference material), the driver's working model, the live state plus the stop's own lines, the person-owned channels open right now, the assist policy, the exact recovery commands — to paste into the coding-agent session acting with your pen at a boundary run cannot cross; read-only, stdout, nothing written, no run lock (a live lock is reported, never refused on), see "The person-proxy brief (driver-helper)"
 ```
 
+Run `opencode-auto --help` for the full usage text (stdout, exit 0; the bare `opencode-auto` prints the same
+text to stderr with exit 1), and `opencode-auto <command> --help` (or `-h`) for one command's synopsis,
+summary and options. An unknown command is refused with a one-line error naming the closest commands
+(`opencode-auto: 'pla' is not a command (did you mean 'plan'?)`), never the full text; an unknown option
+points at its command's `--help` view.
+
 New-project flow, phased (`init` → `transfer` → fill in and commit → `transfer` → review → `plan` → `run`):
 
 ```sh
