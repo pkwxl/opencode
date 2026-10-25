@@ -3587,7 +3587,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
       expect(closed.out).toContain("✓ closed T-001: superseded by the follow-up design")
       // T-002 follows T-001 with no Depends: field → the implicit-dependent note.
       expect(closed.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
-      expect(closed.out).toContain("⚠ closed units skip the unit-close reference scan; the whole-tree scan at round close still applies")
+      expect(closed.out).toContain("⚠ closed units skip the unit-close reference scan; the destination scan at round close still applies")
       // The undo pointer names the close commit's short sha; the next line points on.
       const sha = (await git("rev-parse", "--short", "HEAD")).trim()
       expect(closed.out).toContain(`to undo before anything else runs: git revert ${sha}`)
@@ -5493,10 +5493,13 @@ describe("CLI: release certifies the destination standing alone (auto-core plans
       await commitFixture(dir)
       // The recorded findings of the working rounds — a task-id citation
       // and a path climbing out of the destination's root — block here.
+      // The findings ride a driver commit (the Auto-Stage trailer): the
+      // scan's baseline (0119's git-modified view) stops at the first
+      // person commit, so person-committed content is never scanned.
       await Bun.write(join(dir, "pkg", "src.rs"), "//! The slot (T-012 §2.2).\n")
       await Bun.write(join(dir, "pkg", "b.txt"), 'see ../../outside\n')
       await nested("add", "-A")
-      await nested("commit", "-qm", "work")
+      await nested("commit", "-qm", "work", "-m", "Auto-Stage: unit")
       const blocked = await runCli(["release", dir])
       expect(blocked.code).toBe(2)
       expect(blocked.err).toContain("the destination does not stand alone yet")
