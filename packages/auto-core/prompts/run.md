@@ -474,10 +474,14 @@ next phase and every phase after it without the stops.
 
 1. Confirm the phase complete: every line of its `tasks.md` ticked and every task's `done.md` present (the
    unit-files-win rule; a `Closed:` field counts as done).
-2. The human gate: a `survey`-type phase holds for the person — its `survey.md` must carry a whole-line
-   `Clarified: yes` and no `Fork:` line left unanswered (a held fork without its `Recommend:` clause is the
-   same problem). Missing → stop and report: the person's clarification releases the phase (the driver's
-   `transfer` installs the approved brief — this suite does not replicate that write). Other phase types pass.
+2. The human gate: a `survey`-type phase's `survey.md` must exist — a missing survey is a gate problem,
+   never a silent pass (stop and report) — and it holds for the person only when it records at least one
+   `Fork:` line: then it holds until the person's whole-line `Clarified: yes` (every fork line answered or
+   taking its `Recommend:` default; a held fork without its `Recommend:` clause is the same problem).
+   Held → stop and report: the person's clarification releases the phase (the driver's `transfer` installs
+   the approved brief — this suite does not replicate that write). Zero `Fork:` lines — the `Forks: none`
+   small posture — completes the phase like an ungated one: no `Clarified:` line is needed, hand over
+   normally. Other phase types pass.
 3. Launch the handover child session: `run-handover.md` with `<phase id>`, `<phase name>`, `<phase dir>` and
    `<next target>` filled — the next phase's "<id> <name>" from the line after this one in `phases.md`, or
    `flow complete` when this is the round's last. Then check its outcome mechanically: `<phase

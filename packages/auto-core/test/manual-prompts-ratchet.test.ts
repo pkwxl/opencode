@@ -370,6 +370,28 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("the `phases: all` phrase when it rode")
   })
 
+  test("the human gate is conditional on the recorded forks — zero forks hands over ungated (plans/0081 D14.3)", () => {
+    // The field incident (the aster-mig R-05 round): the phase-transfer step
+    // had stated the survey gate unconditionally since plans/0088 — "its
+    // survey.md must carry a whole-line `Clarified: yes`" — so a zero-fork
+    // survey (the `Forks: none` small posture) stopped the manual run for a
+    // release the gate never required, while the person's `clarify` answered
+    // "nothing awaits" — a hold no command could release. The gate is the
+    // driver's own conditional check (src/phases.ts phaseGateProblems: a
+    // missing survey is always a problem; at least one `Fork:` line holds
+    // for `Clarified: yes`; zero forks completes the phase like an ungated
+    // one): the hold rides the recorded forks, never the phase type alone.
+    const run = text("run.md")
+    expect(run).toContain("a missing survey is a gate problem")
+    expect(run).toContain("holds for the person only when it records at least one")
+    expect(run).toContain("`Forks: none`")
+    expect(run).toContain("completes the phase like an ungated one")
+    expect(run).toContain("no `Clarified:` line is needed")
+    // The unconditional form must not return: the gate never demands a
+    // `Clarified:` line a zero-fork survey has nothing to release.
+    expect(run).not.toContain("must carry a whole-line")
+  })
+
   test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
     // The handover child mirrors the driver's handoverPhase: the distiller
     // session's four-section handover document (templates/prompts/
