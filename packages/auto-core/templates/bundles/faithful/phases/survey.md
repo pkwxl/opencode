@@ -19,9 +19,13 @@ or roadmap it states — is already made, and so is one its principles imply; re
 line is reserved for a decision they leave genuinely open that materially shapes the project —
 scope, compatibility, security, acceptance or cost. State it in the project's terms, not the
 technique's: what each option changes for the goal, the rounds it reshapes, the cost or risk
-it adds, the acceptance it tightens or loosens — then `Recommend:` one default. The person
-must be able to decide from the line alone; technical detail supports the survey's prose, it
-never carries the decision. There is no separate depth/grading question list: a grading depth
+it adds, the acceptance it tightens or loosens — then `Recommend:` one default, written on
+the `Fork:` line itself: the whole fork is one physical line, because the person's release
+command prints the line alone as their review and a `Fork:` line without its `Recommend:`
+on it holds the release. Detail may continue beneath the line as prose support, never as a
+separate `Recommend:` item. The person must be able to decide from the line alone; technical
+detail supports the survey's prose, it never carries the decision. There is no separate
+depth/grading question list: a grading depth
 the analysis or round brief implies is answered in the survey with its derivation; a genuinely
 person-owned policy call is a `Fork:` line like any other — nothing the person must decide
 sits outside the fork list. A reference of a few hundred to ~1k lines in one or two areas

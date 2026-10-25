@@ -192,9 +192,17 @@ describe("bundle sources", () => {
       expect(duties).toContain("already made")
       // The fork bar: project-level consequences and one Recommend: default,
       // decidable from the line alone; no person-needed item outside the
-      // fork list (the depth/grading question category is retired).
+      // fork list (the depth/grading question category is retired). The
+      // default's placement is part of the bar: it sits on the `Fork:` line
+      // itself — one physical line, the one the release prints as the
+      // person's review — with detail beneath as prose, never a separate
+      // `Recommend:` item (a survey that wrote its defaults as sub-items
+      // held its release: the gate scans whole lines).
       expect(duties).toContain("`Recommend:`")
       expect(duties).toContain("project's terms, not the technique's")
+      expect(duties).toContain("one default, written on the `Fork:` line itself")
+      expect(duties).toContain("without its `Recommend:` on it holds the release")
+      expect(duties).toContain("never as a separate `Recommend:` item")
       expect(duties).toContain("no separate depth/grading question list")
       expect(duties).toContain("The survey decides what the person's approved decisions already decide")
     }
