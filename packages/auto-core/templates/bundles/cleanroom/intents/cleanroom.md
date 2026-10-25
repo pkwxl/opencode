@@ -171,8 +171,8 @@ items, not mixed into the check-writing item.
 
 4. Splitting and artifact criteria for this phase ({{phaseName}}):
    - One item per compliance dimension (coverage, behavior, interface, scope, spec
-     hygiene, clean-room independence); each item audits the implementation against the
-     specification and writes its findings;
+     hygiene, clean-room independence, paradigm conformance, contract coverage); each
+     item audits the implementation against the specification and writes its findings;
    - The closing item consolidates the findings into the verdict document: every finding
      carries its evidence and severity, and the Result line follows the findings, never
      optimism;
@@ -289,6 +289,7 @@ phase-plan(spec-read): must "spec-notes.md"
 phase-plan(spec-read): must "the target platform's terms"
 phase-plan(spec-read): must "counts and note ids alone"
 phase-plan(audit): must "verdict.md", "Result: PASS"
+phase-plan(audit): must "paradigm conformance", "contract coverage"
 phase-plan(m): must-not "code migration"
 whole: must "Clean-room boundary"
 subtask: must "Clean-room boundary"
@@ -443,8 +444,9 @@ recorded deviations, deferrals and open findings, and derive the plan's verdict 
 from these — never invent criteria. The plan is an item-by-item adjudication, never a
 summary: each compliance dimension — coverage of the MUST requirements, behavioral
 conformance, public interface conformance, scope discipline, spec hygiene, clean-room
-independence — is its own audit task with its findings written to audit.md, and no
-criterion is accepted on prose, merged, or silently dropped. Explicitly address:
+independence, paradigm conformance, contract coverage — is its own audit task with its
+findings written to audit.md, and no criterion is accepted on prose, merged, or
+silently dropped. Explicitly address:
 
 - **Negative scope** — the plan's first deliverable states what this round does not deliver:
   every deferred, descoped or postponed item with the record that owns it, so a passing
@@ -452,6 +454,18 @@ criterion is accepted on prose, merged, or silently dropped. Explicitly address:
 - **Re-run, never cite** — every entry names the command, check or committed artifact that
   decides it, re-executed at audit time on the final tree; recorded counts and ledgers the
   round kept are re-derived from the tree, and drift is a finding, never an edit;
+- **Divergence receipts, the one carve-out** — driver-run divergence receipts are cited
+  and adjudicated, never re-executed: audit sessions are clean rooms, they never see the
+  corpus, and the divergence lane is the single class of evidence the audit takes on the
+  driver's record (the receipt's scores and directives — the source-free shape); audit
+  findings and remediation directives that cite divergence name ids, risk bands and
+  structural directives only, never excerpts, diffs or paraphrases of either side;
+- **Contract coverage, both directions** — coverage runs implementation-covers-contracts
+  (every delivered behavior maps to a stated contract) and contracts-cover-the-specification
+  (every behavior the specification notes and the brief's MUSTs name is carried into some
+  contract, or explicitly deferred with its record); a recorded contract revision states
+  its kind — a clarification of the specification, or an accommodation of the
+  implementation — and an accommodation without a justification of its own is a finding;
 - **Independence judgment** — how the audit surfaces structural cloning of the reference
   implementation, and implementation leakage in the specification notes themselves;
 - **Gap disposition** — every open finding and deferred item makes an explicit contribution
