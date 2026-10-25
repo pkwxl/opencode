@@ -29,7 +29,12 @@ every acceptance criterion is actually observed to pass
      interface contracts, data-plane behaviors, error semantics, acceptance criteria;
    - Each item reads the reference implementation at the location the brief names and
      produces one standalone behavior-only notes document — observable behavior and
-     contracts, never private names, internal structures or translated code;
+     contracts, never private names, internal structures, translated code or
+     infra-shaped vocabulary (concepts whose meaning hangs on the reference's
+     particular internal organization): behavior is stated as observable contracts
+     at the boundary, in the target platform's terms — the clause targets the
+     concept, never the word, and domain-natural infrastructure names a target
+     needs regardless are not suspect;
    - The concern list is a floor, not a ceiling: a concern may span several tasks sized
      to a session, and every feature area of the reference is assigned to exactly one
      task (a coverage/accounting task may hold the mapping);
@@ -154,6 +159,8 @@ override path) when the call is the person's — never silently follow the lower
 ### asserts
 
 phase-plan(spec-read): must "spec-notes.md"
+phase-plan(spec-read): must "the target platform's terms"
+phase-plan(spec-read): must "counts and note ids alone"
 phase-plan(audit): must "verdict.md", "Result: PASS"
 phase-plan(m): must-not "code migration"
 whole: must "Clean-room boundary"
@@ -164,7 +171,13 @@ subtask: must "Clean-room boundary"
 This project runs a two-room clean room. The specification room — the spec-read phase —
 reads the reference implementation at the location the brief names and distills
 behavior-only specification notes; extraction hygiene bounds those notes to observable
-behavior: no private names, no internal structures, no translated code. The brief
+behavior: no private names, no internal structures, no translated code, no
+infra-shaped vocabulary — concepts named for, or carried over from, the reference's
+substrate structures. Behavior is stated as observable contracts at the boundary, in
+the target platform's terms. The fourth clause targets the concept, never the word —
+domain-natural infrastructure names a target needs regardless are not suspect; what
+the clause forbids is vocabulary whose meaning hangs on the reference's particular
+internal organization, and the judgment is never term matching. The brief
 declares the wall kind — layout separation (the reference outside the worktrees the
 clean rooms use) or rule separation (a shared tree with the reference's paths
 quarantined: never read, searched or reconstructed, and the platform boundary naming
@@ -184,6 +197,29 @@ structural resemblance to the reference implementation beyond those contracts is
 defect, not a goal. Where the specification is silent, the minimal behavior consistent
 with the public interfaces is chosen and the assumption is recorded; the audit phase
 judges compliance and independence, and its verdict follows the findings.
+
+The checks this charter sets beside the wall — the divergence scan over the
+deliverable and over the notes — are risk reduction and the detection of known
+indicators of non-independent implementation, never proof: a control flow can be
+carried over under renamed identifiers, and some of the reference's shapes are
+rational in the target too. The wall stays primary; nothing in these clauses may
+be cited to narrow it, and widening remains the person's ruling as above.
+Comparing the deliverable with the reference needs someone who may see both, and no
+clean room can: the compliance monitor — the person, or a driver-side designate the
+person names — owns that dirty side, and the adjudication splits: the audit judges
+the target-side rationale, the monitor confirms what kind of similarity was
+flagged. The divergence corpus, its comparison configuration and the tooling are
+driver-owned and live outside the platform boundary, in a driver-side repository
+or path — clean-room sessions never read or execute them; the worktree carries at
+most a bare stub that invokes the driver-side location and names no corpus path
+inline; and a corpus path in any session-rendered surface is a wall breach by the
+gate meant to enforce the wall. The divergence instrument's cheap half runs on the
+specification notes themselves at spec-read close, before contamination spreads:
+any of the reference's private identifiers in a note is a hard finding — public
+specification names are the notes' lawful vocabulary; the spec-read room may be
+told the colliding identifier outright, for it reads the reference lawfully; and
+the committed receipt carries counts and note ids alone — a reference identifier
+never persists in any session-readable document.
 
 ### verify-plan-test
 
