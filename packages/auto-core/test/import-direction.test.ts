@@ -179,6 +179,10 @@ const CLASSIFIED: Record<string, Domain> = {
   config: "driver",
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
+  // The root-symlink external_directory stamp (plans/0122): the scan and
+  // the additive insert init/fix share — config-layer machinery beside
+  // config-fix, never reaching the runner.
+  "external-dirs": "driver",
   confirm: "driver",
   // The person-proxy brief (plans/0105): the read-only renderer behind the
   // shell's flagless `driver-helper` — the six-block brief from live state,
@@ -728,6 +732,9 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   opts: "runtime",
   config: "runtime",
   "config-fix": "runtime",
+  // The root-symlink external_directory stamp (plans/0122): init-time
+  // config-layer machinery beside config-fix, touching only node builtins.
+  "external-dirs": "runtime",
   // The intent-bundle surface (plans/0079 §3): init-time installation
   // machinery beside config/config-fix — parse/materialize/register over the
   // policy files, reaching only the provider parsers and opts' mode words.

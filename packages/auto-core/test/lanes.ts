@@ -46,6 +46,9 @@ export const REPO_LANE: readonly string[] = [
   // need no repository, the lane is the honest one.
   "test/doc-lanes.test.ts",
   "test/config-fix.test.ts",
+  // The root-symlink external_directory stamp (plans/0122): scan and pure
+  // stamp over temp directories, no repository, no spawn.
+  "test/external-dirs.test.ts",
   // The plan-recorded execution mode (plans/0075): its end-to-end half drives
   // runTask over real git repositories (freshRepo fixtures).
   "test/decompose-field.test.ts",

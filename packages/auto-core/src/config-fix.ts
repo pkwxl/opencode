@@ -16,8 +16,11 @@
 //     config loads strictly once the key rules are applied; otherwise they are
 //     reported as skipped.
 //   - Files a person may have edited (opencode.json, brief.md) are only
-//     written when missing, as init does. The one exception is moving the
-//     retired source/destDir into brief.md, which appends to its sections.
+//     written when missing, as init does. Two exceptions: moving the retired
+//     source/destDir into brief.md (appends to its sections), and inserting
+//     the root-symlink external_directory allows into opencode.json
+//     (plans/0122 — additive, exactly those allow entries, the person's
+//     rules kept and always winning the evaluation tie).
 // validateProjectConfig stays strict: run, status and amend name `fix`
 // in a strict failure when a key rule applies (fixHint); `fix --dryrun`
 // lists the same findings without writing.
@@ -37,6 +40,15 @@ import {
 } from "./config"
 import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
+import {
+  applyExternalAllows,
+  externalDirectoryEntries,
+  missingExternalDirectoryAllows,
+  OPENCODE_CONFIG_FILE,
+  rootSymlinkRealPaths,
+  staleExternalDirectoryAllows,
+  stampExternalDirectories,
+} from "./external-dirs"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
 import { releasedRoadmapRound } from "./roadmap"
@@ -220,8 +232,42 @@ export async function planFix(dir: string): Promise<FixPlan> {
     fixable(".gitignore", `lacks the ${MODELS_ENTRY} entry (the model registry's project layer is local-only)`, "append the entry", () => ensureModelsGitignore(dir))
   }
 
-  if (!(await Bun.file(join(dir, "opencode.json")).exists())) {
-    fixable("opencode.json", "missing", "write the template", async () => Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text()))
+  // The template write carries the stamp when root symlinks exist (plans/
+  // 0122), so one pass sets a fresh file up completely; the file itself stays
+  // the template byte-for-byte when it does not.
+  const stampedTemplate = async () => {
+    const text = await Bun.file(templateConfig).text()
+    const stamped = stampExternalDirectories(text, externalDirectoryEntries(await rootSymlinkRealPaths(dir)))
+    return stamped ?? text
+  }
+  if (!(await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).exists())) {
+    fixable(OPENCODE_CONFIG_FILE, "missing", "write the template", async () => Bun.write(join(dir, OPENCODE_CONFIG_FILE), await stampedTemplate()))
+  } else {
+    // The root-symlink external_directory allows (plans/0122): missing
+    // entries are fixable (the write re-derives from disk at apply time —
+    // idempotent); a stale allow or a file that cannot hold per-pattern
+    // entries is manual (never guess, never delete person content).
+    const realPaths = await rootSymlinkRealPaths(dir)
+    if (realPaths.length) {
+      const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text()
+      const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(realPaths))
+      if (missing === undefined) {
+        findings.push({
+          class: "manual",
+          path: OPENCODE_CONFIG_FILE,
+          problem: "the permission.external_directory section cannot hold the root-symlink allows (malformed file or a flat action) — add them by hand",
+        })
+      } else if (missing.length) {
+        fixable(OPENCODE_CONFIG_FILE, `permission.external_directory lacks the allow for ${missing.join(", ")}`, "insert the root-symlink external_directory allow(s)", () => applyExternalAllows(dir))
+      }
+      for (const key of (await staleExternalDirectoryAllows(text, realPaths)) ?? []) {
+        findings.push({
+          class: "manual",
+          path: OPENCODE_CONFIG_FILE,
+          problem: `permission.external_directory allows ${key} but that path does not exist (the symlink or its target is gone) — remove the entry if the reference moved`,
+        })
+      }
+    }
   }
   // The bundle provenance findings (plans/0100 D3): manual only — a charter
   // change is not meaning-preserving, so the class stays out of the fixable

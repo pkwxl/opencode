@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
@@ -216,6 +216,100 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     // A person's opencode.json is never compared, only written when missing.
     await writeFile(join(dir, "opencode.json"), '{"model":"mine"}\n')
     expect((await planFix(dir)).findings).toEqual([])
+  })
+
+  // plans/0122: the root-symlink external_directory allows — the template
+  // write carries the stamp, an existing file gains the entries additively,
+  // and stale or unshapeable files are report-only.
+  test("a root symlink's allow is stamped into a missing opencode.json; without symlinks the template stays byte-identical", async () => {
+    await seedInit(dir)
+    await rm(join(dir, "opencode.json"))
+    const plan = await planFix(dir)
+    await applyFix(plan)
+    expect(await Bun.file(join(dir, "opencode.json")).text()).toBe(await Bun.file(templateConfig).text())
+
+    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
+    await symlink(corpus, join(dir, "linux"))
+    try {
+      await rm(join(dir, "opencode.json"))
+      const stamped = await planFix(dir)
+      expect(fixable(stamped).map((finding) => `${finding.path}: ${finding.problem}`)).toEqual(["opencode.json: missing"])
+      await applyFix(stamped)
+      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(written.permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+      expect((await planFix(dir)).findings).toEqual([])
+    } finally {
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+
+  test("an existing opencode.json gains the allow additively; person keys and actions are never overridden", async () => {
+    await seedInit(dir)
+    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
+    await symlink(corpus, join(dir, "linux"))
+    await writeFile(
+      join(dir, "opencode.json"),
+      JSON.stringify({ model: "mine", permission: { read: "allow", external_directory: { "/person/**": "deny" } } }, null, 2) + "\n",
+    )
+    try {
+      const plan = await planFix(dir)
+      expect(fixable(plan)).toEqual([
+        {
+          class: "fixable",
+          path: "opencode.json",
+          problem: `permission.external_directory lacks the allow for ${corpus}/**`,
+          change: "insert the root-symlink external_directory allow(s)",
+        },
+      ])
+      await applyFix(plan)
+      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(Object.keys(written.permission.external_directory)).toEqual([`${corpus}/**`, "/person/**"])
+      expect(written.permission.external_directory["/person/**"]).toBe("deny")
+      expect(written.model).toBe("mine")
+      expect((await planFix(dir)).findings).toEqual([])
+      // A person-owned entry on the same key reads as present: no finding.
+      await writeFile(
+        join(dir, "opencode.json"),
+        JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
+      )
+      expect((await planFix(dir)).findings).toEqual([])
+    } finally {
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+
+  test("a stale allow and an unshapeable file are manual findings, never writes", async () => {
+    await seedInit(dir)
+    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
+    await symlink(corpus, join(dir, "linux"))
+    try {
+      await writeFile(
+        join(dir, "opencode.json"),
+        JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow", "/gone/**": "allow" } } }, null, 2) + "\n",
+      )
+      const stale = await planFix(dir)
+      expect(manual(stale)).toEqual([
+        {
+          class: "manual",
+          path: "opencode.json",
+          problem: "permission.external_directory allows /gone/** but that path does not exist (the symlink or its target is gone) — remove the entry if the reference moved",
+        },
+      ])
+      expect(stale.writes).toEqual([])
+
+      await writeFile(join(dir, "opencode.json"), "not json")
+      const malformed = await planFix(dir)
+      expect(manual(malformed)).toEqual([
+        {
+          class: "manual",
+          path: "opencode.json",
+          problem: "the permission.external_directory section cannot hold the root-symlink allows (malformed file or a flat action) — add them by hand",
+        },
+      ])
+      expect(malformed.writes).toEqual([])
+    } finally {
+      await rm(corpus, { recursive: true, force: true })
+    }
   })
 
   test("inside git, a .gitignore without the driver entries is fixable", async () => {

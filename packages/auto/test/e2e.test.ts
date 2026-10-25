@@ -1313,6 +1313,41 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  // plans/0122: the root-symlink external_directory allows — init stamps them
+  // (into a person's existing file additively), fix restores them (-f skips
+  // the confirmation), and without root symlinks nothing is written.
+  test("init/fix stamp the root-symlink external_directory allows into opencode.json (plans/0122)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    const corpus = await mkdtemp(join(tmpdir(), "auto-cli-corpus-"))
+    const readOpencode = () => Bun.file(join(dir, "opencode.json")).text()
+    try {
+      // The floor: no root symlinks — no stamp line, no external_directory.
+      const plain = await runCli(["init", dir])
+      expect(plain.code).toBe(0)
+      expect(plain.out).not.toContain("stamped: opencode.json")
+      expect(JSON.parse(await readOpencode()).permission).not.toHaveProperty("external_directory")
+
+      await symlink(corpus, join(dir, "linux"))
+      await commitFixture(dir)
+      // A re-init stamps the person's existing file additively.
+      const stamped = await runCli(["init", dir])
+      expect(stamped.code).toBe(0)
+      expect(stamped.out).toContain(`stamped: opencode.json permission.external_directory allows for ${corpus}/**`)
+      const written = JSON.parse(await readOpencode())
+      expect(written.permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+
+      // A removed entry is a fixable finding; -f applies without asking.
+      await writeFile(join(dir, "opencode.json"), JSON.stringify({ ...written, permission: { read: "allow" } }, null, 2) + "\n")
+      const fixed = await runCli(["fix", dir, "-f"])
+      expect(fixed.code).toBe(0)
+      expect(fixed.out).toContain("fixed: opencode.json: insert the root-symlink external_directory allow(s)")
+      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+
   // A branch-isolation fixture: the target directory plus one clean nested
   // repository (pkg) on main (the pinned init.defaultBranch), ready to be
   // named by --isolate; a second nested repository (tools/cli) gives the

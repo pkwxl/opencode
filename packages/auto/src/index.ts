@@ -21,6 +21,7 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
+import { applyExternalAllows, externalAllowsStatus } from "@opencode-ai/auto-core/external-dirs"
 import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
 import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
@@ -2667,7 +2668,9 @@ if (command === "init" || command === "amend") {
   // retired, M3.4): round and phase directories come from plan's
   // round-establishment route, and task units from a planning session or a
   // person. amend writes only what renders from the config
-  // (the contract); opencode.json may hold a person's edits and is init's and fix's.
+  // (the contract); opencode.json may hold a person's edits and is init's and
+  // fix's — with the one additive exception of plans/0122: both may insert
+  // exactly the root-symlink external_directory allow entries, nothing else.
   const templates: Record<string, string> = amendCommand
     ? { ".opencode/agent/auto.md": templateAgent }
     : { "opencode.json": templateConfig, ".opencode/agent/auto.md": templateAgent }
@@ -2683,6 +2686,21 @@ if (command === "init" || command === "amend") {
     }
     await Bun.write(target, content)
     console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
+  }
+  // The root-symlink external_directory allows (plans/0122): init sets them
+  // up whether it just created opencode.json or found a person's file — one
+  // additive insert of exactly the allow entries, the person's rules kept
+  // (theirs always win the evaluation tie). No root symlinks writes nothing
+  // (the byte-identical floor); a file that cannot hold the entries is a
+  // warning here and a fix finding there — init never fails on it.
+  if (!amendCommand) {
+    const allows = await externalAllowsStatus(directory)
+    if (allows.status === "needs-stamp") {
+      await applyExternalAllows(directory)
+      console.log(`stamped: opencode.json permission.external_directory allows for ${allows.missing.join(", ")}`)
+    } else if (allows.status === "malformed") {
+      console.log("⚠ opencode.json cannot hold the root-symlink external_directory allows (malformed or a flat action); fix reports the detail")
+    }
   }
   // The project brief seed (plans/0081 D11, superseding 0052 D9's stub):
   // written verbatim only when --brief/--brief-file is given — omitted writes
