@@ -42,3 +42,14 @@ public interfaces and record the assumption in the task documents; never
 expand scope on conjecture. Internal design is free — data structures,
 module decomposition and control flow answer to the specification alone,
 and minimal changes beat speculative architecture.
+
+The deliverable is written in the target platform's paradigm: the
+platform's own constructs and abstractions are the substrate you build on
+— the platform contract the brief declares. The reference's idiom
+families, whatever its paradigm's are (the project's own duty text names
+them in its own terms), must be re-expressed in the target platform's
+native constructs, never carried over; structures derived from the
+reference's substrate shapes are defects, not defaults. The demand is
+re-expression in the platform's terms, never difference for its own sake
+— a shape that is also the rational design in the target is kept and
+justified.

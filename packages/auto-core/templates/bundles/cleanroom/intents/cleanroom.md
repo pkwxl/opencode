@@ -8,17 +8,20 @@
 specification, declares its artifact (module/file or document path), and carries the way
 to verify it — the checks that target the item's own behavior, not the task's full suite.
 An item that depends on an earlier one comes after it; no close-out item of its own (the
-last item runs the task's full verification once, after its own work).
+last item runs the task's full verification once, after its own work). An implementation
+item is kept ordered after the contract artifact it implements (`Depends:`).
 
 ### self-check-subtask
 
 check that the item's behavior matches the specification's words, not the reference
-implementation's shape
+implementation's shape — check the behavior against the contract the item cites, and
+the property that proves it
 
 ### self-check-whole
 
 once the whole task is complete, check that every specified behavior is implemented and
-every acceptance criterion is actually observed to pass
+every acceptance criterion is actually observed to pass, and that every specified
+behavior maps to a stated contract or a recorded deferral
 
 ## phase duties
 
@@ -48,7 +51,44 @@ boundaries, error handling), each producing one design document that cites the
 specification section it serves; a cross-concern consistency check (the design documents
 do not contradict each other) is a closing item of its own. Design documents propose
 structures the specification calls for, never shapes carried over from the reference
-implementation.
+implementation. Each design item's artifact is a contract document: the stated
+behavior plus its properties and invariants, in the declared property framework the
+pack overlay names — property suites are the in-pipeline instrument, model
+definitions and checking a named option. Per design concern, the design document
+names the target platform construct chosen in place of the transliterated shape,
+building on the target platform's declared interfaces — the platform contract the
+brief declares: its execution model, its memory/isolation discipline, its interface
+shapes; the reference's substrate shapes are unavailable, and structures derived
+from them are defects, not defaults. Where the specification's behavior was
+expressed by the reference in terms of infrastructure the platform forbids,
+restating that behavior in the platform's model is its own named design-document
+section. Re-expression is demanded where the platform provides a materially
+different or better abstraction — never everywhere a difference could be
+manufactured: a shape that is also the rational design in the target is kept and
+justified, not mangled for difference.
+
+Substantive design choices are independently derived; structural similarity that is
+unavoidable — protocol-mandated sequencing, shared mathematical constraints,
+hardware fact, or the shape that is simply the rational design — is justified in the
+task documents at design time: the design-time rationale is the strong form of a
+justification record, and one written after a divergence flag reads as a
+rationalization — commit order tells them apart.
+
+Contract-first ordering: an implementation item depends, via its `Depends:` field,
+on the contract artifact it implements — these duties say it, and the planner writes
+the fields. A contract revised mid-implementation is a recorded change — its reason
+in the task documents, stating its kind: a clarification of the specification (an
+omission or defect found and corrected), or an accommodation of the implementation
+(the contract bent to what was built; an accommodation without a justification of
+its own is a finding). The durable evidence is the citation: each implementation
+task's document records the commit SHA of the contract it cites — cheap, and it
+survives history rewrites; commit order corroborates.
+
+Specification sufficiency runs both ways: the notes cover the behaviors the target
+must keep, and every behavior the specification notes and the brief's MUSTs name is
+carried into some contract, or explicitly deferred with its record — without this,
+contract-first only proves the faithful implementation of whatever happened to be
+written down.
 
 ### m implementation
 
@@ -59,6 +99,8 @@ proves the behavior it implements (a build, a targeted test, or a black-box acce
 step); the tree stays consistent when an item completes — it compiles and existing
 checks do not regress; where the specification is silent, take the minimal behavior
 consistent with the public interfaces and record the assumption in the task documents.
+Each vertical slice cites the contract it satisfies — and the property that proves it
+— by its own surfaces: the contract id, and the commit SHA its task document records.
 
 ### t testing
 
@@ -195,6 +237,8 @@ phase-plan(audit): must "verdict.md", "Result: PASS"
 phase-plan(m): must-not "code migration"
 whole: must "Clean-room boundary"
 subtask: must "Clean-room boundary"
+whole: must "the target platform's paradigm"
+subtask: must "the target platform's paradigm"
 plan-verify: must "never an automatic plagiarism verdict"
 plan-verify: must "the same defect wearing the other coat"
 plan-verify: must "coarse risk bands", "re-scans are capped"
@@ -311,6 +355,11 @@ address:
 - **Design verification** — how each applicable design objective and core behavioral
   requirement maps to implementation areas, test cases, assertions and verifiable
   evidence;
+- **Verification sufficiency** — the suites cover each contract's properties,
+  boundaries and failure paths; property assertions derive from the stated contract,
+  never restated from the implementation they sit beside — a property changed to
+  match observed behavior is a contract revision, recorded with its kind and reason,
+  not a test fix;
 - **Conformance** — how the plan exposes divergence from the specification: boundary
   defects, failure-handling errors, resource lifecycle issues; independence defects
   (structural cloning of the reference implementation) are findings the plan must be
