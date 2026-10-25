@@ -175,14 +175,14 @@ describe("the pure predicates (plans/0099 stage B, D1/D2)", () => {
   // The truth table is the machine half of D2's floors; the observable-stream
   // halves (the switch off, a phase with no eligible units → the serial
   // loop's stream) are stage C's integration cases over the loop.
-  test("docScheduler: the tier-0-only placement over the scheduler activation rule", () => {
-    expect(docScheduler(2, "low", 0)).toBe(true)
-    expect(docScheduler(3, "high", 0)).toBe(true)
-    expect(docScheduler(2, "low", undefined)).toBe(true)
-    expect(docScheduler(1, "low", 0)).toBe(false)
-    expect(docScheduler(2, undefined, 0)).toBe(false)
-    expect(docScheduler(2, "low", 1)).toBe(false)
-    expect(docScheduler(2, "low", 2)).toBe(false)
+  test("docScheduler: the tier-0-only placement over the scheduler activation rule (width alone since plans/0125 D1)", () => {
+    expect(docScheduler(2, 0)).toBe(true)
+    expect(docScheduler(3, 0)).toBe(true)
+    expect(docScheduler(2, undefined)).toBe(true)
+    expect(docScheduler(1, 0)).toBe(false)
+    expect(docScheduler(undefined, 0)).toBe(false)
+    expect(docScheduler(2, 1)).toBe(false)
+    expect(docScheduler(2, 2)).toBe(false)
   })
 
   test("commitRangeText: the doc unit's path-limited range; an absent scope keeps today's string", () => {

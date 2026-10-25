@@ -616,18 +616,20 @@ export async function runTask(
       return undefined
     }
 
-    // S5 (plans/0068 D3 stage 2 / D19 / §6.8): a lane worker under a parallel
-    // level stops at a taken split whose streams remain — the parent lands
-    // the lead and schedules the streams as their own lanes (T-NNN.S<nn>);
-    // the lead's agent server dies with its process, so no lane ever forks
-    // it. Without a level (the serial world) or in the main process (the
-    // serial degrade, whose in-lane streams fork a live lead) the stream
-    // loop below keeps today's behavior; the isolation switch never stops —
+    // S5 (plans/0068 D3 stage 2 / D19 / §6.8; the level half dropped by
+    // plans/0125 D5): a lane worker stops at a taken split whose streams
+    // remain — the parent lands the lead and schedules the streams as their
+    // own lanes (T-NNN.S<nn>); the lead's agent server dies with its
+    // process, so no lane ever forks it. The lane context alone is the fact
+    // (a lane worker is dispatched only by an active scheduler or the
+    // isolation switch, excluded here); in the main process (the serial
+    // degrade, whose in-lane streams fork a live lead) the stream loop
+    // below keeps today's behavior; the isolation switch never stops —
     // its loop schedules tasks only, so a stop would idle the split forever.
     // The split record (not just the state files) is the discriminator: a
     // true-mode decomposition has the files but no record, and its subtasks
     // are not stream lanes.
-    if (opts.lane !== undefined && opts.parallel !== undefined && opts.stream === undefined && !switches.laneIsolation && task.split !== undefined && (task.checklist ?? []).some((item) => !item.done) && (await splitTaken(dir, task.id, (task.checklist ?? []).length))) {
+    if (opts.lane !== undefined && opts.stream === undefined && !switches.laneIsolation && task.split !== undefined && (task.checklist ?? []).some((item) => !item.done) && (await splitTaken(dir, task.id, (task.checklist ?? []).length))) {
       log(`⑂ ${task.id} the split's streams run as lanes of their own; this lane stops after the lead`)
       return { type: "unit-done" }
     }

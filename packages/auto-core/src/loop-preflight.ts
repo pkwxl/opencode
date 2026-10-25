@@ -1,8 +1,8 @@
 // runAll's preflight (pre-run checks): prompt library loading, agent contract
 // integrity check, stats loading and the progress heartbeat, driver state
 // files read-only, test-handover restoration, the start clean gate,
-// the scheduler's usage gates (--max-sessions above 1 without a parallel
-// level, interactive input under concurrency, plans/0068 D10/D11), orphan
+// the scheduler's usage gate (interactive input under concurrency,
+// plans/0068 D11) and its no-level teaching note (plans/0125 D4), orphan
 // lane recovery (D14), interruption state reset, AGENTS.md/.gitignore
 // close-out and the housekeeping commit; also carries runAll's options type
 // RunAllOpts and the agent contract rendering (plans/0006-phases-design.md,
@@ -158,12 +158,12 @@ export type RunAllOpts = {
   // complete route (plans/0049 G8).
   build?: string
   // config.parallel (MP.1, plans/0046 D8): the planning-guidance level injected
-  // into the planning sessions; absent = none. Since plans/0068 S3 it is also
-  // the second half of the scheduler's activation rule (D10): --max-sessions
-  // above 1 runs concurrently only under a level, and the level derives the
-  // landing-conflict response (D21). Since plans/0096 D10 the level's meaning
-  // ends there: it renders guidance and gates concurrency, while the execution
-  // tier below decides which machinery runs.
+  // into the planning sessions; absent = none. It never gates execution
+  // (plans/0125 D1 amending 0068 D10 — width alone activates the scheduler)
+  // and derives the landing-conflict response (D21): the level is how deeply
+  // planning works to make tasks independent, and how much merge repair a
+  // worktree-lane conflict may spend. Which machinery executes concurrently
+  // is the execution tier below, never the level.
   parallel?: ParallelLevel
   // config.treeLanes (plans/0096 D10, the 0068 amendment): the execution tier
   // — absent (off, the default) = Tier 0, process parallelism in one tree (no
@@ -189,11 +189,11 @@ export type RunAllOpts = {
   // state, §4) — the round's own isolation happened at establishment, and
   // every commit-side mechanism works on whatever branch is checked out.
   isolate?: string[]
-  // --max-sessions (plans/0046 D9; live since plans/0068 S3, D10): the
-  // concurrent AI sessions of the task loop — the scheduler's slot count
-  // when the scheduler is active (≥ 2 and a parallel level). Above 1 with
-  // no level is a usage error ("plan for parallelism first"); at 1 (the
-  // default) nothing changes for any project whatever the level.
+  // --max-sessions (plans/0046 D9; live since plans/0068 S3, D10; activation
+  // decoupled by plans/0125 D1): the concurrent AI sessions of the task loop
+  // — the scheduler's slot count, width alone activating it (≥ 2; whatever
+  // the parallel level). At 1 (the default) nothing changes for any project
+  // whatever the level — the serial floor.
   maxSessions?: number
   // --repair (plans/0079 §4): the bounded repair budget of this run — how
   // many automatic repair rounds a FAIL verdict (a task report's Result line)
@@ -413,14 +413,16 @@ export async function preflight(
     const warning = loopbackProxyWarning(process.env)
     if (warning) log(warning)
   }
-  // --max-sessions above 1 needs a parallel level (plans/0068 D10, S3 —
-  // 0046 D9's reservation lifted behind the scheduler): a level means the
-  // project planned for parallel execution, and the scheduler's admission,
-  // conflict budget and guidance all read it. Without one the request is a
-  // usage error rather than silently serial — "plan for parallelism first".
+  // A no-level width is legal and taught, never refused (plans/0125 D4,
+  // amending 0068 D10/S3's usage error): the declarations are the admission
+  // (P17 — level-independent since D5), so the scheduler runs on whatever
+  // the plan's `Depends:`/`Touches:` admit; the level only adds the
+  // planning guidance that arranges independent tasks. One teaching line
+  // (P8: detection records, the person decides), never a gate. A lane
+  // worker never sees it (it carries no maxSessions), and width 1 never
+  // does (the floor).
   if (opts.maxSessions !== undefined && opts.maxSessions !== 1 && opts.parallel === undefined) {
-    log(`max sessions ${opts.maxSessions}: concurrent execution needs a parallel level — set one with init --parallel low|medium|high (planning then arranges the tasks for it) and re-run`)
-    return { exit: 1 }
+    log(`ℹ max sessions ${opts.maxSessions} with no parallel level: tasks run concurrently only as their declared Depends/Touches allow — a level (init --parallel low|medium|high) adds the planning guidance that arranges independent tasks`)
   }
   // Interactive input refuses under concurrency (plans/0068 D11, v1): one
   // human cannot steer N sessions, and the sideband holds exactly one
@@ -456,7 +458,7 @@ export async function preflight(
   // skips the probe and the line (the parent that dispatched it decided).
   // dryrun probes nothing — it writes no state, and it runs no unit anyway.
   let treeTier: TreeTier = 0
-  if (!opts.lane && (schedulerActive(opts.maxSessions, opts.parallel) || autoSwitches().laneIsolation)) {
+  if (!opts.lane && (schedulerActive(opts.maxSessions) || autoSwitches().laneIsolation)) {
     const probe = !opts.dryrun && opts.treeLanes === "auto" ? await probeTierFacts(directory, opts.lanes) : undefined
     const resolved = resolveTreeTier(opts.treeLanes, probe, opts.lanes?.treeBudgetMB)
     treeTier = resolved.tier
@@ -466,7 +468,7 @@ export async function preflight(
     // outranks the branch (it pins full isolation, serially), and the kill
     // switch removes the branch rather than the note.
     const docNote =
-      autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, opts.parallel, resolved.tier)
+      autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, resolved.tier)
         ? "; doc lanes on — documentation-scoped units run concurrently in this tree"
         : ""
     log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}${docNote}`)
@@ -481,9 +483,9 @@ export async function preflight(
   // combination (the switch pins full isolation, one session, serially —
   // doc lanes never engage), and the kill switch removes the branch rather
   // than the flag.
-  if (opts.handoverTest && autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, opts.parallel, treeTier)) {
+  if (opts.handoverTest && autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, treeTier)) {
     log(
-      `--handover-test with max sessions ${opts.maxSessions} under doc lanes (tier 0, parallel ${opts.parallel}): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. ` +
+      `--handover-test with max sessions ${opts.maxSessions} under doc lanes (tier 0): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. ` +
         `Run with --max-sessions 1, or drop --handover-test`,
     )
     return { exit: 1 }
@@ -617,7 +619,7 @@ export async function preflight(
   // tier run or the person — the same story a maxSessions = 1 run has always
   // told; the park is inert (gitignored), and resetInProgress below frees the
   // orphaned unit for the serial loop without touching the scene.
-  if (!opts.dryrun && !opts.lane && worktreeScheduler(opts.maxSessions, opts.parallel, treeTier)) {
+  if (!opts.dryrun && !opts.lane && worktreeScheduler(opts.maxSessions, treeTier)) {
     const recovered = await recoverOrphanLanes(run.git, directory)
     if (recovered !== undefined) return { exit: recovered }
   }

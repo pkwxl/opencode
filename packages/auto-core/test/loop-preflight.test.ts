@@ -510,13 +510,13 @@ describe("the run-start composition order (the services stage)", () => {
   })
 })
 
-// The scheduler's usage gates at preflight (plans/0068 D10/D11, S3):
-// --max-sessions above 1 without a parallel level is a usage error (the
-// 0046 D9 reservation lifted behind the level — "plan for parallelism
-// first"), interactive input refuses under concurrency (one human cannot
-// steer N sessions), and at maxSessions = 1 nothing changes whatever the
-// level (the byte-identical floor: the serial path, byte for byte).
-describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
+// The scheduler's usage surfaces at preflight (plans/0068 D11; the D10
+// no-level gate retired by plans/0125 D4): a no-level width is legal and
+// taught — one log line, the declarations being the admission — interactive
+// input refuses under concurrency (one human cannot steer N sessions), and
+// at maxSessions = 1 nothing changes whatever the level (the byte-identical
+// floor: the serial path, byte for byte).
+describe("preflight: the scheduler's usage surfaces (plans/0068 D11; plans/0125 D4)", () => {
   // An initialized, committed project whose preflight has nothing to write
   // (the registry describe's `project`, local to this describe).
   async function project(): Promise<string> {
@@ -555,13 +555,13 @@ describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
     }
   }
 
-  test("maxSessions above 1 without a parallel level exits 1 pointing at init --parallel", async () => {
+  test("maxSessions above 1 without a parallel level passes preflight and teaches (plans/0125 D4)", async () => {
     const dir = await project()
     for (const maxSessions of [2, 4]) {
       const { result, lines } = await run(dir, { maxSessions })
-      expect(result).toEqual({ exit: 1 })
-      expect(lines).toEqual([
-        `max sessions ${maxSessions}: concurrent execution needs a parallel level — set one with init --parallel low|medium|high (planning then arranges the tasks for it) and re-run`,
+      expect("exit" in result).toBe(false)
+      expect(lines.filter((line) => line.includes("max sessions"))).toEqual([
+        `ℹ max sessions ${maxSessions} with no parallel level: tasks run concurrently only as their declared Depends/Touches allow — a level (init --parallel low|medium|high) adds the planning guidance that arranges independent tasks`,
       ])
     }
   })
@@ -574,6 +574,8 @@ describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
 
   test("--interactive and --wait-answer refuse under concurrency (D11); the parent-side surfaces remain", async () => {
     const dir = await project()
+    // Under a level, so the no-level note stays out of the exact-lines pin
+    // (its own case is the rewritten guard test above).
     const interactive = await run(dir, { maxSessions: 2, parallel: "low", interactive: true })
     expect(interactive.result).toEqual({ exit: 1 })
     expect(interactive.lines).toEqual(["--interactive with max sessions 2: one human cannot steer 2 concurrent sessions; drop --interactive or run with --max-sessions 1"])
@@ -593,12 +595,12 @@ describe("preflight: the scheduler's usage gates (plans/0068 D10/D11)", () => {
   // parse's (test/switches.test.ts) own tests.
   test("--handover-test refuses under doc-lane activation; the serial and worktree-tier shapes keep it", async () => {
     const dir = await project()
-    const refused = await run(dir, { maxSessions: 2, parallel: "low", handoverTest: true })
+    const refused = await run(dir, { maxSessions: 2, handoverTest: true })
     expect(refused.result).toEqual({ exit: 1 })
     expect(
       refused.lines.filter((line) => line.startsWith("--handover-test")),
     ).toEqual([
-      "--handover-test with max sessions 2 under doc lanes (tier 0, parallel low): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. Run with --max-sessions 1, or drop --handover-test",
+      "--handover-test with max sessions 2 under doc lanes (tier 0): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. Run with --max-sessions 1, or drop --handover-test",
     ])
     // One session: doc-lane activation is off, the idle test protocol runs
     // exactly as today.

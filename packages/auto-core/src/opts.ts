@@ -248,13 +248,13 @@ export type Opts = {
   // subtask close-out's P1 scan and terminator scan skip.
   scanExempt?: string[]
   // The parallel level in effect for this execution surface (plans/0068
-  // D18/S5): set only where execution width is real — a concurrent run
-  // (maxSessions ≥ 2 under a level) or a lane worker of one — so the
-  // decompose family and the whole-task split clause carry the
-  // `## parallelism` guidance of the configured level, and a lane worker
-  // stops at a taken split whose streams run as lanes. Absent at one
-  // session in the main process whatever the level (D10's byte-identical
-  // floor). Type-only import; opts stays a pure type module.
+  // D18/S5; never an activation input since plans/0125 D1): set only where
+  // execution width is real — a concurrent run (maxSessions ≥ 2) or a lane
+  // worker — so the decompose family and the whole-task split clause carry
+  // the `## parallelism` guidance of the configured level. Absent at one
+  // session in the main process whatever the level (the byte-identical
+  // floor: guidance rides width, a level alone changes no prompt).
+  // Type-only import; opts stays a pure type module.
   parallel?: import("./intent/types").ParallelLevel
   // The lane worker's scope (plans/0068 §6.3, RunAllOpts.lane re-stated for
   // the task pipeline): present only inside a spawned lane worker. The
@@ -309,10 +309,11 @@ export type SessionCtx = {
     wrapup?: boolean
     scanExempt?: string[]
     stopBefore?: "execute" | "formulate"
-    // The width facts of plans/0068 (D10/D18/S5): the level and the slot
-    // count decide whether the decompose-side guidance rides the execution
-    // options, and the lane scope marks a lane worker (the lead's split
-    // stop). Optional like every field of the slice.
+    // The width facts of plans/0068 (D10/D18/S5; activation decoupled by
+    // plans/0125 D1): the slot count decides whether the decompose-side
+    // guidance rides the execution options (the level beside it), and the
+    // lane scope marks a lane worker (the lead's split stop). Optional like
+    // every field of the slice.
     parallel?: import("./intent/types").ParallelLevel
     maxSessions?: number
     lane?: { unit: string; merge?: string }
@@ -355,10 +356,11 @@ type SessionSite =
 // bottom while a real loop context still assigns unchanged).
 export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
   if (site.site === "task") {
-    // D18/D10 (plans/0068 S5): the decompose-side parallelism guidance rides
-    // the execution options only where execution width is real — a
-    // concurrent run (maxSessions ≥ 2 under a level) or a lane worker of
-    // one (opts.lane is set only by a launcher the scheduler or the
+    // D18/D10 (plans/0068 S5; activation decoupled by plans/0125 D1): the
+    // decompose-side parallelism guidance rides the execution options only
+    // where execution width is real — a concurrent run (maxSessions ≥ 2,
+    // whatever the level; the level only supplies the guidance text) or a
+    // lane worker (opts.lane is set only by a launcher the scheduler or the
     // isolation switch drove; the guidance arranges splits whose streams
     // then run side by side). The rule is inlined (two comparisons) rather
     // than imported from src/lanes.ts — opts sits at the dependency bottom

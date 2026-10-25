@@ -2,7 +2,8 @@
 // design — the scheduler functions over the registry fields src/tasks.ts
 // carries (0051 D3's `worktree` field, built at last). At stage S1 the module
 // was pure and inert; S2 added the dispatch and landing choreography (§6.5)
-// and S3 the activation rule (D10), the conflict-repair policy (D21) and the
+// and S3 the activation rule (D10 — its activation half since re-ruled by
+// plans/0125: width alone), the conflict-repair policy (D21) and the
 // orphan-recovery inputs (D14: the liveness probe, the dispatch cap). S4
 // added the observability surfaces of D13: the prefix relay every dispatch
 // attaches (the parent re-emits each lane worker's output through its own
@@ -61,18 +62,20 @@ import { taskDoc, taskDir } from "./docpaths"
 import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
 import { begin, checklistTitle, clearLane, laneRecords, setLane, setParked, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, withParked, type Plan, type PlanPhase, type Task } from "./tasks"
 
-// —— Activation and policy (D10, D21) ——
+// —— Activation and policy (D10 as amended by plans/0125; D21) ——
 
-// D10's activation rule: the readiness scheduler runs the routed phase's units
-// concurrently iff --max-sessions is at least 2 and the project configured a
-// parallel level (config `parallel`; absent and `none` both mean none). At
-// maxSessions = 1 (the default) the scheduler is off for any project whatever
-// the level — the byte-identical floor: same loops, same prompts, same
-// goldens. A maxSessions above 1 with no level never reaches this function as
-// "active": preflight refuses it as a usage error first ("plan for
-// parallelism first").
-export function schedulerActive(maxSessions: number | undefined, parallel: ParallelLevel | undefined): boolean {
-  return (maxSessions ?? 1) >= 2 && parallel !== undefined
+// The activation rule (plans/0125 D1, amending D10 — the two knobs
+// decoupled): the readiness scheduler runs the routed phase's units
+// concurrently iff --max-sessions is at least 2 — width alone. The
+// `parallel` level never gates execution; it stays the planning-guidance
+// key (the pack's `## parallelism` subsection, injected wherever the level
+// is set) and the landing-conflict posture (D21 below). At maxSessions = 1
+// (the default) the scheduler is off for any project whatever the level —
+// the byte-identical floor: same loops, same prompts, same goldens. A
+// no-level width is legal and taught, not refused: preflight logs one note
+// (plans/0125 D4) saying the declarations are the admission.
+export function schedulerActive(maxSessions: number | undefined): boolean {
+  return (maxSessions ?? 1) >= 2
 }
 
 // —— Tiered parallelism (plans/0096 D8–D10, the 0068 amendment) ——
@@ -130,23 +133,23 @@ export function resolveTreeTier(
   return { tier: 1, reason: `treeLanes auto: reflink capable${budgetNote} — sparse CoW worktree lanes materialized over the unit's Touches` }
 }
 
-// The tier-qualified activation predicate (D9/D10) every worktree-lane site
-// consults — runTaskLoop's scheduler branch and preflight's orphan recovery
-// — so `treeLanes` is interpreted once, here, never per site: the readiness
-// scheduler runs the routed phase's units concurrently iff D10's activation
-// rule holds AND the tier in force materializes worktree lanes (≥ 1). At
-// tier 0 the serial task loop runs instead and the parallelism is the test
-// lanes' — the `parallel` level still renders its planning guidance and the
-// preflight max-sessions-needs-parallel guard keeps its meaning (the level
-// plans for parallel execution whatever surface executes it).
-export function worktreeScheduler(maxSessions: number | undefined, parallel: ParallelLevel | undefined, tier: TreeTier | undefined): boolean {
-  return schedulerActive(maxSessions, parallel) && (tier ?? 0) >= 1
+// The tier-qualified activation predicate (D9; D10 as amended by plans/0125)
+// every worktree-lane site consults — runTaskLoop's scheduler branch and
+// preflight's orphan recovery — so `treeLanes` is interpreted once, here,
+// never per site: the readiness scheduler runs the routed phase's units
+// concurrently iff the activation rule holds (width alone) AND the tier in
+// force materializes worktree lanes (≥ 1). At tier 0 the serial task loop
+// runs instead and the parallelism is the test lanes' — the `parallel`
+// level still renders its planning guidance whatever surface executes it.
+export function worktreeScheduler(maxSessions: number | undefined, tier: TreeTier | undefined): boolean {
+  return schedulerActive(maxSessions) && (tier ?? 0) >= 1
 }
 
-// The doc scheduler's activation predicate (plans/0099 D2): the doc-lane
+// The doc scheduler's activation predicate (plans/0099 D2; the activation
+// half as amended by plans/0125): the doc-lane
 // branch of runTaskLoop's chain runs the routed phase's units concurrently
-// iff the scheduler activation rule holds (--max-sessions ≥ 2 and a
-// configured parallel level) AND the run's tier is 0 — Tier 0 grows task
+// iff the scheduler activation rule holds (--max-sessions ≥ 2, width alone)
+// AND the run's tier is 0 — Tier 0 grows task
 // parallelism (the doc lanes are its task parallelism; 0096 bought
 // processes before trees and left Tier 0's tasks serial), while tiers 1–2
 // keep the worktree lane loop unchanged: at tier ≥ 1 a doc-scheduler branch
@@ -156,8 +159,8 @@ export function worktreeScheduler(maxSessions: number | undefined, parallel: Par
 // branch — a tier-0 parallel run is exactly today's serial loop), never
 // here: the predicate stays pure over injected facts, the worktreeScheduler
 // precedent.
-export function docScheduler(maxSessions: number | undefined, parallel: ParallelLevel | undefined, tier: TreeTier | undefined): boolean {
-  return schedulerActive(maxSessions, parallel) && (tier ?? 0) === 0
+export function docScheduler(maxSessions: number | undefined, tier: TreeTier | undefined): boolean {
+  return schedulerActive(maxSessions) && (tier ?? 0) === 0
 }
 
 // The tier-1 sparse set (D9): the cone-mode directories a lane's worktree
@@ -208,8 +211,10 @@ export function laneCacheEnv(caches: readonly LaneCacheRule[] | undefined, home:
 // (zero session repairs — a conflict at low is a plan defect, and low's
 // posture spends no tokens on merge repair); `medium`/`high` allow one
 // repair re-dispatch (D7's merge instruction) before blocking. No level
-// (none) never conflicts-with-repair: without it the scheduler is off and
-// the serial path has no landings — the answer reads false all the same.
+// reads false all the same — the depth knob unset spends nothing on merge
+// repair, the low posture (plans/0125 D3 kept the posture level-derived
+// even as the level stopped gating activation: the budget is the depth the
+// person opted into, never a width default).
 export function conflictRepair(level: ParallelLevel | undefined): boolean {
   return level === "medium" || level === "high"
 }
@@ -742,7 +747,7 @@ export function laneParkProblem(dir: string, unit: string, platform: NodeJS.Plat
   if (platform !== "win32") return undefined
   const park = join(dir, lanePark(unit))
   if (park.length + PARK_PATH_MARGIN <= WINDOWS_MAX_PATH) return undefined
-  return `the lane worktree path ${park} is ${park.length} characters; the worktree's files under it would pass Windows' ${WINDOWS_MAX_PATH}-character path limit. Move the project to a shallower directory, or run serially (--max-sessions 1 / without a parallel level)`
+  return `the lane worktree path ${park} is ${park.length} characters; the worktree's files under it would pass Windows' ${WINDOWS_MAX_PATH}-character path limit. Move the project to a shallower directory, or run serially (--max-sessions 1)`
 }
 
 // The lane report file inside a lane's worktree (D8): written by the lane

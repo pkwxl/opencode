@@ -198,11 +198,13 @@ describe("sessionOpts (the eight-site field-set pin)", () => {
   })
 })
 
-// The S5 width keys (plans/0068 D10/D18/§6.8): parallel rides the task
-// options only where execution width is real — a concurrent run
-// (maxSessions ≥ 2 under a level) or a lane worker — and lane/stream mark
-// the lane worker's scope. At one session in the main process every key
-// stays absent whatever the level (the byte-identical floor).
+// The S5 width keys (plans/0068 D10/D18/§6.8; activation decoupled by
+// plans/0125 D1): parallel rides the task options only where execution
+// width is real — a concurrent run (maxSessions ≥ 2, whatever the level;
+// the level only supplies the guidance text) or a lane worker — and
+// lane/stream mark the lane worker's scope. At one session in the main
+// process every key stays absent whatever the level (the byte-identical
+// floor: guidance rides width, never the level alone).
 describe("sessionOpts width keys (plans/0068 S5)", () => {
   const lane = { unit: "T-001.S02" }
 

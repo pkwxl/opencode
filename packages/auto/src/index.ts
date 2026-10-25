@@ -472,7 +472,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "parallel",
     "--parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); " +
-      "the level's text comes from the ## parallelism section of the intent pack. With --max-sessions above 1 it is also required for concurrency and sets the landing-conflict posture (low blocks on the first conflict; " +
+      "the level's text comes from the ## parallelism section of the intent pack. It never gates concurrency (--max-sessions alone runs it) and sets the landing-conflict posture (low blocks on the first conflict; " +
       "medium/high allow one repair merge before blocking); which machinery executes concurrently is the --tree-lanes tier's call, not the level's",
   ],
   [
@@ -498,7 +498,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "max-sessions",
-    "--max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 requires a parallel level (init --parallel); " +
+    "--max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 runs the concurrent scheduler on its own — tasks run concurrently only as their declared Depends/Touches allow, whatever the parallel level (a level, init --parallel, adds the planning guidance that arranges independent tasks); " +
       "what runs concurrently is the --tree-lanes tier's call (the default runs the tasks serially in one tree with the tests parallel; tree lanes on/auto run them as concurrent lanes in isolated worktrees); " +
       "--interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)",
   ],
@@ -1117,10 +1117,11 @@ if (command === "run") {
     console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
     process.exit(1)
   }
-  // --max-sessions (auto-core plans/0046 D9; live since plans/0068 S3/D10):
-  // concurrent AI sessions of the task loop. Above 1 the project needs a
-  // parallel level (config parallel, init --parallel) — the check sits after
-  // the config load below. Unrelated to --agent.
+  // --max-sessions (auto-core plans/0046 D9; live since plans/0068 S3/D10;
+  // activation decoupled by auto-core plans/0125 D1): concurrent AI sessions
+  // of the task loop. Width alone activates the scheduler — no parallel
+  // level required; the level stays planning guidance and the
+  // landing-conflict posture. Unrelated to --agent.
   const maxSessions = parseMaxSessions(flags.get("max-sessions"))
   if (maxSessions === null) {
     console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
@@ -1148,10 +1149,6 @@ if (command === "run") {
   }
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
-  if (maxSessions > 1 && !config.parallel) {
-    console.error(`--max-sessions ${maxSessions}: concurrent execution needs a parallel level — set one with init --parallel low|medium|high (planning then arranges the tasks for it) and re-run`)
-    process.exit(1)
-  }
   await logRunBanner(directory, config)
   const code = await runAll(directory, {
     ...runOptions(config, mode, session),

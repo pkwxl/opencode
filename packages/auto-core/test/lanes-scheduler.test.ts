@@ -703,7 +703,7 @@ async function runScheduler(ctx: LoopCtx): Promise<{ code: number; lines: string
 // The park entries that still exist (the teardown's counterpart).
 const parkEntries = async (): Promise<string[]> => readdir(join(dir, ".auto", "worktrees")).catch(() => [])
 
-describe("runLaneLoop (§6.2, D10 active at maxSessions = 2)", () => {
+describe("runLaneLoop (§6.2; D10's activation as amended by plans/0125 — width alone at maxSessions = 2)", () => {
   test("two fake-agent lanes side by side: the ready batch dispatches together, both land, the phase completes", async () => {
     await schedulerProject([
       { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/alpha/alpha.ts" },
@@ -741,6 +741,33 @@ ${run.lines.join("\n")}
     expect(await parkEntries()).toEqual([])
     expect(await changedFiles(dir)).toEqual([])
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBeUndefined()
+  })
+
+  test("plans/0125 D1: the same two lanes with no parallel level — width alone activates the scheduler", async () => {
+    await schedulerProject([
+      { id: "T-001", title: "the alpha module", touches: ["src/alpha/"], file: "src/alpha/alpha.ts" },
+      { id: "T-002", title: "the beta module", touches: ["src/beta/"], file: "src/beta/beta.ts" },
+    ])
+    const units: Record<string, SchedUnit> = {
+      "T-001": { id: "T-001", title: "the alpha module", file: "src/alpha/alpha.ts" },
+      "T-002": { id: "T-002", title: "the beta module", file: "src/beta/beta.ts" },
+    }
+    const launches: string[] = []
+    setShellProfile({
+      laneLauncher: (worktree, unit) => {
+        launches.push(unit)
+        return workingStub(completeUnit(worktree, units[unit]!).then(() => writeLaneReport(worktree, reportOf(unit))))
+      },
+    })
+    // No `parallel` key at all — the level left the activation rule.
+    const run = await runScheduler(schedulerCtx(agentHost(), {}))
+    expect(run.code).toBe(0)
+    expect(run.lines).toContain("✓ all tasks complete")
+    expect(launches.sort()).toEqual(["T-001", "T-002"])
+    expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-002 the beta module")
+    const log = await git(dir, "log", "--format=%B")
+    expect(log.match(/Auto-Stage: landing\n/g)?.length).toBe(2)
+    expect(await parkEntries()).toEqual([])
   })
 
   test("a landing conflict at low blocks immediately: exit 2, the park path named, the scene kept", async () => {

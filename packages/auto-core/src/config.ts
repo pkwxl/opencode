@@ -86,9 +86,11 @@ export type ProjectConfig = {
   // the build check is skipped.
   build?: string
   // How hard planning sessions work to make tasks independent (MP.1, plans/0046
-  // D8/D10): the level picks the `## parallelism` intent subsection injected
-  // into the planning templates. Absent = none (nothing injected, today's
-  // prompts byte for byte). Planning guidance only: tasks still run one at a time.
+  // D8/D10; never an activation input since plans/0125 D1): the level picks the
+  // `## parallelism` intent subsection injected into the planning templates.
+  // Absent = none (nothing injected, today's prompts byte for byte). Planning
+  // guidance and the worktree landing-conflict posture alone — concurrency
+  // itself is --max-sessions' alone.
   parallel?: ParallelLevel
   // The execution tier of the lanes machinery (plans/0096 D10, the 0068
   // amendment): off (absent, the default) = Tier 0 — process parallelism in

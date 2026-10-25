@@ -206,8 +206,10 @@ describe("runAll (D3)", () => {
     const { runAll } = await import("../src/loop")
     const dir = tempDir()
     const lock = acquireRunLock(dir, "plan")
-    // maxSessions 2 exits 1 in preflight, after runAll re-entered the lock.
-    expect(await runAll(dir, { maxSessions: 2 })).toBe(1)
+    // The D11 interactive refusal exits 1 in preflight, after runAll
+    // re-entered the lock (any post-lock preflight exit serves; this one
+    // asks nothing of the directory).
+    expect(await runAll(dir, { maxSessions: 2, interactive: true })).toBe(1)
     expect(readHolder(dir)).toMatchObject({ pid: process.pid, command: "plan" })
     if (lock.ok) lock.release()
     expect(readdirSync(dir)).toEqual([])

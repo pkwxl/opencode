@@ -87,22 +87,24 @@ describe("resolveTreeTier (D10: the tier decision, pure over injected probe fact
   })
 })
 
-describe("worktreeScheduler (D9/D10: the tier-qualified activation predicate)", () => {
+describe("worktreeScheduler (D9; D10 as amended by plans/0125: the tier-qualified activation predicate)", () => {
   test("the stage-5 default: schedulerActive with tier 0 runs the serial task loop, not the lane loop", () => {
-    expect(schedulerActive(2, "low")).toBe(true)
-    expect(worktreeScheduler(2, "low", 0)).toBe(false)
-    expect(worktreeScheduler(2, "low", undefined)).toBe(false)
+    expect(schedulerActive(2)).toBe(true)
+    expect(worktreeScheduler(2, 0)).toBe(false)
+    expect(worktreeScheduler(2, undefined)).toBe(false)
   })
 
-  test("tiers 1 and 2 keep the scheduler; every other activation rule of D10 is unchanged", () => {
-    expect(worktreeScheduler(2, "low", 1)).toBe(true)
-    expect(worktreeScheduler(2, "low", 2)).toBe(true)
-    expect(worktreeScheduler(2, "high", 2)).toBe(true)
-    // The rule's own halves still gate: no level, or maxSessions 1, is off
-    // at every tier — the byte-identical floor.
-    expect(worktreeScheduler(2, undefined, 2)).toBe(false)
-    expect(worktreeScheduler(1, "low", 2)).toBe(false)
-    expect(worktreeScheduler(undefined, "low", 2)).toBe(false)
+  test("tiers 1 and 2 keep the scheduler; width alone activates, the floor unchanged", () => {
+    expect(worktreeScheduler(2, 1)).toBe(true)
+    expect(worktreeScheduler(2, 2)).toBe(true)
+    expect(worktreeScheduler(4, 2)).toBe(true)
+    // The width half still gates: maxSessions 1 (or absent) is off at every
+    // tier — the byte-identical floor. The level left the activation rule
+    // entirely (plans/0125 D1): width alone activates whatever the level.
+    expect(worktreeScheduler(1, 2)).toBe(false)
+    expect(worktreeScheduler(undefined, 2)).toBe(false)
+    expect(schedulerActive(1)).toBe(false)
+    expect(schedulerActive(undefined)).toBe(false)
   })
 })
 

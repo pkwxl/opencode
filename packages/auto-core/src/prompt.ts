@@ -165,10 +165,11 @@ type Opts = {
   contextLimit?: number
   fine?: boolean
   // The parallel level in effect for this execution surface (plans/0068
-  // D18/S5): the decompose family and the whole-task split clause inject the
-  // `## parallelism` subsection of the configured level; absent (none, or a
-  // serial run's options that never carried it) renders nothing — the
-  // byte-identical floor.
+  // D18/S5; never an activation input since plans/0125 D1): the decompose
+  // family and the whole-task split clause inject the `## parallelism`
+  // subsection of the configured level; absent (none, or a serial run's
+  // options that never carried it) renders nothing — the byte-identical
+  // floor.
   parallel?: ParallelLevel
   // The doc-lane render fact (plans/0099 D11): true exactly for a doc lane's
   // units, where the whole-task and wrap-up prompts carry their concurrency

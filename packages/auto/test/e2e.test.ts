@@ -1224,7 +1224,7 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("init --parallel freezes the planning level; none drops the key; run --max-sessions above 1 needs one (plans/0068 D10)", async () => {
+  test("init --parallel freezes the planning level; none drops the key; --max-sessions parses as run's width (plans/0046 D8; activation decoupled by auto-core plans/0125)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       // default: no key written, no summary mention
@@ -1255,11 +1255,9 @@ describe("CLI: init freezes the project config", () => {
       const initSessions = await runCli(["init", dir, "--max-sessions", "1"])
       expect(initSessions.code).toBe(1)
       expect(initSessions.err).toContain("--max-sessions is a run option")
-      // run: above 1 without a level is a usage error (plans/0068 D10); a
-      // non-integer always was
-      const two = await runCli(["run", dir, "--max-sessions", "2"])
-      expect(two.code).toBe(1)
-      expect(two.err).toContain("concurrent execution needs a parallel level")
+      // a non-integer width is a usage error (the shell guard on the level
+      // itself is gone — plans/0125 D2; width alone is legal, its own
+      // preflight gates carrying the rest)
       const zero = await runCli(["run", dir, "--max-sessions", "0"])
       expect(zero.code).toBe(1)
       expect(zero.err).toContain("--max-sessions takes a positive integer")
@@ -4904,36 +4902,32 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     }
   }, 180_000)
 
-  test("--max-sessions above 1 without a parallel level is a usage error (plans/0068 D10); under a level the run reaches preflight's concurrency gates", async () => {
+  test("--max-sessions above 1 with no parallel level runs (auto-core plans/0125 D1/D2): the width passes the shell and reaches preflight's concurrency gates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-max-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
       await commitFixture(dir)
-      // No level: the request is refused rather than silently run serially
-      // ("plan for parallelism first").
-      const two = await runCli(["run", dir, "--max-sessions", "2"])
-      expect(two.code).toBe(1)
-      expect(two.err).toContain("concurrent execution needs a parallel level")
-      expect(two.err).toContain("init --parallel")
-      // Under a level the max-sessions gate is gone: the run now reaches
-      // preflight, where D11's interactive refusal fires (an accepted run
-      // would start an agent; the usage error is the cheap deterministic
-      // witness that the width was accepted).
-      expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
-      await commitFixture(dir)
+      // No level, and the width is accepted: the run reaches preflight, where
+      // D11's interactive refusal fires (an accepted run would start an
+      // agent; the usage error is the cheap deterministic witness that the
+      // width was accepted — the old shell guard on the level is gone,
+      // plans/0125 D2, and the no-level note rides the run log).
       const steered = await runCli(["run", dir, "--max-sessions", "2", "--interactive"])
       expect(steered.code).toBe(1)
+      expect(steered.err).not.toContain("concurrent execution needs a parallel level")
       // preflight's refusal rides the run log's stdout (the run log is open).
       expect(steered.out).toContain("one human cannot steer 2 concurrent sessions")
+      expect(steered.out).toContain("with no parallel level: tasks run concurrently only as their declared Depends/Touches allow")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 })
 
-// The lane scheduler live (auto-core plans/0068 S3, D10; the S4
-// observability cases ride the same entry): --max-sessions 2 under a
-// parallel level routes the task loop through the readiness scheduler — the
+// The lane scheduler live (auto-core plans/0068 S3, D10; the activation
+// decoupled by auto-core plans/0125 — width alone, the fixtures' levels
+// now merely fixture facts): --max-sessions 2 routes the task loop through
+// the readiness scheduler — the
 // lanes spawn through the shell's own `_lane` entry (the default launcher
 // re-invoking this CLI), land through the merge protocol, and the failure
 // matrix and D21's conflict posture drive the run's exit. S4 adds the

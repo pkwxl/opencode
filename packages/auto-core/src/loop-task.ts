@@ -187,10 +187,11 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   // isolation (the switch exists precisely to force the serial lane shape).
   if (autoSwitches().laneIsolation) return runIsolationLoop(ctx, phase)
   // The readiness scheduler (plans/0068 §6.2, S3, D10; tiered by plans/0096
-  // D9): active iff maxSessions ≥ 2, the project configured a parallel level,
-  // and the tier in force materializes worktree lanes (≥ 1) — the units of
+  // D9; activation decoupled by plans/0125 D1): active iff maxSessions ≥ 2
+  // — width alone, whatever the parallel level — and the tier in force
+  // materializes worktree lanes (≥ 1); the units of
   // the routed phase run concurrently, each isolated in its own lane.
-  if (worktreeScheduler(ctx.opts.maxSessions, ctx.opts.parallel, ctx.treeTier)) return runLaneLoop(ctx, phase)
+  if (worktreeScheduler(ctx.opts.maxSessions, ctx.treeTier)) return runLaneLoop(ctx, phase)
   // The doc scheduler (plans/0099 D2, stage C): tier 0 + the same activation
   // rule — Tier 0 grows task parallelism, and the doc lanes are it: units
   // whose declared Touches lie entirely under docs/ run as concurrent
@@ -199,7 +200,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   // path-scoped commit queue). The kill switch is consulted here, at the
   // branch site (off removes the branch — a tier-0 parallel run is exactly
   // today's serial loop), never inside the predicate.
-  if (autoSwitches().docLanes && docScheduler(ctx.opts.maxSessions, ctx.opts.parallel, ctx.treeTier)) return runDocLaneLoop(ctx, phase)
+  if (autoSwitches().docLanes && docScheduler(ctx.opts.maxSessions, ctx.treeTier)) return runDocLaneLoop(ctx, phase)
   const { directory } = ctx
   for (;;) {
     const plan = await loadPlan(directory, phase)
@@ -702,8 +703,8 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
 // reads reaches the parent's log prefixed as it arrives.
 type LiveLane = { task: Task; worker: LaneWorker; output: Promise<string>; worktree: string }
 
-// The task loop behind D10's activation rule (maxSessions ≥ 2 and a parallel
-// level): load plan → ready set (D5) → dispatch up to the slots → await any
+// The task loop behind the activation rule (maxSessions ≥ 2 alone since
+// plans/0125 D1, amending D10): load plan → ready set (D5) → dispatch up to the slots → await any
 // exit → land (serialized; this single-threaded await is the mutex) → the
 // boundary hooks at each landing → repeat until the phase's schedulable units
 // are done. Every execution unit goes through a lane (D4, uniform lanes): the

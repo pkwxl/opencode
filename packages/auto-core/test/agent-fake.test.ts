@@ -3725,6 +3725,26 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     expect(await git(repo, "status", "--porcelain")).toBe("")
   })
 
+  test("plans/0125 D1: the doc lanes engage with no parallel level — width alone routes the doc branch", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    const agent = make({ turn: docTurns(repo) })
+    const ctx = docCtx(repo, serverOf(agent))
+    delete ctx.opts.parallel
+    expect(await runDocLoop(ctx, phase)).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    // Both units ran as doc lanes (the serial loop's prompts carry no sibling
+    // clause and its log no lane lines) and landed done.
+    expect(lines.filter((line) => line.includes("starting a doc lane"))).toHaveLength(2)
+    expect(agent.prompts[execAt(agent, "T-001")]!.text).toContain("4. Sibling doc units run beside you in this tree")
+    for (const id of ["T-001", "T-002"]) {
+      expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
+    }
+    expect(await git(repo, "status", "--porcelain")).toBe("")
+  })
+
   test("admission under overlap: a declaration reaching the sibling's own directory keeps the units serial — the raw touches comparison would have admitted both", async () => {
     const { dir: repo, phase } = await docRepo([
       // T-001 declares only the shared document; its own docs/T-001/ joins

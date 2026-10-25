@@ -1,7 +1,10 @@
 // MP.1 parallel declaration surface (plans/0046 D8–D12): the planning
-// guidance block follows the config level, and --max-sessions is reserved.
+// guidance block follows the config level (its width-side reservation
+// lifted by plans/0068 S3 and the activation decoupled by plans/0125 —
+// width alone runs the scheduler; the preflight note and the truth tables
+// carry that behavior in their own homes).
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { phaseTypeOfLetter } from "../src/phases/registry"
@@ -47,14 +50,5 @@ describe("planning guidance block (D10/D11)", () => {
     factsDir = dir
     expect(phasePlan("low")).toContain("Project low guidance.")
     expect(phasePlan("high")).toBe(phasePlan())
-  })
-})
-
-describe("--max-sessions is reserved (D9)", () => {
-  test("runAll refuses more than one session before reading or writing the project", async () => {
-    const { runAll } = await import("../src/loop")
-    const dir = tempDir()
-    expect(await runAll(dir, { maxSessions: 2 })).toBe(1)
-    expect(readdirSync(dir)).toEqual([])
   })
 })

@@ -590,11 +590,14 @@ export async function executeWhole(
       // prerequisites change are read against it, and the record marks the
       // checklist as the lead's streams.
       await setSplit(planDir, task.id, !opts.dryrun ? await git.unitBaseline(dir) : [], verdict.used)
-      // S5 (plans/0068 D19): under the scheduler the streams run as lanes of
-      // their own — cold starts, no fork of the lead (its agent server dies
-      // with its process); the task pipeline stops at the split (runner's
-      // lead stop). Everywhere else they fork the lead, as they always did.
-      const asLanes = opts.lane !== undefined && opts.parallel !== undefined && !autoSwitches().laneIsolation
+      // S5 (plans/0068 D19; the level half dropped by plans/0125 D5): under
+      // the scheduler the streams run as lanes of their own — cold starts,
+      // no fork of the lead (its agent server dies with its process); the
+      // task pipeline stops at the split (runner's lead stop). Everywhere
+      // else they fork the lead, as they always did. The lane context alone
+      // is the fact (a lane worker is dispatched only by an active scheduler
+      // or the isolation switch, excluded here) — never the level.
+      const asLanes = opts.lane !== undefined && !autoSwitches().laneIsolation
       log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, ${asLanes ? "each as a lane of its own" : "each a fork of the lead"}`)
       return undefined
     }
