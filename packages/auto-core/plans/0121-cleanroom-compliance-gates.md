@@ -24,15 +24,16 @@ new grammar.** The wall stays primary — gates are bounded instruments with gam
 input cut is both cheaper and legally load-bearing; a gate is never argued as license to weaken the wall
 (P12).
 
-The draft then went through the person's review rounds (2026-10-25: two external model reviews, then a
-comprehensive review of the revised draft plus an adjacent marker proposal); the load-bearing
-refinements are woven in below and their full dispositions recorded before the execution schedule.
-The shaping ones across both rounds: the gates are risk screening, never proof (D1); the similarity
-metric cuts both ways — no artificial divergence, justified similarity on the record (D6); remediation
-directives carry their reasoning, stay source-free, and never target the score (D10); coverage runs in
-both directions — contracts must cover the specification, not only the implementation its contracts
-(D8); contract immutability is served by recorded revisions and commit order, not by a lockout
-mechanism (D8, D11).
+The draft then went through the person's review rounds (2026-10-25: two external model reviews, a
+comprehensive review of the revised draft plus an adjacent marker proposal, and the Claude review);
+the load-bearing refinements are woven in below and their full dispositions recorded before the
+execution schedule. The shaping ones across the rounds: the gates are risk screening, never proof
+(D1); the similarity metric cuts both ways — no artificial divergence, justified similarity on the
+record (D6); the dirty side has an owner — the compliance monitor, the notes-side scan, band-shaped
+receipts, the physical tooling wall (D5); remediation directives carry their reasoning, stay
+source-free, and never target a score the sessions cannot see (D10); coverage runs in both directions
+— contracts must cover the specification, not only the implementation its contracts (D8); contract
+immutability is served by recorded revisions and citations, not by a lockout mechanism (D8, D11).
 
 This ruling Derives: **P7** (grammars, never content — the showing: the driver runs declared suites and
 parses receipts, but every judgment above — paradigm conformance, vocabulary hygiene, contract adequacy,
@@ -104,6 +105,14 @@ it as a finding. The clause's target is the concept, not the word: `scheduler`, 
 infrastructure — what the clause forbids is vocabulary whose meaning hangs on the reference's
 particular internal organization. The audit judges smuggled organization, never term matching.
 
+D2 gains D4's mechanical/judgmental split: the driver-side scan runs on the notes themselves at
+spec-read close (D5), where any of the reference's *private* identifiers in a note is a hard finding —
+public specification names are the notes' lawful vocabulary — and a hit is cheap to fix at the source:
+the same leak found in the deliverable three phases later is rework across every unit built on the
+note. The spec-read room may be told the colliding identifier outright (it reads the reference
+lawfully); the committed receipt carries counts and note ids alone — a reference identifier never
+persists in any session-readable document.
+
 Files: `templates/bundles/cleanroom/phases/spec-read.md` (the duty text), the pack's `### spec-read`
 phase-duties block (`templates/bundles/cleanroom/intents/cleanroom.md`), one hygiene sentence in
 `### verify-plan` (the charter's extraction-hygiene enumeration), and a pinning assert (drafted anchor:
@@ -128,7 +137,7 @@ never everywhere a difference could be manufactured: a shape that is also the ra
 target is kept and justified (D6's rule), not mangled for difference.
 
 Files: the pack's `### d design` block, one paragraph in `modes/cleanroom.md` `## exec` (the session-side
-boundary text), and the survey's proposal duty (D5's wave adds the declaration line the person
+boundary text), and the survey's proposal duty (wave 4 adds the declaration line the person
 approves). Shipped text stays generic: "the target platform's declared interfaces"; which interfaces is
 the brief's content, the target's own surface (P16).
 
@@ -171,8 +180,31 @@ monitor role belongs to the driver side of the wall:
   boundary.** The lane table renders into session prompts (`{{laneTable}}` in whole/subtask/fanout), so
   the divergence row's `Command:` is a bare target name (`make divergence-scan`,
   `./scripts/compliance.sh`) whose implementation holds the corpus path — classified in the charter as
-  driver-side compliance tooling: clean-room sessions never read or execute it. A corpus path in any
+  driver-side compliance tooling: clean-room sessions never read or execute it. The wall is physical,
+  not merely textual: the tool, its configuration and the corpus live outside the session-visible tree
+  (a driver-side repository or path); the worktree carries at most a bare stub that invokes the
+  driver-side location and names no corpus path inline; and the target-side acceptance checks
+  reachability — nothing readable from the worktree opens the corpus. A corpus path in any
   session-rendered surface is a wall breach by the gate meant to enforce the wall.
+- **The dirty side has an owner.** Comparing the deliverable with the reference needs someone who may
+  see both, and no clean room can: the audit judges whether a justification record is an adequate
+  design argument, but cannot confirm the flagged similarity is really the protocol-mandated or
+  rational kind the record claims; a clean reader cannot see notes organized after the reference
+  either. The charter names the role — the **compliance monitor** is the person or a driver-side
+  designate they name (traditional clean rooms' monitor; the person already holds it de facto through
+  the exclusion power) — and splits the adjudication: the audit judges the target-side rationale, the
+  monitor confirms what kind of similarity was flagged.
+- **The notes are scanned too.** The instrument's cheap half runs on the specification notes at
+  spec-read close, before contamination spreads (D2's mechanical half) — a note-side hit costs one
+  edit; the same leak in the deliverable costs rework across every unit built on the note.
+- **Receipts are band-shaped, and re-scans are capped.** Source-free is not yet leak-free: over
+  repeated rounds, receipts would teach the clean side which deliverable names collide and which
+  structural changes move a number — an oracle into a reference it never read. So session-rendered
+  receipts and directives name the flagged unit and never the colliding symbol; sessions see coarse
+  risk bands, the exact values staying driver-side for the person and the monitor; and a unit's
+  re-scans are capped (the cap a declared project fact) — past it, the next red escalates to the
+  person instead of opening another fix loop (bounded escalation, P2). A session cannot chase a
+  number it never sees: D10's anti-score rule becomes mechanical, not aspirational.
 - **Screening, not verdict** — a score is a risk flag that triggers adjudication, never an automatic
   plagiarism verdict: similarities can originate in public interfaces, protocol-mandated sequencing,
   shared mathematical constraints, hardware fact, or independent derivation. The tool's declared
@@ -184,18 +216,28 @@ monitor role belongs to the driver side of the wall:
   a **bounded, reviewable scope** — a declared public interface, a named symbol set, a
   protocol-mandated sequence — never a broad silencer: a whole-directory exclusion that greens the
   scan is itself an audit finding, and every exclusion's scope, reason and impact read from the commit
-  that declares it (declaration discipline plus an audit duty, no new tooling).
-- **Staged instrument (P19):** v1 is cheap and high-precision — exported-identifier isomorphism (any
-  exact match with the reference's private symbols fails) plus normalized token-shape overlap; v2
-  structural similarity; cross-language AST/CFG distance only if field evidence demands it. Thresholds,
-  normalization method and exclusion lists are declared project facts (the overlay's row and tooling):
-  strict on names, loose on structure.
+  that declares it (declaration discipline plus an audit duty, no new tooling). Exclusions are written
+  in **target-side terms only** — deliverable paths, unit ids, public specification identifiers — so
+  the list commits in-tree, harmless to clean-room eyes and auditable forever while the
+  corpus-bearing configuration stays out-of-tree; and every entry's reason cites the justification
+  record id that earned it, the two lists one-to-one (D6).
+- **Staged instrument (P19):** v1 is cheap and high-precision — private-identifier matching with the
+  matching method declared in the tool configuration (a minimum length, compound names only, or
+  rarity weighting — common names never flood it into broad exclusions) plus **literal
+  fingerprinting** (string literals and error-message text, unusual numeric constants, lookup-table
+  contents, the ordering of enum variants and struct fields — strong copying indicators,
+  language-independent and cheap to compute; protocol-mandated constants excluded by declaration
+  citing the specification); v2 structural similarity; cross-language AST/CFG distance only if field
+  evidence demands it. Thresholds, matching methods and exclusion lists are declared project facts
+  (the tool's configuration): strict on names, loose on structure.
 - **Receipt granularity starts round-scoped** (the regression lane's own shape). Per-unit divergence
   feedback is deliberately deferred (D11).
 
 The receipts under the regression lane's round-scoped home are the divergence half of the chain of
-custody (P18): each records the flagged unit ids, the measure and its value, the tool's name, version
-and configured scope — reproducible from the recorded line alone — while the full comparison context
+custody (P18): each records the flagged unit ids, the risk band (the exact value driver-side, the
+anti-oracle rule above), the tool's name and version, the target-side scope, and the corpus identity
+as a hash or version — never a path. Reproducible from the recorded line alone, **for the driver**:
+only the driver side holds what the line names, and that is the point. The full comparison context
 stays driver-side with the corpus (D10's source-free rule).
 
 Derives P12, P19, P21, P18, P2, P8.
@@ -224,8 +266,14 @@ manufactured difference.** Three layers hold the line:
 
 The justification record is the evidence layer (the person and the audit read it); the gate layer
 greens only through the tool's declared configuration — a committed surface edit — or a refactor. A
-remediation directive inherits the rule: it demands re-expression against a contract in platform terms
-(D10's grammar), never divergence as such.
+record's weight follows when it was written: the strong form is the design-time rationale D3's duties
+already demand (the design document naming, per concern, the target construct chosen); a justification
+written after the flag has the shape of a rationalization, and the audit reads commit order to tell
+them apart. The linkage is explicit — a justified similarity greens only through an exclusion, so
+every accepted justification becomes an exclusion entry whose reason cites the record's id: the two
+lists stay one-to-one, and neither grows a silent member. A remediation directive inherits the rule:
+it demands re-expression against a contract in platform terms (D10's grammar), never divergence as
+such.
 
 Derives P12 (a metric is evidence, not the thing measured), P7 (adjudication is judgment — the audit's,
 from records), P8 (detection records; the disposition moments stay where they are).
@@ -279,7 +327,10 @@ stated contract, never restated from the implementation they sit beside** — a 
 observed behavior is a contract revision, not a test fix; and **a contract revised mid-implementation
 is a recorded change** — its reason in the task documents, its commit order the evidence (the
 contract's commit precedes the implementation's), which is exactly what the audit's contract-coverage
-dimension reads when it checks the loop ran the right way round. The reviews also proposed a read-only
+dimension reads when it checks the loop ran the right way round. Commit order breaks under squash or
+rebase, so the durable form is the citation: each implementation task's document records the commit
+SHA of the contract it cites — cheap, and it survives history rewrites; the audit reads the SHA
+citations first, commit order as corroboration. The reviews also proposed a read-only
 lockout on contract artifacts enforced at runtime; declined — the driver cannot judge an edit's intent
 (P7) and git history already is the evidence (P18); D11 records the disposition. The verified/unverified
 disclosure the reviews asked for is already the shipped charter's standing rule (`###
@@ -317,7 +368,10 @@ task, its findings in its own `docs/T-NNN/findings.md` — 0120's one-writer rul
 
 The independence dimension gains its adjudication duty: beside the divergence receipts it reads D6's
 justification records — a justified similarity is accepted with its record, an unjustified one is a
-finding; the score is never the verdict. `### verify-plan-audit` gains the contract-coverage
+finding; the score is never the verdict. The labor splits with the compliance monitor (D5): the audit
+judges whether the record is an adequate design argument; the monitor — the person or their
+driver-side designate — confirms what kind of similarity the flag actually names; the audit's half
+never needs the corpus. `### verify-plan-audit` gains the contract-coverage
 requirement and the **one carve-out** to its "re-run, never cite" rule: driver-run divergence receipts
 are cited and adjudicated, never re-executed — audit sessions are clean rooms; they never see the
 corpus, and the divergence lane is the single class of evidence the audit takes on the driver's record
@@ -334,13 +388,20 @@ code, a diff, or a close paraphrase, the remediation channel would carry GPL str
 clean room — the gate breaching the wall it guards. The rule, authored into the pack (no new subsection
 name, P13 — it rides the existing blocks): compliance findings — divergence receipts, fix directives,
 audit findings that cite divergence — **name ids, scores and structural directives only**, never
-excerpts, diffs or paraphrases of either side.
+excerpts, diffs or paraphrases of either side. The scope includes **the person's pen**: whatever the
+person writes into session-visible surfaces — brief approvals, pack edits, exclusion entries, answers
+relayed into task documents, review comments — obeys the same rule; the person sees both sides and
+holds the exclusion power, and is therefore the most likely carrier, precisely because the wall
+trusts them. And source-free is necessary but not sufficient: a source-free channel can still teach
+the reference's shape one collision at a time, which is why receipts are band-shaped and re-scans
+capped (D5).
 
 But a bare transform ("recursion → iteration") invites the mechanical shuffle the reviews warn about —
 a syntax change that leaves the copied shape underneath, or degrades a sound design to move a number.
 So a remediation directive carries three parts, all source-free:
 
-1. **the finding** — the target unit/function id, the measure and its value, the risk class;
+1. **the finding** — the target unit/function id, the risk class, the risk band (the exact value
+   stays driver-side, D5's anti-oracle rule);
 2. **the required reasoning** — the design decision to re-evaluate, cited by its own surfaces: the
    contract id the slice claims, the platform constraint in the target's terms, the paradigm rule
    invoked — never reference content;
@@ -397,7 +458,7 @@ is charter text), P12 (uncertain readings resolve toward not-carrying).
 - **No in-repo synthetic end-to-end fixture suite** (proposed in the review round). The
   detection→blocking→directive→re-validation loop's blocking half is the regression lane's hold,
   already mechanism-tested (0098's suites); re-testing it under a differently-named row duplicates
-  coverage. What is added instead: the wave-3 pin that the example rows parse (D7), and the
+  coverage. What is added instead: the wave-4 pin that the example rows parse (D7), and the
   target-side tool acceptance in the follow-up section — synthetic fixture pairs and the red-path
   smoke.
 - **Per-unit divergence granularity deferred.** Round-scoped (the regression lane's shape) is v1.
@@ -433,7 +494,7 @@ The load-bearing points and where each landed:
    from contracts; revisions recorded with commit-order evidence); the lockout machinery declined with
    the replacement recorded in D11.
 6. **Synthetic end-to-end fixtures in-repo** (both) — declined as duplicating the regression-lane
-   hold's coverage (D11); replaced by the wave-3 uncommented-rows pin and the target-side tool
+   hold's coverage (D11); replaced by the wave-4 uncommented-rows pin and the target-side tool
    acceptance (synthetic fixture pairs, the red-path smoke).
 7. **Verified/partially-verified/unverified scope disclosure in acceptances** (ChatGPT) — already the
    shipped charter's standing rule in `### verify-plan-test`/`### verify-plan-audit`; no change.
@@ -467,12 +528,38 @@ The load-bearing points and where each landed:
 10. **The `CLEAN-*` marker protocol proposal** — out of scope, deferred with its ties recorded in
     D11 (P13 lockstep, source-free, taken up on field evidence).
 
-## Execution schedule (five waves, one session each, always green)
+### Round 3 (2026-10-25, the Claude review — approved with changes made before wave 1)
+
+1. **No one owns the dirty side** — accepted into D5 (the compliance monitor named in the charter:
+   the person or a driver-side designate; the adjudication split — the audit judges the rationale,
+   the monitor confirms the similarity kind) and D10 (the person's pen under the source-free rule),
+   with D9 carrying the split's audit half.
+2. **Run the scan on the spec notes, not only the deliverable** — accepted into D5/D2 (the notes-side
+   identifier scan at spec-read close; the spec-read room may be told the identifier, the committed
+   receipt never carries one).
+3. **Source-free feedback is still an oracle** — accepted into D5/D10 (band-shaped receipts, the
+   colliding symbol never named to clean rooms, capped re-scans escalating to the person — the
+   anti-score rule made mechanical).
+4. **The tooling wall rests on text alone** — accepted into D5 (corpus, configuration and tool
+   out-of-tree; the worktree stub names no corpus path; exclusions in target-side terms committed
+   in-tree; reachability checked at acceptance).
+5. **The v1 instrument is miscalibrated** — accepted into D5 (a declared matching method instead of
+   per-symbol exclusions for common names; literal fingerprinting replacing token-shape overlap —
+   language-independent and cheap).
+6. **Justifications written after a flag are weaker evidence** — accepted into D6 (commit-order
+   weighting; every accepted justification one-to-one with its exclusion entry) and D8 (contract SHA
+   citations surviving squash/rebase).
+7. **Wave 1 was not one ingredient** — accepted: the schedule splits it (six waves), and the
+   repair-diet pin is noted as exercising nothing until the lane wave lands.
+8. **Receipt fields** — accepted into D5 (target-side scope; the corpus identity a hash or version,
+   never a path; reproducible for the driver alone).
+
+## Execution schedule (six waves, one session each, always green)
 
 Sequencing discipline: one ingredient per wave; asserts and their text land in the same wave
 (lockstep, P13); each wave ends green and interruptible; the person commits at the wave boundary.
-This document and its INDEX row land with wave 1 (the same-change rule; committing them ahead of the
-text waves is equally legal if the person prefers). Tests after any template/prompt change, per the
+This document and its INDEX row landed ahead of the waves (the ruling commits, the same-change rule
+satisfied there); the six text waves land separately. Tests after any template/prompt change, per the
 package conventions: `bun typecheck`, then `bun test` — at minimum `test/prompt-exec.test.ts
 test/prompt-phase.test.ts test/prompt-template.test.ts` plus each wave's named suites; the shipped
 bundles' self-ratchet renders the pack through its own asserts, so a new pin that outruns its text
@@ -481,53 +568,62 @@ fails immediately.
 Evidence has layers, and no wave is asked to prove them all: prompt asserts prove a rule was not
 deleted; parse tests prove the grammar and the floor; the target-side smoke proves blocking, exclusion
 and repair actually engage; only real rounds' receipts prove field behavior. Each wave adds its layer,
-and wave 5 checks the correspondence across this matrix — an execution and acceptance checklist,
+and wave 6 checks the correspondence across this matrix — an execution and acceptance checklist,
 never a mechanism:
 
 | core requirement | primary homes | closing evidence |
 |---|---|---|
-| reference isolation | the charter's corpus clause, spec-read hygiene, D5's driver-side tooling rule | the wall pins (round 1); the target smoke's corpus-never-rendered check |
+| reference isolation | the charter's corpus clause, spec-read hygiene, D5's driver-side tooling rule | the wall pins (round 1); the target smoke's corpus-never-rendered and corpus-not-reachable checks |
 | platform adaptation | the brief's platform contract, the design duties, the mode's exec text | the design docs' per-concern construct naming; the audit's paradigm dimension |
 | contract-first | the design duties, `Depends:` fields, the implementation duties | contract-before-implementation commit order; the audit's contract-coverage dimension |
 | similarity risk handling | the lane table, receipts, repair, audit | red-blocks-close and bounded-exclusion checks (the target smoke); the source-free directive pins |
 | independent audit | the audit dimensions, findings documents, verdict | the round-2 dimension pins; the verdict gate, untouched |
 
-**Wave 1 — the wall clauses and spec hygiene (D1, D2, D5's charter clauses, D6's charter sentences,
-D10).**
-`templates/bundles/cleanroom/intents/cleanroom.md`: the `### verify-plan` corpus-and-tooling clause
-(driver-side compliance tooling, outside the platform boundary, never read or executed by clean-room
-sessions) plus the two-sided metric sentences (screening never verdict; artificial divergence is the
-same defect), all in D1's risk-reduction framing; the extraction-hygiene fourth clause (infra-shaped
-vocabulary, the concept never the word); the `### repair`
-source-free three-part finding diet. `templates/bundles/cleanroom/phases/spec-read.md`: the
-vocabulary-hygiene duty. Asserts: the D2 pin plus a pin on the corpus clause. This document + its
-INDEX row ride this wave's commit. Green: full `bun test` (the boundary-sentence pin in
+**Wave 1 — the wall and hygiene clauses (D1, D2, D5's corpus/tooling/monitor clauses).**
+`templates/bundles/cleanroom/intents/cleanroom.md`: the `### verify-plan` corpus-and-tooling clause —
+the compliance monitor named (the person or their driver-side designate), the corpus, configuration
+and tooling physically out-of-tree with the worktree stub naming no corpus path, the notes-side scan
+at spec-read close — all in D1's risk-reduction framing; the extraction-hygiene fourth clause
+(infra-shaped vocabulary, the concept never the word).
+`templates/bundles/cleanroom/phases/spec-read.md`: the
+vocabulary-hygiene duty. Asserts: the D2 pin plus a pin on the corpus clause. Green: full `bun test`
+(the boundary-sentence pin in
 `test/charter-clamp.test.ts` is untouched — additive sentences after it; `test/intent-guarantees.test.ts`
 anchors unchanged).
 
-**Wave 2 — paradigm and contract duties (D3, D4's text, D8's text).**
+**Wave 2 — the metric and repair charter text (D5's screening/band/cap sentences, D6's charter
+sentences, D10).**
+The pack's `### verify-plan` two-sided metric sentences (screening never verdict; artificial
+divergence the same defect; bands not values; re-scans capped with escalation to the person); the
+`### repair` source-free three-part finding diet with the person's-pen sentence. Asserts: the
+metric-sentence pins (the repair pin holds text the lane wave — wave 4 — makes operative: pin first,
+exercise later, legal and noted). Green: the prompt suite.
+
+**Wave 3 — paradigm and contract duties (D3, D4's text, D8's text).**
 The pack's `### d design` (contract artifacts, the per-concern target-construct naming, the
 re-expression section, the justified-similarity record practice), `### m implementation` (the
 slice-cites-its-contract rule), `### decompose` / `### self-check-*` lines, the `### verify-plan-test`
 property-coverage sentences; `modes/cleanroom.md` `## exec` (the paradigm/platform paragraph). Asserts:
 the D4 pin. Green: the prompt suite plus `test/intent-guarantees.test.ts`.
 
-**Wave 3 — the lane table and the declarations (D5, D7, D8's lanes).**
+**Wave 4 — the lane table and the declarations (D5, D7, D8's lanes).**
 The pack's `### test-lanes` comments-only section with the five example rows (the divergence row a
-regression-cost row, its Command a bare target name); `phases/survey.md` (the proposal duty: lane rows,
-corpus location, platform contract); `modes/cleanroom.md` `## init` (the declarations a cleanroom
-project owes). Tests: the floor pins in `test/bundle.test.ts` — the shipped pack parses to `undefined`
+regression-cost row, its Command a bare target name; the divergence tool's configured scope including
+the specification notes, the spec-read close running it like any phase close); `phases/survey.md`
+(the proposal duty: lane rows, corpus location, platform contract); `modes/cleanroom.md` `## init`
+(the declarations a cleanroom project owes). Tests: the floor pins in `test/bundle.test.ts` — the
+shipped pack parses to `undefined`
 and the uncommented example rows parse (the divergence row regression-cost, bare command);
 `test/lane-table.test.ts` untouched (grammar unchanged). Green: `bun test`.
 
-**Wave 4 — the audit dimensions (D9).**
+**Wave 5 — the audit dimensions (D9).**
 `templates/bundles/cleanroom/phases/audit.md` and the pack's `### audit` (the two new dimensions); the
 independence dimension's justification-record adjudication; `### verify-plan-audit` (contract coverage;
 the divergence-receipt carve-out; the source-free three-part directive sentence). Asserts: the D9 pins.
 Green: the prompt suite; `test/round-gates.test.ts` (the verdict gate is untouched — the Result-line
 rule stands verbatim).
 
-**Wave 5 — records and the closing read.**
+**Wave 6 — records and the closing read.**
 `AGENTS.md` navigation: extend the intent/bundle line (and the manual-suite line only if wave
 inspection found a touchpoint — none is expected) with the 0121 pointer. Full `bun typecheck` + `bun
 test`; read the materialized surface once through `init --intent` in a scratch directory (the bundle
@@ -541,7 +637,9 @@ brief, and stages the v1 instrument (identifier isomorphism + token shape). The 
 a **delivery condition before the first live round**, not an optional follow-up: two synthetic fixture
 pairs — one that must flag (a colliding identifier/structure pair) and one that must pass clean (a
 benign pair: public-interface terms, protocol-mandated sequencing); the red-path smoke — a scratch
-project's declared lane exiting 1 blocks its phase close; and the exclusion check — the person's
+project's declared lane exiting 1 blocks its phase close; the exclusion check — the person's
 bounded exclusion (with its recorded reason) clears its own finding, greens the lane, and exempts
-nothing else: an exclusion that also silences the benign fixture fails acceptance. The first rounds'
-receipts are the evidence D11's revisit triggers read.
+nothing else: an exclusion that also silences the benign fixture fails acceptance; and the
+reachability check — nothing readable from the worktree opens the corpus: read the stub and
+everything it names, and no path resolves to corpus content. The first rounds' receipts are the
+evidence D11's revisit triggers read.
