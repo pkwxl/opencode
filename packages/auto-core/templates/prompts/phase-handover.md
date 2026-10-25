@@ -21,8 +21,8 @@ actual docs/ artifacts as the main input; no need to look for a task index.
 ## Input (read-only)
 
 - This phase's task list and execution trail: this phase directory's task index tasks.md and the tasks it lists,
-  docs/T-NNN/ (done.md is the task content, plus artifacts such as report.md; if this phase has no task index, skip
-  this item and go by this phase's actual docs/ artifacts instead);
+  docs/T-NNN/ (done.md is the task content, plus the task's own artifacts and the verification's report.md; if
+  this phase has no task index, skip this item and go by this phase's actual docs/ artifacts instead);
 - This phase's docs/ artifacts and this round's round directory docs/R-NN/; upstream phases' handover documents are
   at their own phase directory's handover.md (a permanent path);
 - Phase index: this round's round directory's phases.md (docs/R-NN/phases.md).

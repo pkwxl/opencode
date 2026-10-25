@@ -184,4 +184,20 @@ describe("unitArtifactSpecs", () => {
     unitArtifactSpecs(phaseType("analysis")!.taskArtifacts, "docs/T-009")
     expect(phaseType("analysis")!.taskArtifacts.map((spec) => spec.path)).toEqual(before)
   })
+
+  // The phase-document contract (plans/0124 D4): the builtin registry is
+  // held to the same reservation the custom-type parser enforces
+  // (src/phases/custom.ts artifactList's reserved lists) — no builtin
+  // phase's declared artifact names a driver-owned file. report.md and
+  // gaps.md belong to the verification child alone (0120); the rest of the
+  // reserved names are the driver's own writes. The registry is authored
+  // in src, so the guard is a pin here, never a runtime parser (P21).
+  test("no builtin artifact name is driver-owned (plans/0124)", () => {
+    const reservedPhase = ["todo.md", "done.md", "tasks.md", "handover.md", "acceptance.md"]
+    const reservedTask = ["todo.md", "done.md", "subtasks.md", "context.md", "shared.md", "report.md", "gaps.md", "handoff.md", "testhandoff.md"]
+    for (const entry of BUILTIN_PHASE_TYPES) {
+      for (const spec of entry.phaseArtifacts) expect(reservedPhase, `${entry.type} phase artifact ${spec.path}`).not.toContain(spec.path)
+      for (const spec of entry.taskArtifacts) expect(reservedTask, `${entry.type} task artifact ${spec.path}`).not.toContain(spec.path)
+    }
+  })
 })

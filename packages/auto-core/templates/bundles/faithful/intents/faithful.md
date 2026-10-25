@@ -50,9 +50,11 @@ do not contradict each other or the behavior baseline) is a closing item of its 
 vertical thin slices first, one observable behavior end to end per item, not horizontal
 layers; the reference implementation is the working input: its structure, naming and
 invariants carry over unless a deliberate divergence is recorded as a deviation in the task
-documents; each item declares the source files it changes plus its task report, and the
-check that proves the behavior it implements holds to parity; the tree stays consistent when
-an item completes — it compiles and existing checks do not regress.
+documents; each item declares the source files it changes and the check that proves the
+behavior it implements holds to parity — a document deliverable carries its own name, and
+`docs/T-NNN/report.md` is never one (the verification child's wrap-up report, reserved);
+the tree stays consistent when an item completes — it compiles and existing checks do not
+regress.
 
 ### t testing
 

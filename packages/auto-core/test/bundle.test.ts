@@ -265,6 +265,34 @@ describe("bundle sources", () => {
     }
   })
 
+  // The phase-document contract (plans/0124): every shipped phase type
+  // declares its task documents in the one grammar — `Task-artifacts:`,
+  // consumed by the formulation's seeded obligation rows — and the packs'
+  // implement-phase item criteria defer to it: report.md is the
+  // verification child's alone (0120's reservation), never an item's
+  // declared artifact. The 0120 enactment enumerated the incident's
+  // surfaces alone and missed these same-family copy sites; this pin holds
+  // the whole family (the 0123 category-scope discipline's first fruit).
+  test("the shipped family declares its task documents and the implement criteria reserve report.md (plans/0124)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    const audit = bundle.types.find((entry) => entry.type === "audit")!
+    expect(audit.phaseArtifacts.map((spec) => spec.path)).toEqual(["audit.md", "verdict.md"])
+    expect(audit.taskArtifacts.map((spec) => spec.path)).toEqual(["findings.md"])
+    const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
+    expect(specRead.phaseArtifacts.map((spec) => spec.path)).toEqual(["spec-notes.md"])
+    expect(specRead.taskArtifacts.map((spec) => spec.path)).toEqual(["notes.md"])
+    expect(specRead.planDuties).toContain("`notes.md` in its own task directory")
+    for (const name of ["cleanroom", "faithful", "faithful-lean"]) {
+      const shipped = await resolveIntentBundle(name)
+      const pack = parseIntentFile(name, shipped![`intents/${name}.md`]!)
+      const m = packSubsection(pack, "phaseDuties", "m")!.replaceAll("\n", " ").replace(/  +/g, " ")
+      expect(m).toContain("a document deliverable carries its own name")
+      expect(m).toContain("`docs/T-NNN/report.md` is never one (the verification child's wrap-up report, reserved)")
+      expect(m).not.toContain("plus its task report")
+    }
+  })
+
   // The lane table ships as the floor (plans/0121 D7): comments-only in the
   // shipped pack, so a project declaring no lanes is byte-identically
   // unaffected; the comments teach the shape with the five example rows a

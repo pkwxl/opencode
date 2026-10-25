@@ -613,5 +613,10 @@ describe("manual-driver prompt ratchet", () => {
     expect(text("run-plan.md")).toContain("`docs/T-NNN/report.md` is a reserved name")
     expect(text("run-task.md")).toContain("One name in that directory is reserved")
     expect(text("plan-append.md")).toContain("the verification's wrap-up report, reserved")
+    // 0124 D3: the handover survey's read-side enumeration names the report
+    // as the verification's, never as a task-artifact example.
+    const runHandover = text("run-handover.md").replaceAll("\n", " ").replace(/  +/g, " ")
+    expect(runHandover).toContain("plus the task's own artifacts and the verification's report.md")
+    expect(runHandover).not.toContain("artifacts such as report.md")
   })
 })

@@ -3,6 +3,7 @@
 Gate: verdict
 Reasoning: deep
 Phase-artifacts: audit.md verdict.md
+Task-artifacts: findings.md
 
 ## plan duties
 

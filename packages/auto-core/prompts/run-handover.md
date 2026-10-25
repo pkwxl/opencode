@@ -13,8 +13,9 @@ commits, the same role split run-verify's close-out has for tasks).
 ## The handover document
 
 Survey this phase's work in full, read-only: the phase directory's task index `<phase dir>/tasks.md` and the
-tasks it lists (`docs/T-NNN/` — done.md is the task content, plus artifacts such as report.md), this phase's
-docs/ artifacts, the round directory `docs/R-NN/`, and the phase index `docs/R-NN/phases.md`. Then distill
+tasks it lists (`docs/T-NNN/` — done.md is the task content, plus the task's own artifacts and the
+verification's report.md), this phase's docs/ artifacts, the round directory `docs/R-NN/`, and the
+phase index `docs/R-NN/phases.md`. Then distill
 into `<phase dir>/handover.md` the knowledge that needs to carry across phases — distill only: no
 implementation, no modification of any existing artifact, no one-off process detail or transient state; each
 piece of information's admission bar is "the next phase can use this". The recipient is <next target>: when

@@ -46,8 +46,9 @@ Document placement is anchored to tasks: each task's document artifacts go into 
 (subtask artifacts included, at docs/T-NNN/S<two-digit index>/index.md); once a path is created it is permanent and
 does not move with the phase/round.
 
-- Complete the implementation work; artifacts are the source-code changes plus the task reports under
-  docs/T-NNN/.
+- Complete the implementation work; artifacts are the source-code changes and documents carrying their
+  own names under docs/T-NNN/ — never docs/T-NNN/report.md, the verification child's reserved wrap-up
+  report.
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content,

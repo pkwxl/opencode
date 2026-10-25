@@ -120,8 +120,9 @@ Test lanes (this project's suites — the table below, declared in the intent pa
 
 ## plan-duties-m
 
-- Complete the implementation work; artifacts are the source-code changes plus the task reports under
-  docs/T-NNN/.
+- Complete the implementation work; artifacts are the source-code changes and documents carrying their
+  own names under docs/T-NNN/ — never docs/T-NNN/report.md, the verification child's reserved wrap-up
+  report.
 
 ## plan-duties-t
 

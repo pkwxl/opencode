@@ -52,9 +52,11 @@ remove legacy debt deliberately — vertical thin slices first, one observable b
 end per item, not horizontal layers; external behavior is preserved exactly as the behavior
 baseline records it, while internal design is free: rebuild, rename, restructure, and never
 preserve internals for their own sake; each removal of legacy names what it removes and why
-in the task documents; each item declares the source files it changes plus its task report,
-and the check that proves the external behavior it carries still holds; the tree stays
-consistent when an item completes — it compiles and existing checks do not regress.
+in the task documents; each item declares the source files it changes and the check that
+proves the external behavior it carries still holds — a document deliverable carries its
+own name, and `docs/T-NNN/report.md` is never one (the verification child's wrap-up report,
+reserved); the tree stays consistent when an item completes — it compiles and existing
+checks do not regress.
 
 ### t testing
 

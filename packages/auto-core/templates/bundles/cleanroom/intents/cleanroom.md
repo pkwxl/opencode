@@ -149,9 +149,11 @@ written down.
 
 4. Splitting and artifact criteria for this phase: implement the specification — vertical
 thin slices first, one observable behavior end to end per item, not horizontal layers;
-each item declares the source files it changes plus its task report, and the check that
-proves the behavior it implements (a build, a targeted test, or a black-box acceptance
-step); the tree stays consistent when an item completes — it compiles and existing
+each item declares the source files it changes and the check that proves the behavior it
+implements (a build, a targeted test, or a black-box acceptance step) — a document
+deliverable carries its own name, and `docs/T-NNN/report.md` is never one (the
+verification child's wrap-up report, reserved); the tree stays consistent when an item
+completes — it compiles and existing
 checks do not regress; where the specification is silent, take the minimal behavior
 consistent with the public interfaces and record the assumption in the task documents.
 Each vertical slice cites the contract it satisfies — and the property that proves it
