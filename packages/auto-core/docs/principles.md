@@ -2,7 +2,7 @@
 
 This is the design constitution of the auto tool family: the ruled set of principles every design decision in `plans/NNNN` derives from, and the frame that governs how the set itself changes. It compresses the plans corpus (0001–0109, baselined `pre`) into one positioning statement, six constitutional principles, thirteen operating principles and two registers — every entry carrying its provenance and code homes, so a reader can check the ruling rather than trust the summary. Concrete requirements (formats, grammars, exit codes, thresholds, security mechanics) are not here: they live with their mechanisms, and the tier test keeps them out. The plans corpus remains the detail record; this document is the ruling surface.
 
-Current as of release v0.2.0. The plans corpus before this initiative is baselined `pre`.
+Current as of release v0.3.0. The plans corpus before this initiative is baselined `pre`.
 
 ## 0. The positioning statement
 
@@ -443,6 +443,8 @@ Ids are never reused — P13's own discipline: a tombstoned id never returns wit
 - Every ruling also states the tier it touches (constitutional / operating / requirement).
 
 Rulings may derive from more than one principle (name each); a documented tension between two principles is a ruling's material, never an excuse to skip the derivation. Answering a boundary question starts from this document, not from a corpus search.
+
+**The category scope.** A requirement enters through its family, never through the surfaces an incident happened to touch (amended at v0.3.0 by plans/0123, from the measured aftermath of plans/0120: a principled ruling enacted surface-enumerated, leaving six same-family surfaces teaching against it). Every requirement-bearing ruling document carries a **Category scope** section: the requirement family named in one line, then the family's home-set enumerated at ruling time — every surface that carries, declares, or teaches the family — each home marked changed by this ruling, consistent and untouched (with reason), or deliberately deferred (with reason and the deferral's home). The section is written before the enactment (it is the measuring step, not the changelog); the enactment is complete against the enumeration, and an enactment touching a proper subset of its own enumeration is an audit finding at the next release. Enumerating where a boundary answer lives is measurement — the evidence rule (P19) applied to the corpus itself; the operative intake procedure for this repository's sessions lives in AGENTS.md's development conventions.
 
 **The red-flag rule.** A ruling that matches no principle is a red flag to resolve **before** landing: either the constitution is incomplete (fix the set, in the same change) or the ruling is drift (fix the ruling).
 

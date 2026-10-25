@@ -86,3 +86,43 @@ The plans/0111 audit-findings ruling round lands: the 0110 stage-4/5 audit findi
 - **F5 — routed**: the shells' own docs at their next snapshot refresh; core unchanged.
 
 **Version practice.** Documentation-layer: package version untouched; the `v0.2.0` git tag was cut by the maintainer on 2026-10-21, pointing at this release's commit (the `v0.1.0` tag likewise, at the constitution-landing commit).
+
+## v0.3.0 — 2026-10-25 — the intake amendment and thirteen ruled programs
+
+Thirteen rulings since v0.2.0 ship together. A minor release — new opt-in mechanisms and Tier II default changes in the set; **no Tier I amendment, no breaking contract change** (the determination below, said so in words per the pre-1.0 clause). The release's own center: the governance amendment plans/0123 ruled 2026-10-25 from the measured aftermath of plans/0120 (a principled ruling enacted surface-enumerated), its constitution half gated to this cut by the change-control rule.
+
+**Principles deltas.** No P-id added, demoted or merged. **Tier II amendment (How to rule):** the section gains **the category scope** (0123) — a requirement enters through its family; every requirement-bearing ruling carries a Category scope section (the family named, the home-set enumerated at ruling time, each home changed/held/deferred with reason, written before the enactment; a proper-subset enactment of its own enumeration an audit finding at the next release). The operative intake procedure lives in AGENTS.md's development conventions (this repository's layer, landed with the ruling); the stamp moves to v0.3.0.
+
+**Tier II default changes.**
+
+- **0113** — `OPENCODE_AUTO_PLAN_VERIFY` default off (previously on); when on, it rides the deep `phase-plan` route only, never the classifier entry.
+- **0114** — a covered round never reads config `phases`: under a released roadmap the reshape channel is the roadmap line alone (the grammar's split home `src/roadmap.ts`).
+
+**Mechanisms added.**
+
+- **0115** — the round-brief proposal channel: a released `### R-NN` subsection under `## Round briefs` of `docs/analysis.md` installs verbatim as the round's round.md; a hand-written round.md never clobbered (`src/round-brief.ts` + `src/analysis.ts`).
+- **0116** — the clarify command: the person's release act as one command (`clarifyGate` writes the whole-line `Clarified: yes`, the release commit `Auto-Stage: clarify`, the refusal matrix; flagless) (`src/clarify.ts` + the shell's row).
+- **0117 / 0118** — the manual suite's `single` run mode (the no-child-platform shape: whole-session wall, self-verification) and the notification wait (a running child's output never read, the wall keyed to clock arithmetic) (`prompts/`).
+- **0122** — the root-symlink external_directory allows: init stamps, fix keeps them in sync, stale entries report-only; no root symlinks is the byte-identical floor (`src/external-dirs.ts`).
+- **0112** — the general shell's docs refresh, F5's landing (constitution-family pointers in the shell AGENTS.md; the README's consolidated security-posture section) — the shell package, no core change.
+
+**Ruled defect fixes.**
+
+- **0119** — the destination scan reads git's modified view (ruled from the cleanroom OOM: the run of driver commits back from HEAD plus the uncommitted state; 0108's every-tracked-line derivation retired, its destination scoping standing).
+- **0120 + 0124** — the report reservation and the phase-document contract: `report.md` is the verification child's alone, every task deliverable carrying its own name; the declared grammar completed (`Task-artifacts:` declarations, the packs and session templates deferring, the registry guarded) — 0124 closing the category-incomplete leftovers of 0120, the very incident 0123 was ruled from.
+
+**Data.** **0121** — the cleanroom bundle's compliance gates: the driver-side divergence lane, the two audit dimensions (paradigm conformance, contract coverage), the source-free remediation diet, the lane table's comments-only floor (`templates/bundles/cleanroom/`; materialized targets through `sync`).
+
+**Tombstones: none.**
+
+**Breaking-change determination (pre-1.0, in words).** Candidates examined: 0113's default flip (a switch default, floor-preserving — the off state is the historical floor); 0114's supersession (conditional on a released roadmap; the config key remains valid, un-read in the covered state); 0119's derivation change (a ruled defect fix; the scan's contract — person-committed content never the migration's ledger — unchanged). **None is a breaking contract change.**
+
+**Re-keyed surfaces.** Amended: `docs/principles.md` (the category-scope paragraph, the stamp → v0.3.0), `docs/releases.md` (this section), `plans/INDEX.md` (the thirteen cells close with v0.3.0), `docs/glossary.md` (the 类别范围 / Category scope row). Every `plans/NNNN-*` original untouched.
+
+**Traceability audit.** No new principles; rule→principle: the thirteen rows carry their P-ids, code homes and test homes (verified at each landing); principle→code: unchanged since v0.2.0 beyond the mechanisms above, each named in its ruling. **The family-consistency check (0123 D3, first application — post-0123 rulings = 0124 alone): passed** — 0124's Category scope table enumerates sixteen homes, each changed or explicitly held in its landing commit (`1f47b31a1`).
+
+**Falsification replay — passed.** Run at the cut (2026-10-25) by a fresh child holding the amended `docs/principles.md` alone, plans closed: Q1 (the category-defect shape — a ruling enacted on three of nine family surfaces) answered as the category-scope defect under P5 (surfaces teaching against each other, dual homes drift) and P19 (acting on an unenumerated subset is ruling without measurement), caught at the next release's principle→code audit, prevented by the Category scope section written before the enactment — 0123's ruling reproduced. Q2 (the work session writing findings into the verifier's report file) answered under P3 (the verdict's author must be the fresh-eyes session; a work session writing the verdict's home risks the Result line riding the worker's narrative) and P5 (one home one writer; dual writers race), the remedy each writer its own home, deliverables carrying their own names — 0120's ruling reproduced. The amendment disturbed no pre-existing derivation.
+
+**Findings disposition.** None new. F1–F8 remain closed (v0.1.0/v0.2.0); **F5 fully consumed** — 0112 is the routed landing the v0.2.0 record named. The family-consistency check accrues with future rulings from this release forward.
+
+**Version practice.** Documentation-layer record; the package version stays untouched (the spine is the design axis); the `v0.3.0` git tag is the maintainer's act at this release's commit, as with v0.1.0 and v0.2.0.
