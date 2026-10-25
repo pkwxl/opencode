@@ -129,6 +129,36 @@ re-runs the verification that produced the finding; it touches nothing the findi
 not name. Repair never re-architects: the minimal change that makes the specified
 behavior hold is the whole task.
 
+Compliance findings — divergence receipts, their fix directives, audit findings that
+cite divergence — obey a stricter diet: they name ids, risk bands and structural
+directives only, never excerpts, diffs or paraphrases of either side. A remediation
+channel that quoted reference content would carry the reference back into the clean
+room — the gate breaching the wall it guards. The person's pen obeys the same rule:
+whatever the person writes into session-visible surfaces — brief approvals, pack
+edits, exclusion entries, answers relayed into task documents, review comments —
+carries no reference content either; the person sees both sides and holds the
+exclusion power, and is therefore the most likely carrier, precisely because the
+wall trusts them.
+
+A compliance directive carries three parts, all source-free:
+
+1. the finding — the target unit or function id, the risk class, the risk band (the
+   exact value stays driver-side);
+2. the required reasoning — the design decision to re-evaluate, cited by its own
+   surfaces: the contract id the slice claims, the platform constraint in the
+   target's terms, the paradigm rule invoked — never reference content;
+3. the acceptance — the behaviors, invariants and suites that must hold unchanged
+   and be re-run when the refactor lands.
+
+A compliance directive names what to re-argue, never the transform to apply. The
+fix task's acceptance is the ordered re-argument: re-examine the contracts the unit
+claims, re-argue the design against the platform's abstractions, change the design
+where the argument fails — never a syntax swap alone — re-run the suites, and
+record the justification of any residual rational similarity.
+A lowered score is not an acceptance condition: the score says whether the risk
+moved, and endless score-chasing refactoring is the failure mode the two-sided
+metric rule exists to prevent.
+
 ### process-references
 
 Process documents are the DRIVER's record of this work — .auto/ and the task, round and
@@ -165,6 +195,11 @@ phase-plan(audit): must "verdict.md", "Result: PASS"
 phase-plan(m): must-not "code migration"
 whole: must "Clean-room boundary"
 subtask: must "Clean-room boundary"
+plan-verify: must "never an automatic plagiarism verdict"
+plan-verify: must "the same defect wearing the other coat"
+plan-verify: must "coarse risk bands", "re-scans are capped"
+fix: must "the gate breaching the wall it guards"
+fix: must "lowered score is not an acceptance condition"
 
 ### verify-plan
 
@@ -220,6 +255,43 @@ specification names are the notes' lawful vocabulary; the spec-read room may be
 told the colliding identifier outright, for it reads the reference lawfully; and
 the committed receipt carries counts and note ids alone — a reference identifier
 never persists in any session-readable document.
+
+A divergence score is screening, never a verdict: a risk flag that triggers
+adjudication, never an automatic plagiarism verdict — similarities can originate
+in public interfaces, protocol-mandated sequencing, shared mathematical
+constraints, hardware fact, or independent derivation. The tool's declared
+configuration excludes what is public or protocol-mandated by declaration; what
+remains flagged flows to the audit's independence dimension as a finding carrying
+its justification record. The only exits from a red receipt are two: a refactor
+that genuinely re-expresses, or a person-declared exclusion on the committed tool
+configuration with its recorded reason — there is no agent-side waiver, and the
+audit adjudicates but cannot green the lane. An exclusion is a bounded,
+reviewable scope — a declared public interface, a named symbol set, a
+protocol-mandated sequence — written in target-side terms only, never a broad
+silencer: a whole-directory exclusion that greens the scan is itself an audit
+finding.
+
+The metric cuts both ways: beside this charter's rule that structural
+resemblance beyond the specified contracts is a defect, divergence manufactured
+to lower a score is the same defect wearing the other coat. What is prohibited
+is structural inheritance without independent justification, not the
+coincidental alignment of rational designs; what is required is target-platform
+adaptation, not manufactured difference. Structural similarity that is
+unavoidable — protocol-mandated sequencing, shared mathematical constraints,
+hardware fact, or the shape that is simply the rational design in the target too
+— is justified in the task documents, and adjudicated from the justification
+records, never the score alone. A justification's weight follows when it was
+written: the strong form is the design-time rationale; a justification written
+after the flag has the shape of a rationalization, and commit order tells them
+apart.
+
+Source-free is not yet leak-free: over repeated rounds, receipts would teach the
+clean side which deliverable names collide. Session-rendered receipts and
+directives name the flagged unit and never the colliding symbol; sessions see
+coarse risk bands, the exact values staying driver-side for the person and the
+compliance monitor; and a unit's re-scans are capped — the cap a declared
+project fact — past it, the next red escalates to the person instead of opening
+another fix loop. A session cannot chase a number it never sees.
 
 ### verify-plan-test
 

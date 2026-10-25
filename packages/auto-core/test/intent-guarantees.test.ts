@@ -1,7 +1,8 @@
 // The bundle self-ratchet (plans/0080 §7, T-141): for every built-in intent
 // bundle, render the prompts its workflows compose — each phase's phase-plan
 // prompt (renderPhasePlan with planDutyText over the bundle's own pack), the
-// whole-task, subtask and wrap-up prompts — and evaluate them against the
+// whole-task, subtask, wrap-up, fix and plan-verify prompts — and evaluate
+// them against the
 // bundle's own declared asserts (parseGuaranteeAsserts + guaranteeViolation):
 // every applicable assert holds. The render exit runs the same gate
 // (renderPrompt throws PromptGuaranteeError), so the renders themselves are
@@ -28,7 +29,7 @@ import { loadPhaseTypes } from "../src/phases/custom"
 import { BUILTIN_PHASE_TYPES, phaseType, resolvePhases, type PhaseTypeEntry } from "../src/phases/registry"
 import { renderFormulationTodo } from "../src/prompt-plan"
 import { promptFacts } from "../src/prompt-facts"
-import { renderSubtask, renderWhole, renderWrapup, type PromptFacts } from "../src/prompt"
+import { renderFix, renderPrompt, renderSubtask, renderWhole, renderWrapup, type PromptFacts } from "../src/prompt"
 import { taskDocPaths } from "../src/docpaths"
 import { promptViews } from "../src/tasks"
 import { plan, task } from "./fixtures/prompt"
@@ -81,7 +82,7 @@ const phasePlanOf = (b: Stamped, entry: PhaseTypeEntry, i: number) => {
 }
 
 describe("the bundle self-ratchet (plans/0080 §7)", () => {
-  test("every built-in bundle's composed prompts hold its own declared asserts — phase-plan per phase, whole, subtask, wrapup — and the precedence block rides along", async () => {
+  test("every built-in bundle's composed prompts hold its own declared asserts — phase-plan per phase, whole, subtask, wrapup, fix, plan-verify — and the precedence block rides along", async () => {
     for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
       const b = await stamped(name)
       try {
@@ -105,17 +106,36 @@ describe("the bundle self-ratchet (plans/0080 §7)", () => {
 
         // The execution surfaces under the bundle's mode and off stamp: whole
         // (the run's unit session — no context-budget protocol under off),
-        // subtask (a project that decomposes after all) and wrap-up. The
-        // renders went through the render gate.
+        // subtask (a project that decomposes after all), wrap-up, and the fix
+        // session (the verification loop's repair half — the pack's `###
+        // repair` discipline rides it as {{repairDuties}}, so a `fix:` assert
+        // pins pack text on the surface that carries it, plans/0121 wave 2).
+        // The renders went through the render gate.
         for (const [template, text] of [
           ["whole", renderWhole(b.facts, views.plan, views.task, docs, { mode: b.mode })],
           ["subtask", renderSubtask(b.facts, views.plan, views.task, docs, "write the schema part of the migration script", { mode: b.mode })],
           ["wrapup", renderWrapup(b.facts, views.plan, views.task, docs, { solo: true, mode: b.mode })],
+          ["fix", renderFix(b.facts, views.plan, views.task, docs, { mode: b.mode })],
         ] as const) {
           rendered.push({ template, phase: "m", text })
           expect(text).toContain("Authority order for everything in this prompt:")
           expect(text).not.toMatch(/\{\{|\}\}/)
         }
+
+        // The plan-verify prompt (plans/0080 §5, the charter's own channel):
+        // the verifier session judges a composed planning prompt against the
+        // resolved charter — verifyPlanCharterText(resolvedVerifyPlan(...)) is
+        // exactly what verifyPlanPrompt renders (src/prompt-verify.ts), so the
+        // `plan-verify` asserts pin charter text on the surface that carries
+        // it (plans/0121 wave 2). The template is the judge, not a working
+        // prompt: no authority-order block rides it, so only the
+        // charter-rides and no-unrendered-vars expectations apply.
+        const charter = verifyPlanCharterText(resolvedVerifyPlan(b.pack))
+        expect(charter).toBeDefined()
+        const verifyText = renderPrompt(b.facts, "plan-verify", { charter, prompt: "PROMPT-UNDER-REVIEW", step: "phase-plan R-01.P01" })
+        rendered.push({ template: "plan-verify", phase: "m", text: verifyText })
+        expect(verifyText).toContain(charter!)
+        expect(verifyText).not.toMatch(/\{\{|\}\}/)
 
         // The ratchet itself: every applicable assert holds on every render —
         // a violation would already have thrown PromptGuaranteeError inside
