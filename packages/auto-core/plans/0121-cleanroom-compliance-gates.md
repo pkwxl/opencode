@@ -24,12 +24,15 @@ new grammar.** The wall stays primary — gates are bounded instruments with gam
 input cut is both cheaper and legally load-bearing; a gate is never argued as license to weaken the wall
 (P12).
 
-The draft then went through the person's review round (two external model reviews, 2026-10-25); the
-load-bearing refinements are woven in below and their full dispositions recorded before the execution
-schedule. The shaping ones: the gates are risk screening, never proof (D1); the similarity metric cuts
-both ways — no artificial divergence, justified similarity on the record (D6); remediation directives
-carry their reasoning and stay source-free (D10); contract immutability is served by recorded revisions
-and commit order, not by a lockout mechanism (D8, D11).
+The draft then went through the person's review rounds (2026-10-25: two external model reviews, then a
+comprehensive review of the revised draft plus an adjacent marker proposal); the load-bearing
+refinements are woven in below and their full dispositions recorded before the execution schedule.
+The shaping ones across both rounds: the gates are risk screening, never proof (D1); the similarity
+metric cuts both ways — no artificial divergence, justified similarity on the record (D6); remediation
+directives carry their reasoning, stay source-free, and never target the score (D10); coverage runs in
+both directions — contracts must cover the specification, not only the implementation its contracts
+(D8); contract immutability is served by recorded revisions and commit order, not by a lockout
+mechanism (D8, D11).
 
 This ruling Derives: **P7** (grammars, never content — the showing: the driver runs declared suites and
 parses receipts, but every judgment above — paradigm conformance, vocabulary hygiene, contract adequacy,
@@ -58,19 +61,31 @@ asserts, tests); no principle change; the INDEX release cell stays open until th
 
 The charter's wall rule is unchanged and remains the first line. What changes is that the cleanroom
 bundle stops relying on the wall alone: the phases' duties, the lane table a project declares, and the
-audit's dimensions together ensure that even a session that somehow saw the reference cannot land a
-transliteration — the paradigm suites reject its idioms, the divergence receipt flags its structure,
-the platform contract rejects its interfaces, and the contract-first ordering means there is nothing to
-imitate because the derivation target is a stated contract, not the reference's shape. The wall is the
-input cut; these are the output cut; defense in depth. Nothing in this document may be cited to narrow
-the wall, and a widening anyone wants stays the person's ruling (the charter's existing widening rule).
+audit's dimensions together make a transliteration **less likely to survive and more likely to be
+caught** — the paradigm suites reject its known idiom families, the divergence receipt flags its
+structural indicators, the platform contract refuses its interfaces, and the contract-first ordering
+removes the thing to imitate, the derivation target being a stated contract rather than the reference's
+shape. The claim stops there, deliberately: this is risk reduction and the detection of *known*
+indicators of non-independent implementation, never prevention — a control flow can be carried over
+under renamed identifiers, module divisions and state-transition logic can survive beneath safe
+target-paradigm syntax, and some of the reference's shapes are rational in the target too, so the
+gates do not exhaust the ways to transliterate. What the chain can honestly claim is what it enforced,
+what it found, and how each finding was disposed — never the proven absence of transliteration. The
+wall is the input cut; these are the output cut; defense in depth. Nothing in this document may be
+cited to narrow the wall, and a widening anyone wants stays the person's ruling (the charter's
+existing widening rule).
 
 What the gates are not: **proof**. Risk detection, clean-room independence and behavioral correctness
 are three goals, each with its own evidence chain — the scans' committed receipts screen for the first
 and feed the second's record (beside the wall and the justification records), while only the
 verification loop — contracts, property suites, black-box acceptance — establishes the third. A green
 divergence receipt is the absence of a flag, never a correctness verdict, and never by itself the
-independence story a dispute would rest on.
+independence story a dispute would rest on. The three chains do not deduce one another: no similar
+code found is not no leakage; idiomatic target code is not independent design; passing tests is not
+covering what was never specified; and behavioral correctness settles no license question — specific
+obligations take their own evaluation, beside the record. What ships with the code, then, is the
+evidence collection itself — behavioral, design, process, detection and audit records, P18's shape —
+and the collection exists to strengthen review, never to replace it.
 
 Derives P12 (conservative under uncertainty), P19 (each gate is bounded and staged, its threshold a
 declared project fact, not a shipped constant).
@@ -84,7 +99,10 @@ structures, no translated code) gains its fourth clause: **no infra-shaped vocab
 named for, or carried over from, the reference's substrate structures. Behavior is stated as observable
 contracts at the boundary, in the target platform's terms. A note that can only be understood by
 someone who knows the reference's internals is leakage, and the audit's spec-hygiene dimension treats
-it as a finding.
+it as a finding. The clause's target is the concept, not the word: `scheduler`, `queue`, `lock`,
+`buffer` are domain-natural names a target needs regardless, and nothing is suspect for sounding like
+infrastructure — what the clause forbids is vocabulary whose meaning hangs on the reference's
+particular internal organization. The audit judges smuggled organization, never term matching.
 
 Files: `templates/bundles/cleanroom/phases/spec-read.md` (the duty text), the pack's `### spec-read`
 phase-duties block (`templates/bundles/cleanroom/intents/cleanroom.md`), one hygiene sentence in
@@ -162,7 +180,11 @@ monitor role belongs to the driver side of the wall:
   declaration; what remains flagged flows to the audit's independence dimension as a finding carrying
   its justification record (D6). The only exits from a red receipt are two: a refactor that genuinely
   re-expresses, or a **person-declared exclusion** on the committed surface with its recorded reason —
-  there is no agent-side waiver, and the audit adjudicates but cannot green the lane.
+  there is no agent-side waiver, and the audit adjudicates but cannot green the lane. An exclusion is
+  a **bounded, reviewable scope** — a declared public interface, a named symbol set, a
+  protocol-mandated sequence — never a broad silencer: a whole-directory exclusion that greens the
+  scan is itself an audit finding, and every exclusion's scope, reason and impact read from the commit
+  that declares it (declaration discipline plus an audit duty, no new tooling).
 - **Staged instrument (P19):** v1 is cheap and high-precision — exported-identifier isomorphism (any
   exact match with the reference's private symbols fails) plus normalized token-shape overlap; v2
   structural similarity; cross-language AST/CFG distance only if field evidence demands it. Thresholds,
@@ -182,10 +204,13 @@ Derives P12, P19, P21, P18, P2, P8.
 
 A similarity gate goodharts in both directions. Downstream, transliteration slips through; upstream, a
 session graded against a similarity score learns to obfuscate — mangling a rational design to shave
-points off a number, sacrificing paradigm fit, clarity or semantics for the metric. Both are defects,
-and the charter says so in one breath: structural resemblance to the reference beyond the specified
-contracts is a defect (the charter's existing rule), and divergence manufactured to lower a score is
-the same defect wearing the other coat. Three layers hold the line:
+points off a number, buying its difference with complexity, performance loss or new error paths. Both
+are defects, and the charter says so in one breath: structural resemblance to the reference beyond the
+specified contracts is a defect (the charter's existing rule), and divergence manufactured to lower a
+score is the same defect wearing the other coat. The principle in one line, running through D2–D4 as
+much as here: **what is prohibited is structural inheritance without independent justification, not
+the coincidental alignment of rational designs; what is required is target-platform adaptation, not
+manufactured difference.** Three layers hold the line:
 
 - **behavior** — specified external behavior and invariants are preserved; semantics are never altered
   to manufacture structural difference;
@@ -261,6 +286,20 @@ disclosure the reviews asked for is already the shipped charter's standing rule 
 verify-plan-test`/`### verify-plan-audit`: the assessment distinguishes verified, failed, blocked and
 deferred) — no change.
 
+Coverage runs in both directions, and the audit's coverage dimension judges both:
+implementation-covers-contracts (every delivered behavior maps to a stated contract) and
+**contracts-cover-the-specification** (every behavior the specification notes and the brief's MUSTs
+name is carried into some contract, or explicitly deferred with its record) — without the second,
+contract-first only ever proves the faithful implementation of whatever happened to be written down.
+Sufficiency splits into three layers, each the duty of an existing home: specification sufficiency
+(the notes cover the behaviors the target must keep — the spec-hygiene dimension), contract
+sufficiency (each requirement becomes a verifiable contract — the design duties), verification
+sufficiency (the suites cover each contract's properties, boundaries and failure paths — the test
+plan). And a recorded contract revision states its kind — a **clarification** of the specification
+(an omission or defect found and corrected) or an **accommodation** of the implementation (the
+contract bent to what was built) — the audit reads the kind, and an accommodation without a
+justification of its own is a finding.
+
 Derives P3 (the derivation target is a stated contract, and verification is the property suite plus
 black-box acceptance — never resemblance), P6 (contracts are re-derivable durable evidence; the ordering
 rule adds no persisted state), P21 (no new mechanism; every consumer present).
@@ -313,6 +352,18 @@ its slice cites, in the platform's iteration and ownership idioms; the contract'
 its property suite must hold and re-run; do not alter required semantics to lower the score" — the last
 clause standing, D6's rule in the directive's own mouth.
 
+The directive names what to re-argue, never the transform to apply: the scanner knows a risk sits at a
+unit, not whether its cause is unjustified inheritance, a public protocol, or a rational shared
+design — so the fix task's acceptance is the ordered re-argument (re-examine the contracts the unit
+claims → re-argue the design against the platform's abstractions → change the design where the
+argument fails, never a syntax swap alone → re-run the property suite, the acceptance anchor and the
+scan → record the justification of any residual rational similarity), and **a lowered score is not an
+acceptance condition** — the score says whether the risk moved, and endless score-chasing refactoring
+is the failure mode D6 exists to prevent. Two questions close the design: does the directive carry
+enough for a session to complete the redesign independently, with no reference internals needed? and
+does the repaired unit still satisfy its contracts, with a design justification of its own? Both yes,
+and D10 is an executable independent-redesign mechanism, not only an anti-leakage rule.
+
 Files: the three-part diet in `### repair` (the fix task's finding vocabulary), the divergence-receipt
 sentence in `### verify-plan-audit`.
 
@@ -333,6 +384,16 @@ is charter text), P12 (uncertain readings resolve toward not-carrying).
   declared exclusion on the committed tool configuration — visible in git, auditable forever (P2, P8,
   P15); an in-pipeline override would be an agent- or session-side widening of exactly the boundary
   this document exists to narrow.
+- **No `CLEAN-*` source-marker family.** The second review round also proposed an in-source marker
+  protocol for leftover work and automated-decision records (`CLEAN-TODO`/`-DEFER`/`-RESOLVE`/
+  `-DECISION`, with lifecycle and closure rules) as a complement to this ruling. Out of scope here and
+  deferred to its own document, taken up when field evidence shows task documents plus the existing
+  `AUTO-*` marker lines (self-contained per the process-references rule) failing to carry the
+  justification and decision load. Two ties bind it whenever it comes: its markers obey the
+  source-free rule (contract ids and platform reasoning, never reference internals), and a new marker
+  family is a P13 vocabulary decision in conscious lockstep, never a bundle edit that grows one
+  sideways. The proposal's own staging — protocol first, no tooling, validated in real rounds — is
+  the P19/P21 route and is endorsed as the shape of that future document.
 - **No in-repo synthetic end-to-end fixture suite** (proposed in the review round). The
   detection→blocking→directive→re-validation loop's blocking half is the regression lane's hold,
   already mechanism-tested (0098's suites); re-testing it under a differently-named row duplicates
@@ -341,7 +402,9 @@ is charter text), P12 (uncertain readings resolve toward not-carrying).
   smoke.
 - **Per-unit divergence granularity deferred.** Round-scoped (the regression lane's shape) is v1.
   Revisit when aster-mig's v1 receipts show round-close rejections arriving late enough to cost a wave
-  of rework (the measured trigger; P19).
+  of rework (the measured trigger; P19). The fields the decision reads are already in the records —
+  each red's first-discovery time, the tasks and rework inside its scope, recurrence after repair, the
+  unit-level cost estimate — extracted from receipts and commit logs; no new data model.
 - **No AST/CFG engine anywhere in this repo.** v1 is identifiers and token shape; structural tools are
   the target project's own investment behind the bare command name. Revisit on v1 field evidence.
 - **No `prompts/` (manual suite) change.** The manual suite reads the bundle duty text as the phase's
@@ -350,10 +413,11 @@ is charter text), P12 (uncertain readings resolve toward not-carrying).
 - **No new pack subsection names, no protocol strings, no bundle.json change** (the phase list and
   `subtask: off` stand).
 
-## Review round (2026-10-25) — dispositions
+## Review rounds — dispositions
 
-The person ran two external model reviews over this draft; the load-bearing points and where each
-landed:
+### Round 1 (2026-10-25, two external model reviews)
+
+The load-bearing points and where each landed:
 
 1. **Gates are not proof; three goals, three evidence chains** (both reviews) — accepted into D1's
    closing paragraph.
@@ -374,6 +438,35 @@ landed:
 7. **Verified/partially-verified/unverified scope disclosure in acceptances** (ChatGPT) — already the
    shipped charter's standing rule in `### verify-plan-test`/`### verify-plan-audit`; no change.
 
+### Round 2 (2026-10-25, a comprehensive review of the revised draft plus an adjacent marker proposal)
+
+1. **D1's "cannot land a transliteration" overclaimed** — accepted: D1 reworded to risk reduction and
+   known-indicator detection, the non-exhaustiveness examples named, the claim restated as enforced /
+   found / disposed, never proven absence.
+2. **The three guarantees are non-deducible; keep them uncompressed, and the deliverable is the
+   evidence collection** — accepted into D1 (the explicit non-deducibilities, the P18 evidence
+   framing, and the restraint: an evidence chain settles no license question by itself).
+3. **Exclusions must be bounded and reviewable, never backdoors** — accepted into D5 (a
+   whole-directory exclusion is itself an audit finding).
+4. **Repair must not target score reduction; detection must not dictate the remediation plan** —
+   accepted into D10 (the ordered re-argument, a lowered score never an acceptance condition, the two
+   closing questions).
+5. **Contract sufficiency: bidirectional coverage, the three sufficiency layers, the
+   clarification/accommodation revision taxonomy** — accepted into D8, as duties of existing homes
+   (spec-hygiene, design, test plan, audit).
+6. **D2's vocabulary clause targets internals-dependent concepts, not infrastructure-sounding
+   words** — accepted as D2's sharpened caveat (the audit judges smuggled organization, never term
+   matching).
+7. **Target-side acceptance is a delivery condition, and the exclusion check must prove boundedness**
+   — accepted into the follow-up section (an exclusion that also silences the benign fixture fails
+   acceptance).
+8. **The per-unit upgrade decision needs named metrics** — accepted into D11, drawn from existing
+   receipts and commit logs.
+9. **A cross-wave traceability matrix and the evidence-layers principle** — accepted into the
+   execution schedule.
+10. **The `CLEAN-*` marker protocol proposal** — out of scope, deferred with its ties recorded in
+    D11 (P13 lockstep, source-free, taken up on field evidence).
+
 ## Execution schedule (five waves, one session each, always green)
 
 Sequencing discipline: one ingredient per wave; asserts and their text land in the same wave
@@ -385,12 +478,27 @@ test/prompt-phase.test.ts test/prompt-template.test.ts` plus each wave's named s
 bundles' self-ratchet renders the pack through its own asserts, so a new pin that outruns its text
 fails immediately.
 
+Evidence has layers, and no wave is asked to prove them all: prompt asserts prove a rule was not
+deleted; parse tests prove the grammar and the floor; the target-side smoke proves blocking, exclusion
+and repair actually engage; only real rounds' receipts prove field behavior. Each wave adds its layer,
+and wave 5 checks the correspondence across this matrix — an execution and acceptance checklist,
+never a mechanism:
+
+| core requirement | primary homes | closing evidence |
+|---|---|---|
+| reference isolation | the charter's corpus clause, spec-read hygiene, D5's driver-side tooling rule | the wall pins (round 1); the target smoke's corpus-never-rendered check |
+| platform adaptation | the brief's platform contract, the design duties, the mode's exec text | the design docs' per-concern construct naming; the audit's paradigm dimension |
+| contract-first | the design duties, `Depends:` fields, the implementation duties | contract-before-implementation commit order; the audit's contract-coverage dimension |
+| similarity risk handling | the lane table, receipts, repair, audit | red-blocks-close and bounded-exclusion checks (the target smoke); the source-free directive pins |
+| independent audit | the audit dimensions, findings documents, verdict | the round-2 dimension pins; the verdict gate, untouched |
+
 **Wave 1 — the wall clauses and spec hygiene (D1, D2, D5's charter clauses, D6's charter sentences,
 D10).**
 `templates/bundles/cleanroom/intents/cleanroom.md`: the `### verify-plan` corpus-and-tooling clause
 (driver-side compliance tooling, outside the platform boundary, never read or executed by clean-room
 sessions) plus the two-sided metric sentences (screening never verdict; artificial divergence is the
-same defect); the extraction-hygiene fourth clause (infra-shaped vocabulary); the `### repair`
+same defect), all in D1's risk-reduction framing; the extraction-hygiene fourth clause (infra-shaped
+vocabulary, the concept never the word); the `### repair`
 source-free three-part finding diet. `templates/bundles/cleanroom/phases/spec-read.md`: the
 vocabulary-hygiene duty. Asserts: the D2 pin plus a pin on the corpus clause. This document + its
 INDEX row ride this wave's commit. Green: full `bun test` (the boundary-sentence pin in
@@ -429,9 +537,11 @@ materializes, the pack resolves, the floor holds). No `docs/structure.md` change
 **Target-side follow-up (not this repository):** the aster-mig project materializes the refreshed
 bundle via `sync`, declares its real lane rows (build, clippy-family paradigm suite, proptest-family
 property suite, the divergence scan behind a bare target name), states its platform contract in the
-brief, and stages the v1 instrument (identifier isomorphism + token shape). The tool's own acceptance,
-before the first live round: two synthetic fixture pairs — one that must flag (a colliding
-identifier/structure pair) and one that must pass clean (a benign pair: public-interface terms,
-protocol-mandated sequencing) — and one red-path smoke: a scratch project's declared lane exiting 1
-blocks its phase close, and the person's exclusion edit (with its recorded reason) greens it. The first
-rounds' receipts are the evidence D11's revisit triggers read.
+brief, and stages the v1 instrument (identifier isomorphism + token shape). The tool's acceptance is
+a **delivery condition before the first live round**, not an optional follow-up: two synthetic fixture
+pairs — one that must flag (a colliding identifier/structure pair) and one that must pass clean (a
+benign pair: public-interface terms, protocol-mandated sequencing); the red-path smoke — a scratch
+project's declared lane exiting 1 blocks its phase close; and the exclusion check — the person's
+bounded exclusion (with its recorded reason) clears its own finding, greens the lane, and exempts
+nothing else: an exclusion that also silences the benign fixture fails acceptance. The first rounds'
+receipts are the evidence D11's revisit triggers read.
