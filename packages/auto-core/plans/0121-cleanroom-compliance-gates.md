@@ -43,8 +43,11 @@ staged from cheap high-precision proxies, thresholds strict on identifiers and l
 score is evidence and never the thing measured, and the wall is never traded for the gate), **P15**
 (policy is data — all four dimensions' judgment content rides the bundle templates and the materialized
 pack overlay, never code), **P16** (genericity — the shipped templates name no language, toolchain or
-project; the target's materialized overlay declares its own suites, thresholds and exclusions after
-`init --intent`), **P19** (measured evidence — the staged instrument and the deferred per-unit
+project, and assume no environment: not a source or target language, not a language pair, not a
+reference or destination project — the C→Rust / Linux→Asterinas posture is the motivating field case
+and the first consumer, never a shape any shipped artifact carries; the target's materialized overlay
+declares its own suites, instruments, thresholds and exclusions after `init --intent`),
+**P19** (measured evidence — the staged instrument and the deferred per-unit
 granularity are revisit rules with named triggers, ruled before the field data exists, not speculation
 built anyway), **P21** (machinery waits for its consumer — no similarity engine, no core gate, no
 lockout; every consumer of the existing seams is present in the same change), **P2** (the person
@@ -152,9 +155,10 @@ Two halves, different homes:
   a committed receipt, part of every implementation task's wrap-up lane set. The shipped bundle names
   the row's *shape* and says the pack overlay declares the command; it names no toolchain (P16).
 - **Judgmental** — charter and duty text: the deliverable is written in the target platform's paradigm;
-  idiom families of the reference — stated generically (raw-pointer and shared-mutable patterns,
-  manual error-unwind cascades, bitflag state machines, blocking-synchronization shapes), never per
-  project — must be re-expressed in the target language's native constructs; and the audit carries a
+  the reference's own idiom families — whatever its paradigm's are, named by the project's duty text
+  in its own terms (an imperative reference brings manual shared-mutable aliasing, cascade error
+  unwinding, bitflag state machines, blocking synchronization; a different paradigm brings its own
+  families) — must be re-expressed in the target language's native constructs; and the audit carries a
   **paradigm conformance** dimension (D9) whose findings read reference-idiom fingerprints in the
   deliverable. The demand is re-expression in the platform's terms, never difference for its own sake —
   D6 bounds this duty from the other side.
@@ -221,15 +225,18 @@ monitor role belongs to the driver side of the wall:
   the list commits in-tree, harmless to clean-room eyes and auditable forever while the
   corpus-bearing configuration stays out-of-tree; and every entry's reason cites the justification
   record id that earned it, the two lists one-to-one (D6).
-- **Staged instrument (P19):** v1 is cheap and high-precision — private-identifier matching with the
-  matching method declared in the tool configuration (a minimum length, compound names only, or
-  rarity weighting — common names never flood it into broad exclusions) plus **literal
-  fingerprinting** (string literals and error-message text, unusual numeric constants, lookup-table
-  contents, the ordering of enum variants and struct fields — strong copying indicators,
-  language-independent and cheap to compute; protocol-mandated constants excluded by declaration
-  citing the specification); v2 structural similarity; cross-language AST/CFG distance only if field
-  evidence demands it. Thresholds, matching methods and exclusion lists are declared project facts
-  (the tool's configuration): strict on names, loose on structure.
+- **Staged instrument (P19):** v1 is cheap and high-precision, and its menu is chosen for the
+  language pair the project declares — no pair is assumed. The cross-language default:
+  private-identifier matching, with the matching method declared in the tool configuration (a minimum
+  length, compound names only, or rarity weighting — common names never flood it into broad
+  exclusions), plus **literal fingerprinting** (string literals and error-message text, unusual
+  numeric constants, lookup-table contents, the ordering of a type's variants or fields where the
+  languages carry such types — strong copying indicators, language-independent and cheap to compute;
+  protocol-mandated constants excluded by declaration citing the specification). A same-language pair
+  may declare token-shape or structural instruments instead — whichever is high-precision for the
+  pair it names. v2 structural similarity; cross-language AST/CFG distance only if field evidence
+  demands it. Thresholds, matching methods and exclusion lists are declared project facts (the tool's
+  configuration): strict on names, loose on structure.
 - **Receipt granularity starts round-scoped** (the regression lane's own shape). Per-unit divergence
   feedback is deliberately deferred (D11).
 
@@ -409,8 +416,9 @@ So a remediation directive carries three parts, all source-free:
    (the property suite, the acceptance anchor, the divergence scan) when the refactor lands.
 
 Example shape: "unit U-042, structural-similarity risk: re-evaluate its state flow against the contract
-its slice cites, in the platform's iteration and ownership idioms; the contract's state invariants and
-its property suite must hold and re-run; do not alter required semantics to lower the score" — the last
+its slice cites, in the platform's native control-flow and resource idioms; the contract's state
+invariants and its property suite must hold and re-run; do not alter required semantics to lower the
+score" — the last
 clause standing, D6's rule in the directive's own mouth.
 
 The directive names what to re-argue, never the transform to apply: the scanner knows a risk sits at a
@@ -466,8 +474,16 @@ is charter text), P12 (uncertain readings resolve toward not-carrying).
   of rework (the measured trigger; P19). The fields the decision reads are already in the records —
   each red's first-discovery time, the tasks and rework inside its scope, recurrence after repair, the
   unit-level cost estimate — extracted from receipts and commit logs; no new data model.
-- **No AST/CFG engine anywhere in this repo.** v1 is identifiers and token shape; structural tools are
+- **No AST/CFG engine anywhere in this repo.** v1 is identifiers and literal fingerprints (the
+  cross-language default; a pair may declare otherwise, D5); structural tools are
   the target project's own investment behind the bare command name. Revisit on v1 field evidence.
+- **No language-pair or project assumption anywhere in the shipped artifacts** (the person's standing
+  rule, restating P16 as each wave's test): every template line the waves write is worded for any
+  source→target pair; where a ruling illustrates with an imperative-paradigm idiom family or a
+  construct one language names specially, the shipped duty names the category and lets the project's
+  reference paradigm supply the members, and the divergence instrument's menu is declared per pair
+  (D5). The test per wave: a template line that only makes sense for one language pair, one toolchain
+  or one project is wrong — aster-mig is the first consumer, never a shape the bundle assumes.
 - **No `prompts/` (manual suite) change.** The manual suite reads the bundle duty text as the phase's
   authority (0120's channel) and carries no cleanroom-specific copy to extend; nothing here changes a
   manual-suite literal, so the manual ratchet is untouched.
@@ -558,9 +574,12 @@ The load-bearing points and where each landed:
 
 Sequencing discipline: one ingredient per wave; asserts and their text land in the same wave
 (lockstep, P13); each wave ends green and interruptible; the person commits at the wave boundary.
-This document and its INDEX row landed ahead of the waves (the ruling commits, the same-change rule
-satisfied there); the six text waves land separately. Tests after any template/prompt change, per the
-package conventions: `bun typecheck`, then `bun test` — at minimum `test/prompt-exec.test.ts
+Every wave runs the P16 test on what it wrote (D11): a template line that only makes sense for one
+language pair, toolchain or project is wrong — the implementation is universal, the field case
+merely the first consumer. This document and its INDEX row landed ahead of the waves (the ruling
+commits, the same-change rule satisfied there); the six text waves land separately. Tests after any
+template/prompt change, per the package conventions: `bun typecheck`, then `bun test` — at minimum
+`test/prompt-exec.test.ts
 test/prompt-phase.test.ts test/prompt-template.test.ts` plus each wave's named suites; the shipped
 bundles' self-ratchet renders the pack through its own asserts, so a new pin that outruns its text
 fails immediately.
@@ -631,9 +650,11 @@ materializes, the pack resolves, the floor holds). No `docs/structure.md` change
 `docs/releases.md` change between release events.
 
 **Target-side follow-up (not this repository):** the aster-mig project materializes the refreshed
-bundle via `sync`, declares its real lane rows (build, clippy-family paradigm suite, proptest-family
-property suite, the divergence scan behind a bare target name), states its platform contract in the
-brief, and stages the v1 instrument (identifier isomorphism + token shape). The tool's acceptance is
+bundle via `sync`, declares its real lane rows (build, its paradigm-constraint suite, its property
+suite, the divergence scan behind a bare target name — the project's own toolchain names, never the
+bundle's), states its platform contract in the
+brief, and stages the v1 instruments its language pair selects (identifier matching + literal
+fingerprinting). The tool's acceptance is
 a **delivery condition before the first live round**, not an optional follow-up: two synthetic fixture
 pairs — one that must flag (a colliding identifier/structure pair) and one that must pass clean (a
 benign pair: public-interface terms, protocol-mandated sequencing); the red-path smoke — a scratch
