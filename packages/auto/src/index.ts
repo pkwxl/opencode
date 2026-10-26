@@ -528,6 +528,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
     "fork <T-NNN | sha> <worktree-path> (auto-core plans/0128): build an experiment environment in a new directory and retry a task from its beginning — or experiment at any exact commit — without the main tree, its branches or its history being touched. " +
       "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
       "The environment is self-resetting (no .auto/ runtime state rides over; the task documents at that commit already read pending); run it with opencode-auto run <path> [--stop-after T-NNN], bring work back with plain git, clean up with the printed git worktree remove / branch -D lines. " +
+      "It takes no run lock (plans/0129 — its only writes in the source repositories are the auto-fork/* branches and worktree registrations, nothing a running driver reads), so it runs beside a live run there. " +
       "Exit codes: 0 forked / 1 the target or path cannot give what was asked / 2 a git failure midway, the partial state named",
   ],
   [
@@ -622,7 +623,7 @@ const COMMANDS: readonly CommandHelp[] = [
     summary:
       "build an experiment environment in a new worktree — at the state before a task first started (T-NNN) or at an exact commit — to retry it in isolation; the main tree is never touched",
     synopsis: "opencode-auto fork <T-NNN | sha> <worktree-path> [dir]",
-    options: ["fork", "run-lock"],
+    options: ["fork"],
   },
   {
     name: "amend",
@@ -1663,10 +1664,13 @@ if (command === "land") {
 // history are never touched. The target checks above (the ref-first split,
 // the required path, the no-options refusal) ran before the directory
 // resolved; forkTask owns every behavioural refusal and returns the complete
-// printable output, land's shape. Like land and close it holds the run lock
-// itself (it writes git refs — branches and worktree registrations), so it
-// is not in the refusal list above. The config load is the validity gate
-// alone — the fork point and the nested alignment derive from committed
+// printable output, land's shape. fork takes no run lock (plans/0129): its
+// only writes in the source repositories are the reserved auto-fork/* branch
+// family and the .git/worktrees registrations — surfaces a running driver
+// never reads or writes — so the experiment can be built while a run is live
+// in the source tree (the retry channel's own case; land and close keep the
+// lock, they move git state a run works on). The config load is the validity
+// gate alone — the fork point and the nested alignment derive from committed
 // history; the experiment's own config is the committed one at that state.
 // Exit codes under the contract: 0 forked / 1 usage / 2 blocked for human.
 if (command === "fork") {
@@ -1679,9 +1683,7 @@ if (command === "fork") {
     if (hint) console.error(hint)
     process.exit(1)
   }
-  const lock = takeRunLock("fork")
   const forked = await forkTask(directory, forkTarget!, forkPath!)
-  lock.release()
   exitWithResult(forked, "forked", "usage")
 }
 

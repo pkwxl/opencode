@@ -3170,10 +3170,12 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
 
 // fork (auto-core plans/0128): the experiment environment — argument checks
 // (the ref-first split, the required worktree path, the no-options refusal),
-// the help rows (fork's own, run's --stop-after), the run-lock family (fork
-// takes the lock itself, so a live lock refuses), the happy paths of both
-// target forms over a real fixture (the driver's trailer commits made by
-// hand), and --stop-after's own surface (the format check, the plan refusal).
+// the help rows (fork's own, run's --stop-after), the lock posture (fork
+// takes no run lock, plans/0129 — it builds beside a live run, its only
+// source-tree writes the reserved branch family and worktree registrations),
+// the happy paths of both target forms over a real fixture (the driver's
+// trailer commits made by hand), and --stop-after's own surface (the format
+// check, the plan refusal).
 describe("CLI: fork (auto-core plans/0128)", () => {
   async function plantLock(dir: string, pid = process.pid) {
     await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
@@ -3230,17 +3232,19 @@ describe("CLI: fork (auto-core plans/0128)", () => {
     expect(usage.out).toContain("fork <T-NNN | sha> <worktree-path>")
   })
 
-  test("fork refuses while another process holds the run lock (it takes the lock itself, land's posture)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
+  test("fork runs beside a live run lock (plans/0129: it takes no lock — nothing it writes in the source tree is read by a running driver)", async () => {
+    const { dir, git } = await taskProject()
     try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await commitFixture(dir)
       await plantLock(dir)
-      const refused = await runCli(["fork", "T-001", `${dir}-exp`, dir])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain(`⏸ another opencode-auto process holds the run lock of ${dir}`)
+      const forked = await runCli(["fork", "T-001", `${dir}-exp`, dir])
+      expect(forked.code).toBe(0)
+      expect(forked.out).toContain(`✓ fork of T-001 created at ${dir}-exp on auto-fork/T-001`)
+      // The planted lock is neither consulted nor disturbed.
+      expect(await Bun.file(join(dir, ".auto/run.lock")).text()).toContain('"command":"run"')
+      expect((await git("branch", "--list", "auto-fork/T-001")).trim()).toBe("+ auto-fork/T-001")
     } finally {
       await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
     }
   })
 
