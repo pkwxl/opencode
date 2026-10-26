@@ -12,7 +12,7 @@
 // line, its timeout and its errors, and takes the executable, the env overlay
 // and the config content as inputs.
 import { spawn as spawnProcess, spawnSync, type ChildProcess } from "node:child_process"
-import { stat } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2"
 import { driverVariable } from "../env"
@@ -142,7 +142,14 @@ export async function manage(
   const spawn = options.spawn ?? ((dir: string, inputs: SpawnInputs) => defaultSpawn(dir, inputs, log))
   const connect = options.connect ?? ((target: string, dir: string) => defaultConnect(target, dir, log))
   let config = options.config
-  const inputs = (): SpawnInputs => ({ bin: options.bin, env: options.env, config })
+  // The spawn inputs are resolved per spawn, so the person-wins strip of the
+  // streaming-timeout floor re-reads the target's opencode.json each time —
+  // a declaration added between spawns applies at the next one.
+  const inputs = async (): Promise<SpawnInputs> => ({
+    bin: options.bin,
+    env: options.env,
+    config: await withoutDeclaredTimeouts(directory, config),
+  })
   if (external) {
     const unused = [
       ...(options.bin !== undefined ? ["bin"] : []),
@@ -151,7 +158,7 @@ export async function manage(
     if (unused.length)
       log(`⚠ the opencode server is external: the agent profile's ${unused.join(" and ")} ${unused.length > 1 ? "have" : "has"} no effect on it, since it keeps the executable and environment it was started with`)
   }
-  let server = external ? await connect(external, directory) : await spawn(directory, inputs())
+  let server = external ? await connect(external, directory) : await spawn(directory, await inputs())
   let agents = await agentsFingerprint(directory)
   // Proxy SDK client always targeting the active server — after a restart
   // swaps the instance, existing references point at the new server
@@ -189,7 +196,7 @@ export async function manage(
       }
       log(`↻ ${reason}`)
       server.close()
-      server = await spawn(directory, inputs())
+      server = await spawn(directory, await inputs())
       agents = await agentsFingerprint(directory)
       return true
     },
@@ -333,4 +340,68 @@ async function agentsFingerprint(directory: string): Promise<{ mtimeMs: number; 
     (info) => ({ mtimeMs: info.mtimeMs, size: info.size }),
     () => null,
   )
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+// The streaming-timeout floor's person-wins half (plans/0127): the spawn
+// config content is sent as OPENCODE_CONFIG_CONTENT, which the server merges
+// after the project's config files — so a floor key the driver set would
+// override a value the person declared in the target's opencode.json. The
+// declaration wins: at spawn time every declared timeout key (any value,
+// `false` included) is removed from the content copy the driver built. Only
+// the two timeout keys are touched — the apiKey references and everything
+// else pass through untouched; a config without a `provider` record and an
+// undefined config return unchanged. Exported for tests.
+export async function withoutDeclaredTimeouts(
+  directory: string,
+  config: Readonly<Record<string, unknown>> | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (config === undefined) return undefined
+  const provider = config["provider"]
+  if (!isRecord(provider)) return config
+  const declared = await declaredProviderOptions(directory)
+  if (declared === undefined) return config
+  let next: Record<string, unknown> | undefined
+  for (const [id, entry] of Object.entries(provider)) {
+    const floor = isRecord(entry) ? entry["options"] : undefined
+    if (!isRecord(floor)) continue
+    if (!("headerTimeout" in floor || "chunkTimeout" in floor)) continue
+    const options = declared[id]
+    if (options === undefined || !("headerTimeout" in options || "chunkTimeout" in options)) continue
+    const kept: Record<string, unknown> = { ...floor }
+    if ("headerTimeout" in options) delete kept["headerTimeout"]
+    if ("chunkTimeout" in options) delete kept["chunkTimeout"]
+    next ??= { ...config, provider: { ...provider } }
+    ;(next["provider"] as Record<string, unknown>)[id] = Object.keys(kept).length > 0 ? { options: kept } : {}
+  }
+  return next ?? config
+}
+
+// The provider options the target's opencode.json / opencode.jsonc declare.
+// JSON only — a jsonc body with comments fails JSON.parse and reads as
+// undeclared (the floor then applies); the first file that parses as an
+// object wins, and a provider entry without an options record contributes
+// nothing. Both files missing or unreadable is undefined.
+async function declaredProviderOptions(directory: string): Promise<Record<string, Record<string, unknown>> | undefined> {
+  for (const name of ["opencode.json", "opencode.jsonc"]) {
+    const text = await readFile(join(directory, name), "utf8").catch(() => undefined)
+    if (text === undefined) continue
+    let value: unknown
+    try {
+      value = JSON.parse(text)
+    } catch {
+      continue
+    }
+    if (!isRecord(value)) continue
+    const provider = value["provider"]
+    if (!isRecord(provider)) return {}
+    const options: Record<string, Record<string, unknown>> = {}
+    for (const [id, entry] of Object.entries(provider)) {
+      if (isRecord(entry) && isRecord(entry["options"])) options[id] = entry["options"]
+    }
+    return options
+  }
+  return undefined
 }

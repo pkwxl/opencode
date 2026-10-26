@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpencodeServer, type OpencodeClient } from "@opencode-ai/sdk/v2"
-import { manage, opencodeHost, serverEnv, spawnOpencodeServer, timeoutFetch, type Server } from "../src/agent/opencode/server"
+import { manage, opencodeHost, serverEnv, spawnOpencodeServer, timeoutFetch, withoutDeclaredTimeouts, type Server } from "../src/agent/opencode/server"
 
 // src/agent/opencode/server.ts (moved from src/server.ts in MA.3): server
 // lifecycle behind AgentHost, and the request timeout guard. Since the model
@@ -408,5 +408,80 @@ describe("timeoutFetch", () => {
     await reader.read()
     controller.abort()
     await expect(reader.read()).rejects.toThrow("body-aborted")
+  })
+})
+
+// withoutDeclaredTimeouts (plans/0127): the person-wins half of the
+// streaming-timeout floor. The spawn config content merges after the
+// project's opencode.json in the server's config loading, so a floor key
+// would override a declared value; the strip removes exactly the declared
+// timeout keys from the content copy, everything else passing through.
+describe("withoutDeclaredTimeouts", () => {
+  const config = {
+    provider: {
+      prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+      other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+    },
+  }
+
+  test("a declared key (any value, false included) is removed; the undeclared one, the apiKey and other providers pass through", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-floor-"))
+    try {
+      await writeFile(
+        join(dir, "opencode.json"),
+        JSON.stringify({ provider: { prov: { options: { headerTimeout: 60_000, chunkTimeout: false } } } }),
+      )
+      expect(await withoutDeclaredTimeouts(dir, config)).toEqual({
+        provider: {
+          prov: { options: { apiKey: "{env:PROV_KEY_A}" } },
+          other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+        },
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("both keys declared on a ringless provider leave an empty entry; a provider absent from the project file keeps the floor", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-floor-"))
+    try {
+      await writeFile(
+        join(dir, "opencode.json"),
+        JSON.stringify({ provider: { other: { options: { headerTimeout: 3_600_000, chunkTimeout: 3_600_000 } } } }),
+      )
+      expect(await withoutDeclaredTimeouts(dir, config)).toEqual({
+        provider: {
+          prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+          other: {},
+        },
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("no config file, an unparseable file and an undefined config all keep the content whole; opencode.jsonc is read when the json is absent", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "auto-floor-"))
+    try {
+      expect(await withoutDeclaredTimeouts(empty, config)).toBe(config)
+      expect(await withoutDeclaredTimeouts(empty, undefined)).toBeUndefined()
+      await writeFile(join(empty, "opencode.json"), "{ not json")
+      expect(await withoutDeclaredTimeouts(empty, config)).toBe(config)
+      await rm(empty, { recursive: true, force: true })
+      const jsonc = await mkdtemp(join(tmpdir(), "auto-floor-"))
+      await writeFile(
+        join(jsonc, "opencode.jsonc"),
+        JSON.stringify({ provider: { prov: { options: { headerTimeout: 90_000 } } } }),
+      )
+      expect(await withoutDeclaredTimeouts(jsonc, config)).toEqual({
+        provider: {
+          prov: { options: { apiKey: "{env:PROV_KEY_A}", chunkTimeout: 1_200_000 } },
+          other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+        },
+      })
+      await rm(jsonc, { recursive: true, force: true })
+    } finally {
+      await rm(empty, { recursive: true, force: true })
+    }
   })
 })

@@ -7,9 +7,11 @@
 // Logs and messages name references only (`key 2/3 ZHIPU_KEY_B`), so no key
 // value is ever read, logged or written by the driver (C4).
 //
-// This module is the mechanism's pure half: the rings built from a registry,
-// the label logs use for one key, and the rotation shape the escalation
-// decides on. The run state — the built rings, the current position per
+// This module is the mechanism's pure half: the rings built from a registry
+// (and the registry's whole provider set, the streaming-timeout floor's
+// domain — plans/0127), the label logs use for one key, and the rotation
+// shape the escalation decides on. The run state — the built rings, the
+// current position per
 // provider and whether rotation is active — lives in the router service
 // (createRouter's key-ring methods, one instance per run; the position never
 // moves back — a cleared key mark does not rewind it, only a failure of the
@@ -44,6 +46,19 @@ export function buildRings(registry: ModelRegistry): Map<string, ModelReference[
 
 // One key of a ring at a position: the reference and where it sits.
 type RingKey = { ref: ModelReference; index: number; total: number }
+
+// Every provider the registry's opencode entries name (the loader derives
+// `provider` from each opencode entry's provider/model id, so the set is the
+// fleet's whole provider surface, ringed or not — a ringless provider can
+// still receive a dispatch and still needs the streaming-timeout floor of
+// plans/0127 in the spawn config). Pure: no run state touches this.
+export function registryProviders(registry: ModelRegistry): Set<string> {
+  const providers = new Set<string>()
+  for (const entry of registry.models.values()) {
+    if (entry.provider !== undefined) providers.add(entry.provider)
+  }
+  return providers
+}
 
 // The label logs use for one key of a ring: "2/3 ZHIPU_KEY_B". The position
 // is 1-based; the name is the reference's label (the variable name, or the

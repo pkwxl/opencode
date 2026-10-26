@@ -957,7 +957,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
       // the reference only — never a value.
       expect(restarts).toHaveLength(1)
       expect(restarts[0]).toContain("key 2/2 PROV_KEY_B")
-      expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+      expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
       expect(lines.some((line) => line.includes("key 1/2 PROV_KEY_A marked down, continuing the same model on key 2/2 PROV_KEY_B"))).toBe(true)
       expect(lines.join("\n")).not.toContain("sk-")
     } finally {
@@ -984,7 +984,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     // spawn config still names the current key — a restart for any other
     // reason spawns on the last position).
     expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(false)
-    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } })
   })
 
   test("an auth failure counts as a key failure: the ring rotates too", async () => {
@@ -999,7 +999,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     expect(result.type).toBe("idle")
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
     expect(restarts).toHaveLength(1)
-    expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+    expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
     expect(chain.modelEntry).toBe("a")
   })
 
@@ -1010,12 +1010,12 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     const first = fakeHost()
     const firstAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
     await runSession(firstAgent.client, task, "p", optsWith(first.host, routing), deepChain(), undefined, undefined, DEFAULTS)
-    expect(first.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+    expect(first.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
     // A scope boundary clears every mark: the ring stays on key B (the
     // config still names it — no restart churn) and the model is eligible
     // again, so the next dispatch selects a.
     services().router.clearDownMarks("task", "task")
-    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } })
     // That dispatch fails on key B: only now does the ring move — wrapping
     // onto key A, whose mark the boundary cleared.
     const second = fakeHost()
@@ -1025,7 +1025,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     expect(result.type).toBe("idle")
     expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
     expect(second.restarts).toHaveLength(1)
-    expect(second.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}" } } } }])
+    expect(second.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
     expect(chain.modelEntry).toBe("a")
   })
 

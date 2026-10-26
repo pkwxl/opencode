@@ -67,10 +67,12 @@ describe("buildRings (pure, from the registry)", () => {
 })
 
 describe("activation and the spawn config (§4.3 injection)", () => {
-  test("the managed server's config names each ring's current key as the provider apiKey reference", () => {
+  test("the managed server's config names each ring's current key as the provider apiKey reference, every registry provider carrying the streaming-timeout floor (plans/0127)", () => {
     router().activateRings(registry(), false)
     expect(router().ringsActive()).toBe(true)
-    expect(router().spawnKeyConfig()).toEqual({ provider: { zhipuai: { options: { apiKey: "{env:ZHIPU_KEY_A}" } } } })
+    expect(router().spawnKeyConfig()).toEqual({
+      provider: { zhipuai: { options: { apiKey: "{env:ZHIPU_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
+    })
   })
 
   test("a rotated ring changes the apiKey reference; a {file:} key is the absolute path reference", () => {
@@ -78,7 +80,29 @@ describe("activation and the spawn config (§4.3 injection)", () => {
     const rotation = router().ringRotation("zhipuai", NOW)!
     router().commitRotation(rotation)
     router().commitRotation(router().ringRotation("zhipuai", NOW)!)
-    expect(router().spawnKeyConfig()).toEqual({ provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}" } } } })
+    expect(router().spawnKeyConfig()).toEqual({
+      provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
+    })
+  })
+
+  test("a ringless registry provider gets the floor alone (no apiKey entry); entries without a provider contribute nothing", () => {
+    const mixed = registry([
+      entry("glm", { model: "zhipuai/glm-4.6", provider: "zhipuai", keys: [KEY_A] }),
+      entry("plain", { model: "other/plain", provider: "other" }),
+      entry("bare", { model: "strange" }),
+    ])
+    router().activateRings(mixed, false)
+    expect(router().spawnKeyConfig()).toEqual({
+      provider: {
+        zhipuai: { options: { apiKey: "{env:ZHIPU_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+        other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } },
+      },
+    })
+  })
+
+  test("a registry whose entries name no provider sends no config at all", () => {
+    router().activateRings(registry([entry("plain", { model: "other/plain" })]), false)
+    expect(router().spawnKeyConfig()).toBeUndefined()
   })
 
   test("inactive rings (external server) and unactivated rings send no config at all", () => {
@@ -125,7 +149,9 @@ describe("rotation (§6.4: the position never moves back)", () => {
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(true)
     // …but the position stays on key 3: no restart churn.
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
-    expect(router().spawnKeyConfig()).toEqual({ provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}" } } } })
+    expect(router().spawnKeyConfig()).toEqual({
+      provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
+    })
     // Only a failure of the current key moves it — onto key 1, the wrapped
     // next whose mark the boundary cleared.
     expect(rotate()?.to).toMatchObject({ index: 0, total: 3 })

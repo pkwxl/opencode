@@ -48,7 +48,7 @@ import { phaseToRole, roleOf, type SessionChain, type WindowWait } from "./chain
 import type { ChainRoute } from "./chain-transitions"
 import { failbackApplies } from "./failback"
 import { HIBERNATE_JITTER_MS } from "./hibernate"
-import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
+import { buildRings, registryProviders, ringKeyLabel, type RingRotation } from "./keyring"
 import { log } from "./log"
 import { formatWindowState, isoInZone } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models-schema"
@@ -67,6 +67,19 @@ type FailbackOverride = { wildcard: string; fallback: string[] }
 // pending, or the tokens were inconclusive (a small cacheWrite with a small
 // cacheRead says nothing either way).
 type CacheClaim = "confirmed" | "contradiction"
+
+// The streaming-timeout floor the spawn config sets for every registry
+// provider (plans/0127): headerTimeout and chunkTimeout, in milliseconds.
+// The managed server's own defaults measure 300s — a long single-shot
+// generation (a task's one-call document write) structurally outlasts them,
+// and every such step died as a transient error, re-forked, and burned hours
+// at zero output (the 2026-10-26 cleanroom T-020 incident: 4h14m on one
+// task, ~415.9k tokens re-read per retry). 20 minutes covers the measured
+// latency class of these replies while staying a bounded wait on a dead
+// endpoint (the retry ladder and the key rotation ride the same errors). The
+// floor is a default, never an override: the adapter drops a key the
+// target's opencode.json declares, so an explicit person value wins.
+export const STREAM_TIMEOUT_FLOOR_MS = 1_200_000
 
 // A parsed reply of the failure-message classifier: the class — the pattern
 // classes minus `overflow`, which the context steps and the handover own and
@@ -126,6 +139,9 @@ export type Router = {
   ringHasUsableKey(provider: string, now: number): boolean
   ringRotation(provider: string, now: number): RingRotation | undefined
   commitRotation(rotation: RingRotation, until?: number): void
+  // The managed server's spawn config content: the active rings' current
+  // keys as apiKey references, plus the streaming-timeout floor for every
+  // registry provider (plans/0127); undefined sends no config at all.
   spawnKeyConfig(): Record<string, unknown> | undefined
   ringLabel(entry: ModelEntry): string
   ringInactiveNote(): string | undefined
@@ -349,6 +365,7 @@ export function createRouter(): Router {
   // key mark does not rewind it, only a failure of the current key advances
   // it (§6.4), so there is no restart churn.
   let rings: Map<string, ModelReference[]> | undefined
+  let providers: Set<string> | undefined
   let positions = new Map<string, number>()
   let active = false
 
@@ -592,6 +609,7 @@ export function createRouter(): Router {
     // (src/agent-pool.ts), the slot the composition order reserves.
     activateRings: (registry, external) => {
       rings = buildRings(registry)
+      providers = registryProviders(registry)
       positions = new Map()
       active = !external
     },
@@ -618,17 +636,29 @@ export function createRouter(): Router {
       positions.set(rotation.provider, rotation.to.index)
     },
     // The spawn config content for the managed server's next spawn (§4.3
-    // injection): every active ring's current key as the provider's apiKey
-    // reference. undefined = send no config at all (no active ring), so the
-    // spawn environment keeps OPENCODE_CONFIG_CONTENT = "{}" exactly as the SDK
-    // spawn sends it. Only references appear here; opencode substitutes them in
-    // its own process.
+    // injection): every registry provider's entry — the active ring's current
+    // key as the provider's apiKey reference where one exists, and the
+    // streaming-timeout floor for every provider the registry names (ringed
+    // or not; plans/0127 — the server-side defaults measured at 300s abort
+    // the driver's long single-shot generations, and the adapter strips a
+    // key the target's opencode.json declares, so an explicit person value
+    // still wins). undefined = send no config at all (no registry provider,
+    // or an external server), so the spawn environment keeps
+    // OPENCODE_CONFIG_CONTENT = "{}" exactly as the SDK spawn sends it.
+    // Only references appear here; opencode substitutes them in its own
+    // process.
     spawnKeyConfig: () => {
-      if (!ringsActive() || rings === undefined || rings.size === 0) return undefined
+      if (!ringsActive() || providers === undefined || providers.size === 0) return undefined
       const provider: Record<string, unknown> = {}
-      for (const [id, keys] of rings) {
+      for (const id of providers) {
         const key = currentKey(id)
-        if (key !== undefined) provider[id] = { options: { apiKey: key.ref } }
+        provider[id] = {
+          options: {
+            ...(key !== undefined ? { apiKey: key.ref } : {}),
+            headerTimeout: STREAM_TIMEOUT_FLOOR_MS,
+            chunkTimeout: STREAM_TIMEOUT_FLOOR_MS,
+          },
+        }
       }
       return { provider }
     },

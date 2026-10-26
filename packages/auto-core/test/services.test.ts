@@ -411,12 +411,13 @@ describe("the service-surface ratchets (moved state and the git seam's delegates
   })
 
   test("keyring.ts holds only the pure ring library", () => {
-    // The ring state's old home shrinks to the ring build and the key
+    // The ring state's old home shrinks to the ring build, the registry's
+    // provider set (the streaming-timeout floor's domain, 0127) and the key
     // label; a new export there is a conscious edit to this pin, not a
     // silent accretion (the state itself is the router's now).
     const text = readFileSync(join(import.meta.dir, "..", "src", "keyring.ts"), "utf8")
     const exported = [...text.matchAll(/export (?:async )?function (\w*)/g)].map((m) => m[1])
-    expect(exported).toEqual(["buildRings", "ringKeyLabel"])
+    expect(exported).toEqual(["buildRings", "registryProviders", "ringKeyLabel"])
   })
 
   test("exit.ts holds only the control service's factory", () => {
