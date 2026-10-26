@@ -110,11 +110,15 @@ export type CommitResult = { ok: boolean; failures: { rel: string; error: string
 // which drain first (D9), and the D6 landing guard has already blocked any
 // stray nested write before the add runs. The skip check narrows with the
 // same pathspec (hasChanges below), so a scoped add that would stage nothing
-// skips the repository instead of failing the commit.
+// skips the repository instead of failing the commit. allowEmpty (plans/
+// 0132 D2): the wall close's record commit — when the tracked diff is empty
+// (the door was already removed by hand, the targets recovered from the
+// live allows) the commit still lands, carrying the recorded targets in its
+// message; only the root repository honors it.
 export async function commitTree(
   dir: string,
   task: { id: string; title: string },
-  info: { stage: string; subject: string; body?: string },
+  info: { stage: string; subject: string; body?: string; allowEmpty?: boolean },
   paths?: readonly string[],
 ): Promise<CommitResult> {
   const roots = await repoRoots(dir)
@@ -124,23 +128,27 @@ export async function commitTree(
     const rel = relative(dir, root) || "."
     const spec = root === dir ? paths : undefined
     try {
-      if (!(await hasChanges(root, spec))) continue
-      let added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
-      if (added.code !== 0 && spec !== undefined) {
-        // The pathspec tolerance (plans/0099 D4): `git status` beside the
-        // add tolerates a pathspec matching nothing, `git add` fatals on it
-        // — and a declared `Touches` entry is a scope bound, never a
-        // promise the file exists (a shared document the unit ends up not
-        // touching, a directory still empty). The offending pathspecs are
-        // named in the message; dropped, the add stages everything the
-        // remaining scope covers, which is exactly the dirt hasChanges
-        // already vouched for.
-        let drop = [...spec]
-        while (added.code !== 0 && /did not match any files/.test(`${added.err}${added.out}`)) {
-          const named = [...`${added.err}${added.out}`.matchAll(/pathspec '([^']+)' did not match/g)].map((match) => match[1]!)
-          if (!named.length || drop.length === named.length) break
-          drop = drop.filter((entry) => !named.includes(entry))
-          added = drop.length ? await git(root, ["add", "-A", "--", ...drop]) : { code: 0, out: "", err: "" }
+      const changes = await hasChanges(root, spec)
+      if (!changes && !(root === dir && info.allowEmpty === true)) continue
+      let added = { code: 0, out: "", err: "" }
+      if (changes) {
+        added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
+        if (added.code !== 0 && spec !== undefined) {
+          // The pathspec tolerance (plans/0099 D4): `git status` beside the
+          // add tolerates a pathspec matching nothing, `git add` fatals on it
+          // — and a declared `Touches` entry is a scope bound, never a
+          // promise the file exists (a shared document the unit ends up not
+          // touching, a directory still empty). The offending pathspecs are
+          // named in the message; dropped, the add stages everything the
+          // remaining scope covers, which is exactly the dirt hasChanges
+          // already vouched for.
+          let drop = [...spec]
+          while (added.code !== 0 && /did not match any files/.test(`${added.err}${added.out}`)) {
+            const named = [...`${added.err}${added.out}`.matchAll(/pathspec '([^']+)' did not match/g)].map((match) => match[1]!)
+            if (!named.length || drop.length === named.length) break
+            drop = drop.filter((entry) => !named.includes(entry))
+            added = drop.length ? await git(root, ["add", "-A", "--", ...drop]) : { code: 0, out: "", err: "" }
+          }
         }
       }
       if (added.code !== 0) {
@@ -153,7 +161,15 @@ export async function commitTree(
       // commits last, by which time each nested repository has settled its
       // final SHA).
       const nested = root === dir ? await nestedHeads(dir, roots) : undefined
-      const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, nested, info.body)])
+      const committed = await git(root, [
+        ...(await identityArgs(root)),
+        "commit",
+        // The wall's record commit on an empty diff (plans/0132 D2): the
+        // message is the record; git would refuse without the flag.
+        ...(!changes && info.allowEmpty ? ["--allow-empty"] : []),
+        "-m",
+        message(subject, task, info.stage, nested, info.body),
+      ])
       if (committed.code !== 0) {
         const error = firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`
         log(`  ⚠ git commit failed (${rel}): ${error} (changes left in the worktree)`)
@@ -877,7 +893,7 @@ export type GitOps = {
   commitTree(
     dir: string,
     task: { id: string; title: string },
-    info: { stage: string; subject: string; body?: string },
+    info: { stage: string; subject: string; body?: string; allowEmpty?: boolean },
     paths?: readonly string[],
   ): Promise<CommitResult>
   beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate>

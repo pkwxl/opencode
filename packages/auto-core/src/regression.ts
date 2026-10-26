@@ -253,7 +253,10 @@ export async function recoverRegression(dir: string): Promise<void> {
 // last close-out and now) would dirty the next unit's start gate, so it gets
 // its own driver commit — but only when it is the ONLY change (foreign dirt
 // keeps its owner: the clean gate's block, not a sweep into our commit).
-async function commitPendingReceipts(dir: string, round: number, git: Pick<GitOps, "commitTree">): Promise<void> {
+// Exported since plans/0132 D3: the wall's admission scan runs the
+// regression lanes fresh ahead of the wall commit, and its receipts must
+// never ride the wall commit (which carries the door removal alone).
+export async function commitPendingReceipts(dir: string, round: number, git: Pick<GitOps, "commitTree">): Promise<void> {
   const changed = await changedFiles(dir)
   const receipts = changed.filter((path) => roleOf(path) === "regression")
   if (!receipts.length) return

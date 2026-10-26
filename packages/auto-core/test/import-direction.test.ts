@@ -467,6 +467,12 @@ const CLASSIFIED: Record<string, Domain> = {
   // script/wrapup: it runs processes and reads git, above the intent domain,
   // below nothing the engine owns.
   regression: "driver",
+  // The sealed reference wall (plans/0132): the closed predicate derived
+  // from disk and git, the three-step close riding the person's advance, the
+  // admission scan over the regression lanes and the sealed channel's one
+  // diff check. Driver like regression: it reads git, runs the lane
+  // machinery and writes opencode.json through protect's allowWrite.
+  wall: "driver",
   // Selection (plans/0055 §6): the candidate list, the pick and the
   // nothing-usable decision of a dispatch under a registry; pure, with the
   // clock and the run state injected. Sits below the session layer, above the
@@ -605,6 +611,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // The regression lane (plans/0098): the driver-run processes' sibling —
   // one background lane over a disposable tree copy, receipts, coverage.
   regression: "kernel",
+  // The sealed reference wall (plans/0132): the regression lane's sibling —
+  // the admission reuses its machinery; the close, the predicate and the
+  // sealed-channel check are pure git/file reads and writes around it.
+  wall: "kernel",
   // engine — one turn, one dispatch, one ladder: watch and the modules it
   // drives. The concerns are policies and the contract is contract, even
   // where they physically sit under engine/.

@@ -1,5 +1,6 @@
 # Spec read
 
+Wall: seal
 Phase-artifacts: spec-notes.md
 Task-artifacts: notes.md
 
@@ -31,5 +32,21 @@ cheap to fix at the source before later phases build on the note. This
 phase's sessions read the reference lawfully, so a session may be told the
 colliding identifier outright. The committed receipt carries counts and note ids alone;
 a reference identifier never persists in any session-readable document.
+
+The sealed wall: this phase's close seals the reference wall — the driver
+removes the reference door(s) and the admitting allows as one recorded act
+at the next person's advance, and every later phase is mechanically walled.
+This document carries the sealing semantics alone; the door path(s) are the
+project's own fill here at materialization (`Wall: seal <door>` — the
+top-level reference symlink names, comma or space separated; an unfilled
+field seals against every top-level symlink that resolves outside the
+project). Evidence layer, this phase's pre-wall duty: the verification
+reports keep verdicts and counts in-tree; their anchors and spot-check
+citations — any reference internals — land in the project's declared
+out-of-tree compliance home beside the divergence receipts, never in a
+session-readable document. Commit messages are covered by the same rule:
+they are the one in-tree channel that can never be restated — no reference
+anchor, identifier or file:line ever rides one, this phase's sessions and
+the driver's own commits alike.
 
 <!-- auto: eof -->

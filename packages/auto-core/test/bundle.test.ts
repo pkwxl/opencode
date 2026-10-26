@@ -293,6 +293,34 @@ describe("bundle sources", () => {
     }
   })
 
+  // The sealed reference wall (plans/0132 D1): the shipped cleanroom bundle
+  // carries the sealing semantics on the spec-read type — `Wall: seal` with
+  // no door named (the universality floor: no project's path rides the
+  // template; the concrete door path is the person-owned fill at
+  // materialization). The survey proposes the door; the spec-read duties
+  // teach the wall and the evidence layer; the audit type stays untouched
+  // (the audit is a clean room under 0121).
+  test("the shipped cleanroom bundle declares the wall: spec-read seals, no door named, the duties teach the evidence layer (plans/0132)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
+    expect(specRead.wall).toEqual({ doors: [] })
+    expect(specRead.planDuties).toContain("this phase's close seals the reference wall")
+    expect(specRead.planDuties).toContain("out-of-tree compliance home")
+    expect(specRead.planDuties).toContain("Commit messages are covered by the same rule")
+    const survey = bundle.types.find((entry) => entry.type === "survey")!
+    expect(survey.gates).toEqual(["human"])
+    expect(survey.planDuties).toContain("the reference door")
+    const audit = bundle.types.find((entry) => entry.type === "audit")!
+    expect(audit.wall).toBeUndefined()
+    // The other two postures declare no wall at all.
+    for (const name of ["faithful", "faithful-lean"]) {
+      const shipped = await resolveIntentBundle(name)
+      const other = parseIntentBundle(shipped!)
+      expect(other.types.every((entry) => entry.wall === undefined)).toBe(true)
+    }
+  })
+
   // The two-lane concurrency model (plans/0126 D1): every shipped pack — the
   // builtin default and the three bundles — carries the width-keyed
   // doc-concurrency teaching, level-free; the bundles' code-depth

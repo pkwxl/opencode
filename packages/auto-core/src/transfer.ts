@@ -82,6 +82,7 @@ import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
 import { loadPlan } from "./tasks"
+import { wallPrecheckFindings } from "./wall"
 
 // The shell's entry: the run lock ("transfer", re-entered by the runAll the
 // advance delegates to), then the state-resolved advance.
@@ -125,6 +126,19 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   if (route.type === "blocked") {
     log(phaseFlowBlockedLine(route.reason))
     return 1
+  }
+  // The sealed wall's boundary check (plans/0132 D2): post-seal the closed
+  // predicate re-derives at every boundary — ahead of any session, so any
+  // reopen however performed (a re-created door, a hand-added covering
+  // allow) surfaces as the person's finding first; the advance itself
+  // finishes the interrupted retirement at the handover below. An undeclared
+  // or pre-seal wall reads nothing here (the floor).
+  {
+    const wallLines = await wallPrecheckFindings(directory)
+    if (wallLines.length) {
+      for (const line of wallLines) log(line)
+      return 2
+    }
   }
   // Shape 4: the round closed — the round-close gate, then the next round
   // from the roadmap's line or the exhausted stop.

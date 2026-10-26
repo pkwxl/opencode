@@ -50,11 +50,14 @@ facts and its `## Project brief` proposal: the lane rows — build, the paradigm
 suite (the target platform's safety and forbidden-construct checks), the property suite, the
 divergence scan behind a bare target name, and the acceptance anchor — named and commanded in
 the project's own toolchain terms, never the bundle's; the divergence corpus location — a
-driver-side location outside the platform boundary, recorded as an environment fact for the
-person, the person's fact to hold driver-side, never session-visible content; and the platform
+driver-side location outside the platform boundary, recorded as an environment fact for
+the person, the person's fact to hold driver-side, never session-visible content; the platform
 contract — the target platform's abstractions the deliverable must build on: its execution
 model, its memory/isolation discipline, its interface shapes — proposed into the brief's
-constants. The person approves these through the fork flow like any other decision, and
-installs the approved lane rows into the materialized pack.
+constants; and the reference door — the top-level reference symlink the sealed wall will
+remove at the spec-read close, proposed so the person fills it into the sealing phase
+document's `Wall:` line at materialization (the wall's concrete door path is the person's
+fill there, never shipped content). The person approves these through the fork flow like any
+other decision, and installs the approved lane rows into the materialized pack.
 
 <!-- auto: eof -->

@@ -52,6 +52,7 @@ import { shellProfile } from "./shell"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
 import { loadPlan, resetPlanning } from "./tasks"
+import { wallBoundary } from "./wall"
 
 // phase handover (§F, docs never move): ① the distillation session (the AI's
 // only duty, a one-off bypass) produces the permanent handover document
@@ -279,6 +280,21 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         log(`⏸ the repair append did not complete (exit ${code}); the regression gate stop follows`)
       }
       for (const line of regressionHoldLines(directory, phase, hold.lanes)) log(line)
+      return 2
+    }
+  }
+  // The sealed reference wall (plans/0132 D2): the wall's one boundary
+  // entry — post-wall the closed predicate re-derived (a reopen, a covering
+  // entry, the sealed channel asserted, the admission's hard-identifier
+  // class), pre-wall under the person's advance path (stopBefore
+  // "formulate" — transfer) with the seal threshold met, the three-step
+  // close itself (the admission scan → the wall commit; the transition
+  // commit below is step 3). A block holds the phase on its handover route
+  // exactly like a gate: nothing is renamed, the next advance re-derives.
+  {
+    const wallLines = await wallBoundary(ctx, phase)
+    if (wallLines.length) {
+      for (const line of wallLines) log(line)
       return 2
     }
   }

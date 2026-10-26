@@ -80,6 +80,14 @@ export type PhaseTypeEntry = {
   // the type). Derivation, not configuration: the config keys keep their
   // constitutional on/off meaning.
   codeWork?: boolean
+  // The sealed reference wall (plans/0132 D1): a type carrying `Wall: seal`
+  // is the sealing phase — its close (or any later transfer past it, the
+  // retrofit) closes the wall. `doors` are the reference door symlinks the
+  // field names (the person-owned fill at materialization; empty = the doors
+  // derive from disk at close, every top-level symlink resolving outside the
+  // project root). Absent field = no wall machinery anywhere (the P10
+  // floor). The lifecycle itself lives in src/wall.ts (driver plane).
+  wall?: { doors: string[] }
   // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
   origin: "builtin" | "project"
 }

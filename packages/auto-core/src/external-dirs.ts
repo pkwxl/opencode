@@ -50,6 +50,24 @@ export async function rootSymlinkRealPaths(dir: string): Promise<string[]> {
   return [...new Set(external)].sort()
 }
 
+// The same scan keeping names beside targets (plans/0132): the reference
+// doors — each top-level symlink with its resolved external real path, the
+// pair the wall close records and removes. The same exclusion rules as
+// rootSymlinkRealPaths; sorted by name.
+export async function rootSymlinkDoors(dir: string): Promise<{ name: string; target: string }[]> {
+  const root = await realpath(dir).catch(() => dir)
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  const doors: { name: string; target: string }[] = []
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue
+    const real = await realpath(join(dir, entry.name)).catch(() => undefined)
+    if (real === undefined || real === root || root.startsWith(real + sep)) continue
+    if (real.startsWith(root + sep)) continue
+    doors.push({ name: entry.name, target: real })
+  }
+  return doors.sort((a, b) => a.name.localeCompare(b.name))
+}
+
 // The permission entries contributed by the real paths: `"<path>/**": "allow"`
 // for each, in the same sorted order.
 export function externalDirectoryEntries(realPaths: readonly string[]): Record<string, "allow"> {
@@ -167,4 +185,86 @@ function parseConfig(text: string): Record<string, unknown> | undefined {
     return undefined
   }
   return isPlainObject(value) ? value : undefined
+}
+
+// —— The wall-side entries (plans/0132 D2) ——
+//
+// The closed predicate's allow half: the wall is closed iff the door is
+// absent and no live external_directory entry covers the recorded target.
+// These pure readers and writers work on the same permission shape the
+// 0122 stamp built; the driver-stamp identification is byte-exact — the
+// stamp for a target is `"<target>/**": "allow"`, re-derivable while the
+// door exists — so any OTHER key covering the target is a person-authored
+// entry the driver never removes (the person-entry split).
+
+// The live permission.external_directory entries of a config text:
+// undefined when the text is malformed or the section cannot hold
+// per-pattern entries (the same fail-loud shapes as the stamp readers).
+export function externalDirectoryLive(text: string): Record<string, string> | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const permission = value.permission
+  if (permission === undefined) return {}
+  if (!isPlainObject(permission)) return undefined
+  const external = permission.external_directory
+  if (external === undefined) return {}
+  if (!isPlainObject(external)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, action] of Object.entries(external)) out[key] = String(action)
+  return out
+}
+
+// One allow entry's base path (a `<path>/**` pattern names `<path>`), or
+// undefined for a non-allow entry or a pattern the wall does not read as a
+// directory allow.
+export function allowBase(key: string): string | undefined {
+  return key.endsWith("/**") ? key.slice(0, -3) : undefined
+}
+
+// Whether an allow entry's pattern covers a path: the target itself or
+// anything beneath it.
+export function allowCovers(key: string, path: string): boolean {
+  const base = allowBase(key)
+  return base !== undefined && (path === base || path.startsWith(base + sep))
+}
+
+// The live allow entries covering any of the targets (sorted, deduped).
+export function coveringAllowKeys(text: string, targets: readonly string[]): string[] {
+  const live = externalDirectoryLive(text)
+  if (live === undefined) return []
+  return [...new Set(Object.keys(live).filter((key) => live[key] === "allow" && targets.some((target) => allowCovers(key, target))))].sort()
+}
+
+// The driver-stamp key for one target (0122's exact bytes).
+export const stampKey = (target: string): string => `${target}/**`
+
+// The wall's write to opencode.json (plans/0132 D2): retire the driver's own
+// stamps — remove exactly the stamp keys of the targets — and stamp a
+// standing deny on each, additively (no 0122 exception invoked: the deny is
+// a new key, the retired stamp the driver withdrawing its own). Person keys
+// and their order are kept; the deny lands at the front of
+// external_directory beside the stamp's own ordering discipline (a person's
+// later rules keep winning the tie). Returns the next text (the input
+// unchanged when nothing moves), or undefined when the text is malformed.
+export function stampWallClosure(text: string, targets: readonly string[]): string | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const permission = isPlainObject(value.permission) ? value.permission : {}
+  const external = isPlainObject(permission.external_directory) ? permission.external_directory : {}
+  const retiring = new Set(targets.map(stampKey))
+  const denies: Record<string, unknown> = {}
+  for (const target of [...new Set(targets)].sort()) denies[stampKey(target)] = "deny"
+  // Keep every person key in its order (a deny the person already set on the
+  // exact key keeps its action only when it is the wall's own deny — an
+  // allow on a stamp key is the stamp itself, retired; a person deny stays a
+  // deny, the same bytes the wall would write).
+  const person: Record<string, unknown> = {}
+  for (const [key, action] of Object.entries(external)) {
+    if (retiring.has(key) && action === "allow") continue
+    person[key] = denies[key] !== undefined && action === "allow" ? "deny" : action
+  }
+  const { external_directory: _replaced, ...personPermission } = permission
+  const next = { ...value, permission: { external_directory: { ...denies, ...person }, ...personPermission } }
+  const out = JSON.stringify(next, null, 2) + "\n"
+  return out === text ? text : out
 }

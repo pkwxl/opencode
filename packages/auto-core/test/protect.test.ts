@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AGENTS_BLOCK_START, ensurePointer, removePointer } from "../src/agents-block"
 import { MODELS_FILE } from "../src/models"
-import { protect, unprotect } from "../src/protect"
+import { protect, protectAdditional, unprotect } from "../src/protect"
 
 const writable = async (path: string) => ((await stat(path)).mode & 0o222) !== 0
 
@@ -100,5 +100,27 @@ describe("protect", () => {
     await chmod(path, 0o444)
     expect(await removePointer(dir)).toEqual({ removed: true, emptied: false })
     expect(await Bun.file(path).text()).toBe("# AGENTS.md\n\nProject notes.\n")
+  })
+
+  // plans/0132 D4: the sealed reference wall's declared set — the vetted
+  // channel frozen at the wall commit, passed in by the run's preflight
+  // (this module derives nothing from git) and extended mid-run by the
+  // wall's own close (protectAdditional).
+  test("the declared sealed paths go read-only with the fixed set and restore after; protectAdditional extends it mid-run", async () => {
+    const notes = join(dir, "docs/R-01/P01-spec-read/spec-notes.md")
+    await Bun.write(notes, "# frozen\n")
+    await protect(dir, ["docs/R-01/P01-spec-read/spec-notes.md"])
+    expect(await writable(notes)).toBe(false)
+    expect(await writable(path)).toBe(false)
+    const taskNotes = join(dir, "docs/T-001/notes.md")
+    await Bun.write(taskNotes, "# notes\n")
+    await protectAdditional(dir, ["docs/T-001/notes.md"])
+    expect(await writable(taskNotes)).toBe(false)
+    await unprotect(dir)
+    expect(await writable(notes)).toBe(true)
+    expect(await writable(taskNotes)).toBe(true)
+    // protectAdditional is a no-op when protection is inactive.
+    await protectAdditional(dir, ["docs/T-001/notes.md"])
+    expect(await writable(taskNotes)).toBe(true)
   })
 })

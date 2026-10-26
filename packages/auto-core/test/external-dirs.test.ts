@@ -202,3 +202,71 @@ describe("externalAllowsStatus and applyExternalAllows", () => {
     }
   })
 })
+
+// —— The wall-side entries (plans/0132 D2) ——
+
+import { allowBase, allowCovers, coveringAllowKeys, externalDirectoryLive, rootSymlinkDoors, stampKey, stampWallClosure } from "../src/external-dirs"
+
+describe("rootSymlinkDoors (plans/0132): the name→target pairs the wall records", () => {
+  test("keeps external doors as pairs, sorted by name, with the same exclusion rules", async () => {
+    const { project, corpus } = await fixture()
+    try {
+      await symlink(corpus, join(project, "linux"))
+      await symlink(corpus, join(project, "aaa"))
+      await mkdir(join(project, "inside"))
+      await symlink(join(project, "inside"), join(project, "self"))
+      const doors = await rootSymlinkDoors(project)
+      expect(doors.map((door) => door.name)).toEqual(["aaa", "linux"])
+      expect(doors.every((door) => door.target === corpus)).toBe(true)
+    } finally {
+      await rm(project, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the wall's entry readers and the closure write", () => {
+  const text = (external: Record<string, string>) =>
+    JSON.stringify({ permission: { external_directory: external, read: { "*": "allow" } } }, null, 2) + "\n"
+
+  test("allowBase/allowCovers: a directory pattern covers the target itself and everything beneath, nothing else", () => {
+    expect(allowBase("/corpus/**")).toBe("/corpus")
+    expect(allowBase("/corpus")).toBeUndefined()
+    expect(allowCovers("/corpus/**", "/corpus")).toBe(true)
+    expect(allowCovers("/corpus/**", "/corpus/sub/file.c")).toBe(true)
+    expect(allowCovers("/corpus/**", "/corpus-x/file.c")).toBe(false)
+    expect(allowCovers("/other/**", "/corpus")).toBe(false)
+  })
+
+  test("externalDirectoryLive and coveringAllowKeys: only live allow entries covering a target, sorted; malformed stays undefined", () => {
+    const t = text({ "/person/**": "allow", [stampKey("/corpus")]: "allow", "/denied/**": "deny" })
+    expect(externalDirectoryLive(t)).toMatchObject({ "/person/**": "allow", [stampKey("/corpus")]: "allow", "/denied/**": "deny" })
+    expect(coveringAllowKeys(t, ["/corpus"])).toEqual([stampKey("/corpus")])
+    // A person's parent glob covers the target too — the person-entry split
+    // names it at the close.
+    expect(coveringAllowKeys(text({ "/tmp/**": "allow" }), ["/tmp/corpus"])).toEqual(["/tmp/**"])
+    expect(coveringAllowKeys("not json", ["/corpus"])).toEqual([])
+    expect(externalDirectoryLive("not json")).toBeUndefined()
+  })
+
+  test("stampWallClosure retires the exact stamps, keeps person keys, lands the denies at the front — idempotent", () => {
+    const t = text({ "/person/**": "deny", [stampKey("/corpus")]: "allow" })
+    const closed = stampWallClosure(t, ["/corpus", "/other"])!
+    const parsed = JSON.parse(closed) as any
+    expect(Object.keys(parsed.permission.external_directory)).toEqual([stampKey("/corpus"), stampKey("/other"), "/person/**"])
+    expect(parsed.permission.external_directory[stampKey("/corpus")]).toBe("deny")
+    expect(parsed.permission.external_directory[stampKey("/other")]).toBe("deny")
+    expect(parsed.permission.external_directory["/person/**"]).toBe("deny")
+    // Idempotent: a second pass is byte-stable; nothing else moves.
+    expect(stampWallClosure(closed, ["/corpus", "/other"])).toBe(closed)
+  })
+
+  test("a person's deny on the exact key stays a deny; an absent section is created; malformed is never guessed", () => {
+    const personDeny = text({ [stampKey("/corpus")]: "deny" })
+    expect(stampWallClosure(personDeny, ["/corpus"])).toBe(personDeny)
+    const noSection = JSON.stringify({ permission: { read: "allow" } }, null, 2) + "\n"
+    const created = stampWallClosure(noSection, ["/corpus"])!
+    expect((JSON.parse(created) as any).permission.external_directory).toEqual({ [stampKey("/corpus")]: "deny" })
+    expect(stampWallClosure("not json", ["/corpus"])).toBeUndefined()
+  })
+})

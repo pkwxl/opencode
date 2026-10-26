@@ -83,6 +83,13 @@ export const REPO_LANE: readonly string[] = [
   // --stop-after (plans/0128): the loop harness over the fake agent on real
   // git repositories — the serial stop's commits and task documents.
   "test/stop-after.test.ts",
+  // The sealed reference wall (plans/0132): the lifecycle suite drives the
+  // close, the predicate and the admission over real git repositories with
+  // real commitTree — the wall commit is git state — beside corpus
+  // directories under temp; the transfer integration rides the loop harness
+  // the same way.
+  "test/wall.test.ts",
+  "test/transfer-wall.test.ts",
   "test/lock.test.ts",
   // The isolation loop's suite (0069 §3.3's gap): drives runIsolationLoop
   // over real git repositories — worktrees, landing merges — so the repo

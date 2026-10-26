@@ -68,6 +68,7 @@ import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { recoverRegression } from "./regression"
 import { protect } from "./protect"
+import { findWallCommit, wallDeclared } from "./wall"
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
 import { createServices, type RunServices } from "./services"
@@ -528,8 +529,12 @@ export async function preflight(
   const progress = trackSubtasks(directory)
   // Driver-owned files go read-only for the whole run; driver writes
   // re-apply it, and the finally below restores writability so a human can
-  // edit the files (e.g. opencode.json after a permission block).
-  await protect(directory)
+  // edit the files (e.g. opencode.json after a permission block). Beside
+  // them, the sealed reference wall's declared set (plans/0132 D4): the
+  // vetted channel frozen at the wall commit — read-only for the run like
+  // the driver's own files; an undeclared or never-closed wall contributes
+  // nothing (the floor, re-derived from git at every run start).
+  await protect(directory, wallDeclared(directory) ? ((await findWallCommit(directory))?.sealed ?? []) : [])
   // on-site restoration of handover documents (test handover interruption
   // recovery F3, plans/0023-test-handover-early-design.md §I): must precede
   // the start clean gate — the previous run may have deleted an

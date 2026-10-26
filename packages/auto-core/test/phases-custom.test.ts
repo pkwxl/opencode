@@ -91,7 +91,7 @@ describe("parsePhaseTypeFile", () => {
       ["# R\n\nCode-work:\n\n## plan duties\n\nx\n", /Code-work must be yes or no; got ""/],
       ["# R\n\nTask-artifacts: gaps.md\n\n## plan duties\n\nx\n", /driver-owned file name/],
       ["# R\n\nReasoning:\n\n## plan duties\n\nx\n", /Reasoning must be deep or simple; got ""/],
-      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner \(available: Tasks, Gate, Reasoning, Code-work, Phase-artifacts, Task-artifacts\)/],
+      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner \(available: Tasks, Gate, Reasoning, Code-work, Wall, Phase-artifacts, Task-artifacts\)/],
       ["# R\n\nPhase-artifacts: ../out.md\n\n## plan duties\n\nx\n", /must be relative to the unit directory/],
       ["# R\n\nPhase-artifacts: /abs.md\n\n## plan duties\n\nx\n", /must be relative/],
       ["# R\n\nPhase-artifacts: handover.md\n\n## plan duties\n\nx\n", /driver-owned file name/],

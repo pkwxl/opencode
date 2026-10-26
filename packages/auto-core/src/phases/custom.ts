@@ -12,6 +12,9 @@
 //   Code-work: yes                    optional; yes | no — the --test-by-driver channel's scope
 //                                     (plans/0083 D9; absent = no: the type declares itself
 //                                     non-code and the driver-run test protocol never renders)
+//   Wall: seal [door …]               optional; plans/0132 D1 — this phase type's close seals
+//                                     the reference wall; the door names are the person-owned
+//                                     fill at materialization (absent = derived from disk)
 //   Phase-artifacts: threat-model.md  optional; standard artifacts in the phase dir
 //   Task-artifacts: review.md         optional; standard artifacts in each task dir
 //
@@ -38,7 +41,7 @@ export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 // P<nn>-<type> accepts it).
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
-const FIELDS = ["tasks", "gate", "reasoning", "code-work", "phase-artifacts", "task-artifacts"] as const
+const FIELDS = ["tasks", "gate", "reasoning", "code-work", "wall", "phase-artifacts", "task-artifacts"] as const
 const SECTIONS: Record<string, "planDuties" | "decomposeDuties"> = {
   "plan duties": "planDuties",
   "decompose duties": "decomposeDuties",
@@ -81,7 +84,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   const name = lines[0]!.trim().replace(/^#\s+/, "")
   const unknown = Object.keys(doc.fields).filter((key) => !(FIELDS as readonly string[]).includes(key))
   if (unknown.length) {
-    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Code-work, Phase-artifacts, Task-artifacts)`)
+    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Code-work, Wall, Phase-artifacts, Task-artifacts)`)
   }
   const tasks = (doc.fields.tasks ?? "yes").toLowerCase()
   if (tasks === "no") {
@@ -91,6 +94,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   const gates = gateList(where, doc.fields.gate)
   const reasoning = reasoningTier(where, doc.fields.reasoning)
   const codeWork = codeWorkFlag(where, doc.fields["code-work"])
+  const wall = wallDecl(where, doc.fields.wall)
   const phaseArtifacts = artifactList(where, "Phase-artifacts", doc.fields["phase-artifacts"], RESERVED_PHASE_FILES)
   const taskArtifacts = artifactList(where, "Task-artifacts", doc.fields["task-artifacts"], RESERVED_TASK_FILES)
   const sections = parseSections(where, lines)
@@ -108,6 +112,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
     gates,
     reasoning,
     ...(codeWork !== undefined ? { codeWork } : {}),
+    ...(wall !== undefined ? { wall } : {}),
     origin: "project",
   }
 }
@@ -135,6 +140,29 @@ function codeWorkFlag(where: string, raw: string | undefined): boolean | undefin
   const value = raw.trim().toLowerCase()
   if (value !== "yes" && value !== "no") throw new Error(`${where}: Code-work must be yes or no; got "${raw}"`)
   return value === "yes"
+}
+
+// `Wall:` (plans/0132 D1) — the sealed reference wall's declaration, additive
+// beside `Gate:`. The value is the keyword `seal` (this phase type's close
+// seals the wall) optionally followed by the reference door names — top-level
+// entry names, space or comma separated, the person-owned fill at
+// materialization (the shipped bundle carries the semantics only; the doors
+// derive from disk when the fill is absent, exactly the 0122 root-symlink
+// derivation). A door name must be a single top-level segment: no `/`, not
+// `.`/`..` — the wall removes top-level symlinks, never a path inside the
+// project. Read case-insensitively on the keyword like the sibling fields;
+// an unknown keyword fails naming the grammar (P13: the vocabulary grows
+// only by lockstep).
+function wallDecl(where: string, raw: string | undefined): { doors: string[] } | undefined {
+  if (raw === undefined) return undefined
+  const value = raw.trim()
+  const [keyword, ...rest] = value.split(/[\s,]+/).filter(Boolean)
+  if (keyword === undefined) throw new Error(`${where}: Wall is empty (omit the field for none)`)
+  if (keyword.toLowerCase() !== "seal") throw new Error(`${where}: Wall must be seal [door …]; got "${raw}"`)
+  const doors = rest.map((door) => door.replace(/^`+|`+$/g, ""))
+  const bad = doors.filter((door) => !door || door === "." || door === ".." || door.includes("/"))
+  if (bad.length) throw new Error(`${where}: Wall door(s) must be top-level entry names without "/" (bad: ${bad.join(", ")}); got "${raw}"`)
+  return { doors: [...new Set(doors)] }
 }
 
 // `Reasoning:` — the execute tier of the type's task sessions (plans/0055 §5).

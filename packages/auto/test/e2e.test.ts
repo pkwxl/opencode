@@ -9,7 +9,7 @@ import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { createServices, installServices, services } from "@opencode-ai/auto-core/services"
-import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
+import { completePhase, establishRound, readPhases, type PhaseUnit } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
@@ -5727,3 +5727,240 @@ describe("CLI: release certifies the destination standing alone (auto-core plans
     }
   })
 })
+
+// The sealed reference wall through the real CLI (auto-core plans/0132): the
+// three-step close rides the person's transfer — the admission scan, the wall
+// commit between the distillation and the transition — and the boundary
+// vocabulary (repeated closure, a reopened door, a person-authored covering
+// allow) answers with exit 2 ahead of any session. The retrofit trigger is
+// driven as the field meets it: the wall declared a phase late, the next
+// transfer past the seal closes it under the sealing phase's name. The
+// undeclared floor is behavior: a project without the Wall: field never
+// grows wall machinery, its door standing.
+describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
+  // One wall project: the corpus beside the target, the door symlinked and
+  // committed, the sealing type and the divergence lane row as the project's
+  // own fills. wall=false writes the type without the field (the retrofit's
+  // pre-declaration state).
+  async function wallProject(wall: boolean): Promise<{ dir: string; corpus: string }> {
+    const root = await mkdtemp(join(tmpdir(), "auto-cli-wall-"))
+    const dir = join(root, "project")
+    const corpus = join(root, "corpus")
+    await mkdir(dir, { recursive: true })
+    await mkdir(corpus, { recursive: true })
+    await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
+    await symlink(corpus, join(dir, "linux"))
+    await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
+    await Bun.write(
+      join(dir, ".opencode/auto/phases/spec-read.md"),
+      ["# Spec read", "", ...(wall ? ["Wall: seal linux"] : []), "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
+    )
+    await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
+    await Bun.write(
+      join(dir, ".opencode/auto/intents/default.md"),
+      [
+        "# default",
+        "",
+        "## quality",
+        "",
+        "### test-lanes",
+        "",
+        "divergence:",
+        "Command: true",
+        "Cost: regression",
+        "Surfaces: .",
+        "Exclusive: no",
+        "",
+        "## acceptance",
+        "",
+        "### result-line",
+        "",
+        "Write it in every report: `Result: PASS` means every acceptance criterion the task asked for was actually observed to pass.",
+        "",
+      ].join("\n"),
+    )
+    return { dir, corpus }
+  }
+
+  // Seed one phase complete the way the driver leaves it: its task index all
+  // ticked with done documents, the sealing artifacts on disk, the phase
+  // renamed done.
+  async function seedPhaseDone(dir: string, unit: PhaseUnit, tasks: string[], artifacts: string[]) {
+    await Bun.write(join(dir, unit.dir, "tasks.md"), `# Tasks\n\n${tasks.map((id) => `- [x] ${id} task ${id}\n`).join("")}`)
+    for (const id of tasks) {
+      await mkdir(join(dir, "docs", id), { recursive: true })
+      await Bun.write(join(dir, "docs", id, "done.md"), `# ${id}: task ${id}\nPhase: R-01.${unit.id}\n\n## Goal\n\nSeeded done.\n`)
+      await Bun.write(join(dir, "docs", id, "notes.md"), `# Notes (${id})\n\nContracts at the boundary.\n\n<!-- auto: eof -->\n`)
+    }
+    for (const file of artifacts) await Bun.write(join(dir, unit.dir, file), `# ${file}\n\nBehavior only.\n\n<!-- auto: eof -->\n`)
+  }
+
+  test("closure, repeated closure, reopen and the person-authored allow — the wall's boundary vocabulary through transfer", async () => {
+    const { dir, corpus } = await wallProject(true)
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      expect((await runCli(["init", dir, "--phases", "spec-read,implement,test"])).code).toBe(0)
+      // init stamped the door's allow (plans/0122): the admitting surface the
+      // wall will retire.
+      const stamped = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(stamped.permission.external_directory[`${corpus}/**`]).toBe("allow")
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
+      await commitFixture(dir)
+      // The construct (P01's formulation todo), then the seeded spec room.
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      const state = (await readPhases(dir))!
+      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], ["spec-notes.md"])
+      await commitFixture(dir)
+      // The advance: the distillation, the admission, the wall commit, the
+      // transition — the retrofit-free close at the sealing phase's own
+      // boundary.
+      const closed = await agent.run(["transfer", dir])
+      expect(closed.code, `${closed.out}\n${closed.err}`).toBe(0)
+      expect(closed.out).toContain("sealed reference wall closed (P01-spec-read Spec read)")
+      expect(closed.out).toContain(corpus)
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(false)
+      const record = await git("log", "--format=%H %B", "--grep=PLAN wall close")
+      expect(record).toContain(`Auto-Stage: wall`)
+      expect(record).toContain(`Wall-door: linux -> ${corpus}`)
+      expect(record).toContain("Wall-sealed: docs/R-01/P01-spec-read/spec-notes.md")
+      expect(record).toContain("Wall-sealed: docs/T-100/notes.md")
+      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+      // Repeated closure never re-closes: the wall derives closed, the next
+      // advance is P02's ordinary review stop.
+      const again = await agent.run(["transfer", dir])
+      expect(again.code, `${again.out}\n${again.err}`).toBe(0)
+      expect(again.out).not.toContain("sealed reference wall closed")
+      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim().split("\n")).toHaveLength(1)
+      // A reopened door: transfer refuses ahead of any session.
+      await symlink(corpus, join(dir, "linux"))
+      await commitFixture(dir)
+      const reopened = await agent.run(["transfer", dir])
+      expect(reopened.code).toBe(2)
+      expect(reopened.out).toContain("present again")
+      expect(reopened.out).toContain("reopen")
+      await rm(join(dir, "linux"))
+      await commitFixture(dir)
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      // A person-authored covering allow: the driver never removes the
+      // person's lines — the block names the entry.
+      const withPerson = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      withPerson.permission.external_directory[`${dirname(corpus)}/**`] = "allow"
+      await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
+      const personBlock = await agent.run(["transfer", dir])
+      expect(personBlock.code).toBe(2)
+      expect(personBlock.out).toContain("person-authored external_directory allow")
+      expect(personBlock.out).toContain(`${dirname(corpus)}/**`)
+      delete withPerson.permission.external_directory[`${dirname(corpus)}/**`]
+      await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  test("the retrofit trigger: a wall declared a phase late closes at the next transfer past the seal, under the sealing phase's name", async () => {
+    const { dir, corpus } = await wallProject(false)
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      expect((await runCli(["init", dir, "--phases", "spec-read,implement,test"])).code).toBe(0)
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
+      await commitFixture(dir)
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      const state = (await readPhases(dir))!
+      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], ["spec-notes.md"])
+      await commitFixture(dir)
+      // The advance past the seal with no wall declared: nothing closes, the
+      // door stands — the pre-declaration floor.
+      const undeclared = await agent.run(["transfer", dir])
+      expect(undeclared.code, `${undeclared.out}\n${undeclared.err}`).toBe(0)
+      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
+      // The person declares the wall a phase late (the field project's sync
+      // or hand fill) and seeds P02: the next transfer past the seal closes
+      // under the sealing phase's name — the retrofit's one-time act.
+      await Bun.write(
+        join(dir, ".opencode/auto/phases/spec-read.md"),
+        ["# Spec read", "", "Wall: seal linux", "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
+      )
+      const advanced = (await readPhases(dir))!
+      await seedPhaseDone(dir, advanced.phases[1]!, ["T-200"], [])
+      await commitFixture(dir)
+      const retrofit = await agent.run(["transfer", dir])
+      expect(retrofit.code, `${retrofit.out}\n${retrofit.err}`).toBe(0)
+      expect(retrofit.out).toContain("sealed reference wall closed (P01-spec-read Spec read)")
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(false)
+      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  test("the undeclared floor as behavior: a project without the Wall: field keeps its door and never grows a wall commit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "auto-cli-floor-"))
+    const dir = join(root, "project")
+    const corpus = join(root, "corpus")
+    await mkdir(dir, { recursive: true })
+    await mkdir(corpus, { recursive: true })
+    await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
+    await symlink(corpus, join(dir, "linux"))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
+      await commitFixture(dir)
+      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      const state = (await readPhases(dir))!
+      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], [])
+      await commitFixture(dir)
+      const advance = await agent.run(["transfer", dir])
+      expect(advance.code, `${advance.out}\n${advance.err}`).toBe(0)
+      expect(advance.out.toLowerCase()).not.toContain("wall")
+      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
+      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(config.permission.external_directory[`${corpus}/**`]).toBe("allow")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  }, 120_000)
+})
+
+// The filled round brief the round-start gate wants (the stub's comments are
+// not content).
+function renderRoundBriefText(): string {
+  return [
+    "# Round R-01",
+    "",
+    "## Goal",
+    "",
+    "Port the timer's behavior into the target's own terms.",
+    "",
+    "## Acceptance criteria",
+    "",
+    "- The behavior-only specification holds.",
+    "",
+    "## Release criteria",
+    "",
+    "- The round's phases complete.",
+    "",
+    "## Close",
+    "",
+    "- Restated: everything the deliverable needs.",
+    "- Accepted as lost: nothing.",
+    "",
+  ].join("\n")
+}
