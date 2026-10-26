@@ -87,6 +87,9 @@ Phase: R-01.P02
 
    The title line, the `Phase:` field line, the three section headings, the index line and the closing terminator are
    parsed by the DRIVER — write them verbatim as above, do not translate or rephrase them;
+   Every task document ends with the closing terminator — its last line of body text is exactly <!-- auto: eof -->;
+   a document that ends in anything else is invalid and the DRIVER blocks this task on it; verify every written
+   document for this before ending the session;
    Optional dependency fields, right after the `Phase:` line of a task document: `Depends: T-011, T-012` — the task starts only after those tasks
    are done (this phase's index or completed earlier-phase tasks, by id only); without the field, the task before it in the index (serial order);
    `Depends: none` — no prerequisite. `Touches: src/dma/, include/dma.h` — the repository-relative paths the task will change (no absolute paths,
@@ -102,7 +105,7 @@ Phase: R-01.P02
 4. Task numbers increment continuously from T-006 (auto-numbering: numbers never repeat within the target directory; earlier numbers are already taken by historical tasks and must not be reused);
    each task is one independently deliverable outcome; do not hand-write subtask checklist items
    (whether and how a task is split is decided at execution time);
-5. End the session immediately once planning is done and the task index, the task documents and the coverage map are written.
+5. End the session immediately once planning is done, the task index, the task documents and the coverage map are written, and every task document's closing terminator is verified.
 
 ## Constraints
 

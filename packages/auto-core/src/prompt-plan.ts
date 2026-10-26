@@ -444,6 +444,9 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
       "",
       "   The title line, the `Phase:` field line, the three section headings, the index line and the closing terminator are",
       "   parsed by the DRIVER — write them verbatim as above, do not translate or rephrase them;",
+      "   Every task document ends with the closing terminator — its last line of body text is exactly <!-- auto: eof -->;",
+      "   a document that ends in anything else is invalid and the DRIVER blocks this task on it; verify every written",
+      "   document for this before ending the session;",
       `   ${renderText("{{> task-depends}}", {}).trim().replaceAll("\n", "\n   ")}`,
       `   ${renderText("{{> task-decompose}}", {}).trim().replaceAll("\n", "\n   ")}`,
       ...(synth !== undefined
@@ -452,13 +455,13 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
             `4. Task numbers increment continuously from T-${numberStart} (auto-numbering: numbers never repeat within the target directory; earlier numbers are already taken by historical tasks and must not be reused);`,
             "   each task is one independently deliverable outcome; do not hand-write subtask checklist items",
             "   (whether and how a task is split is decided at execution time);",
-            "5. End the session immediately once planning is done and the task index, the task documents and the coverage map are written.",
+            "5. End the session immediately once planning is done, the task index, the task documents and the coverage map are written, and every task document's closing terminator is verified.",
           ]
         : [
             `3. Task numbers increment continuously from T-${numberStart} (auto-numbering: numbers never repeat within the target directory; earlier numbers are already taken by historical tasks and must not be reused);`,
             "   each task is one independently deliverable outcome; do not hand-write subtask checklist items",
             "   (whether and how a task is split is decided at execution time);",
-            "4. End the session immediately once planning is done and the task index and all task documents are written.",
+            "4. End the session immediately once planning is done, the task index and all task documents are written, and every task document's closing terminator is verified.",
           ]),
       "",
       "## Constraints",
