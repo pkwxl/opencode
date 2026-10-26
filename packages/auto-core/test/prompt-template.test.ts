@@ -409,7 +409,7 @@ describe("Template render completeness", () => {
       wrapOf(plan, task),
       wrapOf(plan, task, { solo: true, mode: migrate }),
       wrapOf(plan, task, { resolves: [resolveItem("Should the third implementation be closed out as well?")] }),
-      wholeOf(plan, task, { ondemand: true, continuation: true, mode: migrate }),
+      wholeOf(plan, task, { continuation: true, mode: migrate }),
       renderHandoffSteer(facts(), taskDocPaths(task.id)),
       renderTestResult(facts(), { script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
       renderTestWrapup(facts(), { handoffFile: "/h" }),

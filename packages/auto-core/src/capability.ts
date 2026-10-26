@@ -12,7 +12,7 @@
 // | fork "none"       | OPENCODE_AUTO_FORK off; every other fork (retry, failover, shape-check |
 // |                   | re-prompt, handover pin) falls back to a new session (forkSession);  |
 // |                   | --subtask auto's lead gets no split clause: its streams are forks of |
-// |                   | the lead (plans/0059 D7, leadSplit — auto runs as ondemand does)      |
+// |                   | the lead (plans/0059 D7, leadSplit — auto runs as a plain whole task)  |
 // | fork "session"    | the handover pin fork copies the whole session (anchor dropped)       |
 // | steer             | OPENCODE_AUTO_STEER and OPENCODE_AUTO_STUCK off; no length resume;    |
 // |                   | --interactive discards typed lines; --test-by-driver has no fallback |
@@ -147,7 +147,7 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
   const auto = (opts.subtask ?? "auto") === "auto"
   if (!forks && auto) {
     notes.push(
-      `--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does${by(forced((c) => !forksSessions(c)))}`,
+      `--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as a plain whole-task session does${by(forced((c) => !forksSessions(c)))}`,
     )
   }
   if (!caps.steer) {

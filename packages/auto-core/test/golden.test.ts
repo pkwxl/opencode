@@ -221,17 +221,17 @@ describe("golden render snapshots", () => {
         handoff: "docs/T-002/S02/handoff.md",
       }),
     )
-    golden("whole", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true }))
-    golden("whole-budget", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true }))
-    golden("whole-adaptive", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true }))
+    golden("whole", renderWhole(facts, views.plan, views.task, docs, { ...execOpts }))
+    golden("whole-budget", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, budget: true }))
+    golden("whole-adaptive", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, budget: true, adaptive: true }))
     // D18 (plans/0068 S5): the split clause under a parallel level — the
     // lead arranges its streams for the width they will actually get.
-    golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, ondemand: true, budget: true, adaptive: true, parallel: "medium" }))
+    golden("whole-adaptive-parallel-medium", renderWhole(facts, views.plan, views.task, docs, { ...execOpts, budget: true, adaptive: true, parallel: "medium" }))
     // The lane table in play (plans/0096 D4): the protocol block beside the
     // self-check constraint, with the channel clause under the driver channel
     // and without it — the two renders differ by exactly that clause.
-    golden("whole-testlanes", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, ondemand: true, budget: true, testByDriver: true }))
-    golden("whole-testlanes-plain", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, ondemand: true, budget: true }))
+    golden("whole-testlanes", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, budget: true, testByDriver: true }))
+    golden("whole-testlanes-plain", renderWhole(laneFacts, views.plan, views.task, docs, { mode: migrate, budget: true }))
     golden("subtask-testlanes", renderSubtask(laneFacts, views.plan, views.task, docs, "write the execution logic", { ...execOpts, index: 2 }))
     golden("wrapup", renderWrapup(facts, views.plan, views.task, docs, { mode: migrate, resolves }))
     // The wrap-up charter's receipts clause under the same table (0083's

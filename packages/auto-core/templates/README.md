@@ -55,10 +55,12 @@ opencode-auto run <dir> --interactive
 
 Constitutional keys are fixed into `.opencode/auto/config.json` by init only and changed per key
 with `amend` — passing them to `run` is a usage error. Notably the task pipeline key is
-`--subtask off|auto|true|ondemand` (set at init/amend): `off`, the default, runs one whole-task
-session per task; `true` runs the planned decompose pipeline (a decompose session writes
-`subtasks.md`, then one fresh session per subtask); `auto` decomposes adaptively; `ondemand`
-lets a whole-task session hand over to a fresh session mid-task. Committing cannot be turned
+`--subtask off|auto|true|ondemand` (set at init/amend): `off`, the default, runs whole-task
+sessions per task under the standing context-handover protocol (a session hands its context
+over to a fresh session mid-task when the budget demands it); `true` runs the planned decompose
+pipeline (a decompose session writes `subtasks.md`, then one fresh session per subtask); `auto`
+decomposes adaptively; `ondemand` is `off`'s permanent synonym (the mode that once carried the
+protocol alone — merged into `off`, plans/0130). Committing cannot be turned
 off: the unified commit after each session is the completion condition, and any `--commit` form
 is a usage error.
 

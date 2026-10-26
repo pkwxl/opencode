@@ -226,7 +226,7 @@ Lanes (parallel execution, `plans/0068`):
 | 恢复保真 | recovery fidelity | `OPENCODE_AUTO_STRICT_RESUME` |
 | 进度记录 | progress record | `.auto/progress.json` |
 | 测试交接 | test handover | `--handover-test`, `src/exec-session.ts` |
-| 会话交接 | session handover | Context budget (ondemand, auto's lead and its streams): usage notices, a session-decided handover document, the hard-wall hint as last resort (0056) |
+| 会话交接 | session handover | Context budget (every whole-task session, a stream of a split, a fix round — standing since 0130): usage notices, a session-decided handover document, the hard-wall hint as last resort (0056; 0130) |
 | 墙 | wall | The context-budget wall: 2×cap, raised to a quarter of a large model window, capped at 80% of the window (`steerWall`, `plans/0059` D6) |
 | 定版 | freeze | Frozen commit (#1), frozen point, frozen tree |
 | 续跑会话 | continuation session | The session that continues after a handover |

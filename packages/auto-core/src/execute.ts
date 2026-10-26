@@ -1,5 +1,5 @@
-// The task execution stage: executeWhole (off/auto/ondemand whole-task
-// sessions; auto's is its lead, which may split the rest of the task,
+// The task execution stage: executeWhole (the whole-task sessions of every
+// mode; auto's is its lead, which may split the rest of the task,
 // plans/0059 D2–D4) +
 // the merged understand+decompose unit (ensureDecomposed; since M1.0
 // understand+decompose is one single session, plans/0030) + runSubtask, one
@@ -8,10 +8,12 @@
 // Sits above exec-session/session and below runner; **must not import
 // runner** (§D.2).
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S12, pure move).
-// The ondemand-handover engine below (D4, plans/0069 §2.2) is the one
-// post-session handover decision both execution scopes run; the two loops
-// keep their own surroundings (the split guard and unit commit on the whole
-// side, the artifact shape check on the subtask side) and share the decision,
+// The session-handover engine below (D4, plans/0069 §2.2) is the one
+// post-session handover decision every execution scope runs (whole task,
+// stream, fix round — the fix round since plans/0130 D2); the loops keep
+// their own surroundings (the split guard and unit commit on the whole side,
+// the artifact shape check on the subtask side, the one-commit close on the
+// fix side) and share the decision,
 // the retry bookkeeping and the rollback spending through it.
 
 import { rm } from "node:fs/promises"
@@ -60,8 +62,8 @@ import {
   type Task,
 } from "./tasks"
 
-// —— The ondemand-handover engine (D4, plans/0069 §2.2: one engine for
-// executeWhole and runSubtask's streams) ——
+// —— The session-handover engine (D4, plans/0069 §2.2: one engine for
+// executeWhole, runSubtask's streams and the fix rounds, plans/0130 D2) ——
 
 // The engine's per-scope state. consumed = the handover text the current
 // dispatch was seeded with (the recovery document, or the document a previous
@@ -73,7 +75,7 @@ import {
 // rollback redo was spent. The caller creates the holder (the pipeline seeds
 // consumed with the recovery document) and rewinds it inside its rollback
 // redo; the engine spends the two flags.
-type HandoverState = { consumed: string; retried: boolean; rolled: boolean }
+export type HandoverState = { consumed: string; retried: boolean; rolled: boolean }
 
 // The engine's verdict over one ended session's handover document:
 // - natural — the end stands: nothing was due and no fresh document exists,
@@ -109,6 +111,10 @@ type HandoverVerdict =
 //   scope's log lines name it, its retry feedback says "for this subtask",
 //   and its blocked and cold-start lines name the subtask; a whole scope's
 //   lines name the session and the task.
+// - fix, the fix-round flag (plans/0130 D2): the round's scope label — the
+//   log lines and the run-status handover event name a fix round as such;
+//   everything else (the file, the retry policy's fresh shape) is the whole
+//   scope's.
 // - rollbackRedo, the scope's strict-resume rollback redo (tightened in 3.3
 //   R3): the engine spends it once on the first invalid handover document,
 //   with no retry with feedback; a test-handover write-check failure spends
@@ -117,9 +123,10 @@ type HandoverVerdict =
 //   in the stash).
 //   AUTO-DECISION: the redo bodies stay in the callers, only their spending shared (the whole scope resets its split state, the subtask re-seeds its fork — scope recovery, not handover policy; merging the bodies would take before/after reset callbacks that recreate the duplication as plumbing)
 // - subject, the chain's session subject (the fork policy's fork names it).
-type HandoverScope = {
+export type HandoverScope = {
   retry: "fresh" | "fork"
   subtask?: number
+  fix?: boolean
   rollbackRedo: () => Promise<UnitStop | "done" | undefined>
   subject: string
 }
@@ -128,14 +135,14 @@ type HandoverScope = {
 // under a live steer is judged by its handover document — due by the figure
 // (the hard-wall hint in watch + the usage figure) or by a fresh document the
 // session wrote at a boundary of its own choosing, honored whatever the
-// figure. With no steer built (off mode, OPENCODE_AUTO_STEER=off, the
-// planned pipeline's subtasks) none of it exists — no notices, no hint, the
-// check disabled — and the end is natural; a spontaneously written document
-// is ignored, and off mode never builds one anyway. `Status: done` marks the
-// scope complete; `Status: continue` hands over; anything else is invalid.
-// AUTO-DECISION: the engine is one verdict step inside the callers' loops, not a loop-owning engine (the loops' surroundings differ by design — executeWhole's split guard, unit commit and rejected-split fork, runSubtask's shape check and fan-out prompt — and owning them would need a callback per difference, recreating the duplication as plumbing)
-// AUTO-DECISION: a quiet end (nothing due, no fresh document) and a Status: done document both return "natural" with no distinction (both callers act identically on them — executeWhole finishes the stage, a subtask falls to the shape check — and no caller ever distinguished them before)
-async function handoverVerdict(
+// figure. With no steer built (OPENCODE_AUTO_STEER=off, the planned
+// pipeline's subtasks) none of it exists — no notices, no hint, the check
+// disabled — and the end is natural; a spontaneously written document is
+// ignored. `Status: done` marks the scope complete; `Status: continue` hands
+// over; anything else is invalid.
+// AUTO-DECISION: the engine is one verdict step inside the callers' loops, not a loop-owning engine (the loops' surroundings differ by design — executeWhole's split guard, unit commit and rejected-split fork, runSubtask's shape check and fan-out prompt, the fix round's one-commit close — and owning them would need a callback per difference, recreating the duplication as plumbing)
+// AUTO-DECISION: a quiet end (nothing due, no fresh document) and a Status: done document both return "natural" with no distinction (all callers act identically on them — executeWhole finishes the stage, a subtask falls to the shape check, a fix round proceeds to its commit — and no caller ever distinguished them before)
+export async function handoverVerdict(
   client: ClientSource,
   task: Task,
   chain: SessionChain,
@@ -146,7 +153,7 @@ async function handoverVerdict(
   lastText: string,
 ): Promise<HandoverVerdict> {
   if (steer === undefined) return { type: "natural" }
-  const who = scope.subtask !== undefined ? `${task.id} subtask ${scope.subtask}` : task.id
+  const who = scope.subtask !== undefined ? `${task.id} subtask ${scope.subtask}` : scope.fix ? `${task.id} fix` : task.id
   const file = handoffFile(task)
   const doc = await readHandoff()
   const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
@@ -160,6 +167,21 @@ async function handoverVerdict(
         ? `↻ ${who} context reached the handover wall; handed over as ${file}, continuing in a new session`
         : `↻ ${who} session handed itself over as ${file}; continuing in a new session`,
     )
+    // The handover economics' journal line (plans/0130 D5): every handover of
+    // every scope lands in the run-status stream with its figures — due (the
+    // wall forced it) or self-directed, the tokens in use and the wall — so a
+    // later release can pair each continuation session's re-priming spend
+    // against the boundary that caused it (P19's measured basis, no runtime
+    // consumer yet).
+    emitStatus({
+      type: "session-handover",
+      task: task.id,
+      ...(scope.subtask !== undefined ? { subtask: subtaskId(scope.subtask) } : {}),
+      scope: scope.subtask !== undefined ? "subtask" : scope.fix ? "fix" : "whole",
+      due,
+      used: chain.used,
+      ...(chain.wall !== undefined ? { wall: chain.wall } : {}),
+    })
     state.consumed = doc
     return { type: "continue", doc }
   }
@@ -264,12 +286,13 @@ async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: strin
   })
 }
 
-// The execution stage for off/auto/ondemand: off finishes the whole task in
-// one session; ondemand and auto's lead (`ondemand` is true for both), when a
-// live session's context reaches 2x --context-limit, the driver steers in the
-// handover hint, the session writes a handover document and a new session
-// continues from it, until a natural finish or the handover document marks
-// completion. Returns undefined = execution stage done.
+// The execution stage for off/auto (ondemand is off's synonym since plans/
+// 0130): a whole-task session — or a chain of them — carries the task; with
+// OPENCODE_AUTO_STEER on (the default), when a live session's context reaches
+// the effective wall, the driver steers in the handover hint, the session
+// writes a handover document and a new session continues from it, until a
+// natural finish or the handover document marks completion. Returns undefined
+// = execution stage done.
 // A handover document left over from the previous attempt is cleaned up by the
 // caller (the pipeline) after its recovery determination.
 // `lead` = auto's lead (plans/0059 D2–D4): the prompt carries the split
@@ -289,15 +312,14 @@ async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: strin
 // agents that can fork (the streams are forks of the lead; the run start
 // says so in opts.leadSplit, plans/0059 D7) and a task whose checklist is not
 // written yet: a checklist committed before the stage (written by hand) keeps
-// ondemand's path, and runs after the lead as it does there. Without the
-// clause auto's lead is exactly ondemand's session.
+// the whole-task path, and runs after the lead as it does there. Without the
+// clause auto's lead is exactly a plain whole-task session.
 export async function executeWhole(
   client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  ondemand: boolean,
   lead = false,
   // plans/0099 D11: the doc-lane render fact — a doc lane's whole-task
   // prompt carries its concurrency clause; every serial or solo unit leaves
@@ -313,19 +335,20 @@ export async function executeWhole(
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
-  // Ondemand context management (plans/0056): with OPENCODE_AUTO_STEER on the
-  // session gets usage notices and may hand itself over at a natural boundary
-  // (a fresh handoff document is honored whatever the figure); the hard-wall
-  // hint fires at the effective wall in watch (testrun.ts steerWall: 2×cap,
-  // raised to a quarter of a large window, clamped to 80% of it). With the
-  // switch off none of it exists — no notices, no hint, the post-session
-  // handover check disabled with it (see usage.ts sessionHandoverDue) and a
-  // spontaneously written document ignored; off mode never builds one anyway.
-  // The role's usage policy (the whole descriptor's handover flag) declares
-  // the protocol exists for whole-task sessions at all; the mode (ondemand,
-  // auto's lead) is the per-call condition that builds it.
+  // Context management (plans/0056, standing for every whole-task session
+  // since plans/0130 D1): with OPENCODE_AUTO_STEER on the session gets usage
+  // notices and may hand itself over at a natural boundary (a fresh handoff
+  // document is honored whatever the figure); the hard-wall hint fires at the
+  // effective wall in watch (testrun.ts steerWall: 2×cap, raised to a quarter
+  // of a large window, clamped to 80% of it). With the switch off none of it
+  // exists — no notices, no hint, the post-session handover check disabled
+  // with it (see usage.ts sessionHandoverDue) and a spontaneously written
+  // document ignored. The role's usage policy (the whole descriptor's
+  // handover flag) declares the protocol exists for whole-scope execution
+  // sessions at all; the switch is the only per-call condition left (the
+  // ondemand mode that once gated it merged into off, plans/0130).
   const usage = sessionRole("whole").usage
-  const steer = usage.handover && ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
+  const steer = usage.handover ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   nameSubject(chain, subject)
   // The lead's split. The checklist the stage starts from is the committed
@@ -334,8 +357,8 @@ export async function executeWhole(
   // gate lets start with it). Without a commit to read (no git) it is the copy
   // on disk.
   // AUTO-DECISION: the starting checklist is read from HEAD, falling back to the disk only without a commit (the copy on disk at the stage's start would make a killed lead's uncommitted split look written by hand on the resumed run, and nothing else lets a task start with an uncommitted checklist past the clean gate)
-  // AUTO-RESOLVE: does auto's lead get the split clause when the task already has a committed checklist? -> no, the lead runs as ondemand's session and the checklist runs after it (a checklist a person wrote is a split already decided; judging it by the lead's guard could remove it, and a second split on top would run two plans)
-  // AUTO-RESOLVE: does auto's lead get the split clause without usage notices (OPENCODE_AUTO_STEER=off)? -> no, it runs as ondemand's session (criterion (c) is the first usage notice, which never arrives; 0059 D7 rules the same for an agent without mid-turn steer, and the run start already turns the steer off for one)
+  // AUTO-RESOLVE: does auto's lead get the split clause when the task already has a committed checklist? -> no, the lead runs as a plain whole-task session and the checklist runs after it (a checklist a person wrote is a split already decided; judging it by the lead's guard could remove it, and a second split on top would run two plans)
+  // AUTO-RESOLVE: does auto's lead get the split clause without usage notices (OPENCODE_AUTO_STEER=off)? -> no, it runs as a plain whole-task session (criterion (c) is the first usage notice, which never arrives; 0059 D7 rules the same for an agent without mid-turn steer, and the run start already turns the steer off for one)
   // AUTO-DECISION: an agent that cannot fork is known from the run start's fleet-wide degradation (opts.leadSplit), not from the lead's own client (under a model registry the streams may dispatch on any agent of the fleet, and reading a client here would start a host the lead may never use; the steer half of D7 is run-wide in the same way)
   const subtasksRel = taskDoc(task.id, "subtasks")
   const readSubtasks = async (): Promise<string> => Bun.file(join(planDir, subtasksRel)).text().catch(() => "")
@@ -413,7 +436,7 @@ export async function executeWhole(
   // rule must see it as the dispatch's seed — a session that ends without
   // rewriting it is a natural finish, not a second park.
   const priorText = await readHandoff()
-  const prior = ondemand ? handoffStatus(priorText) : undefined
+  const prior = steer !== undefined ? handoffStatus(priorText) : undefined
   if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
     return undefined
@@ -435,7 +458,7 @@ export async function executeWhole(
   let forked = false
   if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
-  // The ondemand-handover engine's per-scope state (D4): consumed is seeded
+  // The session-handover engine's per-scope state (D4): consumed is seeded
   // with the recovery document; the engine spends the retry and rollback
   // flags, the rollback redo below rewinds it (the rejected-split path below
   // re-seeds consumed too — a document the lead left is not this round's
@@ -479,7 +502,7 @@ export async function executeWhole(
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel, docLane: input.docLane }) + feedback + release,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel, docLane: input.docLane }) + feedback + release,
       opts,
       chain,
       steer,
@@ -612,7 +635,7 @@ export async function executeWhole(
       log(`↻ ${task.id} the lead's split was not taken (${verdict.reason}); ${forked ? "a fork of the lead" : "a new session"} finishes the task`)
       continue
     }
-    // The ondemand-handover engine (D4): this scope's verdict over the ended
+    // The session-handover engine (D4): this scope's verdict over the ended
     // session's handover document, under the fresh retry policy — a handover
     // due without a valid document retries the full whole-task prompt in a new
     // session (the fork policy belongs to runSubtask's streams).
@@ -807,7 +830,7 @@ export async function leadForkBase(client: ClientSource, task: Task, opts: Opts,
 // session self-checks its own work; the whole task is accounted for by the
 // wrap-up report and its result line.
 // No context handover for the planned pipeline's subtasks: the session
-// handover mechanism is ondemand's (plans/0056 — this wiring was retired with
+// handover mechanism is the whole-task sessions' (plans/0056 — this wiring was retired with
 // it); such a session that runs past the usage cap is left to the
 // provider-side compression / cap errors, which go through the existing
 // "session error" path. The interruption-recovery seeding below still reads a
@@ -1002,7 +1025,7 @@ export async function runSubtask(
     // copy already holds the full prompt and all the working context, and
     // resending the whole thing would only induce starting over from scratch.
     let briefFork = false
-    // The ondemand-handover engine's per-scope state (D4): consumed is seeded
+    // The session-handover engine's per-scope state (D4): consumed is seeded
     // with the recovery document; the engine spends the retry and rollback
     // flags, the rollback redo below rewinds it.
     const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
@@ -1050,7 +1073,7 @@ export async function runSubtask(
         return result
       }
       // A stream's handover (plans/0059 D5) runs through the same engine as
-      // executeWhole's ondemand loop (D4), under the fork retry policy — a
+      // executeWhole's whole-task loop (D4), under the fork retry policy — a
       // handover due without a valid document is demanded in a fork of the
       // ended session with the feedback alone. Status: continue hands the
       // stream over; a Status: done document and a natural end both fall to
@@ -1125,7 +1148,7 @@ export async function runSubtask(
       break
     }
   }
-  // Subtask done: clear the handover documents (the ondemand handover and the
+  // Subtask done: clear the handover documents (the session handover and the
   // test handover — the next subtask starts counting anew; the test handover
   // is named per subtask, so this removes this subtask's file; the driver's
   // tick is recorded by the unified commit that follows). A lane stream's

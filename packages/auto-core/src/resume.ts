@@ -12,7 +12,7 @@ import type { UnitBaseline } from "./git"
 //   original session continues with the full context and in-session progress
 //   not yet on disk is not lost); the first prompt carries a "continuing after
 //   an interruption" note (with per-phase next-step guidance); when a handover
-//   document was already written before the interruption (ondemand handoff /
+//   document was already written before the interruption (session handoff /
 //   handover-test) there is no reuse — the old session's context is spent and
 //   progress is carried by the handover document, a new session resumes from
 //   it; --new-session explicitly abandons the old session (only the reuse is
@@ -23,7 +23,7 @@ import type { UnitBaseline } from "./git"
 //   is not reused — human attention may take hours and change the environment,
 //   so the old session's context is no longer trustworthy;
 // - The record also carries the phase: on resume the pipeline re-enters by
-//   phase (off/ondemand do not rerun the whole-task session for execution
+//   phase (the whole-task modes do not rerun the whole-task session for execution
 //   phases already past, closeout skips the wrap-up, etc.).
 // The record is written the moment a prompt dispatch succeeds (claiming the
 // running session — a kill mid-round loses nothing) and refreshed with the
@@ -61,7 +61,7 @@ export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 //   shared.md + subtasks.md + each subtask's todo.md, checklist not yet
 //   injected). Legacy "understand" records are mapped to this phase when
 //   parseProgress reads them (compatibility read).
-// - whole: the off/auto/ondemand-mode whole-task single-session execution
+// - whole: the off/auto-mode whole-task execution
 //   phase (auto's lead, plans/0059 D2)
 // - subtasks: the per-subtask session phase (continues from the first unticked
 //   item); index = the owning subtask's 1-based ordinal, carried only by the

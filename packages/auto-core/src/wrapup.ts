@@ -40,26 +40,30 @@ import { join, relative } from "node:path"
 import type { SessionChain } from "./chain"
 import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
-import { taskDoc, taskDocPaths } from "./docpaths"
-import { parseResult, type ReportResult } from "./document/roles"
+import { handoffFile, taskDoc, taskDocPaths } from "./docpaths"
+import { handoffStatus, parseResult, type ReportResult } from "./document/roles"
 import type { UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
 import { ledgerSection } from "./formulate-synthesis"
 import { roundOfPhaseId, strictRegressionWait } from "./regression"
 import { autobanner, log } from "./log"
-import type { ClientSource, Opts, Outcome, UnitStop } from "./opts"
+import { handoverVerdict, type HandoverState } from "./execute"
+import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
 import { codeWork } from "./phases/registry"
 import { promptViews, bookAttempt, type Plan, type Task } from "./tasks"
 import { renderFix, renderWrapup } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import type { Phase } from "./resume"
+import { sessionRole } from "./roles/registry"
 import { runExecSession } from "./exec-session"
 import { runTestLanes, type LaneRun } from "./script"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
 import { shellProfile } from "./shell"
 import { statsModelEvent } from "./stats"
+import { handoffSteer } from "./testrun"
+import { autoSwitches } from "./switches"
 import { commitBlocked, wrapupResolves } from "./unit-commit"
 
 // The constant budget of fix rounds per task (plans/0083 D5): the FIX_ROUNDS
@@ -230,9 +234,21 @@ async function verifySession(
 // One fix round (0083 D4): a fresh fix session reads the gap list + the task
 // document, closes exactly the listed gaps under the pack's repair discipline
 // (renderFix) and re-runs the checks covering its own changes; the driver
-// commits its output after the session with stage `execute` (it is execution;
+// commits its output after the round with stage `execute` (it is execution;
 // the close-out trailer validation is untouched), subject `<id> fix <round>
-// <title>`. The round books into the task's `attempts` (D7).
+// <title>`. The round books into the task's `attempts` (D7). Since plans/
+// 0130 D2 the round runs under the standing context-handover protocol: with
+// OPENCODE_AUTO_STEER on the fix session gets usage notices and may hand
+// itself over through docs/<id>/handoff.md (`Status: continue` — a fresh fix
+// session continues from the document, the round's one commit landing only
+// when its sessions are finished); the whole role's usage policy governs (a
+// fix round is a whole-scope execution dispatch), and the whole stage's own
+// leftover handover document is the engine's consumed seed — a `Status: done`
+// the execution stage left is not this round's signal, and an interrupted
+// fix session's `Status: continue` seeds the round's first continuation.
+// There is no rollback redo inside a round (the strict-resume unit rollback
+// stays the execution stage's; a handover due without a valid document takes
+// the engine's single retry with feedback, then blocks).
 async function runFixRound(
   client: ClientSource,
   plan: Plan,
@@ -247,18 +263,44 @@ async function runFixRound(
   nameSubject(chain, subject)
   const views = promptViews(plan, task)
   log(`↻ ${task.id} verification found gaps; fix round ${round} of ${FIX_ROUNDS} closes exactly ${taskDoc(task.id, "gaps")}`)
-  const result = await runExecSession(
-    client,
-    plan,
-    task,
-    renderFix(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode }),
-    opts,
-    chain,
-    undefined,
-    undefined,
-    `fix ${round}`,
-  )
-  if (result.type === "blocked") return result
+  const readHandoff = async (): Promise<string> => Bun.file(join(plan.dir, handoffFile(task))).text().catch(() => "")
+  const steer = sessionRole("whole").usage.handover ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task) : undefined
+  // Interruption seeding: a leftover handover document at the round's entry
+  // is either the execution stage's completion document (Status: done — the
+  // consumed seed, not a signal) or an interrupted fix session's handover
+  // (Status: continue — this round's first dispatch continues from it).
+  const priorText = await readHandoff()
+  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
+  let continuation = handoffStatus(priorText) === "continue"
+  let feedback = ""
+  for (;;) {
+    const result = await runExecSession(
+      client,
+      plan,
+      task,
+      renderFix(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined }) + feedback,
+      opts,
+      chain,
+      steer,
+      undefined,
+      `fix ${round}`,
+    )
+    if (result.type === "blocked") return result
+    feedback = ""
+    const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fresh", fix: true, subject, rollbackRedo: async () => undefined }, readHandoff, result.lastText)
+    if (decision.type === "natural") break
+    if (decision.type === "continue") {
+      continuation = true
+      continue
+    }
+    if (decision.type === "retry") {
+      feedback = decision.feedback
+      continue
+    }
+    if (decision.type === "coldstart") continue
+    if (decision.type === "stop") return decision.stop
+    return decision
+  }
   const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
   if (committed.type === "failed") return commitBlocked(`${task.id} fix ${round}`, committed)
   await bookAttempt(dir, task.id)

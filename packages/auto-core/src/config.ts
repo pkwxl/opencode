@@ -256,8 +256,12 @@ export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<Pr
 // during run, the bit survives a killed run, and allowWrite relies on
 // module-level state and cannot help in a new process — without clearing it,
 // every init from then on fails with EACCES.
+// The synonym canonicalizes here too (plans/0130 D1): whatever the CLI passed,
+// the file never gains a fresh "ondemand" — the load path's treatment of a
+// hand-edited one, applied at the write boundary (fix's raw record path
+// deliberately preserves what it read; the next amend rewrites it).
 export async function saveProjectConfig(dir: string, config: ProjectConfig): Promise<void> {
-  await saveConfigRecord(dir, config)
+  await saveConfigRecord(dir, config.subtask === "ondemand" ? { ...config, subtask: "off" } : config)
 }
 
 // Writes a raw config record as it is (`fix` rewrites the file from its own
@@ -587,12 +591,18 @@ function intInRange(key: string, value: unknown, min: number, max: number, unit:
 // subtask: off|auto|true|ondemand. The JSON boolean true is the same value as
 // "true" (plans/0059 D1: the pipeline's name reads as a boolean, so a
 // hand-edited config may well write it as one); the config is read back as the
-// string, so the next amend writes "true".
+// string, so the next amend writes "true". "ondemand" is a permanent synonym
+// of "off" (plans/0130 D1: the context-handover protocol became standing for
+// every whole-task session, so the mode that existed to carry it merged into
+// off) — accepted forever, read back as the canonical "off", so the next amend
+// writes "off". The boolean-true spelling's own precedent, applied to a merge
+// the ruling itself created; a hard tombstone would break every stamped
+// `subtask: "ondemand"` config for naming a mode that no longer differs.
 // AUTO-RESOLVE: is the JSON boolean false accepted as "off"? -> no, it stays invalid (0059 D1 names only true as an alias; false never was a valid value, and reading it as off would widen the ruled contract).
 function subtaskOf(value: unknown): SubtaskMode {
   if (value === true) return "true"
   if (typeof value !== "string" || !(SUBTASK_MODES as readonly string[]).includes(value)) {
     throw new Error(`${CONFIG_FILE} subtask must be ${SUBTASK_MODES.join("|")}`)
   }
-  return value as SubtaskMode
+  return value === "ondemand" ? "off" : (value as SubtaskMode)
 }

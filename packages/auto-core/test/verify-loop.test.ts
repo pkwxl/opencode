@@ -218,6 +218,54 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
+  test("a fix session's self-directed handover (plans/0130 D2): a fresh Status: continue document under the wall hands the round over, the continuation reads it, and the round commits once", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The verify session FAILs with a gap list; the first fix session hands
+      // itself over mid-round at a boundary of its own choosing (a fresh
+      // Status: continue document, far under the wall); the continuation fix
+      // session closes the gaps; the re-verification passes.
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# Handover\n\nHalf the gaps closed; the rest stand.\n\nStatus: continue\n")
+        },
+        async () => {
+          await Bun.write(join(dir, "FIXES.md"), "fix round 1\n")
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session" })
+      expect(result).toBeUndefined()
+      // verify, fix (the protocol riding it), fix continuation (reading the
+      // handover document), re-verify — the round's sessions in order.
+      expect(calls.prompts).toHaveLength(4)
+      expect(promptText(calls.prompts[1]!)).toContain("You are the fix session")
+      expect(promptText(calls.prompts[1]!)).toContain("Context-budget protocol")
+      expect(promptText(calls.prompts[2]!)).toContain("The previous fix session ended with a context-budget handover")
+      expect(promptText(calls.prompts[2]!)).toContain("docs/T-001/handoff.md")
+      // The handover split the round's sessions, not the round's budget: one
+      // fix commit carrying the handover document with the work it describes.
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1 sample task"])
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toContain("Result: PASS")
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("--no-wrapup keeps its meaning: no verify session; a task-written FAIL report still blocks at closeout, unchanged (D6)", async () => {
     const dir = await freshRepo()
     try {

@@ -106,7 +106,7 @@ export type TurnContext = {
   // The run options the turn's policies read (waitAnswer, dryrun,
   // humanQuestions, permission, idleMs, interactive, routing, dir).
   readonly opts: Opts
-  // The ondemand session-handover steer (absent = the protocol off).
+  // The session-handover steer (absent = the protocol off).
   readonly steer?: Steer
   // The test-handover protocol's run record (absent = no test protocol).
   readonly test?: TestRun

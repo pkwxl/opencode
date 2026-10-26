@@ -969,12 +969,12 @@ describe("CLI: init freezes the project config", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["amend", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand" })
+      expect((await runCli(["amend", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "auto"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "auto" })
       // Amend one more unrelated key: the three keys changed last time survive
       // as-is
       expect((await runCli(["amend", dir, "--agent", "claude"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "auto", agent: "claude" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -997,11 +997,32 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  test("--subtask ondemand is off's permanent synonym (auto-core plans/0130 D1): accepted at init and amend, written and read back as the canonical off", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--subtask", "ondemand"])).code).toBe(0)
+      // The mode merged into off (the context-handover protocol standing for
+      // every whole-task session); the boolean-true spelling's own treatment,
+      // so a stamped "ondemand" config never breaks across the upgrade.
+      expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
+      expect((await runCli(["amend", dir, "--subtask", "ondemand"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
+      // A hand-edited "ondemand" value reads as off too, and the next amend
+      // writes the canonical spelling.
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...DEFAULT_CONFIG, subtask: "ondemand" }))
+      expect((await runCli(["status", dir])).out).toContain("subtask off")
+      expect((await runCli(["amend", dir, "--context-limit", "128"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128 })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("init defaults to the full overwrite: keys not given fall back to their defaults, identical to a bare init in a clean environment", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand", "--agent", "claude"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
+      expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "auto", "--agent", "claude"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "auto", agent: "claude" })
       // The bootstrap's repository holds the artifacts uncommitted; the
       // overwrite init's clean-tree gate needs the production commit between
       await commitFixture(dir)
@@ -1050,13 +1071,13 @@ describe("CLI: init freezes the project config", () => {
   test("init is idempotent: repeated runs with the same arguments produce constant artifacts", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "ondemand"])).code).toBe(0)
+      expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "auto"])).code).toBe(0)
       const first = await readConfig(dir)
       const agentFirst = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agentsFirst = await Bun.file(join(dir, "AGENTS.md")).text()
       await commitFixture(dir)
       for (let i = 0; i < 2; i++) {
-        expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "ondemand"])).code).toBe(0)
+        expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "auto"])).code).toBe(0)
       }
       expect(await readConfig(dir)).toEqual(first)
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(agentFirst)

@@ -112,13 +112,21 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("subtask takes off|auto|true|ondemand; the JSON boolean true is the pipeline's \"true\"; the default is off (2026-10-04 flip; auto was 0059 D1's)", async () => {
+  test("subtask takes off|auto|true|ondemand (ondemand read back as its synonym off since plans/0130 D1); the JSON boolean true is the pipeline's \"true\"; the default is off (2026-10-04 flip; auto was 0059 D1's)", async () => {
     const dir = tempDir()
     try {
       expect(CONFIG_DEFAULTS.subtask).toBe("off")
-      for (const value of ["off", "auto", "true", "ondemand"] as const) {
+      for (const [value, read] of [
+        ["off", "off"],
+        ["auto", "auto"],
+        ["true", "true"],
+        // The merge's synonym (plans/0130 D1): accepted forever, canonicalized
+        // at load — the boolean-true spelling's own treatment, so the next
+        // amend writes "off" and a stamped "ondemand" config never breaks.
+        ["ondemand", "off"],
+      ] as const) {
         writeConfig(dir, JSON.stringify({ subtask: value }))
-        expect((await loadProjectConfig(dir)).subtask).toBe(value)
+        expect((await loadProjectConfig(dir)).subtask).toBe(read)
       }
       writeConfig(dir, JSON.stringify({ subtask: true }))
       expect(await loadProjectConfig(dir)).toEqual({ ...CONFIG_DEFAULTS, subtask: "true" })

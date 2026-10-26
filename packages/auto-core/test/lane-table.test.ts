@@ -157,7 +157,7 @@ describe("session-side rendering (plans/0096 D4 — no driver machinery)", () =>
   const plain = promptFacts()
 
   test("the whole-task prompt carries the lane protocol and the table beside the self-check constraint", () => {
-    const text = renderWhole(lanes, views.plan, views.task, docs, { ondemand: true, budget: true, testByDriver: true })
+    const text = renderWhole(lanes, views.plan, views.task, docs, { budget: true, testByDriver: true })
     expect(text).toContain("Test lanes (this project's suites")
     expect(text).toContain("docs/T-002/testplan.md")
     expect(text).toContain("docs/T-002/testhands/<lane id>.md")
@@ -171,10 +171,10 @@ describe("session-side rendering (plans/0096 D4 — no driver machinery)", () =>
   })
 
   test("the channel clause renders only when both the lane table and the driver channel are in play", () => {
-    const withChannel = renderWhole(lanes, views.plan, views.task, docs, { ondemand: true, testByDriver: true })
+    const withChannel = renderWhole(lanes, views.plan, views.task, docs, { testByDriver: true })
     expect(withChannel).toContain("your lanes run only what the task's acceptance names beyond that channel")
     expect(withChannel).toContain("never both channels running the anchor")
-    const withoutChannel = renderWhole(lanes, views.plan, views.task, docs, { ondemand: true })
+    const withoutChannel = renderWhole(lanes, views.plan, views.task, docs, {})
     expect(withoutChannel).toContain("Test lanes (this project's suites")
     expect(withoutChannel).not.toContain("both channels running the anchor")
     // A lane table without the driver channel switch renders no test-protocol
@@ -212,7 +212,7 @@ describe("session-side rendering (plans/0096 D4 — no driver machinery)", () =>
 
   test("the floor: without the pack section every execution render stays free of the lane anchors", () => {
     for (const text of [
-      renderWhole(plain, views.plan, views.task, docs, { ondemand: true, budget: true, adaptive: true, testByDriver: true }),
+      renderWhole(plain, views.plan, views.task, docs, { budget: true, adaptive: true, testByDriver: true }),
       renderSubtask(plain, views.plan, views.task, docs, "write the execution logic", { index: 2, testByDriver: true }),
       renderFanout(plain, views.plan, views.task, docs, "write the execution logic", 2, { siblings: ["S01 write the schema part (done)"] }),
     ]) {

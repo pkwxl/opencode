@@ -34,11 +34,13 @@ describe("handoffSteer / sessionHandoverDue (OPENCODE_AUTO_STEER wiring)", () =>
     expect(steer.limit).toBe(cap * 2)
     expect(steer.text).toContain("docs/T-001/handoff.md")
     // The notice bands (plans/0056): 50% informational, 85% wind-down, each
-    // text carrying the figure slots watch fills at send time.
+    // text carrying the figure slots watch fills at send time — the wind-down
+    // also the remaining headroom since plans/0130 D4.
     expect(steer.notes.map((note) => note.at)).toEqual([0.5, 0.85])
     expect(steer.notes[0]!.text).toContain("{{used}}")
     expect(steer.notes[0]!.text).toContain("{{pct}}")
     expect(steer.notes[0]!.text).toContain("{{wall}}")
+    expect(steer.notes[1]!.text).toContain("{{remaining}}")
     expect(steer.notes[1]!.text).toContain("docs/T-001/handoff.md")
     expect(steer.notes[1]!.text).toContain("Status: continue")
   })

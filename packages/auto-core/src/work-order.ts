@@ -57,8 +57,9 @@ type WorkOrderOpts = {
 // prompt, rendered with the production renderer and facts under the attended
 // flag. The render flags mirror what executeWhole computes for a task that
 // starts now (the lead's first prompt under the default adaptive execution):
-//   - ondemand true, continuation false — a session that starts the task, not
-//     one that continues a handover document;
+//   - continuation false — a session that starts the task, not
+//     one that continues a handover document (no mode flag exists to pass:
+//     the protocol is standing for every whole-task session, plans/0130 D1);
 //   - budget = the steer switch — the context-budget protocol rides the
 //     session exactly as a driver run's lead gets it;
 //   - adaptive = the switch on and the committed checklist empty — the split
@@ -81,7 +82,6 @@ export async function workOrder(dir: string, plan: Plan, task: Task, opts: WorkO
     testByDriver: opts.testByDriver,
     handoverTest: opts.handoverTest,
     phase: opts.phase,
-    ondemand: true,
     continuation: false,
     budget: steer,
     adaptive: steer && subtasks(checklistBase).length === 0,

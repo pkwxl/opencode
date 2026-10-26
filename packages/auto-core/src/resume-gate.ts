@@ -66,7 +66,7 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       // unit under today's auto and starts its lead fresh.
       return ctx.mode === "true" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
     case "whole":
-      // off/ondemand's whole-task session and auto's lead (plans/0059 D2: a
+      // the whole-task session and auto's lead (plans/0059 D2: a
       // whole-task session too) — unless the lead's split was taken, which
       // ends its unit: the next unit is a stream, never the lead continued.
       return ctx.mode !== "true" && ctx.split !== true

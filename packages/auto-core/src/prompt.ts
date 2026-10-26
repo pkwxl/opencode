@@ -693,12 +693,20 @@ export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView,
 // into the prompt as the anti-re-architecting boundary — and re-runs the
 // checks covering its own changes. The driver commits its output with stage
 // `execute` (wrapup.ts runFixRound); the template carries no terminator of
-// its own (a prompt, not a document).
-export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts = {}): string {
+// its own (a prompt, not a document). Since plans/0130 D2 the round runs
+// under the standing context-budget protocol: budget is set while the steer
+// is built (OPENCODE_AUTO_STEER=off renders no protocol and ignores handover
+// documents — 0056's floor), and continuation means the round's previous
+// session handed its context over and this one must read the handover
+// document first.
+export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { continuation?: boolean; budget?: boolean } = {}): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "fix", {
     ...ctx,
     gapsFile: docs.gaps,
+    handoffFile: docs.handoff,
+    continuation: Boolean(opts.continuation),
+    budget: Boolean(opts.budget),
     // The pack's repair discipline (plans/0080 §6): the boundary that keeps a
     // fix from re-architecting; absent subsection drops the block cleanly.
     repairDuties: intentText(facts, "governance", "repair", ctx),
@@ -820,9 +828,10 @@ export function renderPriorKnowledge(facts: PromptFacts, input: { file: string; 
 
 // The hard-wall steer the driver inserts while a session is running (usage
 // reached the wall, testrun.ts steerWall: 2x contextLimit, raised to a quarter
-// of a large model window and clamped to 80% of it; ondemand
-// whole-task sessions, auto's lead and the streams of its split, plans/0059
-// D5 — the last resort after the usage notices went unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
+// of a large model window and clamped to 80% of it; every whole-task session
+// since plans/0130 D1, auto's lead and the streams of its split since
+// plans/0059 D5, the fix rounds since plans/0130 D2 — the last resort after
+// the usage notices went unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
 // session at the next provider-turn boundary. The handover document path it
 // names is the task's (docs/<id>/handoff.md), read from the document-path
 // view.
@@ -830,10 +839,13 @@ export function renderHandoffSteer(facts: PromptFacts, docs: TaskDocs): string {
   return renderPrompt(facts, "handoff-steer", { handoffFile: docs.handoff })
 }
 
-// Usage notices steered into a running ondemand whole-task session (or auto's
-// lead, or a stream of its split) at budget milestones (plans/0056): the 50% band is informational, the 85% band advises
-// winding down at the next natural boundary. The figures do not exist at
-// render time — the {{used}}/{{pct}}/{{wall}} slots round-trip as literal
+// Usage notices steered into a running whole-task session (a stream of a
+// split, or a fix round — every session the steer is built for) at budget
+// milestones (plans/0056): the 50% band is informational, the 85% band advises
+// winding down at the next natural boundary and names the tokens remaining
+// before the wall (plans/0130 D4 — the figure a rational handover decision
+// needs beside the percentage). The figures do not exist at render time — the
+// {{used}}/{{pct}}/{{wall}}/{{remaining}} slots round-trip as literal
 // placeholders that the driver fills at send time (fillUsageNote in
 // src/testrun.ts).
 export function renderUsageNoteInfo(facts: PromptFacts, docs: TaskDocs): string {
@@ -845,7 +857,7 @@ export function renderUsageNoteWinddown(facts: PromptFacts, docs: TaskDocs): str
 }
 
 function usageNoteCtx(docs: TaskDocs): Ctx {
-  return { handoffFile: docs.handoff, used: "{{used}}", pct: "{{pct}}", wall: "{{wall}}" }
+  return { handoffFile: docs.handoff, used: "{{used}}", pct: "{{pct}}", wall: "{{wall}}", remaining: "{{remaining}}" }
 }
 
 // Context step-up note (steered into the same session when its context
@@ -889,11 +901,12 @@ export function renderStuckHint(facts: PromptFacts, hit: StuckHitView): string {
   return renderPrompt(facts, "stuck-hint", { ...ctx, reflection: hit.level === 2 ? intentText(facts, "quality", "stuck-reflection", ctx) : undefined })
 }
 
-// --subtask off/auto/ondemand: a single session completes the whole task (no
-// subtask decomposition). ondemand and auto's lead additionally carry the
-// context-budget protocol (usage notices + self-directed handover, plans/0056)
-// when budget is set — the caller passes it only while the steer is built, so
-// OPENCODE_AUTO_STEER=off renders no protocol and ignores handover documents;
+// --subtask off/auto: a single session completes the whole task (no subtask
+// decomposition), under the standing context-budget protocol (usage notices +
+// self-directed handover, plans/0056; standing for every whole-task session
+// since plans/0130 D1) when budget is set — the caller passes it only while
+// the steer is built, so OPENCODE_AUTO_STEER=off renders no protocol and
+// ignores handover documents;
 // continuation means the previous session handed its context over and this
 // one must read the handover document before continuing. adaptive is auto's
 // lead with its split clause (plans/0059 D2–D3): the option to end by writing
@@ -905,12 +918,11 @@ export function renderWhole(
   plan: PlanView,
   task: TaskView,
   docs: TaskDocs,
-  opts: Opts & { ondemand?: boolean; continuation?: boolean; budget?: boolean; adaptive?: boolean } = {},
+  opts: Opts & { continuation?: boolean; budget?: boolean; adaptive?: boolean } = {},
 ): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "whole", {
     ...ctx,
-    ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
     adaptive: Boolean(opts.adaptive),

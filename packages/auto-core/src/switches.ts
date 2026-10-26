@@ -272,7 +272,8 @@ export type Switches = {
   // not for the digest default, where every subtask re-reads its sources.
   fine: boolean
   // Ondemand context management (default on, plans/0056): the driver steers
-  // milestone usage notices into a live ondemand whole-task session, auto's
+  // milestone usage notices into a live whole-task session (every mode
+  // since plans/0130 D1), auto's
   // lead (plans/0059 D2) or a stream of its split (D5) at 50%/85% of the
   // effective wall, and the session
   // itself decides when to hand over at a

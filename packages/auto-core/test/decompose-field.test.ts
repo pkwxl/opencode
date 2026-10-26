@@ -26,9 +26,9 @@ import { services } from "../src/services"
 import type { Opts } from "../src/opts"
 
 describe("resolveDecompose (the plan-recorded mode, plans/0075)", () => {
-  test("auto obeys a present field: split stays auto, whole maps to ondemand, pipeline to true", () => {
+  test("auto obeys a present field: split stays auto, whole maps to off (the merged whole-task mode, plans/0130 D1), pipeline to true", () => {
     expect(resolveDecompose("auto", "split", undefined)).toEqual({ mode: "auto", from: "field", field: "split" })
-    expect(resolveDecompose("auto", "whole", undefined)).toEqual({ mode: "ondemand", from: "field", field: "whole" })
+    expect(resolveDecompose("auto", "whole", undefined)).toEqual({ mode: "off", from: "field", field: "whole" })
     expect(resolveDecompose("auto", "pipeline", undefined)).toEqual({ mode: "true", from: "field", field: "pipeline" })
   })
 
@@ -47,10 +47,10 @@ describe("resolveDecompose (the plan-recorded mode, plans/0075)", () => {
   })
 
   test("leadSplit: false downgrades split to whole — logged at the call site, never blocking; other values unaffected", () => {
-    expect(resolveDecompose("auto", "split", false)).toEqual({ mode: "ondemand", from: "field", field: "split", downgraded: true })
+    expect(resolveDecompose("auto", "split", false)).toEqual({ mode: "off", from: "field", field: "split", downgraded: true })
     expect(resolveDecompose("auto", "split", true)).toEqual({ mode: "auto", from: "field", field: "split" })
     expect(resolveDecompose("auto", "pipeline", false)).toEqual({ mode: "true", from: "field", field: "pipeline" })
-    expect(resolveDecompose("auto", "whole", false)).toEqual({ mode: "ondemand", from: "field", field: "whole" })
+    expect(resolveDecompose("auto", "whole", false)).toEqual({ mode: "off", from: "field", field: "whole" })
   })
 })
 
@@ -112,7 +112,7 @@ describe("runTask consults the Decompose field under --subtask auto", () => {
       expect(prompts[0]).toContain("You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks")
       expect(prompts[0]).not.toContain("Split rule (adaptive decomposition)")
       expect(lines.some((line) => line.includes("T-001 Decompose: whole (the task document's recorded mode; --subtask auto obeys it)"))).toBe(true)
-      expect(await statsDecomposeOf(dir, "T-001")).toEqual({ task: "T-001", mode: "ondemand", from: "field", field: "whole" })
+      expect(await statsDecomposeOf(dir, "T-001")).toEqual({ task: "T-001", mode: "off", from: "field", field: "whole" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -141,19 +141,19 @@ describe("runTask consults the Decompose field under --subtask auto", () => {
       expect(prompts[0]).toContain("completed within a single session, without decomposing it into subtasks")
       expect(prompts[0]).not.toContain("Split rule (adaptive decomposition)")
       expect(lines.some((line) => line.includes("its Decompose: split field cannot run — the fleet cannot fork sessions (capability degradation); downgraded to whole"))).toBe(true)
-      expect(await statsDecomposeOf(dir, "T-001")).toEqual({ task: "T-001", mode: "ondemand", from: "field", field: "split", downgraded: true })
+      expect(await statsDecomposeOf(dir, "T-001")).toEqual({ task: "T-001", mode: "off", from: "field", field: "split", downgraded: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("a hard --subtask override ignores the field: off runs one plain whole session over Decompose: pipeline", async () => {
+  test("a hard --subtask override ignores the field: off runs one plain whole session over Decompose: pipeline (the standing protocol riding it, plans/0130 D1)", async () => {
     const { dir, outcome, prompts } = await run("pipeline", { subtask: "off" })
     try {
       expect(outcome).toEqual({ type: "completed" })
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).not.toContain("subtask decomposition")
-      expect(prompts[0]).not.toContain("Context-budget protocol")
+      expect(prompts[0]).toContain("Context-budget protocol")
       // No field log line under an override; the provenance says override.
       expect(lines.some((line) => line.includes("--subtask auto obeys it"))).toBe(false)
       expect(await statsDecomposeOf(dir, "T-001")).toEqual({ task: "T-001", mode: "off", from: "override" })

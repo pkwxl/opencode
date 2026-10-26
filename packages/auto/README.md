@@ -5,7 +5,7 @@ in task units (the phase's task index `tasks.md` + `docs/T-NNN/`). Constitutiona
 contract, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
 (versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
 maintained exclusively by the driver: each task runs as one whole-task session (the
-default `subtask: off`; `auto` adds adaptive decomposition), or — under `subtask: true` — is first split into subtasks by a decompose session,
+default `subtask: off`; `auto` adds adaptive decomposition; every whole-task session and fix round manages its own context under the standing handover protocol — usage notices steered in, the session deciding when to hand over through `docs/T-NNN/handoff.md`, `OPENCODE_AUTO_STEER=off` the floor), or — under `subtask: true` — is first split into subtasks by a decompose session,
 then completed one subtask at a time by dispatched sessions (every prompt opens a fresh session, each
 carrying its full context and depending on no previous session's memory; the former `OPENCODE_AUTO_REUSE_SESSION`
 knob is retired and ignored; the driver ticks state as each session ends), and after wrap-up the driver marks the
@@ -135,8 +135,8 @@ describes how this run executes and how a person watches it → run.**
 | --- | --- | --- | --- |
 | `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
 | `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
-| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline; under `subtask` `ondemand` and `auto` the context-budget wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (see [Execution pipeline](#execution-pipeline)) |
-| `subtask` | `off` / `auto` / `true` / `ondemand` | `off` (changed from `auto` on 2026-10-04) | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
+| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline; the context-handover wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (every whole-task session and fix round since the protocol became standing; see [Execution pipeline](#execution-pipeline)) |
+| `subtask` | `off` / `auto` / `true` / `ondemand` | `off` (changed from `auto` on 2026-10-04) | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"`, and `ondemand` — the mode that once carried the context-handover protocol alone — is `off`'s permanent synonym (the protocol is standing for every whole-task session), read and written back as `off` |
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `verify` | **Retired** | — | Task-level acceptance was retired (2026-09-21): an existing config with `verify: true` fails loading with exit 1 (delete the key — `fix` does it — and plan acceptance as tasks or use the v phase); `false` or absent is ignored |

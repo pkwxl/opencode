@@ -255,8 +255,10 @@ describe("the usage concern's policies (re-homed from the testrun suite)", () =>
     expect(steerWall(500, undefined)).toBe(500)
   })
 
-  test("fillUsageNote: the figure slots become the formatted figures", () => {
-    const text = fillUsageNote("[DRIVER] context: {{used}} — {{pct}}% of the budget (wall {{wall}})", 60_000, 80_000)
-    expect(text).toBe("[DRIVER] context: 60.0k — 75% of the budget (wall 80.0k)")
+  test("fillUsageNote: the figure slots become the formatted figures; the remaining headroom floors at zero (plans/0130 D4)", () => {
+    const text = fillUsageNote("[DRIVER] context: {{used}} — {{pct}}% of the budget (wall {{wall}}, {{remaining}} left)", 60_000, 80_000)
+    expect(text).toBe("[DRIVER] context: 60.0k — 75% of the budget (wall 80.0k, 20.0k left)")
+    // A jump past the wall names an empty headroom, never a negative one.
+    expect(fillUsageNote("{{remaining}}", 90_000, 80_000)).toBe("0")
   })
 })

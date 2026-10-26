@@ -2074,7 +2074,9 @@ function parseRepairBudget(raw: string | undefined): number | null {
 // --subtask absent/bare = off (the default since 2026-10-04; auto was
 // plans/0059 D1's original default); null marks an invalid value. The four
 // values are the core's SUBTASK_MODES (auto-core plans/0059 D1: true is the
-// planned pipeline auto used to be, auto the adaptive mode).
+// planned pipeline auto used to be, auto the adaptive mode; ondemand is off's
+// permanent synonym since auto-core plans/0130 D1 — accepted here, the core's
+// config boundary reads and writes it as the canonical off).
 function parseSubtask(raw: string | undefined): SubtaskMode | null {
   if (raw === undefined || raw === "") return "off"
   return (SUBTASK_MODES as readonly string[]).includes(raw) ? (raw as SubtaskMode) : null

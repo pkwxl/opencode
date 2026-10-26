@@ -39,8 +39,10 @@ export type Steer = {
   notes: { at: number; text: string }[]
 }
 
-// Handover steer construction (the ondemand whole-task session, auto's lead
-// and the streams of its split — plans/0059 D5; exported as a pure function
+// Handover steer construction (every whole-task session since plans/0130 D1
+// — the mode that once gated it, ondemand, merged into off — auto's lead and
+// the streams of its split since plans/0059 D5, the fix rounds since
+// plans/0130 D2; exported as a pure function
 // for unit tests): not constructed while the experiment switch
 // OPENCODE_AUTO_STEER is off (on = autoSwitches().steer) — no usage notices,
 // no hard-wall hint, and the post-session handover check is disabled with it.
@@ -64,12 +66,15 @@ export function handoffSteer(on: boolean, cap: number, task: Task, subtask?: num
 }
 
 // Fill a usage note's figure slots at send time (the figures do not exist at
-// render time): tokens formatted like the watch log lines, pct rounded.
+// render time): tokens formatted like the watch log lines, pct rounded. The
+// remaining figure (plans/0130 D4) floors at zero — a jump past the wall
+// names an empty headroom, never a negative one.
 export function fillUsageNote(text: string, used: number, wall: number): string {
   return text
     .replaceAll("{{used}}", formatTokens(used))
     .replaceAll("{{pct}}", String(Math.round((used / wall) * 100)))
     .replaceAll("{{wall}}", formatTokens(wall))
+    .replaceAll("{{remaining}}", formatTokens(Math.max(0, wall - used)))
 }
 
 // The effective wall (plans/0056, raised on large windows by plans/0059 D6):
@@ -104,7 +109,7 @@ export function steerWall(limit: number, windowTokens: number | undefined): numb
 // document's absolute path (named by execution scope: a subtask gets
 // docs/<id>/S<two-digit seq>/testhandoff.md, a whole task / fix round gets
 // docs/<id>/testhandoff.md); handover is the switch; limit is the cap on
-// context already used (the raw config.contextLimit; ondemand's handover
+// context already used (the raw config.contextLimit; the handover
 // steer uses twice that); last is the most recent execution's info (the
 // continuation prompt cites its output path).
 // task/unit/handovers feed the handover freeze commit (#1) its commit

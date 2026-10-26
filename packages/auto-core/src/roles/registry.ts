@@ -197,8 +197,10 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     templates: ["whole"],
     // The task sessions take the phase type's execute tier.
     tier: "execute",
-    // The context-handover protocol when the mode builds it (off never does;
-    // ondemand and auto's lead do), the test handover of --test-by-driver,
+    // The context-handover protocol — standing for every whole-scope
+    // execution dispatch (the whole task in any mode, a fix round; the
+    // ondemand mode that once gated it merged into off, plans/0130 D1), the
+    // test handover of --test-by-driver,
     // and — the lead alone — the split guard over the checklist it may
     // write.
     usage: { handover: true, testHandover: true, forkGuard: false, splitGuard: true },

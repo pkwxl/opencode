@@ -40,11 +40,12 @@ import { reportResult, runWrapup } from "./wrapup"
 // `Decompose:` field of docs/T-NNN/todo.md, and --subtask auto executes it
 // mechanically — present: obey; absent: today's adaptive logic unchanged.
 // The hard values off/true/ondemand stay overrides that ignore the field
-// (capability degradation and test determinism keep their levers). The
+// (capability degradation and test determinism keep their levers; ondemand
+// canonicalizes to off at config load, plans/0130 D1). The
 // mapping is the ruled one: split = auto's lead + its split streams (exactly
 // today's behavior, so obeying it changes nothing); whole = one whole-task
-// session to completion (ondemand's protocol); pipeline = the planned
-// decompose pipeline (true's path).
+// session to completion (under the standing handover protocol, plans/0130);
+// pipeline = the planned decompose pipeline (true's path).
 type DecomposeResolution = {
   // The subtask mode the task runs under (the opts.subtask vocabulary).
   mode: SubtaskMode
@@ -56,7 +57,7 @@ type DecomposeResolution = {
   // The field said split but the fleet cannot fork (Opts.leadSplit === false,
   // fixed at run start): downgraded to whole — logged, never blocking (the
   // degrade/clampSwitches pattern; the downgrade path equals what a lead
-  // without its split clause already was, an ondemand session).
+  // without its split clause already was, a plain whole-task session).
   downgraded?: boolean
 }
 
@@ -64,7 +65,10 @@ type DecomposeResolution = {
 // task's document and the run's levers, so every resume re-resolves the same
 // mode). Exported for the decompose-field tests. An unset lever is the
 // constitutional default `off` (2026-10-04 flip; provenance "fallback" — a
-// configured `auto` with no field keeps the adaptive fallback).
+// configured `auto` with no field keeps the adaptive fallback). Since plans/
+// 0130 D1 the whole-field and the downgrade resolve to `off` — the merged
+// whole-task mode (ondemand is its synonym; a whole-task session runs the
+// handover protocol in every mode).
 export function resolveDecompose(
   requested: SubtaskMode | undefined,
   field: DecomposeMode | undefined,
@@ -76,10 +80,10 @@ export function resolveDecompose(
   if (field === undefined) return { mode, from: "fallback" }
   if (field === "split") {
     return leadSplit === false
-      ? { mode: "ondemand", from: "field", field, downgraded: true }
+      ? { mode: "off", from: "field", field, downgraded: true }
       : { mode, from: "field", field }
   }
-  return { mode: field === "pipeline" ? "true" : "ondemand", from: "field", field }
+  return { mode: field === "pipeline" ? "true" : "off", from: "field", field }
 }
 
 // The log line wording of an obeyed field value (the downgrade has its own
@@ -95,27 +99,28 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // --subtask true (the planned pipeline, what auto meant before plans/0059 D1):
 // decompose (when subtasks.md has no checklist) → one session per subtask
 // (driver ticks on trust) → wrap-up → closeout.
-// --subtask off: a single whole-task session → wrap-up → closeout.
-// --subtask ondemand: like off, but the session manages its own context budget
-// (plans/0056): the driver steers milestone usage notices in, the session
-// decides when to hand over and writes docs/<id>/handoff.md, and a fresh
-// session continues from it; the driver's hard-wall hint (2x
-// --context-limit, raised to a quarter of a large model window and clamped to
-// 80% of it) is the last resort.
-// --subtask auto (adaptive decomposition, plans/0059 D2–D5; the default was
-// auto until the 2026-10-04 flip to off): one lead
-// session — a whole-task session under ondemand's protocol, whose prompt
+// --subtask off (the default since the 2026-10-04 flip; ondemand its synonym
+// since plans/0130 D1): whole-task sessions, one share at a time under the
+// standing context-handover protocol (plans/0056, standing since plans/0130):
+// the driver steers milestone usage notices in, the session decides when to
+// hand over and writes docs/<id>/handoff.md, and a fresh session continues
+// from it; the driver's hard-wall hint (2x --context-limit, raised to a
+// quarter of a large model window and clamped to 80% of it) is the last
+// resort. OPENCODE_AUTO_STEER=off renders none of it (0056's floor).
+// --subtask auto (adaptive decomposition, plans/0059 D2–D5): one lead
+// session — a whole-task session under the same protocol, whose prompt
 // carries the split clause. The lead either finishes (or hands over by time,
-// as ondemand does), or ends by writing the remaining streams into
-// subtasks.md; the driver's split guard takes the split (the streams then run
-// in the subtask loop below, as checklist items with driver-written todo.md
-// files, each in a fork of the lead) or rejects it, and a fork of the lead
-// finishes the task.
+// as any whole-task session does), or ends by writing the remaining streams
+// into subtasks.md; the driver's split guard takes the split (the streams
+// then run in the subtask loop below, as checklist items with driver-written
+// todo.md files, each in a fork of the lead) or rejects it, and a fork of the
+// lead finishes the task.
 // Since plans/0075, under auto a task whose todo.md field block carries
 // `Decompose: split | whole | pipeline` runs that recorded mode instead of the
 // adaptive one (resolveDecompose below: split = the lead behavior above,
-// whole = the ondemand path, pipeline = the true path); an absent field keeps
-// the adaptive logic, and the hard values off/true/ondemand ignore the field.
+// whole = the whole-task path, pipeline = the true path); an absent field
+// keeps the adaptive logic, and the hard values off/true/ondemand ignore the
+// field.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
@@ -137,7 +142,7 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // given (skip reuse only; the recorded phase still re-enters the pipeline
 // precisely). Anything else starts a fresh session guided by the recorded
 // phase (graceful exits leave a summarized record with active=false); the
-// phase also re-enters the pipeline precisely — off/ondemand past the
+// phase also re-enters the pipeline precisely — the whole-task modes past the
 // execution phase never re-run the whole-task session, a closeout record
 // skips the wrap-up. Network-failure blockades keep the active record (the
 // session is in-flight and unsummarized); every other blocked/incomplete exit
@@ -189,7 +194,8 @@ export async function runTask(
   // mode — the whole pipeline (the lead clause, the decompose entry, the
   // stream-lane guard, the resume gate's unit attribution) follows the one
   // decision without re-consulting the field. Hard overrides (off/true/
-  // ondemand given on the CLI) ignore the field outright.
+  // ondemand given on the CLI; ondemand canonicalized to off at config load,
+  // plans/0130) ignore the field outright.
   // AUTO-DECISION: the run-start surfaces (capability.ts degrade, the
   // preflight's dispatchNeeds) keep reading the CLI value, not the per-task
   // resolution (they run before any task document is read and reserve
@@ -248,7 +254,8 @@ export async function runTask(
   // interruption" note (with next-step guidance per phase).
   // Handover files take precedence over session reuse: when the session
   // already wrote a handover document before the interruption (the handoff.md
-  // of ondemand or of auto's lead, or --handover-test's testhandoff.md), the
+  // of a whole-task session or a fix round, or --handover-test's
+  // testhandoff.md), the
   // old session's context is exhausted and the document carries the progress — a fresh
   // session continues from the handover (executeWhole/runSubtask/runExecSession
   // seed the continuation from the file).
@@ -472,7 +479,7 @@ export async function runTask(
     // it clears the dirt.
     if (opts.testByDriver) await restoreTestHandoffs(dir, task)
     // Precise phase re-entry: the record shows the pipeline advanced to
-    // wrap-up or beyond → off/auto/ondemand skip the execution phase (the
+    // wrap-up or beyond → the whole-task modes skip the execution phase (the
     // whole-task session is not re-run; true's decompose/subtask loops are
     // idempotent anyway, no special case needed).
     const resumed = resume?.kind
@@ -487,10 +494,10 @@ export async function runTask(
     // of the agent its chain currently runs on instead of one base serving
     // every subtask of the run.
     let fork: ForkBaseInfo | undefined
-    // The session handover protocol (plans/0056) of the whole-task branch:
-    // ondemand's, and auto's lead's (plans/0059 D2: a whole-task session
-    // under the same protocol, plus its split clause).
-    const selfHandover = mode === "ondemand" || mode === "auto"
+    // The session handover protocol (plans/0056) is standing for every
+    // whole-task session since plans/0130 D1 — the executeWhole call below
+    // builds the steer in every mode (auto's lead included, plans/0059 D2)
+    // whenever OPENCODE_AUTO_STEER is on.
     if (mode === "true") {
       // Merged understand + decompose session (M1.0, plans/0030): entered
       // when subtasks.md has no checklist items (tasks that already have
@@ -505,8 +512,8 @@ export async function runTask(
       const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
       if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
-      // Stale cleanup of subtask handover documents (mirrors the ondemand
-      // semantics): a non-resumed run clears the previous attempt's
+      // Stale cleanup of subtask handover documents (mirrors the whole-task
+      // branch's semantics): a non-resumed run clears the previous attempt's
       // leftovers; a resumed run (active record) keeps them for the subtask
       // session to continue from the handover. Only the copy git does not
       // track is deleted (same as F4): a tracked handoff.md necessarily
@@ -530,13 +537,15 @@ export async function runTask(
       }
     } else if (resumed !== "wrapup" && resumed !== "closeout") {
       // Only a non-resumed run clears the previous attempt's leftover
-      // handover document; on resume it is kept (it holds the interrupted
+      // handover document (the whole-task branch's every mode runs the
+      // protocol since plans/0130 D1, so the cleanup is unconditional here);
+      // on resume it is kept (it holds the interrupted
       // session's progress summary, and executeWhole decides whether to
       // continue from its `Status:` line). Again only the copy git does not
       // track is deleted (same reason as the true branch: a tracked one is
       // the in-flight state of an unclosed unit, and deleting it is itself a
       // dirty area).
-      if (selfHandover && recalled?.active !== true) {
+      if (recalled?.active !== true) {
         await removeIfUntracked(dir, handoffFile(task))
       }
       // Same for --handover-test's test handover documents: a non-resumed run
@@ -555,7 +564,7 @@ export async function runTask(
         log(`↻ ${task.id} the lead's split was taken earlier; its streams continue from ${taskDoc(task.id, "subtasks")}, the lead does not run again`)
       } else {
         await persistStage({ kind: "whole" })
-        const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover, mode === "auto", { docLane: input.docLane })
+        const blocked = await executeWhole(client, plan, task, opts, chain, mode === "auto", { docLane: input.docLane })
         if (blocked) return blocked
         task = await reloadTask(plan, task.id)
       }
@@ -662,7 +671,7 @@ export async function runTask(
       } else {
         // In true mode this is where the decomposed checklist items run; under
         // auto, the streams of a split the lead's guard took, each a fork of
-        // the lead; off/ondemand (and auto without a split) only have the items
+        // the lead; off (and auto without a split) only have the items
         // hand-written in subtasks.md.
         for (;;) {
           const items = task.checklist ?? []

@@ -91,7 +91,7 @@ describe("degrade: run-start clamp", () => {
     const none = degrade({ ...OPENCODE_CAPABILITIES, fork: "none" }, parseSwitches({}), {})
     expect(none.leadSplit).toBe(false)
     expect(none.notes).toContain(
-      "--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does",
+      "--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as a plain whole-task session does",
     )
     // Whatever the pipeline's switch says: OPENCODE_AUTO_FORK governs true alone.
     const switchOff = degrade({ ...OPENCODE_CAPABILITIES, resume: false }, parseSwitches({ [SWITCH_ENV.fork]: "off" }), { subtask: "auto" })

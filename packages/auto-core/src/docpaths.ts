@@ -65,11 +65,11 @@ export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" 
 
 // —— Handover-document paths (moved from src/prompt.ts with E2, which took
 // prompt.ts's imports down to the intent domain; the paths themselves are
-// this module's layout, and their non-render consumers — the ondemand loop's
+// this module's layout, and their non-render consumers — the handover loop's
 // reads and clears — keep the same exported names) ——
 
-// Handover document (relative to the target directory): written by an ondemand
-// whole-task session when it hands its context over (self-decided at a natural
+// Handover document (relative to the target directory): written by a
+// whole-task or fix-round session when it hands its context over (self-decided at a natural
 // boundary, or after the hard-wall steer; plans/0056) — the session writes its
 // progress into this file, and the trailing line `Status: continue|done` is
 // parsed by the driver. A subtask names the per-stream document

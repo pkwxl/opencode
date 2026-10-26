@@ -805,21 +805,21 @@ describe("renderWhole", () => {
   })
 
   test("ondemand mode: the context-budget protocol rides on the steer (budget), without it no protocol; continuation demands reading the handover document first", () => {
-    const text = wholeOf(plan, task, { ondemand: true, budget: true })
+    const text = wholeOf(plan, task, { budget: true })
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("Context-budget protocol")
     expect(text).toContain("[DRIVER] This session's context has reached the wall")
     // The protocol block rides on budget (the steer built), not on ondemand
     // itself: with OPENCODE_AUTO_STEER=off the session gets no protocol.
-    expect(wholeOf(plan, task, { ondemand: true })).not.toContain("Context-budget protocol")
+    expect(wholeOf(plan, task, {})).not.toContain("Context-budget protocol")
     expect(text).not.toContain("First read docs/T-002/handoff.md")
-    const cont = wholeOf(plan, task, { ondemand: true, budget: true, continuation: true })
+    const cont = wholeOf(plan, task, { budget: true, continuation: true })
     expect(cont).toContain("First read docs/T-002/handoff.md")
     expect(cont).toContain("then carry on from there")
   })
 
   test("auto's lead (adaptive): the split clause with its three criteria and the line format, in place of the single-session sentence", () => {
-    const text = wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true })
+    const text = wholeOf(plan, task, { budget: true, adaptive: true })
     expect(text).toContain("You are the lead session of this task")
     expect(text).not.toContain("without decomposing it into subtasks")
     expect(text).toContain("Split rule (adaptive decomposition)")
@@ -833,13 +833,13 @@ describe("renderWhole", () => {
     expect(text.indexOf("Split rule")).toBeGreaterThan(text.indexOf("Context-budget protocol"))
     // Without the flag (ondemand, off, a lead after a rejected split) the
     // prompt is the single-session one, byte for byte.
-    expect(wholeOf(plan, task, { ondemand: true, budget: true, adaptive: false })).toBe(wholeOf(plan, task, { ondemand: true, budget: true }))
-    expect(wholeOf(plan, task, { ondemand: true, budget: true })).not.toContain("Split rule")
+    expect(wholeOf(plan, task, { budget: true, adaptive: false })).toBe(wholeOf(plan, task, { budget: true }))
+    expect(wholeOf(plan, task, { budget: true })).not.toContain("Split rule")
   })
 
   test("D18 (plans/0068 S5): a level injects the split clause's parallelism guidance; without one the prompt is byte-identical", () => {
-    const plain = wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true })
-    const wide = wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true, parallel: "medium" })
+    const plain = wholeOf(plan, task, { budget: true, adaptive: true })
+    const wide = wholeOf(plan, task, { budget: true, adaptive: true, parallel: "medium" })
     expect(wide).toContain("The streams run side by side under this project's parallel level medium")
     // The level's own subsection text (the default pack's `## parallelism` /
     // `### medium`) rides inside the clause, framed onto the streams.
@@ -848,13 +848,13 @@ describe("renderWhole", () => {
     expect(wide.indexOf("parallel level medium")).toBeLessThan(wide.indexOf("Before splitting"))
     // None (or the serial run that never carried the level): the clause keeps
     // its exact pre-S5 bytes.
-    expect(wholeOf(plan, task, { ondemand: true, budget: true, adaptive: true, parallel: undefined })).toBe(plain)
+    expect(wholeOf(plan, task, { budget: true, adaptive: true, parallel: undefined })).toBe(plain)
     expect(plain).not.toContain("parallel level")
   })
 
   test("D11 (plans/0099): a doc lane's whole-task prompt carries the concurrency clause as a constraint; a serial unit renders byte-identically without the fact", () => {
-    const plain = wholeOf(plan, task, { ondemand: true })
-    const lane = wholeOf(plan, task, { ondemand: true, docLane: true })
+    const plain = wholeOf(plan, task, {})
+    const lane = wholeOf(plan, task, { docLane: true })
     // The write fence, fourth constraint: only the declared Touches (the
     // unit's own docs/T-NNN/ included); sibling documents stay readable.
     expect(lane).toContain("4. Sibling doc units run beside you in this tree: write only inside your declared `Touches` (your own docs/T-002/ included); the phase index and every other task's documents are read-only to you; reads of sibling documents are fine.")
@@ -864,7 +864,7 @@ describe("renderWhole", () => {
     // Without the fact (every serial or solo unit): the constraint list and
     // the whole prompt keep their exact pre-0099 bytes.
     expect(plain).not.toContain("Sibling doc units")
-    expect(wholeOf(plan, task, { ondemand: true, docLane: false })).toBe(plain)
+    expect(wholeOf(plan, task, { docLane: false })).toBe(plain)
   })
 
   test("the rejected split's note: the reason, the removed checklist, no second split; the fresh-session fallback adds the committed earlier work", () => {
@@ -908,7 +908,7 @@ describe("renderWhole", () => {
   })
 
   test("test-by-DRIVER: the test execution protocol is injected (can coexist with the ondemand context-budget protocol)", () => {
-    const text = wholeOf(plan, task, { ondemand: true, budget: true, testByDriver: true, handoverTest: true })
+    const text = wholeOf(plan, task, { budget: true, testByDriver: true, handoverTest: true })
     expect(text).toContain("Test execution protocol (--test-by-driver, compilation and test runs only")
     expect(text).toContain("tmp/test.sh")
     expect(text).toContain("docs/T-002/handoff.md")

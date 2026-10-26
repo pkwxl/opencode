@@ -77,7 +77,7 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   ledger: { eofScan: false, process: true },
   // Carries its own final-state contract (status line / four sections).
   // The session handoff family spans three shapes since plans/0068 S5: the
-  // task-level handoff.md (ondemand whole-task sessions, auto's lead), the
+  // task-level handoff.md (every whole-task session, a fix round), the
   // per-stream handoff.md inside docs/T-NNN/S<nn>/ (side-by-side stream
   // lanes hand over through one document each — the deferral "all streams
   // of a task share one handoff.md" retired with it), and the test-handover
@@ -283,8 +283,8 @@ export function p1Scope(rel: string, exempt: readonly string[] = []): boolean {
 
 // —— handoff role: protocol checks ——
 
-// The session handoff status line (`Status: continue|done`): ondemand
-// handoff.md and test-handover testhandoff.md share one criterion
+// The session handoff status line (`Status: continue|done`): the
+// handoff.md of any handover scope and test-handover testhandoff.md share one criterion
 // (handover-boundary write check, plans/0022-session-recovery-fidelity-design.md
 // 3.3 R3). undefined = missing/invalid.
 //

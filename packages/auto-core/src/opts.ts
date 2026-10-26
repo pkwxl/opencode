@@ -81,15 +81,16 @@ export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; 
 // subtask's final commit / a hidden task's spec.commit).
 export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
 
-// --subtask's four levels (plans/0059 D1): off (one session to completion —
+// --subtask's four levels (plans/0059 D1): off (whole-task sessions, one share
+// at a time under the standing context-handover protocol of plans/0056/0130 —
 // the default since 2026-10-04, flipping 0059 D1's `auto`) /
 // auto (adaptive decomposition: one lead session works the whole
-// task under ondemand's protocol and splits the rest off only when the
+// task under the same protocol and splits the rest off only when the
 // driver's guard finds that it pays, plans/0059 D2–D4) / true (the planned
 // pipeline: a decompose session, one session per subtask, a wrap-up — what
-// auto meant before 0059) / ondemand (one session executes, managing its own
-// context: usage notices and a self-decided handover document continue the
-// task in fresh sessions, plans/0056).
+// auto meant before 0059) / ondemand (a permanent synonym of off since
+// plans/0130 D1 merged the mode into it — accepted, read back as "off"; the
+// word names what every whole-task session now does).
 export const SUBTASK_MODES = ["off", "auto", "true", "ondemand"] as const
 export type SubtaskMode = (typeof SUBTASK_MODES)[number]
 

@@ -364,7 +364,7 @@ describe("the capability intersection (§8.5)", () => {
       const auto = await startPool(dir, { registry, subtask: "auto" })
       expect(auto.leadSplit).toBe(false)
       expect(lines).toContain(
-        "⚙ --subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does; fake-a (a1) has none",
+        "⚙ --subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as a plain whole-task session does; fake-a (a1) has none",
       )
       auto.pool?.close()
       // The planned pipeline has no clause to lose: no note, the fact alone.

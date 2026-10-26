@@ -64,6 +64,7 @@ export const RUN_STATUS_EVENT_TYPES = [
   "task-end",
   "subtask-start",
   "subtask-end",
+  "session-handover",
   "question-raised",
   "question-answered",
   "usage-rollup",
@@ -109,6 +110,14 @@ export type UnitStatus = (typeof UNIT_STATUSES)[number]
 const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "parked"] as const
 
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
+
+// The handover scopes of the session-handover event (the engine's own
+// parameterization, src/execute.ts HandoverScope, restated structurally like
+// every vocabulary here): a whole-task session, a stream of auto's taken
+// split, a fix round of the verification loop.
+const HANDOVER_SCOPES = ["whole", "subtask", "fix"] as const
+
+export type StatusHandoverScope = (typeof HANDOVER_SCOPES)[number]
 
 // The session error classification words (ErrorClass, src/chain.ts — the
 // glossary's error classification). A failure event carries one only when
@@ -206,6 +215,17 @@ export type RunStatusEvent =
   // `task` locates it — the subtask's qualified id).
   | { type: "subtask-start"; run: number; at: number; task: string; subtask: string; title?: string }
   | { type: "subtask-end"; run: number; at: number; task: string; subtask: string; outcome: TaskOutcome; detail?: string }
+  // A session handed its context over (plans/0056's protocol, the journal
+  // line added by plans/0130 D5): one event per handover of every scope —
+  // whole-task, a split stream, a fix round. `scope` names which;
+  // `subtask` (= S<nn>) locates a stream beside its `task`; `due` = the wall
+  // forced the handover (the hard-wall hint went out or the figure passed
+  // the post-session check), false = the session handed itself over at a
+  // boundary of its own choosing; `used`/`wall` are the tokens of the
+  // boundary — the figures a later release pairs with the continuation
+  // session's re-priming spend to measure what a handover costs (P19's
+  // measured basis; no runtime consumer yet).
+  | { type: "session-handover"; run: number; at: number; task: string; subtask?: string; scope: StatusHandoverScope; due: boolean; used: number; wall?: number }
   // The question lifecycle (what the P3c queue replays to reconstruct "a
   // question is pending"). `question-raised` restates only the correlation
   // key and the text — the asking itself is an agent stream fact
