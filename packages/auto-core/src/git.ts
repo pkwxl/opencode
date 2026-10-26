@@ -1254,6 +1254,46 @@ export async function taskChangedPaths(dir: string, taskId: string): Promise<str
   return [...files].sort()
 }
 
+// The oldest commit whose message carries the task's `Auto-Task: <id>`
+// trailer line (plans/0128's fork derivation): the unit's first commit in
+// this one repository, whose parent is the state the task started from —
+// what a retry-from-the-beginning wants (interrupted earlier attempts carry
+// the trailer too, so "oldest" sits before the task *first* started, not
+// before its last attempt). The scan is the same -z log walk
+// taskChangedPaths filters; undefined = no commit here carries the trailer
+// (the task never ran in this repository).
+export async function taskFirstCommit(root: string, taskId: string): Promise<string | undefined> {
+  const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
+  if (!log || log.code !== 0) return undefined
+  const trailer = `Auto-Task: ${taskId}`
+  const shas = log.out
+    .split("\x1e")
+    .map((entry) => entry.replaceAll("\0", ""))
+    .map((entry) => entry.split("\x1f"))
+    .filter(([sha, body]) => Boolean(sha?.trim()) && (body ?? "").split("\n").some((line) => line.trim() === trailer))
+    .map(([sha]) => sha!.trim())
+  // git log walks newest-first, so the run's last element is the oldest task commit.
+  return shas.at(-1)
+}
+
+// The nested-repository alignment one root-repository commit records: the
+// `Auto-Nested: <rel> @ <sha>` trailer lines commitTree writes when the root
+// commits last — the state every nested repository was at that commit ("any
+// root commit can align cross-repository state"). fork's reconstruction reads
+// the record back (plans/0128): rel keys are repository-relative paths as
+// recorded, the SHAs the short form the trailer writes. An unreadable commit
+// yields the empty map; the caller decides what that means.
+export async function nestedShasAt(root: string, sha: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const body = await git(root, ["show", "-s", "--format=%B", sha]).catch(() => undefined)
+  if (!body || body.code !== 0) return out
+  for (const line of body.out.split("\n")) {
+    const m = /^Auto-Nested:\s*(.+?)\s*@\s*([0-9a-f]+)\s*$/.exec(line.trim())
+    if (m) out.set(m[1]!, m[2]!)
+  }
+  return out
+}
+
 // Scene restoration of handover documents (test-handover interruption
 // recovery F3): the list of files that are committed and tracked yet deleted
 // in the worktree (relative to the target directory). After a test handover

@@ -24,9 +24,10 @@
 //
 // AUTO-DECISION (stateless derivation of the original branch): nothing is
 // recorded at establishment — land derives it: among the repository's local
-// branches, the round family (auto/R-*) and the lane family (auto-lane/*,
+// branches, the round family (auto/R-*), the lane family (auto-lane/*,
 // plans/0074 §2.4 — lane branches live inside whichever branch is checked
-// out) are never the original, and exactly one remaining branch identifies
+// out) and the fork family (auto-fork/*, plans/0128's experiment branches)
+// are never the original, and exactly one remaining branch identifies
 // it; several candidates or none block naming them, never a guess. This
 // keeps U-L1's shipped surface (isolateRound, the establish route) untouched
 // and needs no state file an interrupted run could leave stale. The
@@ -131,8 +132,9 @@ export async function landUnit(dir: string, opts: LandOptions): Promise<LandOutc
     anyBranch = true
     // The original branch: the one local branch that is neither of the
     // driver's families (auto/R-* round branches, auto-lane/* lane
-    // branches). Exactly one identifies it; anything else blocks.
-    const candidates = (await localBranches(root)).filter((name) => !name.startsWith("auto/") && !name.startsWith("auto-lane/"))
+    // branches, auto-fork/* experiment branches, plans/0128). Exactly one
+    // identifies it; anything else blocks.
+    const candidates = (await localBranches(root)).filter((name) => !name.startsWith("auto/") && !name.startsWith("auto-lane/") && !name.startsWith("auto-fork/"))
     if (candidates.length !== 1) {
       problems.push(
         `${rel}: ${candidates.length > 1 ? `cannot tell which of ${candidates.join(", ")} is the original branch` : `no candidate original branch remains beside ${branch}`}; ` +

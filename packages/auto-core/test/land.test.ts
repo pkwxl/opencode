@@ -89,6 +89,25 @@ describe("landUnit (plans/0074 §2.3, U-L2: the landing command core)", () => {
   )
 
   test(
+    "a lingering fork branch (auto-fork/*, plans/0128) never perturbs the original-branch derivation",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir)
+      const original = await branchOf(pkg)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      // A fork environment's experiment branch beside the round branch: the
+      // stateless derivation excludes the family beside auto/* and
+      // auto-lane/*, so exactly one candidate — the original — remains.
+      await git(pkg, "branch", "auto-fork/T-001")
+      const landed = await landUnit(dir, { isolate: ["pkg"] })
+      expect(landed.type).toBe("landed")
+      expect(landed.lines[0]).toMatch(/^✓ pkg: landed [0-9a-f]+ on \S+ \(1 commit\(s\) of auto\/R-01 as one\); auto\/R-01 deleted$/)
+      expect(await branchOf(pkg)).toBe(original)
+      expect(await hasBranch(pkg, "auto-fork/T-001")).toBe(true)
+    }),
+  )
+
+  test(
     "--keep lands mid-round: the branch is retained and checked out (the round simply continues); a later land folds only the new commits",
     withDir(async (dir) => {
       const pkg = await nestedRepo(dir)

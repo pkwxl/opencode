@@ -76,6 +76,13 @@ export const REPO_LANE: readonly string[] = [
   // isolateRound, commitTree and the landing's checkout/squash/merge/delete
   // operations over real git repositories under temp dirs.
   "test/land.test.ts",
+  // The fork command (plans/0128): the forkTask suite drives commitTree and
+  // the worktree adds/removes over real git repositories under temp dirs
+  // (the sibling fork paths are cleaned by the tests themselves).
+  "test/fork.test.ts",
+  // --stop-after (plans/0128): the loop harness over the fake agent on real
+  // git repositories — the serial stop's commits and task documents.
+  "test/stop-after.test.ts",
   "test/lock.test.ts",
   // The isolation loop's suite (0069 §3.3's gap): drives runIsolationLoop
   // over real git repositories — worktrees, landing merges — so the repo

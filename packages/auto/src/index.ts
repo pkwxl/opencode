@@ -30,6 +30,7 @@ import { clarifyGate } from "@opencode-ai/auto-core/clarify"
 import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { renderHelperBrief } from "@opencode-ai/auto-core/driver-helper"
 import { landUnit } from "@opencode-ai/auto-core/land"
+import { forkTask } from "@opencode-ai/auto-core/fork"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -146,6 +147,9 @@ const VALUE_FLAGS = new Set([
   // automatic repair rounds a FAIL verdict or a held verdict gate may drive
   // before blocking for the human; run's alone.
   "repair",
+  // --stop-after (auto-core plans/0128): the task id whose completion ends
+  // this run — the retry's guardrail beside fork; run's alone.
+  "stop-after",
   // --brief/--brief-file (plans/0081 D11): the project brief's seed (init) or
   // revision (amend) — the text verbatim, or the file holding it; init/amend's
   // alone (refused elsewhere like the config flags).
@@ -514,6 +518,19 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "the failed task is closed and an appending session adds rework tasks over the report's evidence, which then run and re-verify. Acceptance gates never auto-repair — the human's sign alone; serial runs only, never persisted",
   ],
   [
+    "stop-after",
+    "--stop-after <T-NNN> run option (auto-core plans/0128): the task whose completion ends this run — the retry's guardrail (fork prints the hint), usable anywhere the serial loop runs. " +
+      "The run stops cleanly (exit 0) once that task closes, its handover and the phase's remaining tasks staying for the next run; an already-complete target stops at once; a target outside the routed phase's index is a usage error. " +
+      "Serial runs only — refused beside --max-sessions ≥ 2 and the lane switches; never persisted",
+  ],
+  [
+    "fork",
+    "fork <T-NNN | sha> <worktree-path> (auto-core plans/0128): build an experiment environment in a new directory and retry a task from its beginning — or experiment at any exact commit — without the main tree, its branches or its history being touched. " +
+      "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
+      "The environment is self-resetting (no .auto/ runtime state rides over; the task documents at that commit already read pending); run it with opencode-auto run <path> [--stop-after T-NNN], bring work back with plain git, clean up with the printed git worktree remove / branch -D lines. " +
+      "Exit codes: 0 forked / 1 the target or path cannot give what was asked / 2 a git failure midway, the partial state named",
+  ],
+  [
     "commit-retired",
     "--commit is retired: committing cannot be turned off — after any session ends the driver recursively commits all changes (git history is the audit trail of AI changes; --commit false and the old alias none were retired on 2026-09-15, " +
       "and with the config key gone the flag went entirely). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value fails loading (opencode-auto fix <dir> drops the key)",
@@ -565,8 +582,8 @@ const COMMANDS: readonly CommandHelp[] = [
     name: "run",
     summary: "execute the current phase's tasks one by one — the driver commits after every session — and stop at its clean end, the phase boundary",
     synopsis:
-      "opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow] [--repair [1-10]]",
-    options: ["frozen", "new-session", "max-sessions", "boundary", "repair", "run-lock"],
+      "opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow] [--repair [1-10]] [--stop-after <T-NNN>]",
+    options: ["frozen", "new-session", "max-sessions", "boundary", "repair", "stop-after", "run-lock"],
   },
   {
     name: "plan",
@@ -599,6 +616,13 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: "land branch-isolated repositories' round of work back onto their original branches (the person-invoked return path)",
     synopsis: "opencode-auto land [dir] [--keep] [--abandon] [--merge]",
     options: ["land", "run-lock"],
+  },
+  {
+    name: "fork",
+    summary:
+      "build an experiment environment in a new worktree — at the state before a task first started (T-NNN) or at an exact commit — to retry it in isolation; the main tree is never touched",
+    synopsis: "opencode-auto fork <T-NNN | sha> <worktree-path> [dir]",
+    options: ["fork", "run-lock"],
   },
   {
     name: "amend",
@@ -989,6 +1013,7 @@ const RUN_OPTION_REFUSALS: ReadonlyArray<{ key: string; flag: string; what: (com
   { key: "wait-between", flag: "--wait-between", what: (command) => `the pause between tasks, and ${command} runs none` },
   { key: "max-sessions", flag: "--max-sessions", what: () => "concurrent sessions of the task loop" },
   { key: "repair", flag: "--repair", what: () => "the bounded repair budget for FAIL verdicts" },
+  { key: "stop-after", flag: "--stop-after", what: () => "the task whose completion ends the run" },
   {
     key: "boundary",
     flag: "--boundary",
@@ -1040,6 +1065,37 @@ if (command === "close") {
     process.exit(1)
   }
 }
+// fork (auto-core plans/0128): like close, the target is required and comes
+// first — positional[0] is the fork target (a task T-NNN or a commit sha),
+// positional[1] the worktree path, positional[2] the optional directory. The
+// shape check makes the split safe the same way close's does; forkTask owns
+// every behavioural refusal (the target's derivation, the nested alignment,
+// the path's bounds). fork takes no options at all, so any flag is a usage
+// error before anything is read.
+const FORK_TARGET = /^(?:T-\d{3,}|[0-9a-f]{7,40})$/i
+let forkTarget: string | undefined
+let forkPath: string | undefined
+if (command === "fork") {
+  const target = positional[0]
+  if (target === undefined || !FORK_TARGET.test(target)) {
+    console.error(
+      target === undefined
+        ? "fork requires a target and a worktree path: opencode-auto fork <T-NNN | sha> <worktree-path> [dir] — the task to retry from its beginning, or an exact commit"
+        : `${target}: not a fork target; expected a task T-NNN or a commit sha (usage: opencode-auto fork <T-NNN | sha> <worktree-path> [dir])`,
+    )
+    process.exit(1)
+  }
+  forkTarget = target
+  if (positional[1] === undefined || !positional[1]!.trim()) {
+    console.error("fork requires a worktree path: opencode-auto fork <T-NNN | sha> <worktree-path> [dir] — the absent directory the experiment environment is created in")
+    process.exit(1)
+  }
+  forkPath = positional[1]!
+  if (flags.size > 0) {
+    console.error(`fork takes no options (usage: opencode-auto fork <T-NNN | sha> <worktree-path> [dir]); --${[...flags.keys()][0]} is not one`)
+    process.exit(1)
+  }
+}
 // land's --merge is the landing-mode boolean, but --merge is also _lane's
 // value flag (the parent branch a conflict repair merges; VALUE_FLAGS holds
 // it for that), so a directory following land's --merge would be swallowed
@@ -1056,7 +1112,7 @@ if (command === "land" && flags.has("merge")) {
     process.exit(1)
   }
 }
-const directory = resolve(command === "close" ? positional[1] ?? "." : positional[0] ?? ".")
+const directory = resolve(command === "close" ? positional[1] ?? "." : command === "fork" ? positional[2] ?? "." : positional[0] ?? ".")
 
 // fix --dryrun: list the configuration findings read-only (the replacement
 // for the retired `check` as a scripted gate on config drift). It skips only
@@ -1076,7 +1132,7 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper" || command === "clarify" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fork" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper" || command === "clarify" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -1147,6 +1203,15 @@ if (command === "run") {
     console.error("--boundary takes stop or flow (stop ends the run at each clean phase end, the default; flow crosses the boundaries continuously as before)")
     process.exit(1)
   }
+  // --stop-after (auto-core plans/0128): the task whose completion ends this
+  // run — the retry's guardrail in a fork environment. The task loop owns
+  // the semantics (the stop itself, the index check, the serial-path
+  // confinement); the shell validates the shape alone.
+  const stopAfter = flags.get("stop-after")
+  if (stopAfter !== undefined && !/^T-\d{3,}$/.test(stopAfter)) {
+    console.error("--stop-after takes a task id (T-NNN): the task whose completion ends this run")
+    process.exit(1)
+  }
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
   await logRunBanner(directory, config)
@@ -1156,6 +1221,7 @@ if (command === "run") {
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     maxSessions,
     repair,
+    ...(stopAfter !== undefined ? { stopAfter } : {}),
     ...(boundary === "flow" ? { boundary: "flow" as const } : {}),
   })
   process.exit(code)
@@ -1589,6 +1655,34 @@ if (command === "land") {
   })
   lock.release()
   exitWithResult(landed, "landed", "usage")
+}
+
+// fork (auto-core plans/0128): build an experiment environment in a new
+// worktree — at the state before a task first started (T-NNN) or at an exact
+// commit — to retry it in isolation; the main tree, its branches and its
+// history are never touched. The target checks above (the ref-first split,
+// the required path, the no-options refusal) ran before the directory
+// resolved; forkTask owns every behavioural refusal and returns the complete
+// printable output, land's shape. Like land and close it holds the run lock
+// itself (it writes git refs — branches and worktree registrations), so it
+// is not in the refusal list above. The config load is the validity gate
+// alone — the fork point and the nested alignment derive from committed
+// history; the experiment's own config is the committed one at that state.
+// Exit codes under the contract: 0 forked / 1 usage / 2 blocked for human.
+if (command === "fork") {
+  await requireConfigFile("fork", true)
+  try {
+    await loadProjectConfig(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
+    process.exit(1)
+  }
+  const lock = takeRunLock("fork")
+  const forked = await forkTask(directory, forkTarget!, forkPath!)
+  lock.release()
+  exitWithResult(forked, "forked", "usage")
 }
 
 // The amend hint of one config flag: how a person changes a key init froze.
@@ -2287,6 +2381,10 @@ if (command === "init" || command === "amend") {
     console.error(`--repair is a run option (the bounded repair budget for FAIL verdicts, per run and never persisted); ${command} does not accept it`)
     process.exit(1)
   }
+  if (flags.has("stop-after")) {
+    console.error(`--stop-after is a run option (the task whose completion ends that run, per run and never persisted); ${command} does not accept it`)
+    process.exit(1)
+  }
   // init's option whitelist (the amend whitelist's pattern, placed after the
   // refusals above so their pinned notices answer first): init takes its
   // config flags, the brief pair, the identity pair and -f alone — every
@@ -2316,6 +2414,8 @@ if (command === "init" || command === "amend") {
         "--wait-between is a run option (the pause between tasks: opencode-auto run <dir> --wait-between <minutes>); init does not accept it — init runs no task",
       boundary:
         "--boundary is a run option (run's phase-boundary shape: opencode-auto run <dir> --boundary stop|flow); init does not accept it — init runs no phase",
+      "stop-after":
+        "--stop-after is a run option (the task whose completion ends that run: opencode-auto run <dir> --stop-after <T-NNN>); init does not accept it — init runs no task",
       reason:
         "--reason is a close option (opencode-auto close <ref> [dir] --reason <text>, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
       cascade:

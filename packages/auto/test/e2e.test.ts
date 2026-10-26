@@ -3168,6 +3168,135 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
   })
 })
 
+// fork (auto-core plans/0128): the experiment environment — argument checks
+// (the ref-first split, the required worktree path, the no-options refusal),
+// the help rows (fork's own, run's --stop-after), the run-lock family (fork
+// takes the lock itself, so a live lock refuses), the happy paths of both
+// target forms over a real fixture (the driver's trailer commits made by
+// hand), and --stop-after's own surface (the format check, the plan refusal).
+describe("CLI: fork (auto-core plans/0128)", () => {
+  async function plantLock(dir: string, pid = process.pid) {
+    await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
+  }
+
+  // An initialized project with one fixture checkpoint and two driver-style
+  // task commits (the trailer block git's -m paragraphs produce matches the
+  // scan's line grammar).
+  async function taskProject() {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
+    expect((await runCli(["init", dir])).code).toBe(0)
+    await commitFixture(dir)
+    const git = gitOf(dir)
+    for (const id of ["T-001", "T-002"]) {
+      await Bun.write(join(dir, `${id}.txt`), `${id}\n`)
+      await git("add", "-A")
+      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}`, "-m", "Auto-Stage: execute")
+    }
+    return { dir, git }
+  }
+
+  test("argument checks: the target and the worktree path are required, a non-target is refused, fork takes no options", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
+    try {
+      const bare = await runCli(["fork"])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain("fork requires a target and a worktree path")
+      const noPath = await runCli(["fork", "T-001"])
+      expect(noPath.code).toBe(1)
+      expect(noPath.err).toContain("fork requires a worktree path")
+      const bad = await runCli(["fork", "main", `${dir}-exp`])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("main: not a fork target")
+      const flagged = await runCli(["fork", "T-001", `${dir}-exp`, "--dryrun"])
+      expect(flagged.code).toBe(1)
+      expect(flagged.err).toContain("fork takes no options")
+      expect((await runCli(["fork", "uninit-dir-xyz", `${dir}-exp`])).code).toBe(1)
+      const uninit = await runCli(["fork", "T-001", `${dir}-exp`, dir])
+      expect(uninit.code).toBe(1)
+      expect(uninit.err).toContain("nothing to fork")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the help rows: fork's synopsis renders, and run's carries --stop-after", async () => {
+    const forkHelp = await runCli(["fork", "--help"])
+    expect(forkHelp.code).toBe(0)
+    expect(forkHelp.out).toContain("opencode-auto fork <T-NNN | sha> <worktree-path> [dir]")
+    const runHelp = await runCli(["run", "--help"])
+    expect(runHelp.code).toBe(0)
+    expect(runHelp.out).toContain("--stop-after <T-NNN>")
+    const usage = await runCli(["--help"])
+    expect(usage.out).toContain("fork <T-NNN | sha> <worktree-path>")
+  })
+
+  test("fork refuses while another process holds the run lock (it takes the lock itself, land's posture)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
+      await plantLock(dir)
+      const refused = await runCli(["fork", "T-001", `${dir}-exp`, dir])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain(`⏸ another opencode-auto process holds the run lock of ${dir}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the task form's happy path: the worktree is created at the pre-task state, the lines name the branch, the run hint and the cleanup", async () => {
+    const { dir, git } = await taskProject()
+    try {
+      const before = (await git("rev-parse", "HEAD~1")).trim()
+      const forked = await runCli(["fork", "T-002", `${dir}-exp`, dir])
+      expect(forked.code).toBe(0)
+      const path = `${dir}-exp`
+      expect(forked.out).toContain(`✓ fork of T-002 created at ${path} on auto-fork/T-002`)
+      expect(forked.out).toContain(`  .: ${before.slice(0, 7)} — the state before T-002 first started`)
+      expect(forked.out).toContain(`run it: opencode-auto run ${path} --stop-after T-002`)
+      expect(forked.out).toContain(`  git -C ${dir} worktree remove ${path} && git -C ${dir} branch -D auto-fork/T-002`)
+      expect((await gitOf(path)("rev-parse", "HEAD")).trim()).toBe(before)
+      // "+" marks the branch as checked out in the fork worktree.
+      expect((await git("branch", "--list", "auto-fork/T-002")).trim()).toBe("+ auto-fork/T-002")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
+    }
+  })
+
+  test("the sha form's happy path, and the unknown task's usage refusal names the trailer", async () => {
+    const { dir, git } = await taskProject()
+    try {
+      const at = (await git("rev-parse", "HEAD")).trim()
+      const forked = await runCli(["fork", at.slice(0, 9), `${dir}-exp`, dir])
+      expect(forked.code).toBe(0)
+      expect(forked.out).toContain(`✓ fork at ${at.slice(0, 7)} (T-002 implement) created at ${dir}-exp on auto-fork/${at.slice(0, 7)}`)
+      expect((await gitOf(`${dir}-exp`)("rev-parse", "HEAD")).trim()).toBe(at)
+      const unknown = await runCli(["fork", "T-099", `${dir}-exp2`, dir])
+      expect(unknown.code).toBe(1)
+      expect(unknown.err).toContain("no commit of this repository carries the trailer Auto-Task: T-099")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
+      await rm(`${dir}-exp2`, { recursive: true, force: true })
+    }
+  })
+
+  test("--stop-after's surface: the format check, and plan refuses the run option", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
+    try {
+      const bad = await runCli(["run", dir, "--stop-after", "tomorrow"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("--stop-after takes a task id (T-NNN)")
+      const planRefusal = await runCli(["plan", dir, "--stop-after", "T-001"])
+      expect(planRefusal.code).toBe(1)
+      expect(planRefusal.err).toContain("--stop-after is a run option (the task whose completion ends the run); plan does not accept it")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // plan (auto-core plans/0053 D14–D15): every route the prelude settles without
 // an agent — the refusals, establishing a round, the round-close gate, the
 // notices — plus the argument checks. The loop paths (planning itself, the

@@ -324,6 +324,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // preflight leftover report; pipeline beside close, the person-invoked
   // command core it mirrors.
   land: "driver",
+  // The fork command's core (plans/0128): forkTask — the experiment
+  // environment's worktrees over git's kernel primitives and the Auto-Task/
+  // Auto-Nested trailer grammar; pipeline beside land, the person-invoked
+  // command core it mirrors.
+  fork: "driver",
   // The release gate (plans/0103 D2/D3; the scan's set 0119): releaseCheck
   // — per destination repository the clean-tree check and the destination
   // containment scan under the release posture; read-only beside land, the
@@ -676,6 +681,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // close — the person-invoked return path of a round's isolation, reaching
   // git's kernel primitives and the runtime config/shell only.
   land: "pipeline",
+  // The fork command (plans/0128): pipeline beside land — the person-invoked
+  // experiment environment over git's kernel primitives, the trailer grammar
+  // and the shell profile only.
+  fork: "pipeline",
   // The release gate (plans/0103 D2/D3): pipeline beside land — the
   // person-invoked read-only gate over the destination repositories,
   // reaching git's kernel primitives and the document scan only.

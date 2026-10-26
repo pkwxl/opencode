@@ -83,6 +83,18 @@ export async function addWorktree(dir: string, path: string, branch: string, spa
   return { ok: true }
 }
 
+// Create a worktree at path on the new branch `branch` starting at an
+// explicit commit (plans/0128's fork point): addWorktree's HEAD start is the
+// lane's dispatch meaning — the parent's current state — while fork names a
+// historical state itself. Full materialization only: a fork environment is
+// a person-sized experiment, never a lane's budgeted cone. Nothing here knows
+// fork targets; start is any committish the caller resolved.
+export async function addWorktreeAt(dir: string, path: string, branch: string, start: string): Promise<WorktreeResult> {
+  const added = await git(dir, ["worktree", "add", "-b", branch, path, start])
+  if (added.code === 0) return { ok: true }
+  return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+}
+
 // Copy the cone set of a fresh `--no-checkout` worktree by reflink from the
 // base checkout (tier 1's materialization core): the declared directories
 // recursively (`cp -a` preserves modes and timestamps, `--reflink=always`

@@ -137,6 +137,13 @@ export type LoopCtx = {
   // nothing persists it — an interrupted or re-run process starts a fresh
   // budget, like every other run-side width fact.
   repairs: number
+  // --stop-after's stop flag (plans/0128): set by the serial task loop when
+  // the target task completes — or is already complete at the loop's start —
+  // and read where the loop returns: a plain 0 from runTaskLoop means "phase
+  // complete, route the close-out", so the flag is the honest signal and the
+  // phase loop ends the run before the handover. Run state only; the
+  // concurrent shapes refuse the option outright.
+  stopAfterDone?: boolean
   // The execution tier preflight resolved and logged (plans/0096 D9/D10, the
   // 0068 amendment): 0 = process parallelism in one tree — no worktree lanes,
   // this loop's serial path is the execution surface and the parallelism is
@@ -173,6 +180,19 @@ function laneMaterial(ctx: LoopCtx): LaneMaterial | undefined {
 // frozen tree, stages 2–3); the `parallel` level's planning guidance and the
 // preflight guard keep their meaning whatever the tier.
 export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+  // --stop-after's confinement (plans/0128): the serial path's stop
+  // condition. Under any concurrent shape (the isolation switch, the
+  // readiness scheduler, the doc lanes) a stop mid-flight would strand
+  // in-flight work, so the combination is refused outright — never a
+  // silently ignored stop target. 1 = usage: the person asked for a
+  // combination this loop does not run.
+  if (
+    ctx.opts.stopAfter !== undefined &&
+    (autoSwitches().laneIsolation || worktreeScheduler(ctx.opts.maxSessions, ctx.treeTier) || (autoSwitches().docLanes && docScheduler(ctx.opts.maxSessions, ctx.treeTier)))
+  ) {
+    log("⏸ --stop-after is a serial-path option — it ends the run after one task completes and cannot ride a concurrent shape; re-run without --max-sessions (and without the lane switches) to use it")
+    return 1
+  }
   // Lane isolation (plans/0068 D10/S2, OPENCODE_AUTO_LANE_ISOLATION): the
   // whole task loop runs one lane at a time — every unit in its own worktree
   // through its own worker process, landed through the merge protocol, still
@@ -202,6 +222,24 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
   // today's serial loop), never inside the predicate.
   if (autoSwitches().docLanes && docScheduler(ctx.opts.maxSessions, ctx.treeTier)) return runDocLaneLoop(ctx, phase)
   const { directory } = ctx
+  // --stop-after's start checks (plans/0128): the target must be a task of
+  // the routed phase's index (a typo never silently never-stops), and an
+  // already-complete target ends the run before any unit runs — both through
+  // the same flag the post-unit check below sets, so the phase loop ends the
+  // run without the close-out a plain 0 would route.
+  if (ctx.opts.stopAfter !== undefined) {
+    const plan = await loadPlan(directory, phase)
+    const entry = plan.tasks.find((unit) => unit.id === ctx.opts.stopAfter)
+    if (entry === undefined) {
+      log(`⏸ --stop-after ${ctx.opts.stopAfter}: not a task of the routed phase's index — a stop target must name a task this run can complete`)
+      return 1
+    }
+    if (entry.status === "done") {
+      ctx.stopAfterDone = true
+      log(`■ ${ctx.opts.stopAfter} is already complete — nothing runs before the stop target (--stop-after)`)
+      return 0
+    }
+  }
   for (;;) {
     const plan = await loadPlan(directory, phase)
     const done = exhausted(plan)
@@ -209,6 +247,19 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     const task = next(plan)!
     const code = await runSerialUnit(ctx, phase, plan, task)
     if (code !== 0) return code
+    // --stop-after's stop point (plans/0128): the target unit just closed —
+    // but a parked unit also returns 0 without being done, so the reloaded
+    // file state settles it (a parked target keeps scheduling around it,
+    // exactly as without the flag). The stop lands before the regression
+    // boundary launches anything new; the next run re-derives that boundary.
+    if (ctx.opts.stopAfter !== undefined && task.id === ctx.opts.stopAfter) {
+      const after = await loadPlan(directory, phase)
+      if ((after.tasks.find((unit) => unit.id === task.id))?.status === "done") {
+        ctx.stopAfterDone = true
+        log(`■ stopped after ${task.id} ${task.title} as requested (--stop-after); the phase's remaining tasks and its handover stay for the next run`)
+        return 0
+      }
+    }
     // The background regression boundary (plans/0098 D4): after the unit's
     // close-out (the tree clean) and before the next unit's start gate —
     // pending receipts committed, one stale lane launched into the copy.

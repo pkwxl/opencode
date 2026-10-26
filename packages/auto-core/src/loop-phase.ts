@@ -752,7 +752,9 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         return 2
       }
       const code = await runTaskLoop(ctx, route.phase)
-      if (code !== 0) return code
+      // --stop-after (plans/0128): the target task closed — the run ends
+      // here, before the phase close-out runTaskLoop's plain 0 would route.
+      if (code !== 0 || ctx.stopAfterDone) return code
       continue
     }
     // The boundary stop (plans/0101 D1): the phase's last task unit closed

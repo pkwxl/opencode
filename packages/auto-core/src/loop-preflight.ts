@@ -204,6 +204,13 @@ export type RunAllOpts = {
   // path alone (plan and transfer carry no budget, and since plans/0101 D1
   // the verdict gates they meet sit past run's boundary stop).
   repair?: number
+  // --stop-after (plans/0128): the task id whose completion ends this run —
+  // the retry's guardrail in a fork environment, usable anywhere the serial
+  // loop runs. Run-side width, never a config key, never persisted; refused
+  // under the lane scheduler and the doc lanes (a stop mid-flight would
+  // strand in-flight work) — the serial path alone, like --repair's
+  // confinement.
+  stopAfter?: string
   // plan's stop condition (plans/0053 D6): the run stops once a planning step
   // has succeeded, or where an execute route would start, and prints what to
   // review. Absent = run: the loop goes on through execution. "formulate"

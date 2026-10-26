@@ -108,9 +108,10 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
 // checks ran on the isolation branch).
 
 // The repository's local branch names (refs/heads, short form). The caller
-// filters the families: the round branches (auto/R-*) and the lane branches
+// filters the families: the round branches (auto/R-*), the lane branches
 // (auto-lane/*, which live inside whichever branch is checked out,
-// plans/0074 §2.4) are never a repository's original branch.
+// plans/0074 §2.4) and the fork branches (auto-fork/*, plans/0128) are never
+// a repository's original branch.
 export async function localBranches(root: string): Promise<string[]> {
   const listed = await git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
   return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
