@@ -235,6 +235,19 @@ export function parallelismVars(facts: PromptFacts, level: ParallelLevel | undef
   return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
+// Doc-concurrency guidance (plans/0126 D1): the pack's `## doc-parallelism`
+// section body — level-free, not subsectioned — the same-tree declaration
+// teaching for doc phases, injected into the planning prompts when the run's
+// width executes doc lanes (--max-sessions ≥ 2, tier 0). At serial width, or
+// when the pack lacks the section, the key is undefined and the block
+// renders nothing — the byte-identical floor. The phase-kind gate (doc
+// phases only; the level block is the code-phase counterpart) sits at the
+// planning call sites, which own the phase entry.
+export function docConcurrencyVars(facts: PromptFacts, maxSessions: number | undefined): { docConcurrency?: string; docWidth?: string } {
+  if ((maxSessions ?? 1) < 2 || facts.pack.docParallelism === undefined) return {}
+  return { docConcurrency: renderText(facts.pack.docParallelism, {}), docWidth: String(maxSessions) }
+}
+
 // The single render exit, now also the guarantees gate (plans/0080 §3): when
 // the active pack declares `### asserts`, every composed prompt is checked
 // against them before it leaves the render layer — a violation throws

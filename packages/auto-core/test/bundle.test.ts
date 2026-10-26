@@ -293,6 +293,26 @@ describe("bundle sources", () => {
     }
   })
 
+  // The two-lane concurrency model (plans/0126 D1): every shipped pack — the
+  // builtin default and the three bundles — carries the width-keyed
+  // doc-concurrency teaching, level-free; the bundles' code-depth
+  // `## parallelism` stays deferred (0125 D7's remaining half).
+  test("the shipped family carries ## doc-parallelism; no bundle ships ## parallelism (plans/0126 D1)", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"]) {
+      const shipped = await resolveIntentBundle(name)
+      const pack = parseIntentFile(name, shipped![`intents/${name}.md`]!)
+      expect(pack.docParallelism).toContain("same-tree concurrency admits on")
+      expect(pack.docParallelism).toContain("give every doc task `Touches: docs/T-NNN/`")
+      expect(pack.parallelism).toBeUndefined()
+    }
+    const plain = tempDir()
+    try {
+      expect(promptFacts({ dir: plain }).pack.docParallelism).toContain("same-tree concurrency admits on")
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+  })
+
   // The lane table ships as the floor (plans/0121 D7): comments-only in the
   // shipped pack, so a project declaring no lanes is byte-identically
   // unaffected; the comments teach the shape with the five example rows a

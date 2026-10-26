@@ -309,6 +309,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           inputPath: planInputPath(phase),
           mode: opts.mode,
           parallel: opts.parallel,
+          maxSessions: opts.maxSessions,
           charter,
         }
       : {
@@ -328,6 +329,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           // implement phase's planning gets the pipeline-trimming note.
           trimmedPhases: parts!.trimmedPhases,
           parallel: opts.parallel,
+          maxSessions: opts.maxSessions,
           testByDriver: opts.testByDriver,
           charter,
         }
@@ -1025,6 +1027,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
           existingTasks: existingTaskList(plan.tasks),
           brief,
           parallel: opts.parallel,
+          maxSessions: opts.maxSessions,
         })
       : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks) })
     const blocks: BlockMapEntry[] = [
@@ -1159,6 +1162,7 @@ async function phaseAppendPrompt(
     handovers: await earlierHandovers(directory, phase, state),
     mode: opts.mode,
     parallel: opts.parallel,
+    maxSessions: opts.maxSessions,
   })
 }
 

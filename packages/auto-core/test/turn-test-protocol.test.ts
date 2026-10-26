@@ -96,14 +96,15 @@ const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
 // recording fx. The measurement events go through the source first (the
 // spine observes every event of the session before the row runs), so a
 // case's figure is the one the source would hold.
-const setup = (over: { test?: TestRun; switches?: Switches; steerOk?: boolean; freeze?: SessionCommit; pending?: PendingTest; run?: TestRunInfo } = {}) => {
+const setup = (over: { test?: TestRun; switches?: Switches; steerOk?: boolean; freeze?: SessionCommit; pending?: PendingTest; run?: TestRunInfo; docLane?: boolean } = {}) => {
   const source = usageSource("events")
   const ctx = turnContext({
     source,
     // The channel's derived condition (plans/0083 D9) needs the config flag
     // on the turn's options — a turn with a test run is a test-channel turn,
-    // exactly what production opts carry here.
-    opts: { testByDriver: true },
+    // exactly what production opts carry here. docLane marks a doc-lane
+    // session (plans/0126 D3: the marker refusal).
+    opts: { testByDriver: true, ...(over.docLane ? { docLane: true } : {}) },
     ...(over.test !== undefined ? { test: over.test } : {}),
     ...(over.switches !== undefined ? { switches: over.switches } : {}),
   })
@@ -196,6 +197,19 @@ describe("the test concern (idle: run and feedback)", () => {
     expect(fx.steers[0]).toContain("test/build.sh")
     expect(fx.steers[0]).toContain("Exit code: 1")
     expect(fx.steers[0]).toContain("fixture-fail")
+  })
+
+  test("a doc lane's pending marker is consumed and refused with a steer — no script ever runs beside sibling writes (plans/0126 D3)", async () => {
+    const testRun = repoTestRun()
+    await scriptRequest(testRun)
+    const { own, fx, idle } = setup({ test: testRun, docLane: true })
+    await expect(idle()).resolves.toBe("consumed")
+    expect(own).toEqual({ handover: false, asked: false, retried: false })
+    expect(fx.calls).toEqual(["exists", "resolveTest", "log", "steer"])
+    expect(fx.steers).toHaveLength(1)
+    expect(fx.steers[0]).toContain("not available mid-session inside a documentation lane")
+    expect(fx.steers[0]).toContain("sibling lanes are writing in this tree")
+    expect(fx.steers[0]).toContain("the wrap-up's test lanes cover this unit's verification")
   })
 
   test("a tracked side-effect violation (0083 D11) is steered back naming it and books the drift counter", async () => {

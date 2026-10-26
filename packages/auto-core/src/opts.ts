@@ -267,6 +267,15 @@ export type Opts = {
   // last, the wrap-up and close-out in the same lane. Set only by the lane
   // entry from the unit id; never by a person's CLI.
   stream?: number
+  // This session runs as a doc lane (plans/0099 D11's render fact carried
+  // onto the session options by plans/0126 D3): a documentation-scoped unit
+  // running as a concurrent in-process pipeline beside sibling lanes in this
+  // tree. The engine's test concern reads it — a doc-lane session never runs
+  // driver test scripts mid-session (the side-effect guard's whole-tree
+  // snapshot would sweep a sibling's in-flight writes); the wrap-up's test
+  // lanes cover the verification. Set only by the doc-lane dispatch; never
+  // by a person's CLI.
+  docLane?: boolean
 }
 
 // —— The session-options builder (the loop family's one Opts factory) ——
@@ -329,9 +338,10 @@ export type SessionCtx = {
 // PhaseKey — computing it here would need the phases value graph, which opts
 // must not pull under every importer — and, since plans/0068 S5, the stream
 // ordinal of a stream lane unit (the task pipeline runs exactly that
-// checklist item).
+// checklist item), and, since plans/0126 D3, the doc-lane flag of a
+// documentation-scoped unit running beside siblings in this tree.
 type SessionSite =
-  | { site: "task"; phase: PhaseKey; stream?: number }
+  | { site: "task"; phase: PhaseKey; stream?: number; docLane?: boolean }
   | { site: "plan-numbering" }
   | { site: "append-numbering" }
   | { site: "phase-append" }
@@ -407,6 +417,9 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       ...(ctx.opts.lane !== undefined ? { lane: ctx.opts.lane } : {}),
       // present only for a stream lane unit (the single-subtask path)
       ...(site.stream !== undefined ? { stream: site.stream } : {}),
+      // present only for a doc-lane unit (plans/0126 D3: the engine's test
+      // concern reads it — no driver test scripts beside sibling writes)
+      ...(site.docLane ? { docLane: true } : {}),
     }
   }
   // the bypass sessions (numbering restore, planning, appending, handover

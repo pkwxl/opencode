@@ -237,4 +237,10 @@ describe("sessionOpts width keys (plans/0068 S5)", () => {
     expect("parallel" in isolation).toBe(false)
     expect(isolation.lane).toEqual({ unit: "T-001" })
   })
+
+  test("the doc-lane flag rides the task options of a doc-lane unit alone (plans/0126 D3 — the engine's test refusal key)", () => {
+    const wide: SessionCtx = { ...ctx, opts: { ...ctx.opts, maxSessions: 2 } }
+    expect(sessionOpts(wide, { site: "task", phase, docLane: true }).docLane).toBe(true)
+    expect(sessionOpts(wide, { site: "task", phase }).docLane).toBeUndefined()
+  })
 })

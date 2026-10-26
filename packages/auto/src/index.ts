@@ -471,8 +471,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "parallel",
-    "--parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); " +
-      "the level's text comes from the ## parallelism section of the intent pack. It never gates concurrency (--max-sessions alone runs it) and sets the landing-conflict posture (low blocks on the first conflict; " +
+    "--parallel none|low|medium|high code-phase planning depth (default none): how hard planning sessions work to make implement/test tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries) for worktree-lane execution; " +
+      "the level's text comes from the ## parallelism section of the intent pack, rendered for code-work phases and m mode — doc phases read ## doc-parallelism, keyed on the run's width, not the level. It never gates concurrency and sets the landing-conflict posture (low blocks on the first conflict; " +
       "medium/high allow one repair merge before blocking); which machinery executes concurrently is the --tree-lanes tier's call, not the level's",
   ],
   [
@@ -498,8 +498,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "max-sessions",
-    "--max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 runs the concurrent scheduler on its own — tasks run concurrently only as their declared Depends/Touches allow, whatever the parallel level (a level, init --parallel, adds the planning guidance that arranges independent tasks); " +
-      "what runs concurrently is the --tree-lanes tier's call (the default runs the tasks serially in one tree with the tests parallel; tree lanes on/auto run them as concurrent lanes in isolated worktrees); " +
+    "--max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 gives documentation waves out of the box — documentation-scoped tasks run side by side as their declared Depends/Touches allow, doc phases' planning arranging the declarations at this width (the pack's ## doc-parallelism teaching, no config needed); " +
+      "code tasks run concurrently only under --tree-lanes (the execution tier: the default runs them serially in one tree with the tests parallel; on/auto run them as concurrent lanes in isolated worktrees, a level — init --parallel — adding their planning depth); " +
       "--interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)",
   ],
   [

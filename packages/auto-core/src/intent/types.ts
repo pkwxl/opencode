@@ -15,11 +15,18 @@
 // - `parallelism` (MP.1, plans/0046 D10): planning guidance for the
 //   init-frozen `parallel` level, `### low|medium|high` subsections injected
 //   into the planning templates. No `### none`: at none nothing is injected.
+//   Since plans/0126 D2 the level is the code-phase depth key alone and the
+//   section renders for codeWork phases and m mode only — doc phases read
+//   `docParallelism` below.
+// - `docParallelism` (plans/0126 D1): the same-tree doc-concurrency
+//   declaration teaching for doc phases, level-free, injected into the
+//   planning templates when the run's width (--max-sessions ≥ 2) executes
+//   doc lanes. Not subsectioned: the whole section body is the teaching.
 
 // Section keys of an intent pack, in canonical document order. The parser
 // (load.ts) and future rendering iterate this list; the pack file protocol
 // uses the human-readable headings mapped in load.ts.
-export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism", "guarantees", "planningInput"] as const
+export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism", "docParallelism", "guarantees", "planningInput"] as const
 
 export type IntentSection = (typeof INTENT_SECTIONS)[number]
 
@@ -38,8 +45,13 @@ export type IntentPack = {
   // Artifact declaration conventions; feeds the document domain (M1.4).
   artifactSpec?: string
   // How hard planning sessions work to make tasks independent, keyed by the
-  // config's `parallel` level (MP.1).
+  // config's `parallel` level (MP.1). The code-phase depth key since
+  // plans/0126 D2 — rendered for codeWork phases and m mode only.
   parallelism?: string
+  // The doc-phase counterpart (plans/0126 D1): the declaration teaching for
+  // same-tree doc concurrency, level-free, injected when the run's width
+  // executes doc lanes (--max-sessions ≥ 2). Not subsectioned.
+  docParallelism?: string
   // Prompt guarantees (plans/0080 §2): the pack's declared consistency
   // contract — `### precedence` (the block injected into prompts), `### asserts`
   // (machine-checked lines the render gate evaluates), `### verify-plan` (the

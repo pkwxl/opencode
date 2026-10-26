@@ -4917,7 +4917,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       expect(steered.err).not.toContain("concurrent execution needs a parallel level")
       // preflight's refusal rides the run log's stdout (the run log is open).
       expect(steered.out).toContain("one human cannot steer 2 concurrent sessions")
-      expect(steered.out).toContain("with no parallel level: tasks run concurrently only as their declared Depends/Touches allow")
+      expect(steered.out).toContain("with no parallel level: documentation-scoped tasks run side by side as their declared Depends/Touches allow")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

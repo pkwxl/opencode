@@ -555,13 +555,13 @@ describe("preflight: the scheduler's usage surfaces (plans/0068 D11; plans/0125 
     }
   }
 
-  test("maxSessions above 1 without a parallel level passes preflight and teaches (plans/0125 D4)", async () => {
+  test("maxSessions above 1 without a parallel level passes preflight and teaches (plans/0125 D4; the teaching reworded by plans/0126 D5)", async () => {
     const dir = await project()
     for (const maxSessions of [2, 4]) {
       const { result, lines } = await run(dir, { maxSessions })
       expect("exit" in result).toBe(false)
       expect(lines.filter((line) => line.includes("max sessions"))).toEqual([
-        `ℹ max sessions ${maxSessions} with no parallel level: tasks run concurrently only as their declared Depends/Touches allow — a level (init --parallel low|medium|high) adds the planning guidance that arranges independent tasks`,
+        `ℹ max sessions ${maxSessions} with no parallel level: documentation-scoped tasks run side by side as their declared Depends/Touches allow — doc phases' planning arranges the declarations at this width; a level (init --parallel low|medium|high) adds code-phase planning depth, code tasks running concurrently only under --tree-lanes`,
       ])
     }
   })
@@ -586,22 +586,16 @@ describe("preflight: the scheduler's usage surfaces (plans/0068 D11; plans/0125 
     expect("exit" in (await run(dir, { maxSessions: 2, parallel: "low", waitAnswer: 0 })).result).toBe(false)
   })
 
-  // Doc lanes (plans/0099 D2): --handover-test refuses under doc-lane
-  // activation — the idle test protocol runs driver scripts against the
-  // whole tree from inside the session engine, the one driver-run surface
-  // with no landing window to drain into. The floors keep it: one session,
-  // and a worktree tier (the doc scheduler is tier-0-only). The switch-off
-  // and isolation floors are the branch site's (stage C) and the switch
-  // parse's (test/switches.test.ts) own tests.
-  test("--handover-test refuses under doc-lane activation; the serial and worktree-tier shapes keep it", async () => {
+  // Doc lanes × --handover-test (plans/0099 D2 refused the combination at
+  // run shape; plans/0126 D3 mechanized the exclusion at the request site —
+  // the engine's test concern refuses a doc-lane session's marker, so the
+  // run shapes compose and preflight no longer refuses). The concern-side
+  // refusal is turn-test-protocol's and the loop-level case agent-fake's.
+  test("--handover-test composes with doc-lane activation (plans/0126 D3); the serial and worktree-tier shapes keep it", async () => {
     const dir = await project()
-    const refused = await run(dir, { maxSessions: 2, handoverTest: true })
-    expect(refused.result).toEqual({ exit: 1 })
-    expect(
-      refused.lines.filter((line) => line.startsWith("--handover-test")),
-    ).toEqual([
-      "--handover-test with max sessions 2 under doc lanes (tier 0): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. Run with --max-sessions 1, or drop --handover-test",
-    ])
+    const wide = await run(dir, { maxSessions: 2, handoverTest: true })
+    expect("exit" in wide.result).toBe(false)
+    expect(wide.lines.some((line) => line.startsWith("--handover-test"))).toBe(false)
     // One session: doc-lane activation is off, the idle test protocol runs
     // exactly as today.
     expect("exit" in (await run(dir, { maxSessions: 1, parallel: "low", handoverTest: true })).result).toBe(false)

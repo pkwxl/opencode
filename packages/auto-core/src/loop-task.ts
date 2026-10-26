@@ -1397,12 +1397,13 @@ async function runDocUnit(
   }
   await taskBracket(directory, task.id, task.title, "starting a doc lane", task.attempts)
   const start = Date.now()
-  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase) }), {
+  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase), docLane: true }), {
     // The unit-start SHA baseline beginUnit recorded (0083 D1: the
     // verification charter's commit range) beside the doc-lane facts — the
     // effective scope (D7), the session prompts' concurrency clause (D11's
-    // docLane render fact), and, on a recovery drive, the rollback refusal's
-    // sibling scopes (D10).
+    // docLane render fact, carried onto the session options too by plans/0126
+    // D3 so the engine's test concern refuses mid-session test requests), and,
+    // on a recovery drive, the rollback refusal's sibling scopes (D10).
     ...(taskBaseline ? { baseline: taskBaseline } : {}),
     docLane: true,
     scope: input.scope,

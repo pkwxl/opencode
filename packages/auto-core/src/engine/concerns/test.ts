@@ -138,6 +138,27 @@ const idleProtocol = async (test: NonNullable<TurnContext["test"]>, own: TurnSta
   }
   const pending = join(test.tmp, "test.sh")
   if (!(await fx.exists(pending))) return { type: "break" }
+  // A doc lane never settles a test request (plans/0126 D3, amending 0099
+  // D2's run-level refusal into the mechanical exclusion): the side-effect
+  // guard snapshots the whole tree on the assumption the script ran alone
+  // between its two reads, and a sibling doc lane's in-flight writes would
+  // be swept into its restore. The request is consumed and refused with a
+  // steer — the wrap-up's test lanes (which drain, 0099 D9) cover the
+  // unit's verification — and the session continues. With this branch, no
+  // script ever executes against this tree while doc lanes are in flight
+  // (sessions outside doc lanes run through the serial degrade, alone,
+  // after the drain), so the preflight run-shape refusal is retired.
+  if (ctx.opts.docLane) {
+    await fx.resolveTest()
+    fx.log(`⚠ ${test.label} requested a driver test run from inside a doc lane; refused — sibling lanes are writing in this tree, the wrap-up's test lanes cover the verification`)
+    const ok = await fx.steer(
+      "A driver-run test is not available mid-session inside a documentation lane: sibling lanes are writing in this tree, " +
+        "and a driver-run script must not run beside their in-flight writes. Record the need in your own notes (what to run and why), " +
+        "continue the task without the mid-session run, and end the session normally — the wrap-up's test lanes cover this unit's verification.",
+    )
+    if (!ok) return { type: "blocked", question: "steer dispatch failed (doc-lane test refusal); cannot continue the session, see the log." }
+    return { type: "continue" }
+  }
   // The handover decision happens at this moment (D1), before execution —
   // the criterion is already decoupled from test outcome. On a hit the
   // driver first commits the freeze to pin the script down, then dispatches

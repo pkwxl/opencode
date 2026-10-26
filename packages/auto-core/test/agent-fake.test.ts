@@ -3745,6 +3745,40 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     expect(await git(repo, "status", "--porcelain")).toBe("")
   })
 
+  test("plans/0126 D3: a doc-lane session's test request is refused with a steer — no script runs beside siblings, the loop completes", async () => {
+    // One doc unit: the shared tmp/test.sh marker is per-tree, so a second
+    // lane's idle would race the first for it — the threading (the docLane
+    // fact reaching the engine through the real dispatch) is what this loop
+    // case pins; the refusal's own shape is turn-test-protocol's.
+    const { dir: repo, phase } = await docRepo([{ id: "T-001", touches: ["docs/T-001/"] }])
+    // The execution session (a code-work phase's doc lane, the test
+    // channel's own gate passing) requests a driver test run; the steered
+    // refusal just ends the turn (the session has nothing to add).
+    const agent = make({
+      turn: docTurns(repo, (ctx) => {
+        if (ctx.text.includes("docs/T-001/todo.md") && !ctx.text.includes("verification session")) {
+          mkdirSync(join(repo, "tmp"), { recursive: true })
+          writeFileSync(join(repo, "tmp", "test.sh"), "test/nothing.sh\n")
+        }
+      }),
+      steer: (steered) => [ev.text(steered.session, "txt_refused", "acknowledged"), ev.idle(steered.session)],
+    })
+    const ctx = docCtx(repo, serverOf(agent), { testByDriver: true })
+    delete ctx.opts.parallel
+    expect(await runDocLoop(ctx, phase)).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    // The partial never taught the channel (the docLane suppression), the
+    // engine refused the marker with a steer, the marker is consumed, and
+    // no script ran.
+    expect(agent.prompts[execAt(agent, "T-001")]!.text).not.toContain("Test execution protocol")
+    const refusal = agent.steers.find((text) => text.includes("not available mid-session inside a documentation lane"))
+    expect(refusal).toBeDefined()
+    expect(refusal).toContain("the wrap-up's test lanes cover this unit's verification")
+    expect(lines.some((line) => line.includes("requested a driver test run from inside a doc lane"))).toBe(true)
+    expect(await Bun.file(join(repo, "tmp", "test.sh")).exists()).toBe(false)
+    expect(await git(repo, "status", "--porcelain")).toBe("")
+  })
+
   test("admission under overlap: a declaration reaching the sibling's own directory keeps the units serial — the raw touches comparison would have admitted both", async () => {
     const { dir: repo, phase } = await docRepo([
       // T-001 declares only the shared document; its own docs/T-001/ joins

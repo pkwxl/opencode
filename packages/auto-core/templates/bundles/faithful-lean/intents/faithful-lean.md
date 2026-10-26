@@ -143,6 +143,13 @@ stricter: never mention a task id at all, and never write a path that leads
 outside that repository's own root; vendor or restate in place whatever it
 pointed at.
 
+## doc-parallelism
+
+In doc-writing phases the declarations are what same-tree concurrency admits on: documentation-scoped tasks with disjoint
+declared scopes run side by side in this tree, so write `Depends: none` where a task's work really is independent (a task
+without the field waits for the one before it) and give every doc task `Touches: docs/T-NNN/` — a doc task left undeclared
+chains after its predecessor and spends the width.
+
 ## guarantees
 
 ### precedence

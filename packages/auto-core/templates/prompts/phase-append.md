@@ -85,6 +85,16 @@ overlap — plan for that as follows:
 {{parallelRules}}
 
 {{/if}}
+{{#if docConcurrency}}
+
+## Doc concurrency (width {{docWidth}})
+
+This run executes with up to {{docWidth}} concurrent sessions: documentation-scoped tasks whose declared
+`Depends:`/`Touches:` allow it run side by side in this tree — plan for that as follows:
+
+{{docConcurrency}}
+
+{{/if}}
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content,

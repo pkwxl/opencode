@@ -40,6 +40,11 @@ describe("planning guidance block (D10/D11)", () => {
     expect(phasePlan("medium")).toContain("split work along file and module boundaries")
     expect(implementPlan("high")).toContain("## Parallelism (high)")
     expect(implementPlan("high")).toContain("split aggressively")
+    // The code-only texts since plans/0126 D2: the doc paragraphs moved to
+    // ## doc-parallelism, and no level text carries them.
+    for (const level of ["low", "medium", "high"] as const) {
+      expect(phasePlan(level)).not.toContain("In doc-writing phases")
+    }
   })
 
   test("a project pack without the level's subsection renders the plain prompt", () => {
@@ -50,5 +55,41 @@ describe("planning guidance block (D10/D11)", () => {
     factsDir = dir
     expect(phasePlan("low")).toContain("Project low guidance.")
     expect(phasePlan("high")).toBe(phasePlan())
+  })
+})
+
+// The doc-concurrency block (plans/0126 D1): the pack's `## doc-parallelism`
+// teaching, keyed on the run's width and the phase's kind — doc phases at
+// --max-sessions ≥ 2 — the level block being the code-phase counterpart.
+const docPlan = (maxSessions?: number, parallel?: "low" | "medium" | "high") =>
+  renderFormulationTodo(promptFacts({ dir: factsDir }), { phase: phaseTypeOfLetter("a"), phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-analysis/tasks.md", parallel, maxSessions, numberStart: 2, charter: "" }).scope
+
+describe("doc-concurrency block (plans/0126 D1/D2)", () => {
+  test("width injects the teaching into a doc phase; serial width renders nothing (the floor)", () => {
+    expect(docPlan()).not.toContain("## Doc concurrency")
+    expect(docPlan(1)).not.toContain("## Doc concurrency")
+    expect(docPlan(3)).toContain("## Doc concurrency (width 3)")
+    expect(docPlan(3)).toContain("In doc-writing phases the declarations are what same-tree concurrency admits on")
+    expect(docPlan(3)).toContain("give every doc task `Touches: docs/T-NNN/`")
+    expect(docPlan(3)).toContain("chains after its predecessor and spends the width")
+  })
+
+  test("the two blocks split by phase kind: a doc phase under a level gets the doc block alone; code phases and m mode get the level block alone", () => {
+    const leveledDoc = docPlan(3, "high")
+    expect(leveledDoc).not.toContain("## Parallelism (high)")
+    expect(leveledDoc).toContain("## Doc concurrency (width 3)")
+    expect(phasePlan("high")).toContain("## Parallelism (high)")
+    expect(phasePlan("high")).not.toContain("## Doc concurrency")
+    const mWide = renderFormulationTodo(promptFacts({ dir: factsDir }), { phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", maxSessions: 3, numberStart: 2, input: "prompt.", charter: "" }).scope
+    expect(mWide).not.toContain("## Doc concurrency")
+  })
+
+  test("a project pack without the section renders the plain prompt at width (the pack-less floor)", () => {
+    const dir = tempDir()
+    const overlay = join(dir, ".opencode", "auto", "intents")
+    mkdirSync(overlay, { recursive: true })
+    writeFileSync(join(overlay, "default.md"), "# default\n\n## quality\n\nQ.\n")
+    factsDir = dir
+    expect(docPlan(3)).toBe(docPlan())
   })
 })

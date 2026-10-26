@@ -35,6 +35,7 @@ const SECTION_HEADINGS: Record<string, IntentSection> = {
   governance: "governance",
   "artifact spec": "artifactSpec",
   parallelism: "parallelism",
+  "doc-parallelism": "docParallelism",
   guarantees: "guarantees",
   "planning-input": "planningInput",
 }

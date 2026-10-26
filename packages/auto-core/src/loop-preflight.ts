@@ -414,15 +414,16 @@ export async function preflight(
     if (warning) log(warning)
   }
   // A no-level width is legal and taught, never refused (plans/0125 D4,
-  // amending 0068 D10/S3's usage error): the declarations are the admission
-  // (P17 — level-independent since D5), so the scheduler runs on whatever
-  // the plan's `Depends:`/`Touches:` admit; the level only adds the
-  // planning guidance that arranges independent tasks. One teaching line
-  // (P8: detection records, the person decides), never a gate. A lane
-  // worker never sees it (it carries no maxSessions), and width 1 never
-  // does (the floor).
+  // amending 0068 D10/S3's usage error; the teaching reworded by plans/0126
+  // D5 to the two-lane model): the declarations are the admission (P17 —
+  // level-independent since D5), doc phases' planning arranging them at this
+  // width (the pack's `## doc-parallelism` teaching), code tasks running
+  // concurrently only under the --tree-lanes tiers. One teaching line (P8:
+  // detection records, the person decides), never a gate. A lane worker
+  // never sees it (it carries no maxSessions), and width 1 never does (the
+  // floor).
   if (opts.maxSessions !== undefined && opts.maxSessions !== 1 && opts.parallel === undefined) {
-    log(`ℹ max sessions ${opts.maxSessions} with no parallel level: tasks run concurrently only as their declared Depends/Touches allow — a level (init --parallel low|medium|high) adds the planning guidance that arranges independent tasks`)
+    log(`ℹ max sessions ${opts.maxSessions} with no parallel level: documentation-scoped tasks run side by side as their declared Depends/Touches allow — doc phases' planning arranges the declarations at this width; a level (init --parallel low|medium|high) adds code-phase planning depth, code tasks running concurrently only under --tree-lanes`)
   }
   // Interactive input refuses under concurrency (plans/0068 D11, v1): one
   // human cannot steer N sessions, and the sideband holds exactly one
@@ -443,6 +444,12 @@ export async function preflight(
   // once rather than let the setting silently do nothing.
   if (opts.parallel && (!renderFacts || !packSubsection(renderFacts.pack, "parallelism", opts.parallel))) {
     log(`⚠ parallel ${opts.parallel}: the active intent pack has no \`## parallelism\` / \`### ${opts.parallel}\` subsection; planning sessions get no parallelism guidance`)
+  }
+  // The width-keyed doc-concurrency teaching (plans/0126 D1): a pack without
+  // the `## doc-parallelism` section leaves doc phases' planning unarranged
+  // at width — the same say-so-once discipline as the level's warning above.
+  if ((opts.maxSessions ?? 1) >= 2 && (!renderFacts || renderFacts.pack.docParallelism === undefined)) {
+    log(`⚠ max sessions ${opts.maxSessions}: the active intent pack has no \`## doc-parallelism\` section; doc phases' planning gets no same-tree concurrency guidance`)
   }
   // The execution tier in force (plans/0096 D10, the 0068 amendment): computed
   // once here — the probe is preflight's ("preflight probes"), the pure
@@ -473,24 +480,6 @@ export async function preflight(
         : ""
     log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}${docNote}`)
   }
-  // --handover-test refuses under doc-lane activation (plans/0099 D2): the
-  // idle test protocol runs driver scripts against the whole tree from
-  // inside the session engine — the one driver-run surface with no landing
-  // window to drain into (its stash guard would treat a sibling's in-flight
-  // doc writes as its own to restore). The wrapup lane gate and the strict
-  // wait have drain points (D9); the idle test does not, so the two run
-  // shapes are mutually exclusive and say so. Lane isolation keeps the
-  // combination (the switch pins full isolation, one session, serially —
-  // doc lanes never engage), and the kill switch removes the branch rather
-  // than the flag.
-  if (opts.handoverTest && autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, treeTier)) {
-    log(
-      `--handover-test with max sessions ${opts.maxSessions} under doc lanes (tier 0): the idle test protocol runs driver scripts against the whole tree from inside a session, and a sibling doc lane's in-flight writes would cross its stash guard. ` +
-        `Run with --max-sessions 1, or drop --handover-test`,
-    )
-    return { exit: 1 }
-  }
-
   // The agent contract written by init (CONTRACT_AGENT); pre-run integrity
   // check: with the contract file missing the server only answers UnknownError
   // (no root cause), so report it here with the shell profile's recovery hint

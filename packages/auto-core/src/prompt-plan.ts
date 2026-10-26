@@ -13,7 +13,7 @@ import type { ModeSpec } from "./mode"
 import { dutiesForPhase } from "./intent/load"
 import { guaranteeViolation, parseGuaranteeAsserts, PromptGuaranteeError } from "./intent/guarantees"
 import type { ParallelLevel } from "./intent/types"
-import { intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
+import { docConcurrencyVars, intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
 import { renderText, type Ctx } from "./template"
 
 // The phase-plan duty paragraph's resolution (plans/0080 §4): the custom
@@ -109,8 +109,15 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
   handovers?: string
   mode?: ModeSpec
   parallel?: ParallelLevel
+  // The run's width (plans/0126 D1): the doc-concurrency teaching renders
+  // for doc phases at --max-sessions ≥ 2 — the width that executes doc lanes.
+  maxSessions?: number
 }): string {
   const type = input.phase
+  // The two guidance blocks split by phase kind (plans/0126 D1/D2): the
+  // level's depth guidance for code-work phases and m mode, the width-keyed
+  // doc-concurrency teaching for doc phases.
+  const codePhase = type === undefined || type.codeWork === true
   return renderPrompt(facts, "phase-append", {
     phase: type ? phaseTag(type) : undefined,
     phaseName: type?.name,
@@ -130,7 +137,8 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
     planDuties: input.planDuties,
-    ...parallelismVars(facts, input.parallel),
+    ...(codePhase ? parallelismVars(facts, input.parallel) : {}),
+    ...(!codePhase ? docConcurrencyVars(facts, input.maxSessions) : {}),
   })
 }
 
@@ -182,6 +190,9 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   mode?: ModeSpec
   trimmedPhases?: boolean
   parallel?: ParallelLevel
+  // The run's width (plans/0126 D1): the doc-concurrency teaching renders
+  // for doc phases at --max-sessions ≥ 2 — the width that executes doc lanes.
+  maxSessions?: number
   testByDriver?: boolean
   charter: string
   // The synthesis payload (plans/0097 D3): brief = the constructor's
@@ -368,7 +379,14 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   if (manual && synth?.protocol) {
     parts.push(`Protocol obligations this plan carries regardless (the DRIVER seeds these ledger rows itself): ${synth.protocol}.\n`)
   }
-  const { parallel, parallelRules } = parallelismVars(facts, input.parallel)
+  // The two planning-guidance blocks split by phase kind (plans/0126 D1/D2):
+  // the level's depth guidance renders for code-work phases and m mode alone
+  // (the level is the code-phase depth key, `--tree-lanes` its execution
+  // tier); doc phases read the width-keyed doc-concurrency teaching instead —
+  // the run's maxSessions admitting same-tree doc lanes. At width 1 a doc
+  // phase gets neither block (the byte-identical floor).
+  const codePhase = manual || input.phase?.codeWork === true
+  const { parallel, parallelRules } = codePhase ? parallelismVars(facts, input.parallel) : {}
   if (parallelRules) {
     parts.push(
       [
@@ -378,6 +396,20 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
         "overlap — plan for that as follows:",
         "",
         parallelRules.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  const { docConcurrency, docWidth } = !codePhase ? docConcurrencyVars(facts, input.maxSessions) : {}
+  if (docConcurrency) {
+    parts.push(
+      [
+        `## Doc concurrency (width ${docWidth})`,
+        "",
+        `This run executes with up to ${docWidth} concurrent sessions: documentation-scoped tasks whose declared`,
+        "`Depends:`/`Touches:` allow it run side by side in this tree — plan for that as follows:",
+        "",
+        docConcurrency.trim(),
         "",
       ].join("\n"),
     )
