@@ -42,7 +42,7 @@ bun run packages/auto/src/index.ts <subcommand> ...
 ```sh
 opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by transfer (plan in m mode) — and no project brief: the assisted project analysis the first `plan`/`transfer` opens proposes and installs it (`--brief`/`--brief-file` are retired on init). In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
 opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-file <path>]   # rewrite only the given config keys, keep the rest (at least one key, or a brief revision; refused without a config), see "Amending (amend)"
-opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
+opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none or only informational notes, 1 when there are findings), see "Config fix (fix)"
 opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
 opencode-auto release [dir]   # the release gate for a destination repository (a nested git repository): the containment findings the working rounds record but deliberately defer — task-id mentions, paths leading outside the repository's own root, process-document paths — block here beside a clean-tree check (an uncommitted state is not a release); a gate, not a scrubber — removal is content work you do with your agent, and the re-run certifies with one ✓ line per destination naming its HEAD, see "The release gate (release)"
 opencode-auto transfer [dir] [--resynthesize]   # advance one boundary, resolved by state: with no round yet the project analysis / direct establishment stopping at the round-start gate; at a phase boundary the human gate first (open survey Fork: lines refuse), then the handover distillation, the phase close and the next phase's plan task constructed and stopped for review; at a completed round the round close and the next round from the roadmap's line (one advance per invocation; m mode refuses — its plan/run shapes stand), see "The advance command (transfer)"
@@ -420,9 +420,12 @@ that "fail to load or silently lose their meaning"; legal alternative spellings 
 `parallel: "none"`, `agent: "opencode"`) are left alone; phase index inconsistency is not fix's business (it
 belongs to the later `plan`).
 
-Findings come in two classes: **fixable** — deterministic and meaning-preserving, applied per the table
+Findings come in three classes: **fixable** — deterministic and meaning-preserving, applied per the table
 below; **manual** — reported only, never guessed (e.g. `handoverTest: true` with `testByDriver: false`:
-which side to change is a person's decision).
+which side to change is a person's decision); **info** — a recorded state, nothing to repair (auto-core
+plans/0135): the note names an expected posture and its channel, asks nothing of anyone, and `fix` /
+`fix --dryrun` exit `0` when only info notes remain — an expected state is not drift, so a CI gate on the
+exit code stays green.
 
 | Object | Finding | Action |
 | --- | --- | --- |
@@ -438,19 +441,25 @@ which side to change is a person's decision).
 | `.gitignore` missing the `tmp/` or `.auto/` entry | Fixable | Append the missing entries |
 | `.gitignore` missing the `/.opencode/auto/models.json` entry (projects initialized before init wrote it) | Fixable | Append that entry (the remaining local-only entries are left to the person) |
 | `opencode.json` missing | Fixable | Write the built-in template (left alone when it exists, possibly containing manual edits) |
-| brief.md missing | Fixable | Write the project brief stub (left alone when it exists) |
+| `opencode.json` missing the `external_directory` allow for a root symlink's resolved target (auto-core plans/0122) | Fixable | Insert the allow additively (person entries kept, always winning the evaluation tie) |
+| A stale `external_directory` allow — its symlink or target is gone (auto-core plans/0122) | Manual | Remove the entry if the reference moved |
+| `opencode.json` cannot hold per-pattern allows (malformed file or a flat action, auto-core plans/0122) | Manual | Add them by hand |
+| Bundle provenance: a managed intent-bundle file stale or person-edited (auto-core plans/0100) | Manual | Reported; `sync` plans the upgrade |
+| `phases` superseded by a released roadmap line covering the current round (auto-core plans/0114 D2) | Info | Nothing — recorded; reshape the round by moving its `R-NN` line in `docs/analysis.md` (the config key is inert for the round, never amended) |
 
 The artifact rules are rendered from the config, so they run only when the config (after the key rules are
 applied) loads strictly.
 
-Interaction mirrors `reset`: it first prints the findings list (`fix:` / `manual:` / `skipped:` lines); when
+Interaction mirrors `reset`: it first prints the findings list (`fix:` / `manual:` / `info:` / `skipped:`
+lines — only informational notes print under a `config-layer notes in` header instead of `findings`); when
 there are fixable items it goes through the clean-worktree gate, then asks once more `[y/N]` (no prompt
 off-TTY; `-f`/`--force` skips both gates), then writes per the list and prints a `fixed:` line per item. fix
 does not commit — the changes stay in the worktree for review.
 
 `fix --dryrun` is the read-only half and the replacement for the retired `check` as a scripted gate on config
 drift: it plans and prints the findings and writes nothing, exiting `0` when there are none and `1` when
-there are any (fixable and manual alike), so a CI job can gate on the exit code. It skips only the gates
+there are fixable or manual ones — informational notes alone print and exit `0` (an expected state is not
+drift, auto-core plans/0135) — so a CI job can gate on the exit code. It skips only the gates
 that guard writes — the clean-worktree check, the confirmation and the run-lock refusal (it runs beside a
 live run) — and keeps fix's other refusals, including the uninitialized and legacy-layout ones.
 
@@ -459,10 +468,12 @@ live run) — and keeps fix's other refusals, including the uninitialized and le
 | No config and no legacy mode (not initialized; run `init` first) | 1 |
 | No findings at all (the config layer matches the config) | 0 |
 | All fixable items applied, no manual items | 0 |
+| Only informational notes (nothing to repair) | 0, nothing written |
 | Manual items present (fixable items still applied) | 1 |
 | Dirty worktree (no `-f` given) | 1, no changes made |
 | Confirmation answered with anything but `y` | 0, no changes made |
 | `--dryrun`, no findings | 0, nothing written |
+| `--dryrun`, only informational notes | 0, nothing written |
 | `--dryrun`, findings (fixable and/or manual) | 1, nothing written |
 
 Strict failures on the `run` / `status` and amend paths append a `fix: opencode-auto fix <dir>`
@@ -709,7 +720,7 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   the authority's (auto-core plans/0114): a round the released roadmap covers reshapes by moving its
   `- R-NN <phases> — <goal>` line in `docs/analysis.md` — `amend --phases` refuses outright there
   (exit 1 naming the line-move channel; the config value never applies to a covered round, `status`
-  names the key superseded, `fix` reports it as a manual finding with nothing to repair) — while a
+  names the key superseded, `fix` records it as an informational note — nothing to repair) — while a
   config-governed round reshapes through `amend --phases`. Started or completed phases are immutable;
   mid-phase the config-governed amend refuses (exit 1) naming the boundary. The survey gate's release
   is the designed first use: where the inventory contradicts the round's cold tail, reshape with the

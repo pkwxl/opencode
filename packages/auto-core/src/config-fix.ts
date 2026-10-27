@@ -4,9 +4,11 @@
 // Rules for the rules:
 //   - Config layer only: .opencode/auto/config.json and the artifacts init
 //     writes from it. Phase-index inconsistencies belong to `plan` (0052 D22).
-//   - Two classes. fixable = deterministic and meaning-preserving; manual =
+//   - Three classes. fixable = deterministic and meaning-preserving; manual =
 //     report only, never guess (handoverTest without testByDriver: which side
-//     to change is a human decision).
+//     to change is a human decision); info = recorded state, nothing to
+//     repair (plans/0135: the note names an expected posture and its channel,
+//     never a person act — it fails no gate and asks nothing of anyone).
 //   - Only keys that fail to load or silently lose their meaning are broken.
 //     Valid alternative spellings (a phases array, parallel "none", agent
 //     "opencode") are left alone.
@@ -71,7 +73,7 @@ export async function renderAgentContract(testByDriver: boolean): Promise<string
 }
 
 type FixFinding = {
-  class: "fixable" | "manual"
+  class: "fixable" | "manual" | "info"
   // The file the finding is about, relative to the target directory.
   path: string
   problem: string
@@ -282,17 +284,19 @@ export async function planFix(dir: string): Promise<FixPlan> {
   }
   // The roadmap supersession (plans/0114 D2): a released roadmap's line for
   // the current round is that round's phase list (plans/0101 D5) — the config
-  // key then silently loses its meaning for the round, this table's own
-  // manual class ("report only, never guess"). Nothing to repair: the person
-  // reshapes rounds by moving roadmap lines, and a valid key is never
-  // rewritten. m mode never consults the roadmap; a round the roadmap does
+  // key then silently loses its meaning for the round. Nothing is wrong with
+  // the config: the person reshapes rounds by moving roadmap lines, and a
+  // valid key is never rewritten — so the note is info, not manual
+  // (plans/0135): an expected posture recorded against "cleaning up" the key,
+  // it names no person act, exits 0 alone, and no edit of the file could
+  // clear it. m mode never consults the roadmap; a round the roadmap does
   // not cover keeps the key as its live establishment authority and names
   // nothing.
   if (config.phases !== "m") {
     const round = await currentRound(dir)
     if ((await releasedRoadmapRound(dir, round)) !== undefined) {
       findings.push({
-        class: "manual",
+        class: "info",
         path: CONFIG_FILE,
         problem: `phases "${config.phases}" is superseded — ${roundDirName(round)} establishes under the released roadmap of ${ANALYSIS_DOC}; nothing to repair (reshape rounds by moving its lines)`,
       })
@@ -309,12 +313,11 @@ export async function applyFix(plan: FixPlan): Promise<void> {
 
 // The plan as the shell prints it (and the tests read it): one line per finding.
 export function formatFixPlan(plan: FixPlan): string {
-  return [
-    ...plan.findings.map((finding) =>
-      finding.class === "fixable" ? `  fix: ${finding.path}: ${finding.problem} → ${finding.change}` : `  manual: ${finding.path}: ${finding.problem}`,
-    ),
-    ...(plan.skipped ? [`  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (${plan.skipped})`] : []),
-  ].join("\n")
+  const line = (finding: FixFinding) =>
+    finding.class === "fixable"
+      ? `  fix: ${finding.path}: ${finding.problem} → ${finding.change}`
+      : `  ${finding.class}: ${finding.path}: ${finding.problem}`
+  return [...plan.findings.map(line), ...(plan.skipped ? [`  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (${plan.skipped})`] : [])].join("\n")
 }
 
 // The hint a strict config failure ends with when a key rule would repair it

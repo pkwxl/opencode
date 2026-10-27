@@ -2920,12 +2920,14 @@ if (command === "reset") {
 // print the plan, then the worktree cleanliness gate and the confirmation
 // (-f skips both), then apply. It never commits: the diff is left for review.
 // --dryrun keeps the read-only half: plan and print the findings, write
-// nothing, exit 0 when there are none and 1 when there are any — a scripted
-// gate on config drift keeps its exit code. It skips only the write-side
-// gates (the clean-tree check, the confirmation and the run-lock refusal
-// above) and keeps fix's other refusals, including the uninitialized and
-// legacy-layout ones; the uninitialized refusal still applies because a
-// directory without a config layer has nothing to list.
+// nothing, exit 0 when there are none and when only informational notes
+// remain (plans/0135: an expected posture is not drift) and 1 when there are
+// fixable or manual findings — a scripted gate on config drift keeps its exit
+// code. It skips only the write-side gates (the clean-tree check, the
+// confirmation and the run-lock refusal above) and keeps fix's other
+// refusals, including the uninitialized and legacy-layout ones; the
+// uninitialized refusal still applies because a directory without a config
+// layer has nothing to list.
 if (command === "fix") {
   const plan = await planFix(directory)
   if (plan.uninitialized) {
@@ -2938,7 +2940,9 @@ if (command === "fix") {
   }
   const fixable = plan.findings.filter((finding) => finding.class === "fixable")
   const manual = plan.findings.filter((finding) => finding.class === "manual")
-  console.log(`config-layer findings in ${directory}:`)
+  // Info notes alone are not findings against the layer (plans/0135): the
+  // header and the closing line say so, and no gate fails over them.
+  console.log(`${fixable.length + manual.length ? "config-layer findings" : "config-layer notes"} in ${directory}:`)
   console.log(formatFixPlan(plan))
   if (fixDryrun) {
     if (manual.length) {
@@ -2947,9 +2951,11 @@ if (command === "fix") {
     console.log(
       fixable.length
         ? `dryrun: nothing was changed; apply the ${fixable.length} fixable finding(s) with opencode-auto fix ${directory}`
-        : "dryrun: nothing was changed; the finding(s) above need a person",
+        : manual.length
+          ? "dryrun: nothing was changed; the finding(s) above need a person"
+          : "dryrun: nothing was changed; the note(s) above are informational — nothing to repair",
     )
-    process.exit(1)
+    process.exit(fixable.length + manual.length ? 1 : 0)
   }
   if (fixable.length) {
     if (!flags.has("force")) {
@@ -2975,6 +2981,10 @@ if (command === "fix") {
   if (manual.length) {
     console.error(`${manual.length} finding(s) need a person (listed as manual above): edit the file by hand, then re-run opencode-auto fix ${directory}`)
     process.exit(1)
+  }
+  if (!fixable.length) {
+    console.log("✓ nothing to fix: the note(s) above are informational — nothing to repair")
+    process.exit(0)
   }
   console.log("✓ config layer repaired; review the change and commit it")
   process.exit(0)

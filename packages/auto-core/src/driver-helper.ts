@@ -475,12 +475,16 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   }
 
   // Row 10 — config and provenance findings: the fix/sync surfaces, read the
-  // same way those commands read them.
+  // same way those commands read them. Info notes ride nowhere here
+  // (plans/0135): they name no person act — the superseded phases key's
+  // channel is the roadmap line, a finding row would send the pen after the
+  // one key the design says never to amend.
   const fix = await planFix(dir)
-  if (fix.findings.length) {
-    const fixable = fix.findings.filter((finding) => finding.class === "fixable").length
+  const actionable = fix.findings.filter((finding) => finding.class !== "info")
+  if (actionable.length) {
+    const fixable = actionable.filter((finding) => finding.class === "fixable").length
     facts.push(
-      `⚠ config findings: ${fix.findings.length} (${fixable} fixable by rule, ${fix.findings.length - fixable} manual) — ${bin} fix ${dir} --dryrun lists them`,
+      `⚠ config findings: ${actionable.length} (${fixable} fixable by rule, ${actionable.length - fixable} manual) — ${bin} fix ${dir} --dryrun lists them`,
     )
     channels.push(`.opencode/auto/config.json and the config layer — fixable findings repair by rule (${bin} fix), manual ones by hand; config keys change with ${bin} amend ${dir} --<key> <value>`)
   }

@@ -11,7 +11,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { hostname } from "node:os"
 import { dirname, join } from "node:path"
-import { GUIDANCE } from "../src/agents-block"
+import { GUIDANCE, ensurePointer } from "../src/agents-block"
+import { renderAgentContract } from "../src/config-fix"
 import { renderHelperBrief } from "../src/driver-helper"
 import { ANALYSIS_DOC, reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
@@ -21,6 +22,7 @@ import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import { setSwitchModelRegistry } from "../src/switches"
 import { git, freshRepo } from "./fixtures/runner"
+import templateConfig from "../templates/opencode.json" with { type: "file" }
 
 const made: string[] = []
 afterEach(() => {
@@ -370,6 +372,25 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     // no AGENTS.md block, no gitignore entries): the standing row renders.
     expect(lines.some((line) => line.startsWith("- ⚠ config findings:"))).toBe(true)
     expect(lines.some((line) => line.startsWith("- .opencode/auto/config.json and the config layer —"))).toBe(true)
+  })
+
+  test("row 10 — an info-only fix plan (the superseded phases key under a released roadmap) renders no finding row (plans/0135)", async () => {
+    const dir = await repo()
+    await established(dir, "mt")
+    write(dir, ANALYSIS_DOC, ANALYSIS(["- R-01 mt — port the core"], true))
+    // The artifact-complete config layer: the supersession note is all that
+    // remains of planFix — a recorded posture, not a finding against the
+    // layer, so the person-facing row stays quiet (a channel line here would
+    // send the pen after the one key the design forbids amending).
+    write(dir, ".opencode/agent/auto.md", await renderAgentContract(false))
+    await ensurePointer(dir, { testByDriver: false })
+    write(dir, "opencode.json", await Bun.file(templateConfig).text())
+    write(dir, ".gitignore", ".auto/\ntmp/\n/.opencode/auto/models.json\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "covered round")
+    const lines = await renderHelperBrief(dir, { phases: "mt" })
+    expect(lines.some((line) => line.startsWith("- ⚠ config findings:"))).toBe(false)
+    expect(lines.some((line) => line.startsWith("- .opencode/auto/config.json and the config layer —"))).toBe(false)
   })
 
   test("row 11 — the dirty tree at a start gate; quiet at the round-start gate where the uncommitted setup is the design", async () => {

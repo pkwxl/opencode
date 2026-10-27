@@ -3030,6 +3030,35 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
     }
   })
 
+  // plans/0135: the superseded phases key under a released roadmap covering
+  // the current round is an expected posture (plans/0114 D2), not drift —
+  // recorded as an info note that fails no gate and asks nothing of anyone.
+  test("fix with only an informational note: notes header, no person trailer, exit 0 (plain and --dryrun)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
+      const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
+      await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+      const dry = await runCli(["fix", dir, "--dryrun"])
+      expect(dry.code).toBe(0)
+      expect(dry.out).toContain("config-layer notes in")
+      expect(dry.out).not.toContain("config-layer findings in")
+      expect(dry.out).toContain('  info: .opencode/auto/config.json: phases "mt" is superseded — R-01 establishes under the released roadmap of docs/analysis.md; nothing to repair (reshape rounds by moving its lines)')
+      expect(dry.out).toContain("dryrun: nothing was changed; the note(s) above are informational — nothing to repair")
+      expect(dry.err).not.toContain("need a person")
+      // nothing was written
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      const fix = await runCli(["fix", dir])
+      expect(fix.code).toBe(0)
+      expect(fix.out).toContain("config-layer notes in")
+      expect(fix.out).toContain("✓ nothing to fix: the note(s) above are informational — nothing to repair")
+      expect(fix.err).not.toContain("need a person")
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("repairs retired keys and missing artifacts, keeps the other keys, is idempotent; run works again", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
