@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ensureGitignore, ensureInitGitignore, ensureModelsGitignore, MODELS_ENTRY } from "../src/gitignore"
+import {
+  ensureGitignore,
+  ensureInitGitignore,
+  ensureModelsGitignore,
+  ensureNestedGitignore,
+  MODELS_ENTRY,
+  removeGitignoreEntry,
+  retiredGitignoreEntries,
+  RETIRED_ENTRIES,
+} from "../src/gitignore"
 import { MODELS_FILE } from "../src/models"
 
 const gitInit = (cwd: string) => Bun.spawnSync(["git", "init", "-q"], { cwd })
@@ -72,10 +81,10 @@ describe("ensureInitGitignore", () => {
 
   test("a git repository gets the workdir and the local-only entries in one pass, idempotently", async () => {
     gitInit(dir)
-    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json"])
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"])
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
     expect(await ensureInitGitignore(dir)).toEqual([])
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
   })
 
   test("nested git repositories in the tree (including nested-in-nested) are ignored; node_modules is not descended into", async () => {
@@ -96,8 +105,8 @@ describe("ensureInitGitignore", () => {
   test("existing equivalent entries (slash-less spellings) are not duplicated", async () => {
     gitInit(dir)
     await writeFile(join(dir, ".gitignore"), "node_modules\n.env\nAGENTS.md\n")
-    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/opencode.json", "/.opencode/auto/models.json"])
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules\n.env\nAGENTS.md\ntmp/\n.auto/\n/.gitignore\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.opencode/auto/models.json"])
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules\n.env\nAGENTS.md\ntmp/\n.auto/\n/.opencode/auto/models.json\n")
   })
 
   test("the model registry's project layer entry is the registry's own path", () => {
@@ -106,7 +115,9 @@ describe("ensureInitGitignore", () => {
 })
 
 // fix's rule for a project initialized before init ignored the model
-// registry's project layer (plans/0055 §4.1).
+// registry's project layer (plans/0055 §4.1). The fixture is a pre-0138
+// .gitignore (it still holds the retired entries — the models rule appends
+// its one entry and never strips; the retirement rules live below).
 describe("ensureModelsGitignore", () => {
   let dir: string
 
@@ -140,6 +151,75 @@ describe("ensureModelsGitignore", () => {
 
   test("a non-git directory without a .gitignore is left alone", async () => {
     expect(await ensureModelsGitignore(dir)).toBe(false)
+    expect(await Bun.file(join(dir, ".gitignore")).exists()).toBe(false)
+  })
+})
+
+// fix's rule for the nested repositories (plans/0138): init stamps the set at
+// init time; a repository that appears later gets its entry appended.
+describe("ensureNestedGitignore", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-gitignore-nested-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("a nested repository that appeared after init gets its entry; dryRun only reports; idempotent", async () => {
+    gitInit(dir)
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await mkdir(join(dir, "vendor", "pkg"), { recursive: true })
+    gitInit(join(dir, "vendor", "pkg"))
+    expect(await ensureNestedGitignore(dir, { dryRun: true })).toEqual(["/vendor/pkg/"])
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n")
+    expect(await ensureNestedGitignore(dir)).toEqual(["/vendor/pkg/"])
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/vendor/pkg/\n")
+    expect(await ensureNestedGitignore(dir)).toEqual([])
+  })
+
+  test("a tree without nested repositories appends nothing", async () => {
+    gitInit(dir)
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    expect(await ensureNestedGitignore(dir)).toEqual([])
+  })
+})
+
+// The retired entries (plans/0138): the pre-0138 local-only ruling ignored
+// the .gitignore itself and opencode.json — the two lines fix's findings key
+// on, the self-entry stripped by rule, the opencode.json line the person's.
+describe("retiredGitignoreEntries / removeGitignoreEntry", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-gitignore-retired-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("a pre-0138 file reports both entries; a current file or a missing file reports none", async () => {
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await retiredGitignoreEntries(dir)).toEqual(RETIRED_ENTRIES)
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
+    expect(await retiredGitignoreEntries(dir)).toEqual([])
+    await rm(join(dir, ".gitignore"))
+    expect(await retiredGitignoreEntries(dir)).toEqual([])
+  })
+
+  test("the strip removes one entry's line, keeps the rest, and empties a file that held only it; dryRun reports without writing", async () => {
+    await writeFile(join(dir, ".gitignore"), "node_modules/\n/.gitignore\n/opencode.json\n")
+    expect(await removeGitignoreEntry(dir, "/.gitignore", { dryRun: true })).toBe(true)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n/.gitignore\n/opencode.json\n")
+    expect(await removeGitignoreEntry(dir, "/.gitignore")).toBe(true)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n/opencode.json\n")
+    expect(await removeGitignoreEntry(dir, "/.gitignore")).toBe(false)
+    // An equivalent spelling (slash-less) counts as the same entry.
+    await writeFile(join(dir, ".gitignore"), "opencode.json\n")
+    expect(await removeGitignoreEntry(dir, "/opencode.json")).toBe(true)
     expect(await Bun.file(join(dir, ".gitignore")).exists()).toBe(false)
   })
 })

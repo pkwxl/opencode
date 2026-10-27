@@ -2079,7 +2079,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(init.code).toBe(0)
       expect(init.out).toContain("updated: .gitignore")
       const gitignore = await Bun.file(join(dir, ".gitignore")).text()
-      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json"]) {
+      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
     } finally {
@@ -2292,7 +2292,7 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
       // sees the work tree the bootstrap created).
       expect(init.out).toContain("updated: .gitignore")
       const gitignore = await Bun.file(join(dir, ".gitignore")).text()
-      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json"]) {
+      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
       expect(init.out).toContain(`next: opencode-auto plan ${dir}`)
@@ -4717,6 +4717,10 @@ describe("CLI: reset de-initialization", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       await commitFixture(dir)
       await writeFile(join(dir, "opencode.json"), '{"model":"my own config"}\n')
+      // opencode.json is a tracked surface (plans/0138): the edit is ordinary
+      // uncommitted work now, and reset's cleanliness gate — the same bracket
+      // as over an edited config.json — wants it committed first.
+      await commitFixture(dir)
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
       expect(reset.out).toContain("keep: opencode.json")
@@ -4798,8 +4802,12 @@ describe("CLI: the worktree cleanliness gate", () => {
       expect(dirty.code).toBe(1)
       expect(dirty.err).toContain("requires a clean worktree")
       expect(dirty.err).toContain(".opencode/auto/config.json")
-      // init's ignore rules keep the local-only files out of the dirty list
-      expect(dirty.err).not.toContain("opencode.json")
+      // The tracked surfaces (plans/0138) sit in the dirty list beside the
+      // config layer — init's writes the person has not committed yet; the
+      // ignore rules still keep the local-only files (AGENTS.md) out of it.
+      expect(dirty.err).toContain("opencode.json")
+      expect(dirty.err).toContain(".gitignore")
+      expect(dirty.err).not.toContain("AGENTS.md")
       expect(dirty.err).toContain("-f/--force")
       // The refusal happens before any write
       expect(await readConfigAt(dir)).not.toHaveProperty("agent")

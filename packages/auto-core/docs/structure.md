@@ -217,7 +217,7 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md; also the delivery surface for the preparation guidance states (primer + assist rule + the state's text, the next-lines carrying the mode's commands) (0054, 0084, 0101; P5) | `src/agents-block.ts` (0054, 0084, 0101 D7) |
 | reset command | Remove init's configuration artifacts (the project brief is always kept) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |
-| .gitignore | Driver work-directory entries | `src/gitignore.ts` |
+| .gitignore | Driver work-directory entries; the local-only set (`/.env`, `AGENTS.md`, the registry's project layer) beside the committed surfaces (the file itself and `opencode.json`, 0138); fix's reconcile (workdir/models/nested appends, the retired self-entry strip) | `src/gitignore.ts` (0138) |
 | Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines (0053) | `src/lock.ts` (0053 D1–D3) |
 | Logging | Verbose/audit output, timestamps, log file | `src/log.ts` |
 | Driver-status events | `RunStatusEvent` — the run's typed narrative vocabulary, emitted at the driver's narrative points through a setter seam into the append-only `.auto/run-status.jsonl` journal the daemon's SSE status tail reads; frozen additive-only, disjoint from `RunEvent`/`AgentEvent` (0067; P13) | `src/run-status-schema.ts`, `src/run-status.ts` (0067 P2a/P2b) |

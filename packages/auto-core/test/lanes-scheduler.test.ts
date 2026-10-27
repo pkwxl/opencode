@@ -371,13 +371,14 @@ const reportOf = (unit: string, over: Partial<LaneReport> = {}): LaneReport => (
   ...over,
 })
 
-// A committed project with one pending task, its scaffolding local-only
-// (gitignored like init writes it): the scene a parent dispatches a lane
+// A committed project with one pending task — the ignored half of its
+// scaffolding local-only, the tracked surfaces (the .gitignore, opencode.json)
+// committed at HEAD (plans/0138): the scene a parent dispatches a lane
 // from. Returns the loaded task.
 async function laneProject(text = "## T-001: the widget [pending]\nBuild the widget.\n"): Promise<Task> {
   await git(dir, "init", "-q")
   const plan = await seedUnits(dir, text)
-  await Bun.write(join(dir, ".gitignore"), [".auto/", "tmp/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", ""].join("\n"))
+  await Bun.write(join(dir, ".gitignore"), [".auto/", "tmp/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json", ""].join("\n"))
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), "the agent contract\n")
   await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
@@ -588,7 +589,7 @@ type SchedUnit = { id: string; title: string; touches?: string[]; root?: boolean
 // The scaffolding every lane worktree needs (F7) — the write half of
 // laneProject above, shared with the scheduler projects.
 async function writeScaffolding(root: string): Promise<void> {
-  await Bun.write(join(root, ".gitignore"), [".auto/", "tmp/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", ""].join("\n"))
+  await Bun.write(join(root, ".gitignore"), [".auto/", "tmp/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json", ""].join("\n"))
   await mkdir(join(root, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(root, ".opencode", "agent", "auto.md"), "the agent contract\n")
   await mkdir(join(root, ".opencode", "auto"), { recursive: true })
@@ -599,7 +600,8 @@ async function writeScaffolding(root: string): Promise<void> {
 
 // A committed scheduler project: one unit per entry, its document carrying
 // the `Depends: none` / `Touches:` declarations the readiness predicate
-// reads, the scaffolding local-only, everything committed at HEAD.
+// reads — the ignored half of the scaffolding local-only, the tracked
+// surfaces committed at HEAD (plans/0138).
 async function schedulerProject(units: SchedUnit[]): Promise<void> {
   await git(dir, "init", "-q")
   await Bun.write(

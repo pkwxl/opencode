@@ -304,7 +304,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "so its -p (init takes no prompt and no brief; the planning input is plan's), --brief/--brief-file (the brief's channels are the approved proposals and amend's manual revision) and --amend (change individual keys with the amend command) are retired. " +
       "In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. " +
       "It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); " +
-      "else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree",
+      "else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.env, /AGENTS.md, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree — the .gitignore itself and opencode.json are committed project surfaces (plans/0138: the ignore set and the host posture reach every fresh clone; AGENTS.md stays local, re-derived from the committed config at every run start)",
   ],
   [
     "amend",
@@ -315,7 +315,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "fix",
     "fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, " +
-      "and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — its channels are the approved proposals and amend --brief); " +
+      "and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config — the .gitignore rules append the workdir, model-layer and nested-repository entries and remove the retired /.gitignore self-entry (plans/0138: the ignore set is a tracked surface), the retired /opencode.json line reported for the person, a visibility decision — (opencode.json only when missing; the brief is never written — its channels are the approved proposals and amend --brief); " +
       "anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. " +
       "fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)",
   ],
@@ -2837,10 +2837,12 @@ if (command === "init" || command === "amend") {
   if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
   // Plain init writes the full ignore set in one pass (the driver workdir, the
   // local-only files and every nested git repository in the tree — see
-  // auto-core/gitignore.ts); the amend command never touches it.
+  // auto-core/gitignore.ts); the amend command never touches it. The file
+  // itself and opencode.json are committed project surfaces (plans/0138): the
+  // closing line teaches the person to commit them with the rest.
   if (command === "init") {
     const appended = await ensureInitGitignore(directory)
-    if (appended.length) console.log(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories)`)
+    if (appended.length) console.log(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories; the file itself and opencode.json are committed project surfaces — commit them with the config layer)`)
   }
 
   if (amendCommand) {

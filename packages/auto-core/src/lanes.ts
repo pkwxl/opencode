@@ -798,14 +798,19 @@ export type LaneMaterial = {
 }
 
 // The scaffolding a fresh git worktree lacks (F7): the untracked, gitignored
-// local-only state a lane's preflight and sessions need. `.gitignore` rides
-// along although F7's list does not name it: init ignores the file itself
-// (gitignore.ts INIT_ENTRIES), so a fresh worktree does not carry it, and
-// without it the worktree's own `.auto/` and `tmp/` would surface as
-// untracked dirt at every clean gate.
-// AUTO-DECISION (`.gitignore` in the copy set): without the copy the lane's
-// first beginUnit sees `.auto/` as untracked and blocks — the copy is the
-// one-line fix and costs nothing (the file is local-only state by design).
+// local-only state a lane's preflight and sessions need. Since plans/0138 the
+// .gitignore and opencode.json are committed project surfaces, so a worktree
+// of a current project carries both from HEAD — but the copy stays: a project
+// initialized before 0138 still holds them untracked (its .gitignore keeps
+// the retired self-entry until `fix` migrates it), and without the copy the
+// worktree's own `.auto/` and `tmp/` would surface as untracked dirt at every
+// clean gate. For a current project the copies are byte-identical no-ops
+// beside HEAD (the worktree is created at the parent's HEAD, and the
+// run-start clean gate guarantees the parent's tree matches it); the two
+// entries retire only when no pre-0138 project runs lanes anymore.
+// AUTO-DECISION (`.gitignore` in the copy set): without the copy a pre-0138
+// lane's first beginUnit sees `.auto/` as untracked and blocks — the copy is
+// the one-line fix and costs nothing.
 const SCAFFOLD_FILES = [".gitignore", ".opencode", "opencode.json", "AGENTS.md"]
 
 // One dispatch (§6.5 ①–⑤): attempts bookkeeping through begin, the worktree —

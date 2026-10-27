@@ -119,7 +119,7 @@ const reportText = (id: string): string => `# ${id} report\n\n${"Delivered. ".re
 // state, so the worktree's own `.auto/` (the lane report included) is never
 // untracked dirt at the landing verification.
 async function writeScaffolding(root: string): Promise<void> {
-  await Bun.write(join(root, ".gitignore"), [".auto/", "tmp/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", ""].join("\n"))
+  await Bun.write(join(root, ".gitignore"), [".auto/", "tmp/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json", ""].join("\n"))
   await mkdir(join(root, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(root, ".opencode", "agent", "auto.md"), "the agent contract\n")
   await mkdir(join(root, ".opencode", "auto"), { recursive: true })
@@ -129,8 +129,9 @@ async function writeScaffolding(root: string): Promise<void> {
 }
 
 // A committed isolation project: one unit per entry, its document carrying
-// the `Depends:` declaration next()'s selection reads, the scaffolding
-// local-only, everything committed at HEAD.
+// the `Depends:` declaration next()'s selection reads — the ignored half
+// of the scaffolding local-only, the tracked surfaces (the .gitignore,
+// opencode.json) committed at HEAD (plans/0138).
 async function isoProject(root: string, phaseUnit: PhaseUnit, units: IsoUnit[]): Promise<void> {
   await git(root, "init", "-q")
   await Bun.write(join(root, phaseUnit.dir, "tasks.md"), renderTaskIndex("R-01.P01", units.map((unit) => ({ id: unit.id, title: unit.title }))))

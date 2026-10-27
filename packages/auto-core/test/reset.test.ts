@@ -222,14 +222,24 @@ describe("removeGitignoreEntries", () => {
     await mkdir(join(dir, "pkg"))
     await Bun.spawn(["git", "-C", join(dir, "pkg"), "init", "-q"]).exited
     await writeFile(join(dir, ".gitignore"), "node_modules/\n")
-    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", "/pkg/"])
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json", "/pkg/"])
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
   })
 
   test("a file holding only init entries is deleted whole", async () => {
-    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: true })
     expect(await exists(join(dir, ".gitignore"))).toBe(false)
+  })
+
+  // plans/0138: the retired /.gitignore and /opencode.json lines are a
+  // pre-0138 init's, and their retirement is fix's rule — reset mirrors the
+  // current init and leaves them as the person's own entries.
+  test("a pre-0138 init's retired entries survive reset (fix owns their retirement)", async () => {
+    await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/.gitignore\n/opencode.json\n")
   })
 })

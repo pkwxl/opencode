@@ -40,7 +40,14 @@ import {
   validateProjectConfig,
   type ProjectConfig,
 } from "./config"
-import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
+import {
+  ensureGitignore,
+  ensureModelsGitignore,
+  ensureNestedGitignore,
+  MODELS_ENTRY,
+  removeGitignoreEntry,
+  retiredGitignoreEntries,
+} from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import {
   applyExternalAllows,
@@ -232,6 +239,33 @@ export async function planFix(dir: string): Promise<FixPlan> {
   // layer (plans/0055 §4.1): preflight refuses an unignored one and names fix.
   if (await ensureModelsGitignore(dir, { dryRun: true })) {
     fixable(".gitignore", `lacks the ${MODELS_ENTRY} entry (the model registry's project layer is local-only)`, "append the entry", () => ensureModelsGitignore(dir))
+  }
+  // The nested-repository entries (plans/0138): init stamps the set at init
+  // time; a repository that appears later (or a pre-0138 clone whose partial
+  // .gitignore never carried them) would be absorbed by the parent's unified
+  // commit as a gitlink.
+  if ((await ensureNestedGitignore(dir, { dryRun: true })).length) {
+    fixable(".gitignore", "lacks an entry for a nested git repository in the tree", "append the entry (the parent's unified commit would otherwise absorb the repository as a gitlink)", () => ensureNestedGitignore(dir))
+  }
+  // The retired entries (plans/0138): pre-0138 init ignored the .gitignore
+  // itself and opencode.json, so neither ever reached git — every fresh clone
+  // lost the whole ignore set (the first run's housekeeping commit then
+  // tracking a partial file) and the person's opencode.json edits were
+  // unversioned. The self-entry is the tool's own surface: stripped here, the
+  // file surfaces untracked and lands in git with the next commit. The
+  // opencode.json line stays the person's pen act: the file holds person
+  // settings, and whoever must keep it local owns their own line and this
+  // finding.
+  const retired = await retiredGitignoreEntries(dir)
+  if (retired.includes("/.gitignore")) {
+    fixable(".gitignore", "holds the retired /.gitignore entry (the ignore set is a tracked project surface since plans/0138 — a self-ignored file never reached git, and every fresh clone lost the whole set)", "remove the entry (the file surfaces untracked and lands in git with the next commit)", () => removeGitignoreEntry(dir, "/.gitignore"))
+  }
+  if (retired.includes("/opencode.json")) {
+    findings.push({
+      class: "manual",
+      path: ".gitignore",
+      problem: "holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
+    })
   }
 
   // The template write carries the stamp when root symlinks exist (plans/

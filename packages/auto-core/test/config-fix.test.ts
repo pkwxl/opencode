@@ -360,9 +360,11 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.opencode/auto/models.json\n")
   })
 
-  // plans/0055 §4.1: a project initialized before init ignored the model
-  // registry's project layer gets the entry, and nothing else changes.
-  test("an older init's .gitignore without the project layer entry: fix appends it and names it in the plan", async () => {
+  // plans/0055 §4.1 (the models entry) under plans/0138's retirement rules:
+  // a pre-0138 .gitignore also holds the retired /.gitignore and /opencode.json
+  // lines — the self-entry is stripped by rule, the opencode.json line is the
+  // person's visibility call and stays a manual finding until they act.
+  test("an older init's .gitignore: fix appends the models entry, strips the retired self-entry, and reports the /opencode.json line", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, contextLimit: 128, custom: "kept" })
     expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
     const older = "node_modules/\ntmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n"
@@ -370,13 +372,37 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     const config = await Bun.file(join(dir, CONFIG)).text()
     const plan = await planFix(dir)
     expect(formatFixPlan(plan)).toBe(
-      "  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry",
+      "  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry\n" +
+        "  fix: .gitignore: holds the retired /.gitignore entry (the ignore set is a tracked project surface since plans/0138 — a self-ignored file never reached git, and every fresh clone lost the whole set) → remove the entry (the file surfaces untracked and lands in git with the next commit)\n" +
+        "  manual: .gitignore: holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
     )
-    expect(plan.writes.map((write) => write.path)).toEqual([".gitignore"])
+    expect(plan.writes.map((write) => write.path)).toEqual([".gitignore", ".gitignore"])
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe(older)
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe(`${older}/.opencode/auto/models.json\n`)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\ntmp/\n.auto/\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
     expect(await Bun.file(join(dir, CONFIG)).text()).toBe(config)
+    // The manual /opencode.json finding persists until the person removes the
+    // line; with it gone by hand the plan is clean.
+    expect((await planFix(dir)).findings.map((finding) => `${finding.class}: ${finding.problem}`)).toEqual([
+      "manual: holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
+    ])
+    await writeFile(join(dir, ".gitignore"), "node_modules/\ntmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
+    expect((await planFix(dir)).findings).toEqual([])
+  })
+
+  // plans/0138: a nested repository that appeared after init (or a pre-0138
+  // clone whose partial file never carried the entries) gains its entry — the
+  // parent's unified commit would otherwise absorb it as a gitlink.
+  test("a nested git repository without its .gitignore entry: fix appends it", async () => {
+    await seedInit(dir)
+    expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
+    await mkdir(join(dir, "vendor"))
+    await Bun.spawn(["git", "-C", join(dir, "vendor"), "init", "-q"])
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
+    const plan = await planFix(dir)
+    expect(formatFixPlan(plan)).toBe("  fix: .gitignore: lacks an entry for a nested git repository in the tree → append the entry (the parent's unified commit would otherwise absorb the repository as a gitlink)")
+    await applyFix(plan)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n/vendor/\n")
     expect((await planFix(dir)).findings).toEqual([])
   })
 

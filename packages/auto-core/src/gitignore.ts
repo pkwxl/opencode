@@ -19,13 +19,27 @@ const ENTRIES = ["tmp/", ".auto/"]
 // keep this module near-leaf; test/gitignore.test.ts pins the two together.
 export const MODELS_ENTRY = "/.opencode/auto/models.json"
 
-// The local-only entries init writes on top of the workdir entries:
-// .gitignore itself (the ignore rules are a local arrangement), .env
-// (secrets), AGENTS.md / opencode.json (agent instructions and session
-// configuration) and the model registry's project layer are not committed.
-// reset removes the entries only: a project layer stays on disk, since the
-// driver never wrote it.
-const INIT_ENTRIES = ["/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", MODELS_ENTRY]
+// The local-only entries init writes on top of the workdir entries: .env
+// (secrets), AGENTS.md (the driver's block — derived byte-identically from
+// the committed config and re-rendered by ensurePointer at every run start,
+// so the file itself stays out of git while its source travels) and the
+// model registry's project layer (the operator's, plans/0055 §4.1). The
+// .gitignore itself and opencode.json are NOT here: they are committed
+// project surfaces (plans/0138) — the ignore set is law every machine needs
+// identically (a self-ignored file never reached git, and every fresh clone
+// lost the whole set, the first run's housekeeping commit then tracking a
+// partial file), and opencode.json holds the project's host posture
+// (permission table, timeout keys, external-directory allows). reset removes
+// the entries only: a project layer stays on disk, since the driver never
+// wrote it.
+const INIT_ENTRIES = ["/.env", "/AGENTS.md", MODELS_ENTRY]
+
+// The retired entries (plans/0138): pre-0138 init ignored the .gitignore
+// itself and opencode.json. fix strips the self-entry (the file surfaces
+// untracked and lands in git with the next commit) and reports opencode.json's
+// line for the person — the visibility of a file that holds person settings
+// is a person act, and a person who must keep it local owns their own line.
+export const RETIRED_ENTRIES = ["/.gitignore", "/opencode.json"]
 
 // Line-normalized equivalence: a leading / and a trailing / are both
 // disregarded (`/tmp`, `tmp/`, `tmp` are equivalent).
@@ -99,6 +113,32 @@ export async function ensureModelsGitignore(directory: string, opts: { dryRun?: 
   return (await appendEntries(directory, [MODELS_ENTRY], opts)).length > 0
 }
 
+// fix's rule for the nested repositories in the tree (plans/0138): init
+// stamps the set at init time, and a repository that appears later (or a
+// pre-0138 clone whose partial .gitignore never carried the entries) would
+// be absorbed by the parent's unified commit as a gitlink. Returns the
+// entries appended (or, under dryRun, that would be).
+export async function ensureNestedGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<string[]> {
+  return appendEntries(directory, await nestedRepoEntries(directory), opts)
+}
+
+// Which of the retired entries (RETIRED_ENTRIES) the .gitignore still holds,
+// line-normalized — fix's findings read this; the two entries take different
+// classes there (the self-entry is the tool's own surface to keep true, the
+// opencode.json line a visibility decision that belongs to the person).
+export async function retiredGitignoreEntries(directory: string): Promise<string[]> {
+  const existing = await Bun.file(join(directory, ".gitignore")).text().catch(() => undefined)
+  if (existing === undefined) return []
+  return RETIRED_ENTRIES.filter((entry) => existing.split("\n").some((line) => normalize(line) === normalize(entry)))
+}
+
+// fix's strip of one retired entry: removes the equivalent line, deleting the
+// file when nothing else remains (the same emptied rule as reset's). Returns
+// whether a line was removed (dryRun computes without writing).
+export async function removeGitignoreEntry(directory: string, entry: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
+  return (await stripEntries(directory, [entry], opts)).removed
+}
+
 // init's .gitignore initialization: on top of the driver workdir entries,
 // append the local-only entries (INIT_ENTRIES) and an entry per nested git
 // repository in the target tree. Returns the appended entries (for the log line).
@@ -106,20 +146,19 @@ export async function ensureInitGitignore(directory: string): Promise<string[]> 
   return appendEntries(directory, [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))], {})
 }
 
-// The inverse of ensureGitignore/ensureInitGitignore (for reset): removes every
-// entry init wrote (the workdir, the local-only entries and the currently
-// present nested repository entries); the user's own entries are kept as they
-// are. If only blank remains after the removal the file is deleted (init
-// created it). dryRun computes the result without writing, so reset can print
-// the plan before asking.
-export async function removeGitignoreEntries(
+// The shared strip logic: removes the lines equivalent to the given entries;
+// if only blank remains after the removal the file is deleted (init created
+// it). dryRun computes the result without writing, so reset can print the
+// plan before asking.
+async function stripEntries(
   directory: string,
-  opts: { dryRun?: boolean } = {},
+  entries: string[],
+  opts: { dryRun?: boolean },
 ): Promise<{ removed: boolean; emptied: boolean }> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
   if (existing === undefined) return { removed: false, emptied: false }
-  const targets = [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))].map(normalize)
+  const targets = entries.map(normalize)
   const kept = existing.split("\n").filter((line) => !targets.includes(normalize(line)))
   const removed = kept.length !== existing.split("\n").length
   const text = kept.join("\n").trim()
@@ -129,4 +168,17 @@ export async function removeGitignoreEntries(
     else await Bun.write(file, `${text}\n`)
   }
   return { removed, emptied }
+}
+
+// The inverse of ensureGitignore/ensureInitGitignore (for reset): removes every
+// entry init wrote (the workdir, the local-only entries and the currently
+// present nested repository entries); the user's own entries are kept as they
+// are — including, on a project initialized before plans/0138, the retired
+// /.gitignore and /opencode.json lines: fix owns their retirement, and what
+// reset leaves behind is the person's.
+export async function removeGitignoreEntries(
+  directory: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<{ removed: boolean; emptied: boolean }> {
+  return stripEntries(directory, [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))], opts)
 }
