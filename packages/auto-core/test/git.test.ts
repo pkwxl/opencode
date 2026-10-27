@@ -20,6 +20,7 @@ import {
   restoreFile,
   rollbackUnit,
   suffixedTitle,
+  taskChangedPaths,
   unitBaseline,
   unitViolations,
   writeLocalIdentity,
@@ -422,6 +423,64 @@ describe("commitPending (a hidden task's ③ backfill commit)", () => {
 })
 
 // ---- Recovery fidelity (plans/0022-session-recovery-fidelity-design.md 3.1 ③ / 3.3) ----
+
+describe("taskChangedPaths (the release note's re-merge surface, plans/0096 D7; the corpus bound plans/0140)", () => {
+  // A person-side plain commit (no Auto-Task trailer) — the formulation
+  // commits (the PLAN formulate shape writes the unit document) and the
+  // restart's wipe commit of these fixtures.
+  async function personCommit(dir: string, message: string) {
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", message)
+  }
+
+  async function formulate(dir: string, taskId: string) {
+    await mkdir(join(dir, "docs", taskId), { recursive: true })
+    await writeFile(join(dir, "docs", taskId, "todo.md"), `# ${taskId}\n`)
+    await personCommit(dir, `${taskId} formulated`)
+  }
+
+  test("a single corpus: every trailer commit contributes (the bound changes nothing — the floor)", async () => {
+    const dir = await fresh()
+    try {
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      await writeFile(join(dir, "root.txt"), "init\n")
+      await personCommit(dir, "init")
+      await formulate(dir, "T-001")
+      await writeFile(join(dir, "one.txt"), "one\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 implement the migration: execute" })
+      await writeFile(join(dir, "two.txt"), "two\n")
+      await commitTree(dir, task, { stage: "wrapup", subject: "T-001 implement the migration: wrapup" })
+      expect(await taskChangedPaths(dir, "T-001")).toEqual(["one.txt", "two.txt"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an id re-issued after a wipe-and-restart: only the current corpus's commits contribute", async () => {
+    const dir = await fresh()
+    try {
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      await writeFile(join(dir, "root.txt"), "init\n")
+      await personCommit(dir, "init")
+      // The old corpus: formulated, then its task commits touch old.txt.
+      await formulate(dir, "T-001")
+      await writeFile(join(dir, "old.txt"), "old\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 implement the migration: execute" })
+      // The restart: the corpus wiped over retained history, the ids re-issued.
+      await rm(join(dir, "docs"), { recursive: true, force: true })
+      await personCommit(dir, "restart: the corpus wiped")
+      // The current corpus: re-formulated, its task commits touch new.txt.
+      await formulate(dir, "T-001")
+      await writeFile(join(dir, "new.txt"), "new\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 implement the migration: execute" })
+      expect(await taskChangedPaths(dir, "T-001")).toEqual(["new.txt"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe("baselineIntact (baseline verification at recovery)", () => {
   test("HEAD == baseline / a range of only driver commits → passes; an external commit is detected; **uncommitted dirty areas are not reported**", async () => {

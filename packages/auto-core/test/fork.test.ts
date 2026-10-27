@@ -1,14 +1,17 @@
 // The fork command core (plans/0128): forkTask — the experiment environment
 // in a new worktree. The task form's derivation (the parent of the oldest
-// Auto-Task commit, interrupted attempts included in what is excluded), the
-// sha form (the named commit itself, the root commit accepted), the branch
-// family's first-free naming, the nested repositories' aligned
-// reconstruction (the Auto-Nested record, the task form's own-log fallback,
-// the underivable refusal), and the usage matrix (unknown task, unresolvable
-// sha, the path bounds, the initial-commit edge). The driver's commits are
-// made by the real commitTree, so the trailers the derivation scans are the
-// production ones. land's original-branch filter (the auto-fork/* family)
-// is pinned beside its own suite in test/land.test.ts.
+// Auto-Task commit of the current corpus, interrupted attempts included in
+// what is excluded), the sha form (the named commit itself, the root commit
+// accepted), the branch family's first-free naming, the nested repositories'
+// aligned reconstruction (the Auto-Nested record, the task form's own-log
+// fallback, the underivable refusal), the usage matrix (unknown task,
+// unresolvable sha, the path bounds, the initial-commit edge), and the
+// corpus bound (plans/0140 — a task number re-issued after a
+// wipe-and-restart forks the current corpus's pre-start, never before the
+// restart). The driver's commits are made by the real commitTree, so the
+// trailers the derivation scans are the production ones. land's
+// original-branch filter (the auto-fork/* family) is pinned beside its own
+// suite in test/land.test.ts.
 //
 // removeFork (plans/0139) — the teardown of what fork builds: the members'
 // worktrees and their one branch, the tips named; the dirty refusal and its
@@ -286,6 +289,107 @@ describe("forkTask (plans/0128: the fork command core)", () => {
         expect(edge.type).toBe("usage")
         expect(edge.lines[0]).toContain("is the repository's initial commit")
         expect(existsSync(forks.at("edge"))).toBe(false)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+})
+
+describe("the corpus bound (plans/0140: a task number re-issued over retained history)", () => {
+  // A person-side plain commit (no Auto-Task trailer): the formulation
+  // commits (the PLAN formulate shape writes the unit document) and the
+  // restart's wipe commit of these fixtures.
+  async function personCommit(dir: string, message: string) {
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", message)
+  }
+
+  async function formulate(dir: string, taskId: string) {
+    mkdirSync(join(dir, "docs", taskId), { recursive: true })
+    writeFileSync(join(dir, "docs", taskId, "todo.md"), `# ${taskId}\n\n## Goal\n\nThe current corpus's formulation.\n`)
+    await personCommit(dir, `${taskId} formulated`)
+  }
+
+  // The restart itself: the corpus wiped over retained history (the docs
+  // tree gone, the git history holding every old-corpus commit), the
+  // shape reset + a hand wipe leaves behind.
+  async function restart(dir: string) {
+    rmSync(join(dir, "docs"), { recursive: true, force: true })
+    await personCommit(dir, "restart: the corpus wiped")
+  }
+
+  test(
+    "an id re-issued after the restart: the fork sits at the current corpus's pre-start, the success line naming the older lineage",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        await initRoot(dir)
+        await formulate(dir, "T-001")
+        await taskCommit(dir, "T-001", "first migration", "execute", "old.txt")
+        await restart(dir)
+        await formulate(dir, "T-001")
+        const before = await fullShaOf(dir, "HEAD")
+        await taskCommit(dir, "T-001", "first migration", "execute", "new.txt")
+        const outcome = await forkTask(dir, "T-001", forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        const path = forks.at("exp")
+        // The current corpus's pre-start: after its formulation, before its
+        // first task commit — never the old corpus's, which unbounded would
+        // have pinned (the parent of the old exec commit).
+        expect(await fullShaOf(path, "HEAD")).toBe(before)
+        expect(existsSync(join(path, "old.txt"))).toBe(true)
+        expect(existsSync(join(path, "new.txt"))).toBe(false)
+        expect(outcome.lines).toContain(
+          `  .: ${before.slice(0, 7)} — the state before T-001 first started (this corpus; the history also holds older T-001 commits from before a restart)`,
+        )
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "an id the current corpus never re-issued: the old corpus's own pre-start, no note (the cross-corpus floor)",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        await initRoot(dir)
+        await formulate(dir, "T-005")
+        const oldPreStart = await fullShaOf(dir, "HEAD")
+        await taskCommit(dir, "T-005", "fifth migration", "execute", "five.txt")
+        await restart(dir)
+        await formulate(dir, "T-001")
+        await taskCommit(dir, "T-001", "first migration", "execute", "new.txt")
+        const outcome = await forkTask(dir, "T-005", forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        const path = forks.at("exp")
+        // The newest addition of docs/T-005/todo.md is still the old
+        // corpus's formulation, so the corpus set contains the old corpus's
+        // commits: the derivation lands where the unbounded scan did.
+        expect(await fullShaOf(path, "HEAD")).toBe(oldPreStart)
+        expect(outcome.lines).toContain(`  .: ${oldPreStart.slice(0, 7)} — the state before T-005 first started`)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "formulated in the current corpus but never started: the refusal names the corpus shape (the old corpus's commits do not count as its start)",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        await initRoot(dir)
+        await formulate(dir, "T-001")
+        await taskCommit(dir, "T-001", "first migration", "execute", "old.txt")
+        await restart(dir)
+        await formulate(dir, "T-001")
+        const refused = await forkTask(dir, "T-001", forks.at("exp"))
+        expect(refused.type).toBe("usage")
+        expect(refused.lines[0]).toContain("every commit carrying the trailer Auto-Task: T-001 predates this corpus's formulation of the unit")
+        expect(existsSync(forks.at("exp"))).toBe(false)
+        expect(await hasBranch(dir, "auto-fork/T-001")).toBe(false)
       } finally {
         forks.done()
       }

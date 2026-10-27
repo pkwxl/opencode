@@ -9,9 +9,16 @@
 // runtime state and the task documents at that commit already say "pending").
 //
 // Target forms (the shell shape-checks; this module owns the semantics):
-//   T-NNN — the parent of the repository's oldest `Auto-Task: T-NNN` commit:
-//           the state before the task first started, interrupted earlier
-//           attempts included (a retry from the beginning wants none of them).
+//   T-NNN — the parent of the current corpus's oldest `Auto-Task: T-NNN`
+//           commit: the state before the task first started, interrupted
+//           earlier attempts included (a retry from the beginning wants
+//           none of them). The corpus bound (plans/0140): task numbers
+//           never repeat within a corpus, but a wipe-and-restart over
+//           retained history re-issues them — unbounded, the oldest
+//           trailer commit under a re-issued id belongs to an earlier
+//           corpus and the fork would land before the restart — so the
+//           scan is bounded at the task's corpus set (taskCorpusCommits,
+//           the newest commit that added the unit's todo.md).
 //   sha   — the commit itself: the person names the exact state.
 //
 // Branch family `auto-fork/<target>` (first-free -2, -3… across every
@@ -97,22 +104,29 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     return usage([`${worktreePath}: the path already exists — fork needs an absent path it can create`])
   }
   // The fork point. The task form walks the trailer scan to the task's first
-  // commit and takes its parent; the sha form takes the commit itself.
+  // commit of the current corpus and takes its parent; the sha form takes
+  // the commit itself. `older` rides along for the success line — commits
+  // under the same id from before a restart exist, the re-issued shape the
+  // person should see named rather than infer from a sha.
   let point: string
+  let olderLineage = false
   if (task !== undefined) {
     const first = await taskFirstCommit(root, task)
-    if (first === undefined) {
+    if (first === undefined || first.first === undefined) {
       return usage([
-        `${task}: no commit of this repository carries the trailer Auto-Task: ${task} — the task never started here, so the main tree already sits at its beginning; nothing to fork`,
+        first?.older
+          ? `${task}: every commit carrying the trailer Auto-Task: ${task} predates this corpus's formulation of the unit — the task's document was re-created by a later restart, and the current corpus has not started the task; the main tree already sits at its beginning, nothing to fork`
+          : `${task}: no commit of this repository carries the trailer Auto-Task: ${task} — the task never started here, so the main tree already sits at its beginning; nothing to fork`,
       ])
     }
-    const parent = await revSha(root, `${first}^`)
+    const parent = await revSha(root, `${first.first}^`)
     if (parent === undefined) {
       return usage([
-        `${task}: its first commit (${first.slice(0, 7)}) is the repository's initial commit — no state exists before the task; fork a sha you choose instead`,
+        `${task}: its first commit (${first.first.slice(0, 7)}) is the repository's initial commit — no state exists before the task; fork a sha you choose instead`,
       ])
     }
     point = parent
+    olderLineage = first.older
   } else {
     const full = await revSha(root, target)
     if (full === undefined) {
@@ -136,8 +150,12 @@ export async function forkTask(dir: string, target: string, worktreePath: string
       continue
     }
     if (sha === undefined && task !== undefined) {
+      // The nested repository holds no task documents, so its scan has no
+      // corpus boundary (taskCorpusCommits's undefined floor) — the whole
+      // log stands, the shape before plans/0140, reached only when the
+      // fork commit records no alignment for this repository.
       const first = await taskFirstCommit(repoRoot, task)
-      const parent = first === undefined ? undefined : await revSha(repoRoot, `${first}^`)
+      const parent = first?.first === undefined ? undefined : await revSha(repoRoot, `${first.first}^`)
       if (parent !== undefined) sha = parent
     }
     if (sha === undefined) {
@@ -192,7 +210,7 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   if (task !== undefined) {
     const title = await taskTitle(root, task)
     lines.push(`✓ fork of ${task}${title !== undefined ? ` ${title}` : ""} created at ${path} on ${branch}`)
-    lines.push(`  .: ${point.slice(0, 7)} — the state before ${task} first started`)
+    lines.push(`  .: ${point.slice(0, 7)} — the state before ${task} first started${olderLineage ? ` (this corpus; the history also holds older ${task} commits from before a restart)` : ""}`)
   } else {
     const shown = await git(root, ["show", "-s", "--format=%s", point])
     const subject = shown.code === 0 ? shown.out.trim() : undefined

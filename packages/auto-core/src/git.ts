@@ -1,6 +1,7 @@
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import type { AddedLine } from "./document/types"
+import { taskDir } from "./docpaths"
 import { log } from "./log"
 import type { PhaseKey } from "./phases/registry"
 
@@ -1240,13 +1241,17 @@ export async function rangeChangedFiles(dir: string, heads: readonly { root: str
 // and the suite's range grammar read — contributes its diff (a merge against
 // its first parent, so a landed lane's merge names the branch's files; the
 // runtime's landing merges carry the trailer like every driver commit).
-// Paths come back target-directory-relative; an unreadable repository
+// Commits of an earlier corpus under a re-issued id fall outside the task's
+// corpus set (plans/0140, the same bound taskFirstCommit reads) so a
+// wipe-and-restart never blends lineages into this surface either. Paths
+// come back target-directory-relative; an unreadable repository
 // contributes nothing (the surface is advisory steer, never a gate).
 export async function taskChangedPaths(dir: string, taskId: string): Promise<string[]> {
   const phys = await physicalDir(dir)
   const files = new Set<string>()
   const trailer = `Auto-Task: ${taskId}`
   for (const root of await repoRoots(dir)) {
+    const corpus = await taskCorpusCommits(root, taskId)
     const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
     if (!log || log.code !== 0) continue
     // -z separates commits with NUL (not whitespace — trim keeps it), so
@@ -1257,6 +1262,7 @@ export async function taskChangedPaths(dir: string, taskId: string): Promise<str
       .map((entry) => entry.replaceAll("\0", ""))
       .map((entry) => entry.split("\x1f"))
       .filter(([sha, body]) => Boolean(sha?.trim()) && (body ?? "").split("\n").some((line) => line.trim() === trailer))
+      .filter(([sha]) => corpus === undefined || corpus.has(sha!.trim()))
       .map(([sha]) => sha!.trim())
     for (const sha of shas) {
       const tree = await git(root, ["diff-tree", "--no-commit-id", "--name-only", "-z", "-r", "-m", "--first-parent", "--ignore-submodules=all", sha]).catch(() => undefined)
@@ -1270,26 +1276,65 @@ export async function taskChangedPaths(dir: string, taskId: string): Promise<str
   return [...files].sort()
 }
 
-// The oldest commit whose message carries the task's `Auto-Task: <id>`
-// trailer line (plans/0128's fork derivation): the unit's first commit in
-// this one repository, whose parent is the state the task started from —
-// what a retry-from-the-beginning wants (interrupted earlier attempts carry
-// the trailer too, so "oldest" sits before the task *first* started, not
-// before its last attempt). The scan is the same -z log walk
-// taskChangedPaths filters; undefined = no commit here carries the trailer
-// (the task never ran in this repository).
-export async function taskFirstCommit(root: string, taskId: string): Promise<string | undefined> {
+// One task's corpus, as the commits of this one repository that belong to
+// it (plans/0140): everything reachable from HEAD but not from the first
+// parent of the newest commit that added the task's unit document
+// `docs/T-NNN/todo.md`. Every corpus formulates a unit exactly once, so the
+// newest addition is the current corpus's formulation-of-record, and the
+// boundary commit itself counts inside — the creating commit can be a task
+// commit (an interrupted first attempt committing its own todo.md, or a
+// formulation task's collect writing the *next* task's document under its
+// own id). Why a boundary is needed at all: task numbers never repeat
+// within a corpus, but a wipe-and-restart over retained git history
+// re-issues them (the numbering floor scans surviving files only,
+// src/numbering.ts), and unbounded, the oldest trailer commit under a
+// re-issued id belongs to an earlier corpus — a fork would land before the
+// restart. With no re-issuance the set contains every trailer commit
+// anyway, so the bound changes nothing (the byte-identical floor).
+// undefined = no derivable boundary in this repository (a nested
+// repository — task documents live in the target directory alone; a unit
+// whose document no history commit added; a boundary at the repository's
+// initial commit, where nothing exists before it): nothing separates
+// lineages there and the whole-log scan stands.
+async function taskCorpusCommits(root: string, taskId: string): Promise<Set<string> | undefined> {
+  const added = await git(root, ["log", "-n", "1", "--diff-filter=A", "--format=%H", "--", join(taskDir(taskId), "todo.md")]).catch(() => undefined)
+  const bound = added?.code === 0 ? added.out.trim() : ""
+  if (!/^[0-9a-f]{40}$/.test(bound)) return undefined
+  const listed = await git(root, ["rev-list", `${bound}^..HEAD`]).catch(() => undefined)
+  if (!listed || listed.code !== 0) return undefined
+  return new Set(listed.out.split("\n").filter(Boolean))
+}
+
+// The task-first derivation fork reads (plans/0128, the corpus bound
+// plans/0140): `first` = the oldest commit of the task's *current corpus*
+// carrying the `Auto-Task: <id>` trailer line — the unit's first commit in
+// this repository, whose parent is the state the task started from, what a
+// retry-from-the-beginning wants (interrupted earlier attempts carry the
+// trailer too, so "oldest" sits before the task *first* started, not
+// before its last attempt; trailer commits under the same id from a corpus
+// before a wipe-and-restart fall outside the set). `older` = such
+// out-of-corpus commits exist, the re-issued shape — fork's refusal and
+// success line read it to say so. The scan is the same -z log walk
+// taskChangedPaths filters; first undefined with older false = no commit
+// here carries the trailer (the task never ran in this repository);
+// undefined overall = the log itself is unreadable.
+export type TaskFirstCommit = { first: string | undefined; older: boolean }
+
+export async function taskFirstCommit(root: string, taskId: string): Promise<TaskFirstCommit | undefined> {
   const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
   if (!log || log.code !== 0) return undefined
   const trailer = `Auto-Task: ${taskId}`
-  const shas = log.out
-    .split("\x1e")
-    .map((entry) => entry.replaceAll("\0", ""))
-    .map((entry) => entry.split("\x1f"))
-    .filter(([sha, body]) => Boolean(sha?.trim()) && (body ?? "").split("\n").some((line) => line.trim() === trailer))
-    .map(([sha]) => sha!.trim())
-  // git log walks newest-first, so the run's last element is the oldest task commit.
-  return shas.at(-1)
+  const corpus = await taskCorpusCommits(root, taskId)
+  let first: string | undefined
+  let older = false
+  for (const entry of log.out.split("\x1e")) {
+    const [sha, body] = entry.replaceAll("\0", "").split("\x1f")
+    if (!sha?.trim() || !(body ?? "").split("\n").some((line) => line.trim() === trailer)) continue
+    // git log walks newest-first, so the last in-corpus hit is the oldest.
+    if (corpus === undefined || corpus.has(sha.trim())) first = sha.trim()
+    else older = true
+  }
+  return { first, older }
 }
 
 // The nested-repository alignment one root-repository commit records: the

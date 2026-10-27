@@ -526,7 +526,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "fork",
     "fork <T-NNN | sha> <worktree-path> (auto-core plans/0128): build an experiment environment in a new directory and retry a task from its beginning — or experiment at any exact commit — without the main tree, its branches or its history being touched. " +
-      "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
+      "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit of the current corpus — a task number re-issued after a wipe-and-restart never forks at the state before the restart, plans/0140; the success line names the older lineage when one exists); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
       "The environment is self-resetting (no .auto/ runtime state rides over; the task documents at that commit already read pending); run it with opencode-auto run <path> [--stop-after T-NNN], bring work back with plain git, clean up with remove-fork. " +
       "It takes no run lock (plans/0129 — its only writes in the source repositories are the auto-fork/* branches and worktree registrations, nothing a running driver reads), so it runs beside a live run there. " +
       "Exit codes: 0 forked / 1 the target or path cannot give what was asked / 2 a git failure midway, the partial state named",

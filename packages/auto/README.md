@@ -51,7 +51,7 @@ opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # dispatch th
 opencode-auto run [dir] [--boundary stop|flow]   # execute the current phase's tasks one by one and stop at its clean end — the boundary — naming transfer as the advance command (--boundary flow crosses the boundaries continuously as before; agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]   # close a unit (task T-NNN, phase R-NN.P<nn>, round R-NN) without delivering it — done for scheduling, the reason in a Closed: field, the close commit, undo = git revert, see "Closing units (close and plan --force-close)"
 opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
-opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment environment in a new worktree — at the state before a task first started (T-NNN, the parent of its oldest Auto-Task commit) or at an exact commit — to retry it in isolation; nested repositories reconstructed alongside, aligned at the recorded state; the main tree, its branches and its history never touched; takes no run lock, runs beside a live run, see "The retry fork (fork, remove-fork)"
+opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment environment in a new worktree — at the state before a task first started (T-NNN, the parent of its oldest Auto-Task commit of the current corpus; a number re-issued after a restart never forks before the restart, plans/0140) or at an exact commit — to retry it in isolation; nested repositories reconstructed alongside, aligned at the recorded state; the main tree, its branches and its history never touched; takes no run lock, runs beside a live run, see "The retry fork (fork, remove-fork)"
 opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: every worktree of the fork removed and its auto-fork/* branch deleted per repository (uncommitted work blocks naming the files — `--force` discards it explicitly), freeing the path and the branch name to fork again; the tips stay recoverable via git reflog; see "The retry fork (fork, remove-fork)"
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — a seed or the analysis phase's generated brief; delete it by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
@@ -1026,9 +1026,13 @@ retained branch.
 environment**: a new worktree outside the project — at the state *before* a task first started (a task
 target `T-NNN`, the parent of the repository's oldest `Auto-Task: T-NNN` commit, interrupted earlier
 attempts included in what is left behind) or at an exact commit you name (a sha) — where a retry runs
-without the main tree, its branches or its history being touched in any way. Nested repositories are
-reconstructed alongside as their own worktrees, aligned at the state the fork commit's `Auto-Nested`
-lines record. The environment is self-resetting (`.auto/` is gitignored, so no runtime state rides
+without the main tree, its branches or its history being touched in any way. The scan is bounded at the
+task's **corpus** (plans/0140): task numbers never repeat within a corpus, but a reset-and-restart over
+retained git history re-issues them — the derivation reads the current corpus alone (bounded at the
+newest commit that added the task's `docs/T-NNN/todo.md`), so a re-issued id never forks at the state
+before the restart, and the success line names the older lineage when one exists. Nested repositories
+are reconstructed alongside as their own worktrees, aligned at the state the fork commit's
+`Auto-Nested` lines record. The environment is self-resetting (`.auto/` is gitignored, so no runtime state rides
 over; the task documents at that commit already read pending); run it with
 `opencode-auto run <path> --stop-after T-NNN` so the retry halts once the task closes, and bring work
 back with plain git. One branch family `auto-fork/<target>` is created (first-free suffix across every
