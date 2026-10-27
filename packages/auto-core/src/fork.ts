@@ -20,6 +20,14 @@
 //           scan is bounded at the task's corpus set (taskCorpusCommits,
 //           the newest commit that added the unit's todo.md).
 //   sha   — the commit itself: the person names the exact state.
+//   sha:<rel>@<sha>[,<rel>@<sha>…] — the named-alignment form (the
+//           maintainer's internal affordance, undocumented in the CLI help):
+//           the commit itself, with each nested repository's state named on
+//           the command instead of read from the commit's Auto-Nested record
+//           — the override for a person commit that records no alignment.
+//           A named entry wins over the record; repositories not named keep
+//           the record's alignment; an entry naming no nested repository of
+//           this project is a usage refusal, never silently ignored.
 //
 // Branch family `auto-fork/<target>` (first-free -2, -3… across every
 // repository being forked, one coherent name everywhere); land's original-
@@ -48,11 +56,16 @@ export type ForkOutcome = { type: "forked" | "removed" | "usage" | "blocked"; li
 
 const TASK_TARGET = /^T-\d{3,}$/
 const SHA_TARGET = /^[0-9a-f]{7,40}$/i
+// The named-alignment form's two halves: a root sha, then comma-separated
+// `<rel>@<sha>` entries (the greedy rel side takes the last @ — a repository
+// path containing one still parses).
+const NAMED_TARGET = /^([0-9a-f]{7,40}):(.+)$/i
+const NAMED_ENTRY = /^(.+)@([0-9a-f]{7,40})$/i
 
 // One nested repository of the fork: its path relative to the project and
 // its absolute original root (the worktree is added from there), with the
 // state it aligns at.
-type NestedFork = { rel: string; root: string; sha: string }
+type NestedFork = { rel: string; root: string; sha: string; named: boolean }
 
 // Whether child lies inside parent (or equals it): relative() says "" for
 // equality and a ".."-headed path for anything outside; a sibling named
@@ -79,14 +92,28 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   const usage = (lines: string[]): ForkOutcome => ({ type: "usage", lines })
   const blocked = (lines: string[]): ForkOutcome => ({ type: "blocked", lines })
   const task = TASK_TARGET.test(target) ? target : undefined
-  const shape = `${bin} fork <T-NNN | sha> <worktree-path> [dir]`
-  if (task === undefined && !SHA_TARGET.test(target)) {
+  const namedMatch = task === undefined ? NAMED_TARGET.exec(target) : undefined
+  const shape = `${bin} fork <T-NNN | sha | sha:<rel>@<sha>> <worktree-path> [dir]`
+  if (task === undefined && namedMatch === undefined && !SHA_TARGET.test(target)) {
     return usage([`${target}: not a fork target; expected a task T-NNN or a commit sha (usage: ${shape})`])
   }
   if (!worktreePath.trim()) {
     return usage([`fork requires a worktree path — the absent directory the experiment environment is created in (usage: ${shape})`])
   }
   const path = resolve(worktreePath)
+  // The named alignments, keyed by the same repository-relative spelling the
+  // enumeration below derives (`relative(root, repoRoot)`) — a forgiving
+  // resolve first, so "./pkg" and "pkg/" name the repository the record would.
+  const named = new Map<string, string>()
+  if (namedMatch) {
+    for (const entry of namedMatch[2]!.split(",")) {
+      const m = NAMED_ENTRY.exec(entry.trim())
+      if (!m) {
+        return usage([`${entry.trim()}: not a nested alignment — expected <rel>@<sha> after the colon, comma-separated for several (usage: ${shape})`])
+      }
+      named.set(relative(root, resolve(root, m[1]!.trim())).replaceAll("\\", "/"), m[2]!)
+    }
+  }
 
   // —— Pass 1: every refusal, before any repository's git state is touched ——
   // The path is the person's one placement decision, so its bounds are named
@@ -128,9 +155,10 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     point = parent
     olderLineage = first.older
   } else {
-    const full = await revSha(root, target)
+    const wanted = namedMatch ? namedMatch[1]! : target
+    const full = await revSha(root, wanted)
     if (full === undefined) {
-      return usage([`${target}: no commit of this repository resolves to this sha (or the short form is ambiguous) — name a commit of ${root}`])
+      return usage([`${wanted}: no commit of this repository resolves to this sha (or the short form is ambiguous) — name a commit of ${root}`])
     }
     point = full
   }
@@ -142,11 +170,16 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   const nested: NestedFork[] = []
   const problems: string[] = []
   const recorded = await nestedShasAt(root, point)
+  const seen = new Set<string>()
   for (const repoRoot of (await repoRoots(root)).filter((entry) => entry !== root)) {
     const rel = relative(root, repoRoot) || "."
-    let sha = recorded.get(rel)
+    seen.add(rel)
+    // A named entry is the person's deliberate word — it wins over whatever
+    // the record carries; repositories not named keep the record's alignment.
+    const asNamed = named.get(rel)
+    let sha = asNamed ?? recorded.get(rel)
     if (sha !== undefined && (await revSha(repoRoot, sha)) === undefined) {
-      problems.push(`${rel}: the aligned sha ${sha} recorded at ${point.slice(0, 7)} does not resolve in this repository (history rewritten?) — settle it by hand and fork again`)
+      problems.push(`${rel}: the aligned sha ${sha} ${asNamed !== undefined ? "you named" : `recorded at ${point.slice(0, 7)}`} does not resolve in this repository (history rewritten?) — settle it by hand and fork again`)
       continue
     }
     if (sha === undefined && task !== undefined) {
@@ -164,11 +197,16 @@ export async function forkTask(dir: string, target: string, worktreePath: string
           task !== undefined
             ? `neither recorded at ${point.slice(0, 7)} (no Auto-Nested line) nor reachable as the parent of a first ${task} commit of its own`
             : `the fork commit records no Auto-Nested line for it`
-        }; fork a commit that records the alignment, or settle the repository by hand`,
+        }; fork a commit that records the alignment, name it on the command (fork <sha>:<rel>@<sha> <worktree-path>), or settle the repository by hand`,
       )
       continue
     }
-    nested.push({ rel, root: repoRoot, sha })
+    nested.push({ rel, root: repoRoot, sha, named: asNamed !== undefined })
+  }
+  // An entry naming no repository of this project never matched anything — a
+  // typo'd rel would otherwise fall through to the record path silently.
+  for (const rel of named.keys()) {
+    if (!seen.has(rel)) problems.push(`${rel}: no nested repository of this project sits there — the named alignment matches nothing (usage: ${shape})`)
   }
   if (problems.length) {
     return usage([`${target}: the nested repositories cannot all be aligned at this fork point:`, ...problems.map((problem) => `  ${problem}`)])
@@ -217,7 +255,7 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     lines.push(`✓ fork at ${point.slice(0, 7)}${subject ? ` (${subject})` : ""} created at ${path} on ${branch}`)
     lines.push(`  .: ${point.slice(0, 7)} — the named commit`)
   }
-  for (const repo of nested) lines.push(`  ${repo.rel}: ${repo.sha.slice(0, 7)} (aligned at the fork point)`)
+  for (const repo of nested) lines.push(`  ${repo.rel}: ${repo.sha.slice(0, 7)} (${repo.named ? "aligned as named" : "aligned at the fork point"})`)
   lines.push(`run it: ${bin} run ${path}${task !== undefined ? ` --stop-after ${task}` : ""}`)
   lines.push(`cleanup when done: ${bin} remove-fork ${path} ${root} — removes every worktree of the fork and deletes ${branch} in each of its repositories`)
   return { type: "forked", lines }

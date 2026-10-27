@@ -1091,8 +1091,10 @@ if (command === "close") {
 // shape check makes the split safe the same way close's does; forkTask owns
 // every behavioural refusal (the target's derivation, the nested alignment,
 // the path's bounds). fork takes no options at all, so any flag is a usage
-// error before anything is read.
-const FORK_TARGET = /^(?:T-\d{3,}|[0-9a-f]{7,40})$/i
+// error before anything is read. The colon suffix (the internal
+// named-alignment form sha:<rel>@<sha>[,…] — the core owns its parse and its
+// refusals; undocumented here) only widens what passes the shape check.
+const FORK_TARGET = /^(?:T-\d{3,}|[0-9a-f]{7,40}(?::.+)?)$/i
 let forkTarget: string | undefined
 let forkPath: string | undefined
 if (command === "fork") {

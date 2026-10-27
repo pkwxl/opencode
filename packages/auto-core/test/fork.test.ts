@@ -4,7 +4,10 @@
 // what is excluded), the sha form (the named commit itself, the root commit
 // accepted), the branch family's first-free naming, the nested repositories'
 // aligned reconstruction (the Auto-Nested record, the task form's own-log
-// fallback, the underivable refusal), the usage matrix (unknown task,
+// fallback, the underivable refusal), the named-alignment form
+// (sha:<rel>@<sha> — the person names the nested state on the command: a
+// person commit with no record forks, a named entry wins over the record,
+// an unmatched rel is refused), the usage matrix (unknown task,
 // unresolvable sha, the path bounds, the initial-commit edge), and the
 // corpus bound (plans/0140 — a task number re-issued after a
 // wipe-and-restart forks the current corpus's pre-start, never before the
@@ -289,6 +292,105 @@ describe("forkTask (plans/0128: the fork command core)", () => {
         expect(edge.type).toBe("usage")
         expect(edge.lines[0]).toContain("is the repository's initial commit")
         expect(existsSync(forks.at("edge"))).toBe(false)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+})
+
+describe("the named-alignment form (sha:<rel>@<sha>: the person names the nested state on the command)", () => {
+  test(
+    "a person commit that records no Auto-Nested line forks with the nested worktree at the sha named on the command",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        const pkgSetup = await nestedRepo(dir, "pkg")
+        const init = await initRoot(dir, "pkg")
+        // pkg moves past its setup before the fork is asked for — the named
+        // sha, not the nested HEAD, is what the fork must land on.
+        writeFileSync(join(dir, "pkg", "later.txt"), "later\n")
+        await git(join(dir, "pkg"), "add", "-A")
+        await git(join(dir, "pkg"), "commit", "-qm", "nested later")
+        const outcome = await forkTask(dir, `${init.slice(0, 7)}:pkg@${pkgSetup.slice(0, 7)}`, forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        const path = forks.at("exp")
+        expect(await fullShaOf(path, "HEAD")).toBe(init)
+        expect(existsSync(join(path, "pkg", ".git"))).toBe(true)
+        expect(await fullShaOf(join(path, "pkg"), "HEAD")).toBe(pkgSetup)
+        expect(await hasBranch(dir, `auto-fork/${init.slice(0, 7)}`)).toBe(true)
+        expect(outcome.lines).toContain(`  pkg: ${pkgSetup.slice(0, 7)} (aligned as named)`)
+        // The main tree's nested repository is untouched at its own HEAD.
+        expect(await fullShaOf(join(dir, "pkg"), "HEAD")).not.toBe(pkgSetup)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "a named entry wins over the recorded alignment; repositories not named keep the record's",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        const pkgSetup = await nestedRepo(dir, "pkg")
+        const pkg2Setup = await nestedRepo(dir, "pkg2")
+        await initRoot(dir, "pkg", "pkg2")
+        await taskCommit(dir, "T-001", "first migration", "execute", "one.txt")
+        // A person commit inside pkg between two driver commits, so the
+        // record at the fork point holds a different pkg sha than the named
+        // one — precedence is what this pins.
+        writeFileSync(join(dir, "pkg", "later.txt"), "later\n")
+        await git(join(dir, "pkg"), "add", "-A")
+        await git(join(dir, "pkg"), "commit", "-qm", "nested later")
+        await taskCommit(dir, "T-002", "second migration", "execute", "two.txt")
+        const rootAfter2 = await fullShaOf(dir, "HEAD")
+        const outcome = await forkTask(dir, `${rootAfter2.slice(0, 7)}:pkg@${pkgSetup.slice(0, 7)},pkg2@${pkg2Setup.slice(0, 7)}`, forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        const path = forks.at("exp")
+        expect(await fullShaOf(path, "HEAD")).toBe(rootAfter2)
+        expect(await fullShaOf(join(path, "pkg"), "HEAD")).toBe(pkgSetup)
+        expect(await fullShaOf(join(path, "pkg2"), "HEAD")).toBe(pkg2Setup)
+        expect(outcome.lines).toContain(`  pkg: ${pkgSetup.slice(0, 7)} (aligned as named)`)
+        expect(outcome.lines).toContain(`  pkg2: ${pkg2Setup.slice(0, 7)} (aligned as named)`)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "the refusal matrix: an unmatched rel, a malformed entry, an unresolvable named sha, an unresolvable root sha — usage, nothing created",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        const pkgSetup = await nestedRepo(dir, "pkg")
+        const init = await initRoot(dir, "pkg")
+        const short = init.slice(0, 7)
+        // A rel no repository sits at — never silently ignored; pkg itself,
+        // unrecorded at the person commit and unnamed, rides along with its
+        // own underivable line teaching the command form.
+        const ghost = await forkTask(dir, `${short}:ghost@${pkgSetup.slice(0, 7)}`, forks.at("exp"))
+        expect(ghost.type).toBe("usage")
+        expect(ghost.lines[0]).toBe(`${short}:ghost@${pkgSetup.slice(0, 7)}: the nested repositories cannot all be aligned at this fork point:`)
+        expect(ghost.lines.some((line) => line.startsWith("  ghost: no nested repository of this project sits there"))).toBe(true)
+        expect(ghost.lines.some((line) => line.startsWith("  pkg: its state at the fork point is not derivable"))).toBe(true)
+        expect(ghost.lines.some((line) => line.includes("name it on the command"))).toBe(true)
+        // A malformed entry (no @).
+        const malformed = await forkTask(dir, `${short}:pkg`, forks.at("exp"))
+        expect(malformed.type).toBe("usage")
+        expect(malformed.lines[0]).toContain("not a nested alignment")
+        // A named sha that does not resolve in the nested repository.
+        const unresolvable = await forkTask(dir, `${short}:pkg@abcdef0`, forks.at("exp"))
+        expect(unresolvable.type).toBe("usage")
+        expect(unresolvable.lines.some((line) => line.startsWith("  pkg: the aligned sha abcdef0 you named does not resolve"))).toBe(true)
+        // A root sha that does not resolve — the sha named alone in the
+        // refusal, not the whole target.
+        const badRoot = await forkTask(dir, `abcdef0:pkg@${pkgSetup.slice(0, 7)}`, forks.at("exp"))
+        expect(badRoot.type).toBe("usage")
+        expect(badRoot.lines[0]).toContain("abcdef0: no commit of this repository resolves to this sha")
+        expect(existsSync(forks.at("exp"))).toBe(false)
+        expect(await hasBranch(dir, `auto-fork/${short}`)).toBe(false)
       } finally {
         forks.done()
       }
