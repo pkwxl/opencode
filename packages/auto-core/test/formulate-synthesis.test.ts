@@ -524,6 +524,37 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
     }
   })
 
+  test("a formulation session that drops the unit's own index row blocks in the collect's own voice, never a crash (0141 D2)", async () => {
+    // The planner rewrites the index without the formulation task's own row —
+    // the shape that used to die at the post-session reload ("task T-00N not
+    // found") before the collect could name it. The guarded reload turns it
+    // into the collect's blocked shape, teaching the remedy.
+    const dropOwnRow = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes("What this task writes (the DRIVER's format protocol)")) {
+        const phaseDir = promptPhaseDir(ctx.text)
+        const own = /# (T-\d+): Formulate /.exec(ctx.text)?.[1]
+        if (phaseDir && own) {
+          appendOneTask(dir, phaseDir)
+          const file = join(dir, phaseDir, "tasks.md")
+          const kept = readFileSync(file, "utf8").split("\n").filter((line) => !line.startsWith(`- [ ] ${own} `))
+          writeFileSync(file, `${kept.join("\n").replace(/\n+$/, "\n")}`)
+        }
+        return undefined
+      }
+      return artifactTurns(dir)(ctx)
+    }
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? dropOwnRow(dir)(ctx))
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      expect(code).toBe(2)
+      expect(lines.some((line) => line.includes("the formulation output is invalid") && line.includes("no longer lists the formulation task"))).toBe(true)
+      // The wrap-up never dispatched: the guard blocked before it.
+      expect(createTitles(f).some((title) => title!.includes("wrapup"))).toBe(false)
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
   test("a changed floor re-runs the pipeline: a changed planning input re-synthesizes", async () => {
     const f = await synthesisFixture(() => constructorTurn)
     try {

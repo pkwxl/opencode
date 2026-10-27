@@ -71,6 +71,8 @@ Phase: R-01.P02
 
 - [ ] T-NNN <task title>
 
+   This task's own row stays in the index unchanged: the session adds the planned tasks' lines beside it, never
+   removes or rewrites the formulation task's own line — the driver ticks and closes this unit through that row;
    The title line, the `Phase:` field line, the three section headings, the index line and the closing terminator are
    parsed by the DRIVER — write them verbatim as above, do not translate or rephrase them;
    Every task document ends with the closing terminator — its last line of body text is exactly <!-- auto: eof -->;

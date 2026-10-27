@@ -461,7 +461,13 @@ export async function runTask(
   // context is untrustworthy), while the phase info is kept for precise
   // re-entry. The session title is renamed to the interruption state in step
   // (same wording as the loop's boundary commit).
-  task = await reloadTask(plan, task.id)
+  // The session title carries the id and title the in-hand task object
+  // already holds; a blocked formulation unit may have lost its own index row
+  // (the guarded reload inside the pipeline returned the collect's blocked
+  // shape for exactly that), so its reload here degrades to the stale object
+  // instead of crashing the blocked path itself (plans/0141 D2) — any other
+  // task's row is driver-exclusive state, and its reload still throws.
+  task = task.formulate !== undefined ? ((await reloadTask(plan, task.id).catch(() => undefined)) ?? task) : await reloadTask(plan, task.id)
   await renameSession(await clientOf(client, chain.agent), chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
   if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
     await persistStage(chain.phase ?? (mode === "true" ? { kind: "decompose" } : { kind: "whole" }))
@@ -566,7 +572,27 @@ export async function runTask(
         await persistStage({ kind: "whole" })
         const blocked = await executeWhole(client, plan, task, opts, chain, mode === "auto", { docLane: input.docLane })
         if (blocked) return blocked
-        task = await reloadTask(plan, task.id)
+        // The formulation session rewrites the phase's whole task index, and
+        // one that drops the unit's own row makes the reload throw before the
+        // mechanical collect below could name the breach (plans/0141 D2) — a
+        // crash where the designed shape is the collect's own blocked voice.
+        // The unit's row is how the driver ticks and closes it; the remedy is
+        // restoring the row by hand, and a re-run dispatches a fresh session
+        // over the surviving files (the collect's v1 simplification, applied
+        // to its own grammar breach). Any other task's reload still throws —
+        // its row is driver-exclusive state no session may write.
+        if (task.formulate !== undefined) {
+          const reloaded = await reloadTask(plan, task.id).catch(() => undefined)
+          if (!reloaded) {
+            return {
+              type: "blocked",
+              question: `the formulation output is invalid: ${plan.index} no longer lists the formulation task ${task.id} — its own row must stay in the index (the driver ticks and closes the unit through it); restore the row, then re-run`,
+            }
+          }
+          task = reloaded
+        } else {
+          task = await reloadTask(plan, task.id)
+        }
       }
     }
 

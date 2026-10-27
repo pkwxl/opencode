@@ -7,11 +7,13 @@ import {
   ensureInitGitignore,
   ensureModelsGitignore,
   ensureNestedGitignore,
+  ENTRIES,
   MODELS_ENTRY,
   removeGitignoreEntry,
   retiredGitignoreEntries,
   RETIRED_ENTRIES,
 } from "../src/gitignore"
+import { WORKDIR_ROOTS } from "../src/git"
 import { MODELS_FILE } from "../src/models"
 
 const gitInit = (cwd: string) => Bun.spawnSync(["git", "init", "-q"], { cwd })
@@ -111,6 +113,13 @@ describe("ensureInitGitignore", () => {
 
   test("the model registry's project layer entry is the registry's own path", () => {
     expect(MODELS_ENTRY).toBe(`/${MODELS_FILE}`)
+  })
+
+  // plans/0141 D1: the unit start gate's workdir exemption spells the roots
+  // in git.ts (which cannot import this module back) — the pin keeps the two
+  // spellings one law.
+  test("the gate's WORKDIR_ROOTS are exactly the ignore set's workdir entries", () => {
+    expect(WORKDIR_ROOTS.map((root) => `${root}/`)).toEqual(ENTRIES)
   })
 })
 

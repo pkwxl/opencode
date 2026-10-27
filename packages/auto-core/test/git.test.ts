@@ -396,6 +396,51 @@ describe("beginUnit (unit start gate)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test("untracked driver-workdir files (the run lock ahead of the ignore set's arrival) are not the person's dirt; a tracked workdir file still blocks", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await mkdir(join(dir, "tmp"), { recursive: true })
+      await writeFile(join(dir, ".auto/run.lock"), "1\n")
+      await writeFile(join(dir, "tmp/lane-1.out"), "x\n")
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate.type).toBe("ok")
+      // A tracked workdir file is the opposite fact: someone put it in git,
+      // and the driver's rewrite of it would dirty every later unit.
+      await git(dir, "add", ".auto/run.lock")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "track the workdir")
+      await writeFile(join(dir, ".auto/run.lock"), "2\n")
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: [".auto/run.lock"] })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the carryover stages with the workdir excluded: a repository whose ignore set has not arrived yet heals its driver state without absorbing .auto/ into git", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 sample\n")
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: sample\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 sample\n")
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await writeFile(join(dir, ".auto/run.lock"), "1\n")
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate.type).toBe("ok")
+      expect(await fileTracked(dir, "docs/T-001/done.md")).toBe(true)
+      // The workdir stays out of git — untracked exactly as before the heal,
+      // the state the ignore set will keep it in once preflight writes it.
+      expect(await git(dir, "ls-files")).not.toContain(".auto")
+      expect(await changedFiles(dir)).toEqual([".auto/run.lock"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("commitPending (a hidden task's ③ backfill commit)", () => {

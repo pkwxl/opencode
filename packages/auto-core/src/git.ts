@@ -357,6 +357,22 @@ export function driverStateFile(rel: string): boolean {
   return DRIVER_STATE.some((re) => re.test(path))
 }
 
+// The driver workdir's roots, spelled without the trailing slash for the
+// containment test below: gitignore.ts ENTRIES is the law (the ignore set is
+// tracked law since plans/0138 — git does not see these directories' files
+// once the set is on disk), and this module cannot import it back (gitignore
+// already imports repoRoots from here) — the same near-leaf spelling as
+// MODELS_ENTRY, pinned against ENTRIES by test/gitignore.test.ts.
+export const WORKDIR_ROOTS = ["tmp", ".auto"]
+
+// Whether a target-directory-relative path lies in the driver workdir
+// (root-anchored, like the ignore entries themselves; a nested repository's
+// own stray .auto/ is not the driver's workdir and does not match).
+export function workdirEntry(rel: string): boolean {
+  const path = rel.replaceAll("\\", "/")
+  return WORKDIR_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))
+}
+
 // Whether a repository-relative path lies inside one of the scope entries
 // (an entry may name a file or a directory, trailing slash optional): equal
 // paths count, and a directory entry contains every path under it. The doc
@@ -772,10 +788,33 @@ export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { ty
 // authority over git state stays with the human).
 export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate> {
   if (opts.dryrun) return { type: "ok", baseline: undefined }
-  const dirty = await changedFiles(dir)
+  // The gate judges the person's tree, and the driver workdir is not part of
+  // it (plans/0141 D1): an untracked .auto/ or tmp/ file is the driver's own
+  // runtime state (the run lock, the stats heartbeat) — invisible to git once
+  // the ignore set is on disk, and preflight ensures the set only after this
+  // gate, so the first gate of a repository whose set has not arrived yet (a
+  // hand-built one, a person who dropped the lines) would otherwise name the
+  // driver's own state as the person's uncommitted work and block on a false
+  // remedy. A tracked workdir file is the opposite fact — someone put it in
+  // git, and the driver's every rewrite would dirty later units — and still
+  // blocks.
+  const untracked = await untrackedFiles(dir)
+  const dirty = (await changedFiles(dir)).filter((file) => !(untracked.has(file) && workdirEntry(file)))
   if (dirty.length) {
     if (dirty.every(driverStateFile)) {
-      const healed = await commitTree(dir, task, { stage: "carryover", subject: `${task.id} carryover driver-state posting` })
+      // The carryover stages with the workdir roots excluded from its
+      // pathspec: this one commit can run before preflight's ignore-set
+      // repair (the run-start gate is ahead of it), and an unqualified
+      // add -A would absorb the workdir into git — tracked runtime state
+      // the driver then rewrites every run, the 2026-09-17 H5 shape. Once
+      // the set is on disk the exclusion is a no-op (ignored files never
+      // stage).
+      const healed = await commitTree(
+        dir,
+        task,
+        { stage: "carryover", subject: `${task.id} carryover driver-state posting` },
+        [".", ...WORKDIR_ROOTS.map((root) => `:(exclude)${root}`)],
+      )
       if (healed.ok) {
         log(`  ✓ driver state files not posted (${dirty.join(", ")}), self-healed with a catch-up commit`)
         return { type: "ok", baseline: await unitBaseline(dir) }

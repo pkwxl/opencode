@@ -78,9 +78,16 @@ test.skipIf(!E2E)(
       // The blocked reason never enters the task document (it lives in the run log only)
       expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).not.toContain("question:")
 
-      // Simulated human intervention: the blocking question is settled outside
-      // the session — just restart to resume.
-      // Second run: T-002 resumes, T-003 completes, everything done
+      // Simulated human intervention: the blocking question is settled
+      // outside the session — the person records the granted authorization
+      // in the task's own document, the one per-task surface the resumed
+      // session reads (the blocked reason itself lives in the run log only
+      // and is never fed back automatically; under the default question
+      // policy a permission question blocks unattended every time, so
+      // without the settlement the resume would ask and block again).
+      const todo = join(dir, "docs/T-002/todo.md")
+      await Bun.write(todo, `${await Bun.file(todo).text()}\n## Person decision\n\nThe write permission for greeting.txt is granted by the person. Do not ask again — write the greeting "hello" into greeting.txt now.\n`)
+      // Second run: T-002 resumes past the settled question, T-003 completes, everything done
       expect(await runAll(dir, {})).toBe(0)
       const done = await loadPlan(dir, P01)
       expect(done.tasks.every((t) => t.status === "done")).toBe(true)

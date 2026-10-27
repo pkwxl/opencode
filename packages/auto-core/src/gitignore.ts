@@ -10,8 +10,10 @@ import { repoRoots } from "./git"
 
 // The driver workdir: tmp/ (the driver-run test script requests and outputs,
 // inside the target directory) and .auto/ (run logs, progress recovery records
-// and other runtime state).
-const ENTRIES = ["tmp/", ".auto/"]
+// and other runtime state). Exported for test/gitignore.test.ts's pin against
+// git.ts WORKDIR_ROOTS — the unit start gate's workdir exemption spells the
+// roots leaf-side (git.ts cannot import this module back).
+export const ENTRIES = ["tmp/", ".auto/"]
 
 // The model registry's project layer (plans/0055 §4.1). It belongs to whoever
 // operates this checkout, not to the project, so it is local-only like
