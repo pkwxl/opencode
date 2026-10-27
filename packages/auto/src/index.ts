@@ -30,7 +30,7 @@ import { clarifyGate } from "@opencode-ai/auto-core/clarify"
 import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { renderHelperBrief } from "@opencode-ai/auto-core/driver-helper"
 import { landUnit } from "@opencode-ai/auto-core/land"
-import { forkTask } from "@opencode-ai/auto-core/fork"
+import { forkTask, removeFork } from "@opencode-ai/auto-core/fork"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -527,9 +527,17 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
     "fork",
     "fork <T-NNN | sha> <worktree-path> (auto-core plans/0128): build an experiment environment in a new directory and retry a task from its beginning — or experiment at any exact commit — without the main tree, its branches or its history being touched. " +
       "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
-      "The environment is self-resetting (no .auto/ runtime state rides over; the task documents at that commit already read pending); run it with opencode-auto run <path> [--stop-after T-NNN], bring work back with plain git, clean up with the printed git worktree remove / branch -D lines. " +
+      "The environment is self-resetting (no .auto/ runtime state rides over; the task documents at that commit already read pending); run it with opencode-auto run <path> [--stop-after T-NNN], bring work back with plain git, clean up with remove-fork. " +
       "It takes no run lock (plans/0129 — its only writes in the source repositories are the auto-fork/* branches and worktree registrations, nothing a running driver reads), so it runs beside a live run there. " +
       "Exit codes: 0 forked / 1 the target or path cannot give what was asked / 2 a git failure midway, the partial state named",
+  ],
+  [
+    "remove-fork",
+    "remove-fork <worktree-path> (auto-core plans/0139): tear down a fork — every worktree of the fork removed (its nested repositories' first, the root's last) and the one auto-fork/* branch deleted in each of its repositories — so the path is free and a retry takes the stem branch name again; the branch tips are printed and stay recoverable via git reflog. " +
+      "The record it reads is git's own (the worktree registrations and the branch family — nothing is persisted about a fork), so the worktree must be a registered one of this project on an auto-fork/* branch: a lane park, a person worktree or a stranger path is refused, never touched. " +
+      "Uncommitted work in the fork blocks naming the files (commit it or bring it back by hand) — re-run with --force to discard it explicitly; a run live inside the fork refuses (stop it first). " +
+      "Like fork it takes no run lock (plans/0129's argument: its source-tree writes are the branch family and the registrations alone), so it runs beside a live run in the source. " +
+      "Exit codes: 0 removed / 1 the path is not a fork of this project / 2 blocked — the live run, the uncommitted work, or a git failure midway (the removal is resumable by re-running)",
   ],
   [
     "commit-retired",
@@ -624,6 +632,13 @@ const COMMANDS: readonly CommandHelp[] = [
       "build an experiment environment in a new worktree — at the state before a task first started (T-NNN) or at an exact commit — to retry it in isolation; the main tree is never touched",
     synopsis: "opencode-auto fork <T-NNN | sha> <worktree-path> [dir]",
     options: ["fork"],
+  },
+  {
+    name: "remove-fork",
+    summary:
+      "tear down a fork — every worktree of the fork removed and its auto-fork/* branch deleted per repository — freeing the path (and the branch name) to fork again",
+    synopsis: "opencode-auto remove-fork <worktree-path> [dir] [--force]",
+    options: ["remove-fork"],
   },
   {
     name: "amend",
@@ -1101,6 +1116,26 @@ if (command === "fork") {
     process.exit(1)
   }
 }
+// remove-fork (auto-core plans/0139): the teardown of what fork builds.
+// positional[0] is the fork's root worktree path, positional[1] the optional
+// source directory. --force is its one option — the explicit discard of the
+// fork's uncommitted work; anything else is a usage error before anything is
+// read. removeFork owns every behavioural refusal (the registration, the
+// branch family, the members' coherence, a live run inside the fork, the
+// dirty files).
+let removeForkPath: string | undefined
+if (command === "remove-fork") {
+  if (positional[0] === undefined || !positional[0]!.trim()) {
+    console.error("remove-fork requires a worktree path: opencode-auto remove-fork <worktree-path> [dir] — the fork's root worktree, as fork's success line named it")
+    process.exit(1)
+  }
+  removeForkPath = positional[0]!
+  const foreign = [...flags.keys()].filter((key) => key !== "force")
+  if (foreign.length) {
+    console.error(`remove-fork takes only --force (usage: opencode-auto remove-fork <worktree-path> [dir] [--force]); --${foreign[0]} is not one`)
+    process.exit(1)
+  }
+}
 // land's --merge is the landing-mode boolean, but --merge is also _lane's
 // value flag (the parent branch a conflict repair merges; VALUE_FLAGS holds
 // it for that), so a directory following land's --merge would be swallowed
@@ -1117,7 +1152,7 @@ if (command === "land" && flags.has("merge")) {
     process.exit(1)
   }
 }
-const directory = resolve(command === "close" ? positional[1] ?? "." : command === "fork" ? positional[2] ?? "." : positional[0] ?? ".")
+const directory = resolve(command === "close" ? positional[1] ?? "." : command === "fork" ? positional[2] ?? "." : command === "remove-fork" ? positional[1] ?? "." : positional[0] ?? ".")
 
 // fix --dryrun: list the configuration findings read-only (the replacement
 // for the retired `check` as a scripted gate on config drift). It skips only
@@ -1137,7 +1172,7 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fork" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper" || command === "clarify" || command === "run") {
+if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fork" || command === "remove-fork" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper" || command === "clarify" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -1689,6 +1724,35 @@ if (command === "fork") {
   }
   const forked = await forkTask(directory, forkTarget!, forkPath!)
   exitWithResult(forked, "forked", "usage")
+}
+
+// remove-fork (auto-core plans/0139): the teardown of what fork builds —
+// every worktree of the fork removed (its nested repositories' first, the
+// root's last, its removal sweeping the directory) and the auto-fork/*
+// branch deleted in each repository, so the person can fork the same path
+// (and the same branch stem) again. The argument checks above (the required
+// path, --force the one option) ran before the directory resolved;
+// removeFork owns every behavioural refusal and returns the complete
+// printable output, land's shape. Like fork it takes no run lock
+// (plans/0129's argument verbatim: its only writes in the source
+// repositories are the reserved branch family and the worktree
+// registrations — surfaces a running driver never reads), so it runs beside
+// a live run in the source; the run it refuses is one live inside the fork
+// itself (removeFork's own check, P20). The config load is the validity
+// gate alone, fork's shape. Exit codes under the contract: 0 removed /
+// 1 usage / 2 blocked for human.
+if (command === "remove-fork") {
+  await requireConfigFile("remove-fork", true)
+  try {
+    await loadProjectConfig(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
+    process.exit(1)
+  }
+  const removed = await removeFork(directory, removeForkPath!, { force: flagOn("force") })
+  exitWithResult(removed, "removed", "usage")
 }
 
 // The amend hint of one config flag: how a person changes a key init froze.

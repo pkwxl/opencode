@@ -51,6 +51,8 @@ opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # dispatch th
 opencode-auto run [dir] [--boundary stop|flow]   # execute the current phase's tasks one by one and stop at its clean end — the boundary — naming transfer as the advance command (--boundary flow crosses the boundaries continuously as before; agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]   # close a unit (task T-NNN, phase R-NN.P<nn>, round R-NN) without delivering it — done for scheduling, the reason in a Closed: field, the close commit, undo = git revert, see "Closing units (close and plan --force-close)"
 opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
+opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment environment in a new worktree — at the state before a task first started (T-NNN, the parent of its oldest Auto-Task commit) or at an exact commit — to retry it in isolation; nested repositories reconstructed alongside, aligned at the recorded state; the main tree, its branches and its history never touched; takes no run lock, runs beside a live run, see "The retry fork (fork, remove-fork)"
+opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: every worktree of the fork removed and its auto-fork/* branch deleted per repository (uncommitted work blocks naming the files — `--force` discards it explicitly), freeing the path and the branch name to fork again; the tips stay recoverable via git reflog; see "The retry fork (fork, remove-fork)"
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — a seed or the analysis phase's generated brief; delete it by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
@@ -1017,6 +1019,37 @@ round branch and print the landed SHA.
 `land` holds the run lock around its branch moves — run it when no `run`/`plan` is live, exactly like
 `close`; landing mid-round is allowed under `--keep`, and the round's sessions keep committing to the
 retained branch.
+
+### The retry fork (fork, remove-fork)
+
+`opencode-auto fork <T-NNN | sha> <worktree-path> [dir]` (auto-core plans/0128) builds an **experiment
+environment**: a new worktree outside the project — at the state *before* a task first started (a task
+target `T-NNN`, the parent of the repository's oldest `Auto-Task: T-NNN` commit, interrupted earlier
+attempts included in what is left behind) or at an exact commit you name (a sha) — where a retry runs
+without the main tree, its branches or its history being touched in any way. Nested repositories are
+reconstructed alongside as their own worktrees, aligned at the state the fork commit's `Auto-Nested`
+lines record. The environment is self-resetting (`.auto/` is gitignored, so no runtime state rides
+over; the task documents at that commit already read pending); run it with
+`opencode-auto run <path> --stop-after T-NNN` so the retry halts once the task closes, and bring work
+back with plain git. One branch family `auto-fork/<target>` is created (first-free suffix across every
+repository of the fork). It takes **no run lock** (plans/0129 — its only writes in the source
+repositories are the reserved branch family and worktree registrations, surfaces a running driver never
+reads), so it runs beside a live run there.
+
+`opencode-auto remove-fork <worktree-path> [dir] [--force]` (auto-core plans/0139) is the teardown —
+the retry loop's other half: every worktree of the fork removed (its nested repositories' first, the
+root's last) and the one `auto-fork/*` branch deleted in each of its repositories, so the path is free
+**and the stem branch name is free again** (a leftover branch would push the next fork of the same
+target to `-2` forever). The branch tips are printed before deletion and stay recoverable via
+`git reflog`; committed experiment work is discardable by design. The record it reads is git's own
+(the worktree registrations and the branch family — nothing is ever persisted about a fork), so the
+path must be a registered worktree of this project on an `auto-fork/*` branch: a lane park, a person
+worktree or a stranger path is refused (exit 1), never touched. **Uncommitted work in the fork blocks**
+(exit 2) naming the files per member — commit it or bring it back by hand, or re-run with `--force` to
+discard it explicitly. A run live inside the fork refuses (stop it first; P20 — in-flight work is never
+destroyed mid-run). Like `fork` it takes no run lock in the source. Exit codes: `0` removed / `1` the
+path is not a fork of this project / `2` blocked — the live run, the uncommitted work, or a git failure
+midway (the removal is resumable by re-running: an already-removed member is seen and skipped).
 
 ### Manual-driver prompt suite (install-prompts)
 

@@ -23,17 +23,21 @@
 // give (an unknown task, an unresolvable sha, an underivable nested
 // alignment, a path that exists or sits inside the project) / 2 blocked — a
 // git failure after worktrees began appearing, the partial state named for
-// manual cleanup. Bringing work back and cleaning up are the person's plain
-// git (P21: no landing machinery until a consumer rules it).
+// manual cleanup. Bringing work back is the person's plain git (P21: no
+// landing machinery until a consumer rules it); tearing down is
+// `remove-fork` (plans/0139 — the deferred consumer arrived), the exact
+// inverse of what fork builds.
+import { existsSync } from "node:fs"
 import { mkdir, stat } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
-import { git, nestedShasAt, repoRoots, taskFirstCommit } from "./git"
+import { firstLine, git, nestedShasAt, repoRoots, taskFirstCommit } from "./git"
 import { addWorktreeAt } from "./git-worktree"
 import { localBranches, revSha } from "./git-land"
+import { liveRunLock, lockLines } from "./lock"
 import { parseUnitDoc } from "./document/unit"
 import { shellProfile } from "./shell"
 
-export type ForkOutcome = { type: "forked" | "usage" | "blocked"; lines: string[] }
+export type ForkOutcome = { type: "forked" | "removed" | "usage" | "blocked"; lines: string[] }
 
 const TASK_TARGET = /^T-\d{3,}$/
 const SHA_TARGET = /^[0-9a-f]{7,40}$/i
@@ -162,8 +166,6 @@ export async function forkTask(dir: string, target: string, worktreePath: string
 
   // —— Pass 2: the worktrees (the root first, then each nested repository at
   // its aligned state; a failure midway blocks naming the partial scene) ——
-  const created: { root: string; path: string }[] = []
-  const cleanupLine = (entry: { root: string; path: string }): string => `  git -C ${entry.root} worktree remove ${entry.path} && git -C ${entry.root} branch -D ${branch}`
   const added = await addWorktreeAt(root, path, branch, point)
   if (!added.ok) {
     return blocked([
@@ -171,7 +173,6 @@ export async function forkTask(dir: string, target: string, worktreePath: string
       `clean up any partial state by hand: git -C ${root} worktree prune${(await revSha(root, branch)) !== undefined ? ` && git -C ${root} branch -D ${branch}` : ""}`,
     ])
   }
-  created.push({ root, path })
   for (const repo of nested) {
     const at = join(path, repo.rel)
     await mkdir(dirname(at), { recursive: true })
@@ -179,11 +180,10 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     if (!ok.ok) {
       return blocked([
         `⏸ ${repo.rel}: creating its aligned worktree failed: ${ok.error}`,
-        `the fork is partial — remove what was created (the root worktree exists on ${branch}) and re-run:`,
-        ...created.map(cleanupLine),
+        `the fork is partial (the root worktree exists on ${branch}) — tear it down and re-run:`,
+        `  ${bin} remove-fork ${path} ${root}`,
       ])
     }
-    created.push({ root: repo.root, path: at })
   }
   // The success lines: what each repository sits at, how to run the
   // experiment, how to clean it up. The run hint names --stop-after for the
@@ -201,7 +201,190 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   }
   for (const repo of nested) lines.push(`  ${repo.rel}: ${repo.sha.slice(0, 7)} (aligned at the fork point)`)
   lines.push(`run it: ${bin} run ${path}${task !== undefined ? ` --stop-after ${task}` : ""}`)
-  lines.push(`cleanup, per repository of the fork:`)
-  for (const entry of created) lines.push(cleanupLine(entry))
+  lines.push(`cleanup when done: ${bin} remove-fork ${path} ${root} — removes every worktree of the fork and deletes ${branch} in each of its repositories`)
   return { type: "forked", lines }
+}
+
+// The registered worktrees of one repository, as resolved path → checked-out
+// branch (undefined = a detached HEAD): `git worktree list --porcelain`, the
+// record fork's own statelessness rests on (P6: git's registry and the
+// auto-fork/* branch family are the whole record of a fork — nothing else
+// exists to consult, and remove-fork persists nothing of its own either).
+async function worktreeBranches(dir: string): Promise<Map<string, string | undefined>> {
+  const listed = await git(dir, ["worktree", "list", "--porcelain"]).catch(() => undefined)
+  const out = new Map<string, string | undefined>()
+  if (!listed || listed.code !== 0) return out
+  let path: string | undefined
+  for (const line of listed.out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      path = resolve(line.slice("worktree ".length))
+      out.set(path, undefined)
+    } else if (line.startsWith("branch ") && path !== undefined) {
+      out.set(path, line.slice("branch ".length).replace(/^refs\/heads\//, ""))
+    }
+  }
+  return out
+}
+
+export type RemoveForkOptions = {
+  // --force: discard the uncommitted work the fork's worktrees hold (the
+  // explicit bracket — without it a dirty member blocks naming its files;
+  // the branch tips stay named either way, recoverable via git reflog).
+  force?: boolean
+}
+
+// remove-fork (plans/0139): the teardown of what fork builds — every
+// worktree of the fork removed and its one branch name deleted in each of
+// the fork's repositories, so the path is free and the next fork of the
+// same target takes the stem name again (a leftover branch would push it
+// to -2 forever). The inverse is exact because the record is git's own:
+// the root worktree's registration names the branch (which must be of the
+// auto-fork/* family — a lane park or person worktree is never touched),
+// and each nested repository of the source (fork's own enumeration)
+// holding a worktree at the same relative place on the same branch is a
+// member. Every refusal lands before any git state is touched (land's
+// two-pass shape); the teardown removes the nested members first and the
+// root last — the root's removal sweeps the whole directory, so a
+// root-first order would strand the nested registrations pointing at
+// swept paths (the measured git behavior this ordering rides).
+//
+// Exit-code contract: 0 removed / 1 usage — the person pointed at
+// something that is not a fork of this project (an unregistered path, a
+// worktree on another branch or detached, a member off the coherent
+// branch) / 2 blocked — a live run inside the fork, uncommitted work
+// without --force, or a git failure midway (resumable: the removal is
+// idempotent, a re-run rediscovers what still stands).
+export async function removeFork(dir: string, worktreePath: string, opts: RemoveForkOptions = {}): Promise<ForkOutcome> {
+  const { bin } = shellProfile()
+  const root = resolve(dir)
+  const usage = (lines: string[]): ForkOutcome => ({ type: "usage", lines })
+  const blocked = (lines: string[]): ForkOutcome => ({ type: "blocked", lines })
+  const shape = `${bin} remove-fork <worktree-path> [dir]`
+  const path = resolve(worktreePath)
+
+  // —— Pass 1: every refusal, before any repository's git state is touched ——
+  if (path === root) {
+    return usage([`${worktreePath}: that is the project's own working tree — remove-fork tears down fork worktrees only (usage: ${shape})`])
+  }
+  const registered = await worktreeBranches(root)
+  const branch = registered.get(path)
+  if (!registered.has(path)) {
+    return usage([`${worktreePath}: no worktree of ${root} is registered there — nothing of a fork to remove (usage: ${shape})`])
+  }
+  if (branch === undefined) {
+    return usage([`${worktreePath}: the worktree there has a detached HEAD, not a fork's checked-out auto-fork/* branch — remove it with plain git`])
+  }
+  if (!branch.startsWith("auto-fork/")) {
+    return usage([`${worktreePath}: the worktree there is on ${branch}, not of the fork family auto-fork/* — remove-fork never touches a worktree it did not build; plain git removes it`])
+  }
+  // The members: the root worktree plus every nested repository of the
+  // source holding a worktree at the same relative place, on the same
+  // branch (fork's one coherent name — a member on anything else is named
+  // for the person to settle, never guessed at).
+  const members: { rel: string; repo: string; path: string }[] = [{ rel: ".", repo: root, path }]
+  const problems: string[] = []
+  for (const repoRoot of (await repoRoots(root)).filter((entry) => entry !== root)) {
+    const rel = relative(root, repoRoot) || "."
+    const at = join(path, rel)
+    const theirs = await worktreeBranches(repoRoot)
+    if (!theirs.has(at)) continue
+    const theirBranch = theirs.get(at)
+    if (theirBranch !== branch) {
+      problems.push(`${rel}: its worktree under the fork is on ${theirBranch ?? "a detached HEAD"}, not ${branch} — settle it by hand; remove-fork never touches a worktree it cannot name`)
+      continue
+    }
+    members.push({ rel, repo: repoRoot, path: at })
+  }
+  if (problems.length) {
+    return usage([`${worktreePath}: the fork's repositories do not all sit on ${branch}:`, ...problems.map((problem) => `  ${problem}`)])
+  }
+  // A live run inside the experiment: its driver holds state in the fork's
+  // tree, and removing the worktree under it would destroy in-flight work
+  // mid-run (P20). The source project's own lock is deliberately not
+  // consulted — fork's own argument (plans/0129), verbatim: the only writes
+  // in the source repositories are the auto-fork/* branch family and the
+  // worktree registrations, surfaces a running driver never reads.
+  const holder = liveRunLock(path)
+  if (holder) return blocked(lockLines(path, holder))
+  // Uncommitted work in a member is never discarded silently (P20): without
+  // --force it blocks naming the files — commit them, bring them back by
+  // hand, or discard explicitly. A member's own subtree does not count as
+  // the root's dirt (each member is judged by its own status, and the
+  // nested-first teardown removes the inner worktrees before the root's
+  // removal runs); a swept member (directory already gone) has only its
+  // registration left and nothing to check.
+  if (!opts.force) {
+    const dirty: { rel: string; files: string[] }[] = []
+    const memberPrefixes = members.slice(1).map((member) => `${member.rel}/`)
+    for (const member of members) {
+      if (!existsSync(member.path)) continue
+      const status = await git(member.path, ["status", "--porcelain"])
+      if (status.code !== 0) {
+        return blocked([
+          `⏸ ${member.rel}: its status cannot be read (git status exit ${status.code}) — settle the worktree by hand and re-run: ${bin} remove-fork ${worktreePath}`,
+        ])
+      }
+      const files = status.out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => !memberPrefixes.some((prefix) => line.slice(3).startsWith(prefix)))
+      if (files.length) dirty.push({ rel: member.rel, files })
+    }
+    if (dirty.length) {
+      return blocked([
+        `⏸ the fork holds uncommitted work — remove-fork never discards it silently; commit it or bring it back by hand, then re-run:`,
+        ...dirty.flatMap(({ rel, files }) => [`  ${rel}:`, ...files.map((file) => `    ${file}`)]),
+        `to discard it instead: ${bin} remove-fork ${worktreePath} ${root} --force`,
+      ])
+    }
+  }
+
+  // —— Pass 2: the teardown — nested members first, the root last, each
+  // branch deleted after its own worktree is gone (git refuses to delete a
+  // branch a worktree has checked out). Every step names the branch tip
+  // before deleting it, land --abandon's recoverability posture: committed
+  // work is discardable by design, the reflog keeps it until collection. ——
+  const lines: string[] = []
+  const resumable = `the removal is resumable — settle the cause and re-run: ${bin} remove-fork ${worktreePath}`
+  for (const member of [...members.slice(1), members[0]!]) {
+    const swept = !existsSync(member.path)
+    const tip = (await revSha(member.repo, `refs/heads/${branch}`))?.slice(0, 7)
+    const removed = await git(member.repo, ["worktree", "remove", ...(opts.force ? ["--force"] : []), member.path])
+    if (removed.code !== 0) {
+      return blocked([
+        ...lines,
+        `⏸ ${member.rel}: removing its worktree failed: ${firstLine(removed.err || removed.out) || `git worktree remove exit code ${removed.code}`}`,
+        resumable,
+      ])
+    }
+    if (tip === undefined) {
+      lines.push(`  ${member.rel}: worktree ${swept ? "already gone — registration dropped" : "removed"}, ${branch} already gone`)
+      continue
+    }
+    const deleted = await git(member.repo, ["branch", "-D", branch])
+    if (deleted.code !== 0) {
+      return blocked([
+        ...lines,
+        `⏸ ${member.rel}: its worktree is removed, but deleting ${branch} failed: ${firstLine(deleted.err || deleted.out) || `git branch -D exit code ${deleted.code}`}`,
+        `finish it by hand: git -C ${member.repo} branch -D ${branch}`,
+      ])
+    }
+    lines.push(`  ${member.rel}: worktree ${swept ? "already gone — registration dropped" : "removed"}, branch ${branch} deleted (was ${tip})`)
+  }
+  if (lines.some((line) => line.includes("(was "))) {
+    lines.push(`  the tips above stay recoverable via git reflog until collection`)
+  }
+  // The retry hint names the target the branch stem carries (fork's own
+  // grammar: the task id or short sha, an experiment number after it).
+  const stem = /^auto-fork\/(T-\d{3,}|[0-9a-f]{7,40})(?:-\d{1,2})?$/i.exec(branch)
+  const target = stem?.[1] ?? "<T-NNN | sha>"
+  return {
+    type: "removed",
+    lines: [
+      `✓ fork at ${path} removed — ${members.length} worktree${members.length === 1 ? "" : "s"} and the branch ${branch} deleted${opts.force ? " (--force: the uncommitted work discarded)" : ""}`,
+      ...lines,
+      `retry: ${bin} fork ${target} ${path} ${root}`,
+    ],
+  }
 }

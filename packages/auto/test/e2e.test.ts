@@ -3336,7 +3336,7 @@ describe("CLI: fork (auto-core plans/0128)", () => {
       expect(forked.out).toContain(`✓ fork of T-002 created at ${path} on auto-fork/T-002`)
       expect(forked.out).toContain(`  .: ${before.slice(0, 7)} — the state before T-002 first started`)
       expect(forked.out).toContain(`run it: opencode-auto run ${path} --stop-after T-002`)
-      expect(forked.out).toContain(`  git -C ${dir} worktree remove ${path} && git -C ${dir} branch -D auto-fork/T-002`)
+      expect(forked.out).toContain(`cleanup when done: opencode-auto remove-fork ${path} ${dir} — removes every worktree of the fork and deletes auto-fork/T-002 in each of its repositories`)
       expect((await gitOf(path)("rev-parse", "HEAD")).trim()).toBe(before)
       // "+" marks the branch as checked out in the fork worktree.
       expect((await git("branch", "--list", "auto-fork/T-002")).trim()).toBe("+ auto-fork/T-002")
@@ -3375,6 +3375,131 @@ describe("CLI: fork (auto-core plans/0128)", () => {
       expect(planRefusal.err).toContain("--stop-after is a run option (the task whose completion ends the run); plan does not accept it")
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// remove-fork (auto-core plans/0139): the teardown of what fork builds —
+// argument checks (the required worktree path, --force the one option), the
+// help rows, the teardown happy path with the branch freed for the retry's
+// stem name, the dirty refusal with --force as the explicit discard, and a
+// live run inside the fork refusing (P20 — never torn down mid-run).
+describe("CLI: remove-fork (auto-core plans/0139)", () => {
+  // The fork describe's fixture shape: an initialized project with a
+  // checkpoint and two driver-style task commits, so fork T-002 derives.
+  async function taskProject() {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-rmfork-"))
+    expect((await runCli(["init", dir])).code).toBe(0)
+    await commitFixture(dir)
+    const git = gitOf(dir)
+    for (const id of ["T-001", "T-002"]) {
+      await Bun.write(join(dir, `${id}.txt`), `${id}\n`)
+      await git("add", "-A")
+      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}`, "-m", "Auto-Stage: execute")
+    }
+    return { dir, git }
+  }
+
+  // A planted live lock naming pid 1 — alive and unprobeable (EPERM), so it
+  // reads live from this test process (a lock naming the reading process's
+  // own pid reads stale: the dead-predecessor rule).
+  async function plantLiveLock(path: string) {
+    await mkdir(join(path, ".auto"), { recursive: true })
+    await Bun.write(join(path, ".auto/run.lock"), JSON.stringify({ pid: 1, host: hostname(), command: "run", started: "2026-10-27T10:00:00.000Z" }))
+  }
+
+  test("argument checks: the worktree path is required, --force is the one option, an uninitialized dir and a stranger path are usage refusals", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-rmfork-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const bare = await runCli(["remove-fork"])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain("remove-fork requires a worktree path")
+      const flagged = await runCli(["remove-fork", `${dir}-exp`, dir, "--dryrun"])
+      expect(flagged.code).toBe(1)
+      expect(flagged.err).toContain("remove-fork takes only --force")
+      const uninit = await runCli(["remove-fork", `${dir}-exp`])
+      expect(uninit.code).toBe(1)
+      expect(uninit.err).toContain("nothing to remove-fork")
+      const stranger = await runCli(["remove-fork", `${dir}-exp`, dir])
+      expect(stranger.code).toBe(1)
+      expect(stranger.err).toContain(`no worktree of ${dir} is registered there`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the help rows: remove-fork's synopsis renders in its own view and the full usage", async () => {
+    const help = await runCli(["remove-fork", "--help"])
+    expect(help.code).toBe(0)
+    expect(help.out).toContain("opencode-auto remove-fork <worktree-path> [dir] [--force]")
+    const usage = await runCli(["--help"])
+    expect(usage.out).toContain("remove-fork <worktree-path>")
+  })
+
+  test("the teardown happy path: every worktree and the branch come down, the retry takes the stem name again", async () => {
+    const { dir, git } = await taskProject()
+    try {
+      const path = `${dir}-exp`
+      expect((await runCli(["fork", "T-002", path, dir])).code).toBe(0)
+      // An experiment commit on the fork's branch: discardable by design.
+      await Bun.write(join(path, "exp.txt"), "experiment\n")
+      await gitOf(path)("add", "-A")
+      await gitOf(path)("commit", "-qm", "experiment")
+      const removed = await runCli(["remove-fork", path, dir])
+      expect(removed.code).toBe(0)
+      expect(removed.out).toContain(`✓ fork at ${path} removed — 1 worktree and the branch auto-fork/T-002 deleted`)
+      expect(removed.out).toContain("  .: worktree removed, branch auto-fork/T-002 deleted")
+      expect(removed.out).toContain(`retry: opencode-auto fork T-002 ${path} ${dir}`)
+      expect(await Bun.file(join(path, "exp.txt")).exists()).toBe(false)
+      expect((await git("branch", "--list", "auto-fork/T-002")).trim()).toBe("")
+      // The retry: the same path and target take the stem name, not -2.
+      const again = await runCli(["fork", "T-002", path, dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(`✓ fork of T-002 created at ${path} on auto-fork/T-002`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
+    }
+  })
+
+  test("uncommitted work blocks naming the files (exit 2, nothing removed); --force discards it (exit 0)", async () => {
+    const { dir, git } = await taskProject()
+    try {
+      const path = `${dir}-exp`
+      expect((await runCli(["fork", "T-002", path, dir])).code).toBe(0)
+      await Bun.write(join(path, "junk.txt"), "uncommitted\n")
+      const refused = await runCli(["remove-fork", path, dir])
+      expect(refused.code).toBe(2)
+      expect(refused.err).toContain("the fork holds uncommitted work — remove-fork never discards it silently")
+      expect(refused.err).toContain("?? junk.txt")
+      expect(refused.err).toContain("--force")
+      expect(await Bun.file(join(path, "junk.txt")).exists()).toBe(true)
+      const forced = await runCli(["remove-fork", path, dir, "--force"])
+      expect(forced.code).toBe(0)
+      expect(forced.out).toContain("(--force: the uncommitted work discarded)")
+      expect((await git("branch", "--list", "auto-fork/T-002")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
+    }
+  })
+
+  test("a run live inside the fork refuses (exit 2, the fork stands)", async () => {
+    const { dir, git } = await taskProject()
+    try {
+      const path = `${dir}-exp`
+      expect((await runCli(["fork", "T-002", path, dir])).code).toBe(0)
+      await plantLiveLock(path)
+      const live = await runCli(["remove-fork", path, dir])
+      expect(live.code).toBe(2)
+      expect(live.err).toContain(`holds the run lock of ${path}`)
+      // The pre-T-002 state stands untouched beside the planted lock.
+      expect(await Bun.file(join(path, "T-001.txt")).exists()).toBe(true)
+      expect((await git("branch", "--list", "auto-fork/T-002")).trim()).toBe("+ auto-fork/T-002")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(`${dir}-exp`, { recursive: true, force: true })
     }
   })
 })
