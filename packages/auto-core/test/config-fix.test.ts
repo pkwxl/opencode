@@ -62,6 +62,12 @@ describe("project brief (plans/0052 D9; the stub retired by plans/0081 D11)", ()
       "e2fsprogs missing.",
     ].join("\n")
     expect(briefProposal(survey)).toBe("The goal, the reference location and wall kind, the target,\nthe constraints that bind every round.")
+    // Document-level punctuation never installs (plans/0133 D8): a survey
+    // whose section is the document's last carries the person's release mark
+    // and the eof terminator inside the body — the aster-mig baseline's
+    // installed brief the field case.
+    const last = ["# Survey", "", "## Project brief", "", "The constants.", "", "Clarified: yes", "", "<!-- auto: eof -->", ""].join("\n")
+    expect(briefProposal(last)).toBe("The constants.")
   })
 
   test("appendToSection: end of the section, before the next heading; heading added when absent", () => {

@@ -40,7 +40,7 @@ bun run packages/auto/src/index.ts <subcommand> ...
 ## Usage
 
 ```sh
-opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, write the optional project-brief seed of `--brief <text> | --brief-file <path>` verbatim to .opencode/auto/brief.md (omitted: no file; the survey/analysis phase proposes the full brief later), idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by transfer (plan in m mode). In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
+opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by transfer (plan in m mode) — and no project brief: the assisted project analysis the first `plan`/`transfer` opens proposes and installs it (`--brief`/`--brief-file` are retired on init). In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
 opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-file <path>]   # rewrite only the given config keys, keep the rest (at least one key, or a brief revision; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
@@ -80,11 +80,59 @@ The `m` mode (the default single run) works as before, with `plan` and `run` alo
 (establishes the implicit single phase `R-01/P01-implement`, stops at the round-start gate) → commit →
 `plan -p` (optional, see
 [Planning tasks with AI](#planning-tasks-with-ai)) or list tasks by hand in `tasks.md` → `run`. `init`'s
-`-p` (edit `.opencode/auto/brief.md` directly instead) and `--amend` (use the `amend` subcommand instead) are
+`-p` (init takes no prompt and writes no brief — the analysis flow owns the start) and `--amend` (use the `amend` subcommand instead) are
 retired; the `continue` subcommand is retired too (every boundary crossing is `transfer` in a phased
 project — opening the next round included), and so is the
 `check` subcommand (the principle scan and the reference check were removed; `fix --dryrun` lists the
 configuration findings).
+
+### Working with an intent bundle (`--intent cleanroom` / `faithful` / `faithful-lean`)
+
+The three shipped bundles are whole workflows — an intent pack (quality bars, phase duties,
+governance), a scenario mode and custom phase types — that `init --intent <name>` materializes into
+the ordinary `.opencode/auto/` surfaces, stamping `phases` and `mode` from the manifest (explicit
+flags win). The steps of the phased flow above do not change; the intent changes what lives inside
+them, and where you come in. `cleanroom` — the two-room clean room, `survey,spec-read,design,
+implement,test,audit` — in full:
+
+```sh
+opencode-auto init <dir> --intent cleanroom   # materializes the bundle; then your declarations (below)
+#                                              the analysis flow exactly as steps 2–5 above (clarify releases it;
+#                                              the approved `## Project brief` proposal installs the brief; R-01
+#                                              opens under the roadmap's line, `survey` leading its phases)
+opencode-auto plan <dir> && opencode-auto run <dir>   # P01-survey: the sessions size the reference and record only
+#                                              the genuinely open decisions; the run ends at the phase's held
+#                                              `Gate: human` naming the release
+opencode-auto clarify <dir>                   # your review: prints every `Fork:` line with its `Recommend:` default,
+#                                              then writes the release (or answer the forks in survey.md by hand);
+#                                              the release also installs the completed project brief
+opencode-auto transfer <dir>                  # past the survey; constructs P02-spec-read's plan task for review
+opencode-auto plan <dir> && opencode-auto run <dir>   # P02-spec-read: the specification room reads the reference
+#                                              through the door and distills behavior-only notes
+opencode-auto transfer <dir>                  # this advance seals the wall — the door removed, a standing deny
+#                                              stamped on its target, the admission scan's receipts committed —
+#                                              and constructs design's plan task
+# P03-design → P04-implement → P05-test: the plain loop (transfer → plan → run), every phase now a clean room
+#   working from the specification notes, the brief and the planning input alone — the divergence lane runs
+#   driver-side in the background against committed trees; P06-audit: the compliance verdict (findings first,
+#   the Result line last)
+```
+
+Your declarations at materialization, none of them shipped content: the **lane rows** — uncomment
+and command the pack's `### test-lanes` rows in `.opencode/auto/intents/cleanroom.md` (build, the
+paradigm-constraint suite, the property suite, the divergence scan behind a bare target name, the
+acceptance anchor) in the project's own toolchain terms; the **wall door** — fill the
+`Wall: seal <door>` line in `.opencode/auto/phases/spec-read.md` with the reference symlink's path;
+and the **divergence corpus location** — a driver-side fact you hold outside the platform boundary,
+never brief, pack or session content. Between rounds, `sync` upgrades the materialized bundle to
+the running binary — unedited files fast-forward, your lane rows and door fill are person-edits,
+reported and never overwritten.
+
+The re-work bundles share the survey rhythm: a `faithful` or `faithful-lean` round opens with the
+same human-gated survey (its release installing the revised brief) — `faithful` ports an existing
+system faithfully (the survey sizes the reference, the phases carry the parity duties),
+`faithful-lean` the same with deliberate debt shedding. Neither carries the wall, the sealed
+channel or the audit — those are the cleanroom's compliance gates alone.
 
 `init` always leaves an existing opencode.json untouched; `.opencode/agent/auto.md` is always replaced when
 it differs from the built-in template, so the agent contract is the latest version. Round directories
@@ -234,9 +282,9 @@ Compatibility and migration:
 | Old scripts like `run -m xxx` | Exit code 1 + amend guidance (breaking) |
 | Retired option `--commit` (any value, on any command) | Exit code 1 + retirement notice (committing cannot be turned off; a stored `commit: true` still loads and is ignored) |
 | Retired options `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | Appearing on any command: exit code 1 + retirement notice (acceptance becomes planned tasks; the report result line `Result: FAIL` stops the run) |
-| Retired options `--source-dir` / `--source-path` / `--dest-dir` | Appearing on any command: exit code 1 + retirement notice (the migration source and target are intent and go into the project brief — `init/amend --brief` — or the planning input) |
+| Retired options `--source-dir` / `--source-path` / `--dest-dir` | Appearing on any command: exit code 1 + retirement notice (the migration source and target are intent and go into the project analysis's `## Project brief` proposal — or `amend --brief` — or the planning input) |
 | Existing config containing `source` / `destDir` | `run` / `amend` / `init` fail strictly (`status` prints a ⚠ line); the message names the original value and the fix (copy into brief.md, then delete the key) and points at `fix` — `fix` migrates the value into brief.md's `## Source` / `## Target` sections and deletes the key; a no-argument `init` drops them, prints the original values, and overwrites as usual |
-| Retired options `init -p` / `--prompt` (the brief seed is `--brief <text> | --brief-file <path>`; the planning input is `plan -p`) and `--amend` | Appearing: exit code 1 + retirement notice (the former points at the `--brief` seed flags and `plan -p`, the latter at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`); the retired `check` subcommand likewise: exit code 1 + retirement notice (pointing at `fix --dryrun` — the principle scan and the reference check were removed) |
+| Retired options `init -p` / `--prompt` (init takes no prompt and no brief; the planning input is `plan -p`), `init --brief` / `--brief-file` (init writes no brief — the project analysis's approved `## Project brief` proposal installs it; a later manual override: `amend --brief`) and `--amend` | Appearing: exit code 1 + retirement notice (the first points at the analysis flow and `plan -p`, the second at the analysis flow and `amend --brief`, the third at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`); the retired `check` subcommand likewise: exit code 1 + retirement notice (pointing at `fix --dryrun` — the principle scan and the reference check were removed) |
 | Unknown `--` options (including misspellings like `--next`) | Exit code 1 + near-name suggestions (breaking; previously silently ignored). `status` accepts only a directory argument and rejects any option; `reset` accepts only a directory argument and `-f`; `fix` accepts only a directory argument, `-f` and `--dryrun` |
 | Close-family flags (`--reason`, `--cascade`, `--commit-changes`, `--stash-changes`) or the lane value flags (`--unit`, `--merge`) on `run`, `transfer` or `init` | Exit code 1 + a pointer at the owning command — `close` / `plan --force-close` for the close family, the hidden `_lane` entry for the lane flags (breaking; previously silently ignored — `init --dryrun` wrote everything and `run --merge <dir>` swallowed the directory) |
 | Repeated `init` (no arguments) | **Every key falls back to its default** (breaking: previously "config unchanged"); templates and the marker block stay idempotent |
@@ -1799,18 +1847,22 @@ under a model registry the value is an internal name — see
 [Model registry and tiered routing](#model-registry-and-tiered-routing-model-registry));
 an unknown type key is a usage error at run start.
 
-- **brief.md**: the project brief `.opencode/auto/brief.md` (versioned, human-editable), consumed by
-  every phase's planning session — it is project-level intent, and the tone set in the a phase is just as
-  needed in the k phase. When the file is missing, `init`
-  writes a **project brief stub** (four sections `## Goal` / `## Source` / `## Target`
-  / `## Constraints`, each holding only HTML comment hints; an existing file is kept) for a person to fill
-  in by direct editing; comments are stripped before injecting into the planning session, and an unfilled
-  stub injects nothing. The section headings are scaffolding only — the driver
-  does not parse them. `reset` deletes it only while it is byte-identical to the stub; once filled in it is
-  kept. init starts no AI sessions and
-  accepts no `-p` (intent is edited directly in that file; planning with input is `plan -p` — see
+- **brief.md**: the project brief `.opencode/auto/brief.md` (versioned, driver-written — person words
+  through a driver-owned channel), consumed by
+  every phase's planning session — the project's constants are just as needed in the k phase as in the
+  a phase. The person's words reach it through approvals, never the pen: an approved `## Project brief`
+  proposal replaces the whole file (the project analysis's release installs the provisional constants,
+  every survey release the completed or revised ones — the latest approval is the entire brief;
+  auto-core plans/0081 D11/D15, plans/0133 the lifetime ruling). The order at the start: the project
+  analysis (`docs/analysis.md`) comes first — its release installs the provisional brief; init never
+  writes a brief (`--brief`/`--brief-file` are retired on init, auto-core plans/0133 D9).
+  `amend --brief <text> | --brief-file <path>` is the rare manual override, written verbatim; comments are stripped before injecting into the planning
+  session, and a missing or comment-only file injects nothing. `reset` always keeps it. init starts no
+  AI sessions and
+  accepts no `-p` and no `--brief` (the brief is installed from the analysis's approved proposal or
+  revised with `amend --brief`; planning with input is `plan -p` — see
   [Planning tasks with AI](#planning-tasks-with-ai)).
-- **Migration source and target**: project intent, written into brief.md (e.g. "migrate `legacy/pkg`
+- **Migration source and target**: project facts, written into brief.md (e.g. "migrate `legacy/pkg`
   into `app/`"), and picked up by the planning session when it reads the brief — no longer config
   (auto-core plans/0052
   D1–D3, 2026-09-23). The former `--source-dir` / `--source-path` / `--dest-dir` options and

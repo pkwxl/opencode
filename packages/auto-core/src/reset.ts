@@ -67,7 +67,7 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
 
   if (await fileExists(join(dir, CONFIG_JSON))) entries.push({ path: CONFIG_JSON, action: "remove" })
   if (await fileExists(join(dir, BRIEF_FILE))) {
-    entries.push({ path: BRIEF_FILE, action: "keep", reason: "the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to" })
+    entries.push({ path: BRIEF_FILE, action: "keep", reason: "the project brief (an installed approved proposal or a person's amend --brief write) is kept; delete it by hand if you mean to" })
   }
   if (await fileExists(join(dir, LEGACY_CONFIG))) entries.push({ path: LEGACY_CONFIG, action: "remove" })
 

@@ -843,7 +843,7 @@ describe("CLI parsing: run-side options and the config", () => {
           const run = await runCli([command, dir, ...extra])
           expect(run.code).toBe(1)
           expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
-          expect(run.err).toContain("state them in the project brief (opencode-auto init <dir> --brief <text> | --brief-file <path>, likewise amend) or in the planning input")
+          expect(run.err).toContain("state them in the project analysis's `## Project brief` proposal (or opencode-auto amend <dir> --brief <text> | --brief-file <path>) or in the planning input")
         }
       }
       // The refusal happens before any write
@@ -932,8 +932,8 @@ describe("CLI: init freezes the project config", () => {
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       expect(init.out).not.toContain("list tasks in")
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // the brief is the optional --brief seed (plans/0081 D11): a plain
-      // init writes none
+      // init writes no brief (plans/0133 D9 — the seed channel retired, the
+      // analysis's approved proposal the first brief a project gets)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
@@ -1127,7 +1127,7 @@ describe("CLI: init freezes the project config", () => {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("full overwrite drops the retired key commit = false")
-      expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in the project brief (init/amend --brief) or in the planning input')
+      expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in the project analysis\'s `## Project brief` proposal (or `amend --brief`), or in the planning input')
       expect(init.out).toContain('full overwrite drops the retired key destDir = "app"')
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
       await commitFixture(dir)
@@ -1987,28 +1987,40 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("init -p is retired (plans/0053 D31; the brief seed is --brief, plans/0081 D11): the notice points at the seed flags; a seeded brief is never touched by a bare re-init", async () => {
+  test("init -p and init --brief are retired (plans/0053 D31; the seed half retired by auto-core plans/0133 D9): the notices point at the analysis flow; an amend-written brief is never touched by a bare re-init", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
-      // The seed: written verbatim, nothing written when omitted.
-      expect((await runCli(["init", dir, "--brief", "Migrate legacy to bun."])).code).toBe(0)
-      expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
+      // init writes no brief: the analysis's approved proposal is the first
+      // brief a project gets; --brief on init is refused naming that flow.
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(brief).exists()).toBe(false)
+      await commitFixture(dir)
+      const seedRefused = await runCli(["init", dir, "--brief", "Migrate legacy to bun."])
+      expect(seedRefused.code).toBe(1)
+      expect(seedRefused.err).toBe(
+        "--brief is retired on init: init writes no brief — the project analysis comes first. The first plan/transfer opens docs/analysis.md; its approved `## Project brief` proposal installs the brief on release. A later manual override: opencode-auto amend <dir> --brief <text> | --brief-file <path>\n",
+      )
+      expect(await Bun.file(brief).exists()).toBe(false)
       const refused = await runCli(["init", dir, "-p", "the revised intent"])
       expect(refused.code).toBe(1)
       expect(refused.err).toBe(
-        "--prompt is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p\n",
+        "--prompt is retired: init takes no prompt and writes no brief — the project analysis (opened by the first plan/transfer) proposes and installs the brief, and the planning input is plan -p\n",
       )
-      // A bare re-init never touches the seeded brief (§7 A5); the overwrite
-      // gate is git-bound, so commit between inits.
+      // The person's manual word travels amend: written verbatim, and a bare
+      // re-init never touches it (§7 A5; the overwrite gate is git-bound, so
+      // commit between inits).
+      expect((await runCli(["amend", dir, "--brief", "Migrate legacy to bun."])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
       await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
-      // An explicit --brief replaces it — the person's word wins.
-      expect((await runCli(["init", dir, "--brief", "Second intent."])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--brief", "Second intent."])).code).toBe(0)
       expect(await Bun.file(brief).text()).toBe("Second intent.\n")
-      // The seed and the planning input are exclusive to their commands.
+      // The revision channel and the planning input are exclusive to their
+      // commands.
       expect((await runCli(["run", dir, "--brief", "x"])).code).toBe(1)
+      expect((await runCli(["run", dir, "--brief", "x"])).err).toContain("--brief is an amend option (the project brief's manual revision: opencode-auto amend <dir> --brief <text or path>)")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2408,7 +2420,7 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       const prompt = await runCli(["init", dir, "-p", "intent"])
       expect(prompt.code).toBe(1)
       expect(prompt.err).toBe(
-        "--prompt is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p\n",
+        "--prompt is retired: init takes no prompt and writes no brief — the project analysis (opened by the first plan/transfer) proposes and installs the brief, and the planning input is plan -p\n",
       )
       const flag = await runCli(["init", dir, "--amend"])
       expect(flag.code).toBe(1)
@@ -4529,8 +4541,8 @@ describe("CLI: run under --subtask auto over the claude adapter (auto-core plans
   }, 60_000)
 })
 
-describe("CLI: the project brief seed (plans/0081 D11, superseding 0052 D9's stub)", () => {
-  test("--brief seeds verbatim; omitted writes nothing; a bare re-init never touches it; reset keeps it; -p stays retired", async () => {
+describe("CLI: the project brief's channels (plans/0081 D11; init's seed half retired by auto-core plans/0133 D9)", () => {
+  test("init writes no brief and refuses --brief; amend --brief revises verbatim; a bare re-init never touches it; reset keeps it; -p stays retired", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
@@ -4539,16 +4551,20 @@ describe("CLI: the project brief seed (plans/0081 D11, superseding 0052 D9's stu
       expect(await Bun.file(brief).exists()).toBe(false)
       await commitFixture(dir)
       const seeded = await runCli(["init", dir, "--brief", "Migrate legacy/pkg to app/."])
-      expect(seeded.out).toContain("created: .opencode/auto/brief.md (the brief seed, verbatim")
+      expect(seeded.code).toBe(1)
+      expect(seeded.err).toContain("--brief is retired on init: init writes no brief")
+      expect(await Bun.file(brief).exists()).toBe(false)
+      const amended = await runCli(["amend", dir, "--brief", "Migrate legacy/pkg to app/."])
+      expect(amended.code).toBe(0)
+      expect(amended.out).toContain("created: .opencode/auto/brief.md (the person's manual word, verbatim")
       expect(await Bun.file(brief).text()).toBe("Migrate legacy/pkg to app/.\n")
       await commitFixture(dir)
       expect((await runCli(["init", dir])).out).not.toContain(".opencode/auto/brief.md")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
       const reset = await runCli(["reset", dir])
-      expect(reset.out).toContain("keep: .opencode/auto/brief.md (the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to)")
+      expect(reset.out).toContain("keep: .opencode/auto/brief.md (the project brief (an installed approved proposal or a person's amend --brief write) is kept; delete it by hand if you mean to)")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
-      // init's -p is retired (plans/0053 D31; the seed is --brief): with -p it
-      // is always refused
+      // init's -p is retired (plans/0053 D31): with -p it is always refused
       const refused = await runCli(["init", dir, "-p", "intent"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("--prompt is retired")
@@ -4563,11 +4579,16 @@ describe("CLI: the project brief seed (plans/0081 D11, superseding 0052 D9's stu
   test("amend --brief revises the brief beside the config keys (plans/0081 D11.2)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--brief", "first"])).code).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
       const amended = await runCli(["amend", dir, "--brief", "revised intent"])
       expect(amended.code).toBe(0)
-      expect(amended.out).toContain("replaced: .opencode/auto/brief.md (the brief, verbatim)")
+      expect(amended.out).toContain("created: .opencode/auto/brief.md (the person's manual word, verbatim")
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("revised intent\n")
+      await commitFixture(dir)
+      const revised = await runCli(["amend", dir, "--brief", "second revision"])
+      expect(revised.code).toBe(0)
+      expect(revised.out).toContain("replaced: .opencode/auto/brief.md (the brief, verbatim)")
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("second revision\n")
       // amend still refuses -p with the brief pointer (A8).
       const refused = await runCli(["amend", dir, "-p", "x"])
       expect(refused.code).toBe(1)

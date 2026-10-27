@@ -22,11 +22,13 @@ After materialization the project owes its own declarations, none of them shippe
 the lane rows commented in the shipped pack become the project's own declared rows — the
 person installs them, commanded in the project's own terms (build, the paradigm-constraint
 suite, the property suite, the divergence scan behind a bare target name, the acceptance
-anchor); the brief states the wall kind and the divergence corpus location — a driver-side
-location outside the platform boundary, whose exact path is the person's driver-side fact
-and never a session-visible one; and the brief declares the platform contract — the target
+anchor); the brief states the wall kind; it declares the platform contract — the target
 platform's abstractions the deliverable must build on: its execution model, its
-memory/isolation discipline, its interface shapes.
+memory/isolation discipline, its interface shapes; and it never states the divergence
+corpus location — the corpus is a driver-side location outside the platform boundary whose
+exact path is the person's driver-side fact, an environment fact for the person, never
+session-visible content (a corpus path in any session-rendered surface, the brief
+included, is a wall breach).
 
 ## exec
 

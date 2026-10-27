@@ -11,7 +11,7 @@ Formulate the "Design" phase's complete task plan — the task index docs/R-01/P
 ## Scope
 
 This document is the single input of this formulation task: the DRIVER assembled everything below from the project's committed sources when it created the task, and nothing else is injected into your session. Plan from these sources — the repository and the project's artifacts, never invention; where two of them disagree, the authority order (when present below) says which wins.
-## Input: project intent (.opencode/auto/brief.md)
+## Input: project brief (.opencode/auto/brief.md)
 
 Project intent (fixed input).
 

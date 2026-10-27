@@ -221,7 +221,8 @@ const RETIRED_KEYS: Record<string, { retired: (value: unknown) => boolean; why: 
       `agent must be opencode|claude ("${value}" looks like an agent contract name: that setting is retired — the contract is always .opencode/agent/auto.md; delete the key, or set "claude")`,
   },
   // plans/0052 D3: the migration parameters were only ever forwarded into the
-  // phase-planning prompt, so they are intent and belong in brief.md.
+  // phase-planning prompt, so they are project facts (brief content, plans/
+  // 0133's duty split) and belong in brief.md.
   source: migrationParameter("source"),
   destDir: migrationParameter("destDir"),
 }
@@ -235,7 +236,7 @@ export function retiredValue(key: string, value: unknown): boolean {
 function migrationParameter(key: string) {
   return {
     retired: (value: unknown) => value !== undefined,
-    why: "the migration source and target are intent — state them in the project brief (init/amend --brief) or in the planning input",
+    why: "the migration source and target are intent — state them in the project analysis's `## Project brief` proposal (or `amend --brief`), or in the planning input",
     message: (value: unknown) =>
       `${key} is retired (the migration source and target are intent, not configuration): ` +
       `copy its value ${JSON.stringify(value)} into .opencode/auto/brief.md, then remove the key`,

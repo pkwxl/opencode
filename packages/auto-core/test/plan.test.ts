@@ -134,7 +134,7 @@ describe("planPrelude: the phased state refusals (plans/0101 D4) and m mode's ro
         type: "stop",
         code: 0,
         lines: [
-          "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
+          "ℹ no project brief yet; the project analysis's `## Project brief` proposal installs it (amend --brief the manual override) — or name the reference in this round's planning input",
           "✓ round R-01 established: single phase P01-implement",
           "next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, " +
             `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
@@ -955,6 +955,27 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       expect(agents).toContain("Current state — project analysis")
       expect(agents).toContain("How opencode-auto works")
       expect(agents).toContain("Assisted preparation rule")
+    }),
+  )
+
+  test(
+    "row 0a: a brief on disk while the analysis is unreleased carries the order notice (plans/0133 D7)",
+    withDir(async (dir) => {
+      analysisOn()
+      mkdirSync(join(dir, ".opencode", "auto"), { recursive: true })
+      writeFileSync(join(dir, ".opencode", "auto", "brief.md"), "Hand-authored constants.\n")
+      const result = await planPrelude(dir, { phases: "m" })
+      expect(result.type).toBe("stop")
+      if (result.type !== "stop") return
+      expect(result.lines[0]).toBe("✓ the project analysis is open: docs/analysis.md written (a stub with section hints)")
+      expect(
+        result.lines.some(
+          (line) =>
+            line.startsWith("ℹ a project brief is already on disk") &&
+            line.includes("the analysis still comes first") &&
+            line.includes("replaces the whole brief on release"),
+        ),
+      ).toBe(true)
     }),
   )
 

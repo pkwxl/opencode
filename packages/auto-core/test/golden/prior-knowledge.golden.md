@@ -11,7 +11,7 @@ Migration/upgrade mode notes:
 - Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
   record how it was made and annotate it as AUTO-DECISION requires.
 
-## Input: project intent (.opencode/auto/brief.md)
+## Input: project brief (.opencode/auto/brief.md)
 
 Second-pass migration intent.
 

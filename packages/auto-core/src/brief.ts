@@ -2,21 +2,36 @@
 // plans/0081 D11): the project's *constants* — what this project is, where
 // the reference/source lives, where the deliverable goes, the constraints
 // every round must respect; read by every planning session of every round.
-// Nothing requires the person to fill or maintain it by hand: the optional
-// seed (`init --brief <text> | --brief-file <path>`, written verbatim,
-// nothing written when omitted) only points the first survey at the
-// reference; the analysis owns the brief from there — the survey phase's
-// closing task proposes a `## Project brief` section, the person's
-// `Clarified: yes` approves it, and the driver installs that section
-// verbatim (D15.2, loop-phase.ts installApprovedBrief). `amend --brief
-// <text> | --brief-file <path>` stays the person's rare manual override and
-// the default path's install channel (D15.4, the `a` phase's proposal).
+// Lifetime (plans/0133): the brief is the person's *latest approved*
+// re-statement, never an accumulating file — installBriefProposal below
+// replaces it wholesale, so the newer approval is the whole brief. Two gates
+// install it: the analysis release installs the provisional constants at the
+// project start (goal, inputs, target, constraints), and every human-gated
+// survey release installs the completed or revised ones (the re-work bundles'
+// survey adds the wall kind, the platform contract, the reference door and
+// the round's scope posture). A hand edit between approvals is silently
+// replaced at the next install — the file lives in the driver-owned plane
+// precisely because of that replace semantics; the person's channel is the
+// proposal (and the rare manual override below), never the pen. The duty
+// split stated with it: docs/analysis.md is the engagement contract (its
+// narrative sections the standing background the surveys read, its
+// `## Roadmap` lines and `## Round briefs` proposals living law), the brief
+// the standing constants the sessions read — newest approval wins.
+// Nothing requires the person to fill or maintain it by hand, and init
+// never writes it (plans/0133 D9 — the seed channel retired): the analysis
+// owns the brief from the start — the survey phase's closing task proposes
+// a `## Project brief` section, the person's `Clarified: yes` approves it,
+// and the driver installs that section verbatim (D15.2, loop-phase.ts
+// installApprovedBrief). `amend --brief <text> | --brief-file <path>` stays
+// the person's rare manual override — the revision channel, never the
+// start's.
 // The stub-and-hand-edit model (0052 D9) and reset's remove-while-stub rule
 // retired with this; a bare re-init writes no brief file (D11.1, §7 A5).
 // The headings are scaffolding the driver never parses (0052 §7); `fix`
 // writes under `## Source` / `## Target` when it moves the retired keys here.
 import { join } from "node:path"
 import { allowWrite, reprotect } from "./protect"
+import { CLARIFIED_MARK } from "./document/roles"
 import { stubbedText } from "./round-brief"
 
 export const BRIEF_FILE = join(".opencode", "auto", "brief.md")
@@ -37,6 +52,14 @@ export async function projectBriefText(dir: string): Promise<string | undefined>
   return raw === undefined ? undefined : stubbedText(raw)
 }
 
+// Document-level punctuation is never brief content (plans/0133 D8, the
+// aster-mig baseline's installed brief the field case): a survey whose
+// `## Project brief` section is the document's last carries the person's
+// release mark and the eof terminator inside the section body — the
+// round-brief extractor's discipline (analysis.ts roundBriefProposals)
+// extended to the project brief.
+const BRIEF_DOC_PUNCTUATION = new Set([CLARIFIED_MARK, "<!-- auto: eof -->"])
+
 // The `## Project brief` proposal inside a survey (plans/0081 D15.1): the
 // section body between the heading and the next level-1/2 heading, or
 // undefined when the survey carries none or the body is empty. Pure, so the
@@ -49,7 +72,7 @@ export function briefProposal(surveyText: string): string | undefined {
   if (end === -1) end = lines.length
   let last = end
   while (last > start + 1 && !lines[last - 1]!.trim()) last--
-  const body = lines.slice(start + 1, last).join("\n").trim()
+  const body = lines.slice(start + 1, last).filter((line) => !BRIEF_DOC_PUNCTUATION.has(line.trim())).join("\n").trim()
   return body || undefined
 }
 

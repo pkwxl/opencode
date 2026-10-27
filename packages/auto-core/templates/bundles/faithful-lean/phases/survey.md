@@ -11,8 +11,11 @@ phase after it does that), and no implementation. Size first, and let the size s
 enumerate the reference at the location the brief names — subsystem areas, line counts,
 structure, and where the legacy debt concentrates (the parts whose internals this project
 exists to shed) — in this planning session's own read-only survey. Decisions come from the
-person's approved words first: the approved project analysis (docs/analysis.md — in this
-planning prompt's input, or read the file), else the project brief and round brief. Before
+person's approved words, newest first: the current project brief (the latest approved
+proposal — it replaces every earlier one wholesale) and this round's round brief, then the
+approved project analysis (docs/analysis.md — in this planning prompt's input, or read the
+file) as the standing background — a decision a later approval revised does not revive, and
+where the analysis settles what no later approval touches, its line binds. Before
 recording any fork, check the candidate against them: a decision the analysis settles —
 explicitly, or through the goals, constraints or roadmap it states — is already made, and so
 is one its principles imply; record both as `Settled:` lines, each naming the line that

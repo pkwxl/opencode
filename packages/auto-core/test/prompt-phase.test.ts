@@ -68,7 +68,7 @@ describe("renderFormulationTodo, phased (the formulation task's single input, pl
     const missing = phasePlan({ phase: L("d") })
     // The fallback names the seed channels (plans/0081 D11.3), never an ask.
     expect(missing).toContain("Not provided (no project brief yet")
-    expect(missing).toContain("init --brief <one line>")
+    expect(missing).toContain("The project analysis's")
     expect(missing).not.toContain("ask a human")
     expect(missing).toContain("Split by design concern")
     expect(phasePlan({ phase: L("m") })).toContain("Vertical thin slices first")
@@ -231,12 +231,12 @@ describe("renderFormulationTodo, m mode (the implicit P01-implement, plans/0095 
     expect(text).not.toContain("## Input: round brief")
   })
 
-  test("brief two states: given, the project-intent paragraph is injected; missing/blank, the whole block disappears", () => {
+  test("brief two states: given, the project-brief paragraph is injected; missing/blank, the whole block disappears", () => {
     const withBrief = implementPlan({ input: "x", brief: "migrate legacy to bun" })
-    expect(withBrief).toContain("## Input: project intent (.opencode/auto/brief.md)")
+    expect(withBrief).toContain("## Input: project brief (.opencode/auto/brief.md)")
     expect(withBrief).toContain("migrate legacy to bun")
-    expect(implementPlan({ input: "x" })).not.toContain("## Input: project intent")
-    expect(implementPlan({ input: "x", brief: "   " })).not.toContain("## Input: project intent")
+    expect(implementPlan({ input: "x" })).not.toContain("## Input: project brief")
+    expect(implementPlan({ input: "x", brief: "   " })).not.toContain("## Input: project brief")
   })
 
   test("no retired flag wording (verify retired)", () => {

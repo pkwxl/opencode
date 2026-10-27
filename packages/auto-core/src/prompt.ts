@@ -808,7 +808,7 @@ export function renderKnowledge(facts: PromptFacts, input: { file: string; mode?
 // output path of the intermediate artifact temp-kb.md (relative to the
 // target directory; only after the driver confirms the finish marker is it
 // renamed into place — the completion-verdict protocol is in
-// knowledge.ts); brief is the project intent verbatim (may be empty);
+// knowledge.ts); brief is the project brief verbatim (may be empty);
 // distilled is the list of existing distillation artifact paths
 // (knowledge.ts existingDistilledDocs; when non-empty the template injects
 // a reference-style conditional block: already-covered knowledge points

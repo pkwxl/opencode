@@ -95,11 +95,11 @@ describe("reset: boundary safety", () => {
   })
 
   // plans/0081 D11: the stub and its remove-while-stub rule retired — every
-  // brief (a seed or the analysis phase's generated brief) is kept.
+  // brief (an installed approved proposal or a person's amend --brief write) is kept.
   test("the brief is always kept (a seed or a generated brief alike)", async () => {
     await writeFile(join(dir, ".opencode", "auto", "brief.md"), "Migrate legacy/pkg to app/.\n")
     const entries = await reset(dir)
-    expect(entries.find((entry) => entry.path === ".opencode/auto/brief.md")).toMatchObject({ action: "keep", reason: "the project brief (a seed or the analysis phase's generated brief) is kept; delete it by hand if you mean to" })
+    expect(entries.find((entry) => entry.path === ".opencode/auto/brief.md")).toMatchObject({ action: "keep", reason: "the project brief (an installed approved proposal or a person's amend --brief write) is kept; delete it by hand if you mean to" })
     expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).text()).toContain("Migrate legacy/pkg to app/.")
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
   })

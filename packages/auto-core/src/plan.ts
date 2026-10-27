@@ -20,7 +20,7 @@ import { ensurePointer } from "./agents-block"
 import { ACCEPTED_MARK } from "./document/roles"
 import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
 import { releasedRoadmapRound } from "./roadmap"
-import { briefProposal, installBriefProposal, projectBriefText } from "./brief"
+import { briefProposal, BRIEF_FILE, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { dirtyStopLines, log } from "./log"
 import type { ModeSpec } from "./mode"
@@ -633,7 +633,7 @@ const stop = (code: number, lines: string[]): PlanStop => ({ type: "stop", code,
 
 // The person-facing advisory notices of a planning step (plans/0081 D11.3 /
 // D12.3): one line when no project brief exists (the survey phase will
-// propose one; the seed is optional), one when a planning step starts with no
+// propose one — the seed is optional), one when a planning step starts with no
 // input (the scaffold is one command away). Neither blocks anything, and
 // neither is a question — planning proceeds by the duties and the
 // default-and-record rule (D16).
@@ -641,7 +641,7 @@ async function planningNotices(dir: string, phase: PhaseUnit | undefined, input:
   const lines: string[] = []
   if ((await projectBriefText(dir)) === undefined) {
     lines.push(
-      "ℹ no project brief yet; the survey phase will propose one — seed it optionally with init --brief <one line>, or name the reference in this round's planning input",
+      "ℹ no project brief yet; the project analysis's `## Project brief` proposal installs it (amend --brief the manual override) — or name the reference in this round's planning input",
     )
   }
   if (!input && phase !== undefined && !(await readPlanInput(dir, phase))?.trim()) {
@@ -1033,6 +1033,21 @@ export function analysisAwaitingLines(dir: string, command: "plan" | "transfer",
   ]
 }
 
+// The order notice (plans/0133 D7), appended to every unreleased-analysis
+// stop shape: a brief already on disk while the analysis is not yet
+// released — the aster-mig features census the field case (three projects
+// prepared brief-first, no analysis). The analysis comes first, and its
+// approved `## Project brief` proposal replaces the whole brief on release;
+// the stop says so at the moment the person acts from it, naming the rescue
+// (carry the disk brief's content into the section). Empty when no brief is
+// on disk — the seed-free start keeps its byte-identical floor.
+export async function analysisOrderLines(dir: string): Promise<string[]> {
+  if ((await projectBriefText(dir)) === undefined) return []
+  return [
+    `ℹ a project brief is already on disk (${BRIEF_FILE}); the analysis still comes first — the approved \`## Project brief\` section of ${ANALYSIS_DOC} replaces the whole brief on release, so carry the disk brief's content into that section (or restore it with \`amend --brief\` afterwards)`,
+  ]
+}
+
 export async function analysisGate(
   dir: string,
   command: "plan" | "transfer",
@@ -1043,7 +1058,7 @@ export async function analysisGate(
     await mkdir(join(dir, "docs"), { recursive: true })
     await Bun.write(join(dir, ANALYSIS_DOC), renderAnalysisStub())
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    return { type: "stop", code: 0, lines: analysisOpenedLines(dir, command) }
+    return { type: "stop", code: 0, lines: [...analysisOpenedLines(dir, command), ...(await analysisOrderLines(dir))] }
   }
   let types: ReturnType<typeof loadPhaseTypes>
   try {
@@ -1054,11 +1069,11 @@ export async function analysisGate(
   const problems = analysisProblems(raw, types)
   if (problems.length) {
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    return { type: "stop", code: 2, lines: analysisHeldLines(dir, command, problems) }
+    return { type: "stop", code: 2, lines: [...analysisHeldLines(dir, command, problems), ...(await analysisOrderLines(dir))] }
   }
   if (!clarifiedMark(raw)) {
     await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "analysis", manual: opts.manual } })
-    return { type: "stop", code: 2, lines: analysisAwaitingLines(dir, command, surveyForks(raw)) }
+    return { type: "stop", code: 2, lines: [...analysisAwaitingLines(dir, command, surveyForks(raw)), ...(await analysisOrderLines(dir))] }
   }
   // The release (row 0d's shape): the approved brief proposal installs
   // verbatim (the survey release's mechanism, D15.2 generalized); the caller

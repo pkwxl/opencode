@@ -10,7 +10,7 @@ Scenario mode notes ({{modeName}}):
 
 {{/if}}
 {{#if brief}}
-## Input: project intent (.opencode/auto/brief.md)
+## Input: project brief (.opencode/auto/brief.md)
 
 {{brief}}
 

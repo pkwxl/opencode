@@ -26,7 +26,7 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { PHASE_ACCEPTANCE_NAME, roundBriefPath, roundDir, roundDirName } from "./docpaths"
-import { acceptanceMark, ACCEPTED_MARK, parseResult } from "./document/roles"
+import { acceptanceMark, ACCEPTED_MARK, CLARIFIED_MARK, parseResult } from "./document/roles"
 import {
   nextReady,
   parseIndex,
@@ -325,8 +325,11 @@ const SURVEY_NAME = "survey.md"
 export const phaseSurveyDoc = (unit: PhaseUnit): string => join(unit.dir, SURVEY_NAME)
 
 // The person's release line in a survey (D14.3): its presence simultaneously
-// releases the phase and approves the proposed project brief (D15.2).
-export const CLARIFIED_MARK = "Clarified: yes"
+// releases the phase and approves the proposed project brief (D15.2). The
+// literal lives in document/roles (its grammar's module, since plans/0133 D8
+// — the proposal extractors strip it as document punctuation) and is
+// re-exported here, the gates' reader.
+export { CLARIFIED_MARK } from "./document/roles"
 
 // The `Fork:` lines a survey records (D14.2), in document order: each a scope
 // fork stated with its options, project-level consequences and one

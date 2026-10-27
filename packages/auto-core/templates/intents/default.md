@@ -140,8 +140,8 @@ Write it when this task's description asks you to check, test, validate or accep
 ### round-brief
 
 Treat the round brief's goal and acceptance criteria as the measure of this phase's plan: every task should move the
-round toward its goal, and work the brief puts out of scope stays out. Where the brief and the project intent disagree,
-the brief is the newer word for this round. The brief belongs to the human — never edit round.md.
+round toward its goal, and work the brief puts out of scope stays out. Where the round brief and the project brief
+disagree, the round brief is the newer word for this round. The round brief belongs to the human — never edit round.md.
 
 ### phase-acceptance-draft
 

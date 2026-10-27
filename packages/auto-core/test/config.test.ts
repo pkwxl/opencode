@@ -293,7 +293,7 @@ describe("loadOverwriteBaseline (plans/0052 D4: the full-overwrite init baseline
         ["source", { dir: "legacy", path: "pkg" }],
         ["destDir", "app"],
       ])
-      expect(retired.find((item) => item.key === "source")!.why).toContain("state them in the project brief (init/amend --brief)")
+      expect(retired.find((item) => item.key === "source")!.why).toContain("state them in the project analysis's `## Project brief` proposal")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -150,9 +150,10 @@ const VALUE_FLAGS = new Set([
   // --stop-after (auto-core plans/0128): the task id whose completion ends
   // this run — the retry's guardrail beside fork; run's alone.
   "stop-after",
-  // --brief/--brief-file (plans/0081 D11): the project brief's seed (init) or
-  // revision (amend) — the text verbatim, or the file holding it; init/amend's
-  // alone (refused elsewhere like the config flags).
+  // --brief/--brief-file (plans/0081 D11; init's seed half retired by
+  // auto-core plans/0133 D9 — the analysis flow owns the start): the project
+  // brief's revision channel, amend's alone — the text verbatim, or the file
+  // holding it (refused elsewhere like the config flags).
   "brief",
   "brief-file",
   // --boundary (auto-core plans/0101 D1): run's phase-boundary shape — stop
@@ -299,8 +300,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "init",
     "init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. " +
-      "It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore, plus the optional project-brief seed of --brief/--brief-file; never the rounds — transfer establishes them (plan does in m mode)), " +
-      "so its -p (the brief seed is --brief; the planning input is plan's) and --amend (change individual keys with the amend command) are retired. " +
+      "It writes the config layer only (config.json, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — transfer establishes them (plan does in m mode), and never the project brief — the analysis flow owns the start: its `## Project brief` proposal installs the brief on release), " +
+      "so its -p (init takes no prompt and no brief; the planning input is plan's), --brief/--brief-file (the brief's channels are the approved proposals and amend's manual revision) and --amend (change individual keys with the amend command) are retired. " +
       "In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. " +
       "It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); " +
       "else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree",
@@ -314,7 +315,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "fix",
     "fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, " +
-      "and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — seed it with init/amend --brief); " +
+      "and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json only when missing; the brief is never written — its channels are the approved proposals and amend --brief); " +
       "anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. " +
       "fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)",
   ],
@@ -430,14 +431,14 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "prompt",
     "-p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. " +
-      "The project brief .opencode/auto/brief.md is seeded with init --brief <text> | --brief-file <path> (written verbatim; omitted writes no file) and revised with amend's --brief/--brief-file or installed from the survey phase's approved proposal — " +
+      "The project brief .opencode/auto/brief.md is installed from approved proposals (the project analysis's release first, then every survey release — the latest approval is the entire file) and revised only by amend's --brief/--brief-file, the person's manual override — " +
       "never hand-edited mid-run; every planning session reads it. State the migration source and target there — --source-dir/--source-path/--dest-dir are retired",
   ],
   [
     "reset",
     "reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, " +
       "the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); the project brief .opencode/auto/brief.md is kept " +
-      "(a seed or the analysis phase's generated brief — delete it by hand if you mean to); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)",
+      "(an installed approved proposal or a person's amend --brief write — delete it by hand if you mean to); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)",
   ],
   [
     "phases",
@@ -574,9 +575,9 @@ const EXIT_CODES =
 const COMMANDS: readonly CommandHelp[] = [
   {
     name: "init",
-    summary: "write a project's config layer as a stateless full overwrite (config.json, opencode.json, the agent contract, the AGENTS.md block, .gitignore, the optional brief seed)",
+    summary: "write a project's config layer as a stateless full overwrite (config.json, opencode.json, the agent contract, the AGENTS.md block, .gitignore)",
     synopsis:
-      "opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [--brief <text> | --brief-file <path>] [-f|--force]",
+      "opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [-f|--force]",
     options: ["frozen", "init", "mode", "prompt", "phases", "test-by-driver", "handover-test", "auto-number", "wrapup", "agent", "parallel", "tree-lanes", "scan-exempt", "isolate", "force", "run-lock"],
   },
   {
@@ -864,10 +865,12 @@ const COMPLETION_RETIRED =
   "is retired: the driver no longer runs task-level acceptance, quality review or a final review. " +
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
-  "is retired: the migration source and target are intent, not configuration — state them in the project brief (opencode-auto init <dir> --brief <text> | --brief-file <path>, likewise amend) or in the planning input, which planning sessions read"
+  "is retired: the migration source and target are intent, not configuration — state them in the project analysis's `## Project brief` proposal (or opencode-auto amend <dir> --brief <text> | --brief-file <path>) or in the planning input, which planning sessions read"
 const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)"
 const INIT_PROMPT_RETIRED =
-  "is retired: init takes no prompt — the optional brief seed is --brief <text> | --brief-file <path> (written verbatim to .opencode/auto/brief.md), and the planning input is plan -p"
+  "is retired: init takes no prompt and writes no brief — the project analysis (opened by the first plan/transfer) proposes and installs the brief, and the planning input is plan -p"
+const INIT_BRIEF_RETIRED =
+  "is retired on init: init writes no brief — the project analysis comes first. The first plan/transfer opens docs/analysis.md; its approved `## Project brief` proposal installs the brief on release. A later manual override: opencode-auto amend <dir> --brief <text> | --brief-file <path>"
 const AMEND_FLAG_RETIRED =
   "is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"
 const COMMIT_FLAG_RETIRED =
@@ -887,6 +890,8 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
   "implement-file": IMPLEMENT_RETIRED,
   "implement-prompt": IMPLEMENT_RETIRED,
   prompt: { command: "init", notice: INIT_PROMPT_RETIRED },
+  brief: { command: "init", notice: INIT_BRIEF_RETIRED },
+  "brief-file": { command: "init", notice: INIT_BRIEF_RETIRED },
   amend: AMEND_FLAG_RETIRED,
 }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
@@ -1823,13 +1828,14 @@ function refuseFrozenFlags(command: "run" | "plan" | "transfer") {
   }
   // --amend is retired everywhere (RETIRED_FLAGS above: once init stopped
   // taking the flag, no command accepts it).
-  // --brief/--brief-file are init/amend's alone (plans/0081 D11): the project
-  // brief's seed/revision channel; run and plan never write it, so they
-  // refuse the pair rather than silently ignoring it.
+  // --brief/--brief-file are amend's alone (plans/0081 D11; init's seed half
+  // retired by auto-core plans/0133 D9): the project brief's revision
+  // channel; run and plan never write it, so they refuse the pair rather
+  // than silently ignoring it.
   for (const key of ["brief", "brief-file"]) {
     if (flags.has(key)) {
       console.error(
-        `--${key} is an init/amend option (the project brief: opencode-auto init <dir> --${key} <text or path>, likewise amend); ${command} does not accept it`,
+        `--${key} is an amend option (the project brief's manual revision: opencode-auto amend <dir> --${key} <text or path>); ${command} does not accept it`,
       )
       process.exit(1)
     }
@@ -2803,18 +2809,18 @@ if (command === "init" || command === "amend") {
       console.log("⚠ opencode.json cannot hold the root-symlink external_directory allows (malformed or a flat action); fix reports the detail")
     }
   }
-  // The project brief seed (plans/0081 D11, superseding 0052 D9's stub):
-  // written verbatim only when --brief/--brief-file is given — omitted writes
-  // no file, and a bare re-init never touches an existing brief (a generated,
-  // approved brief survives re-init, §7 A5). init seeds; amend revises (the
-  // person's rare manual override and the default path's install channel).
+  // The project brief write (plans/0081 D11; init's seed half retired by
+  // auto-core plans/0133 D9 — the analysis flow owns the start, its approved
+  // `## Project brief` proposal the first brief a project gets): amend's
+  // revision channel alone — the text verbatim; a bare re-init never touches
+  // an existing brief (a generated, approved brief survives re-init, §7 A5).
   if (briefSeed !== undefined) {
     const existed = await Bun.file(join(directory, BRIEF_FILE)).exists()
     await Bun.write(join(directory, BRIEF_FILE), `${briefSeed.trimEnd()}\n`)
     console.log(
       existed
         ? `replaced: ${BRIEF_FILE} (the brief, verbatim)`
-        : `created: ${BRIEF_FILE} (the brief seed, verbatim — the survey/analysis phase proposes the full brief later; every planning session reads it)`,
+        : `created: ${BRIEF_FILE} (the person's manual word, verbatim — the next approved proposal replaces the whole file; every planning session reads it)`,
     )
   }
   // Idempotently sync the opencode-auto block of AGENTS.md: render it from the

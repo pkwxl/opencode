@@ -21,7 +21,7 @@ exist):
 The existing lines are fixed: the new tasks are appended after them, never before or between them.
 
 {{#if brief}}
-## Input: project intent (.opencode/auto/brief.md)
+## Input: project brief (.opencode/auto/brief.md)
 
 {{brief}}
 

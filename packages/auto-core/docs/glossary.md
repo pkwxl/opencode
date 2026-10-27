@@ -192,8 +192,9 @@ Lanes (parallel execution, `plans/0068`):
 | 结论 | verdict | |
 | 自报 | self-report | Never a completion criterion |
 | 轮简报 | round brief | `docs/R-NN/round.md` |
-| 简报、项目简报 | project brief | `.opencode/auto/brief.md` (`src/brief.ts`); "the brief" when the round brief is not in play |
-| 项目简报桩 | project brief stub | What `init` writes when `brief.md` is missing: section headings with comment hints only, so it injects nothing into planning; `reset` removes the brief only while it equals the stub (`renderProjectBrief`, `plans/0052` D9) |
+| 简报、项目简报 | project brief | `.opencode/auto/brief.md` (`src/brief.ts`); "the brief" when the round brief is not in play; the person's latest approved project constants — each approved `## Project brief` proposal (the analysis release, then every survey release) replaces the whole file, newest approval wins; no brief word before the analysis release (`init --brief` retired with plans/0133 D9; `amend --brief` the person's post-release manual override) |
+| 项目分析 | project analysis | The pre-round `docs/analysis.md` (`src/analysis.ts`): the engagement contract — analysis, goals, brief proposal, roadmap — released once by `Clarified: yes`; the `## Roadmap` lines and `## Round briefs` proposals stay living law, the narrative sections the standing background the surveys read. Not the `a` analysis phase (a round's phase, its own documents) |
+| 项目简报桩 | project brief stub | Retired with `plans/0081` D11 (the stub-and-hand-edit model): `init` writes no brief stub, a bare re-init writes no brief file, and a missing or comment-only brief injects nothing into planning; `reset` always keeps the brief |
 
 ## Git, completion and gates
 

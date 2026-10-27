@@ -125,6 +125,13 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines).toContain(`⏸ the project analysis awaits you: review docs/analysis.md, then release it — opencode-auto clarify ${dir} writes the \`Clarified: yes\` line and commits it (or add the line and commit yourself)`)
     expect(lines).toContain(`then re-run: opencode-auto transfer ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`)
+    expect(lines.some((line) => line.startsWith("ℹ a project brief is already on disk"))).toBe(false)
+    // The order notice (plans/0133 D7): a brief on disk while the analysis is
+    // unreleased — the aster-mig features shape — reads here the same way,
+    // naming the replace-on-release rescue.
+    write(dir, ".opencode/auto/brief.md", "Hand-authored constants.\n")
+    const noticed = await renderHelperBrief(dir, { phases: "mt" })
+    expect(noticed.some((line) => line.startsWith("ℹ a project brief is already on disk (.opencode/auto/brief.md); the analysis still comes first") && line.includes("replaces the whole brief on release"))).toBe(true)
     expect(lines.some((line) => line.startsWith("- docs/analysis.md — its sections"))).toBe(true)
     expect(lines).toContain(`- opencode-auto transfer ${dir}`)
     // The held variant: grammar problems hold the release, the held lines verbatim.

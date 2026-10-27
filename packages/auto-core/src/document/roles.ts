@@ -410,6 +410,14 @@ export function parseResult(text: string): ReportResult | undefined {
 // never write this line.
 export const ACCEPTED_MARK = "Accepted: yes"
 
+// The person's release line in a survey or the project analysis (0081 D14.3,
+// 0084): a whole document-level protocol line — its presence releases the
+// document's gate and approves the `## Project brief` proposal it carries.
+// The gates read it through phases.ts (clarifiedMark), which re-exports the
+// literal; the home is here so the document domain's extractors (brief.ts's
+// proposal strip, plans/0133 D8) reach it without crossing a domain edge.
+export const CLARIFIED_MARK = "Clarified: yes"
+
 // Whether an acceptance record carries an `Accepted:` line at all (a draft
 // holding one is a forged sign-off) and whether the last such line is exactly
 // the sign-off. Whole-line, case-sensitive, like the other protocol lines.

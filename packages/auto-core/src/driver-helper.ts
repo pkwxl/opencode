@@ -109,6 +109,7 @@ import { liveRunLock, lockStatusLine } from "./lock"
 import {
   analysisAwaitingLines,
   analysisHeldLines,
+  analysisOrderLines,
   emptyIndexNotice,
   executeNotice,
   gateStopLines,
@@ -296,6 +297,9 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
       if (raw === undefined) {
         // The stop before the stub: the first advance opens the flow.
         facts.push(`no ${ANALYSIS_DOC} yet — the first ${advance} opens the assisted project analysis`)
+        // The order notice (plans/0133 D7): a brief on disk with no analysis
+        // at all — the aster-mig features shape — reads here the same way.
+        facts.push(...(await analysisOrderLines(dir)))
       } else {
         let problems: string[]
         try {
@@ -304,8 +308,8 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           facts.push(`⚠ ${error instanceof Error ? error.message : String(error)}`)
           problems = []
         }
-        if (problems.length) stopLines.push(...analysisHeldLines(dir, advance, problems))
-        else if (!clarifiedMark(raw)) stopLines.push(...analysisAwaitingLines(dir, advance, surveyForks(raw)))
+        if (problems.length) stopLines.push(...analysisHeldLines(dir, advance, problems), ...(await analysisOrderLines(dir)))
+        else if (!clarifiedMark(raw)) stopLines.push(...analysisAwaitingLines(dir, advance, surveyForks(raw)), ...(await analysisOrderLines(dir)))
         else {
           // Released, not yet established: the next advance installs the
           // approved brief and opens R-01 under the roadmap's line.

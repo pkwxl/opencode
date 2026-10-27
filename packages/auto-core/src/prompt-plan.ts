@@ -224,15 +224,15 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   )
   if (synth === undefined) {
     if (briefText !== undefined) {
-      parts.push(["## Input: project intent (.opencode/auto/brief.md)", "", briefText, ""].join("\n"))
+      parts.push(["## Input: project brief (.opencode/auto/brief.md)", "", briefText, ""].join("\n"))
     } else if (!manual) {
       parts.push(
         [
-          "## Input: project intent",
+          "## Input: project brief",
           "",
-          "Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The survey phase of a re-work",
-          "round will propose one — seed it optionally with `init --brief <one line>` (what the project is, where the",
-          "reference lives, where the deliverable goes), or name the reference in this round's planning input.",
+          "Not provided (no project brief yet; .opencode/auto/brief.md is missing or empty). The project analysis's",
+          "approved `## Project brief` proposal installs it (the survey phase of a re-work round proposes the revision)",
+          "— or name the reference in this round's planning input.",
           "",
         ].join("\n"),
       )

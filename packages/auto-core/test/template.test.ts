@@ -185,7 +185,7 @@ describe("built-in template registry", () => {
       file: "docs/R-01/P04-knowledge/kb.md",
       phase: "a",
       phaseName: "analysis",
-      brief: "project intent",
+      brief: "project brief",
       handovers: "### P01-analysis Analysis(docs/R-01/P01-analysis/handover.md)",
       prevRound: "### Previous round (round 1) phase directory index",
       archive: "docs/R-01/P01-analysis",
