@@ -38,6 +38,35 @@ describe("exit (the one-shot per-run /exit flag)", () => {
     expect(next.exitRequested()).toBe(false)
     expect(() => next.maybeExit("phase", "phase m implementation handover")).not.toThrow()
   })
+
+  test("the session handover is a boundary kind of its own (plans/0143): maybeExit throws carrying it", () => {
+    services().control.requestExit()
+    let caught: unknown
+    try {
+      services().control.maybeExit("handover", "T-001 session handover")
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(ExitRequested)
+    const error = caught as ExitRequested
+    expect(error.boundary).toBe("handover")
+    expect(error.label).toBe("T-001 session handover")
+    expect(error.message).toBe("/exit took effect at the T-001 session handover boundary")
+  })
+
+  test("the wrap-up entry is a boundary kind of its own (plans/0143 D5): maybeExit throws carrying it", () => {
+    services().control.requestExit()
+    let caught: unknown
+    try {
+      services().control.maybeExit("wrapup", "T-001 wrap-up entry")
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(ExitRequested)
+    const error = caught as ExitRequested
+    expect(error.boundary).toBe("wrapup")
+    expect(error.message).toBe("/exit took effect at the T-001 wrap-up entry boundary")
+  })
 })
 
 // The recovery wait's sleep as a pause boundary (plans/0057 §6, §11 item 9).

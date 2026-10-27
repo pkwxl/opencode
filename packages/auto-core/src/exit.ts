@@ -12,6 +12,18 @@
 // operator most wants to stop cleanly. requestExit wakes it at once
 // (sleepUnlessExit); the loop records the session its recovery would have
 // continued before it throws.
+// The session handover is a fifth boundary (plans/0143): the three scopes'
+// continuation loops (executeWhole, runSubtask's streams, the fix rounds)
+// probe at the handover verdict's "continue" — by then the ended session has
+// reached exactly the state an interruption at that spot leaves (executeWhole
+// committed before the verdict; a stream's or a fix round's open work is the
+// interruption seeding their resume paths already own), and a re-run seeds
+// the continuation session from the handoff document. The wrap-up entry is a
+// sixth (plans/0143 D5): runWrapup probes after its stage persist (what a
+// re-run re-enters by) and before its first verification act of the round.
+// An /exit request cannot cross a worker process boundary, so both probes are
+// inert inside a lane worker and the parent's drain rule keeps its order (a
+// mid-drain throw would abandon in-flight lanes).
 // This module is also the control service's home: the request and its
 // sleepers are one run-wide service instance on the services holder —
 // createControl() below builds it, services.ts carries it as RunServices.control
@@ -21,11 +33,13 @@
 import { emitStatus } from "./run-status"
 import type { Boundary } from "./control-types"
 
-// The boundary an /exit took effect at: a step-mode boundary, or the
-// wait-and-probe loop's sleep ("wait").
+// The boundary an /exit took effect at: a step-mode boundary, the
+// wait-and-probe loop's sleep ("wait"), a session handover ("handover"), or
+// a wrap-up entry ("wrapup", plans/0143). The vocabulary mirrors the
+// journal's EXIT_BOUNDARIES (run-status-schema.ts) in lockstep.
 export class ExitRequested extends Error {
   constructor(
-    readonly boundary: Boundary | "wait",
+    readonly boundary: Boundary | "wait" | "handover" | "wrapup",
     readonly label: string,
   ) {
     super(`/exit took effect at the ${label} boundary`)
@@ -39,7 +53,7 @@ export type Control = {
   requestExit(): void
   exitRequested(): boolean
   sleepUnlessExit(ms: number, sleep?: (ms: number) => Promise<void>): Promise<boolean>
-  maybeExit(boundary: Boundary, label: string): void
+  maybeExit(boundary: Boundary | "handover" | "wrapup", label: string): void
 }
 
 // One instance per run (the holder built at the run start): the request flag
@@ -91,11 +105,14 @@ export function createControl(): Control {
         sleepers.delete(wake)
       }
     },
-    // The checkpoint shared by the three step-mode safe boundaries, triggered
-    // right after the stepPause call: a hit throws, and runAll at the top of
-    // loop.ts catches it uniformly and converts it to exit code 3 (not
-    // occupying Outcome's blocked/incomplete channels — those two channels
-    // mean human attention is needed, which /exit does not).
+    // The checkpoint shared by the step-mode safe boundaries, the session
+    // handover and the wrap-up entry (plans/0143), triggered right after the
+    // stepPause call at the step sites, at the handover verdict's "continue"
+    // at the handover sites, and after the stage persist at the wrap-up
+    // entries: a hit throws, and runAll at the top of loop.ts catches it
+    // uniformly and converts it to exit code 3 (not occupying Outcome's
+    // blocked/incomplete channels — those two channels mean human attention
+    // is needed, which /exit does not).
     maybeExit(boundary, label) {
       if (pending) throw new ExitRequested(boundary, label)
     },

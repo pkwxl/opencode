@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
 import { executeWhole, runSubtask } from "../src/execute"
+import { createControl, ExitRequested } from "../src/exit"
 import { noCommitGit } from "../src/git-ops"
 import { clampSwitches } from "../src/switches"
 import { ev, fakeAgent, MODEL, type TurnScript } from "./fixtures/agent"
@@ -135,6 +136,36 @@ Body.
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // plans/0143: the handover point is an /exit boundary — the session's work
+  // is committed before the verdict and the handoff document rides the
+  // commit, so the pause leaves the scene a kill at that spot would and the
+  // continuation session is never dispatched.
+  test("an /exit pending when the session hands itself over: the exit takes effect at the handover, no continuation dispatched (plans/0143)", async () => {
+    const { dir, plan, task, agent, chain, writeHandoff } = await setup((ctx) => {
+      if (ctx.n === 1) writeHandoff("# Handover\n\nHalf done; next: the rest.\n\nStatus: continue\n")
+      return undefined
+    })
+    const control = createControl()
+    control.requestExit()
+    try {
+      let caught: unknown
+      try {
+        await executeWhole(agent.client, plan, task, { dir, git: noCommitGit(), control }, chain)
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(ExitRequested)
+      const error = caught as ExitRequested
+      expect(error.boundary).toBe("handover")
+      expect(error.label).toBe("T-001 session handover")
+      // Exactly one session ran — the continuation the verdict opened never
+      // launched; a re-run seeds it from the handoff document.
+      expect(agent.prompts).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // The same engine's other retry policy (D4): a stream of auto's taken split
@@ -194,6 +225,41 @@ describe("runSubtask stream handover (the fork retry policy)", () => {
       expect(agent.prompts[0]!.text).not.toContain("Context-budget protocol")
       expect(agent.argsOf("fork")).toHaveLength(0)
       expect(agent.steers).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // plans/0143: a stream's handover is the same /exit boundary as the whole
+  // task's — the verdict consumed the document, the continuation fork never
+  // launches.
+  test("an /exit pending when a stream hands itself over: the exit takes effect at the stream's handover (plans/0143)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      const agent = fakeAgent({
+        turn: (ctx) => {
+          if (ctx.n === 1) {
+            mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+            writeFileSync(join(dir, "docs", "T-001", "handoff.md"), "# Handover\n\nStream half done; next: the rest.\n\nStatus: continue\n")
+          }
+          return undefined
+        },
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const control = createControl()
+      control.requestExit()
+      let caught: unknown
+      try {
+        await runSubtask(agent.client, plan, plan.tasks[0]!, "runs stream T-001.S01", 1, { dir, git: noCommitGit(), control }, chain, undefined, false, [])
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(ExitRequested)
+      const error = caught as ExitRequested
+      expect(error.boundary).toBe("handover")
+      expect(error.label).toBe("T-001 subtask 1 session handover")
+      expect(agent.prompts).toHaveLength(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

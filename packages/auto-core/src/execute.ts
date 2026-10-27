@@ -642,6 +642,11 @@ export async function executeWhole(
     const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fresh", subject, rollbackRedo }, readHandoff, result.lastText)
     if (decision.type === "natural") return undefined
     if (decision.type === "continue") {
+      // The handover point is an /exit boundary (plans/0143): the session's
+      // work is committed above and the handoff document rides that commit,
+      // so pausing here leaves exactly the scene a kill at this spot would —
+      // the re-run seeds the continuation session from the document.
+      opts.control?.maybeExit("handover", `${task.id} session handover`)
       continuation = true
       feedback = ""
       continue
@@ -1082,6 +1087,11 @@ export async function runSubtask(
       // and end naturally here.
       const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fork", subtask: index, subject, rollbackRedo }, readHandoff, result.lastText)
       if (decision.type === "continue") {
+        // The same /exit boundary as executeWhole's (plans/0143): the
+        // stream's open work is the interruption seeding the resume path
+        // already owns. Inert inside a lane worker (an /exit request cannot
+        // cross the worker process boundary).
+        opts.control?.maybeExit("handover", `${task.id} subtask ${index} session handover`)
         continuation = true
         forked = false
         feedback = ""

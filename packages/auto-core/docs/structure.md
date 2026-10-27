@@ -93,7 +93,7 @@ Grouped by sub-domain (R10) — the sub-domain column the direction test holds i
 | Module | Responsibility | Key files |
 |---|---|---|
 | Session chain and routing | `SessionChain` (with its `agent` and model entry), phase → role → model routing, error classification, the retry policy in force and `agentGaveUp`, resets stated in a known provider wording (`statedInWording`) (0017, 0055, 0057) | `src/chain.ts` (0017, 0055 §8.2, 0057 §4, S4a) |
-| Control boundary types | The control modules' shared vocabulary: the pipeline `Boundary` kind (phase / task / subtask — the safe boundaries step mode, `/exit` and failback pause or reset at) and the `Interactive` sideband interface; types only, importing nothing (0061; P14) | `src/control-types.ts` (0061 §2.2 R8) |
+| Control boundary types | The control modules' shared vocabulary: the pipeline `Boundary` kind (phase / task / subtask — the boundaries step mode and failback pause or reset at; `/exit` lands at those three plus its own kinds, the recovery wait and the session handover, src/exit.ts, 0143) and the `Interactive` sideband interface; types only, importing nothing (0061; P14) | `src/control-types.ts` (0061 §2.2 R8) |
 | Turn contract | The engine's types: `TurnInput` (external and synthetic), the per-concern `TurnState` slices with the read-only view over them, the immutable `TurnContext`, the audited `TurnFx` surface, `Concern`/`Advice`/`Settle` and the arbitration types (0061; P13) | `src/engine/contract.ts` (0061 §4.3) |
 
 ### kernel — the task store, the git/commit boundary and the run's records
@@ -158,7 +158,7 @@ The session-driving chain's lower half and the turn engine's internals (0061): `
 | Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records; a fleet that cannot fork withholds auto's split clause (`leadSplit`) (0040, 0055; P12) | `src/capability.ts` (0040, 0055, 0059 D7; 0083 D9) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint (0016) | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries (0012; P2) | `src/step.ts` (0012) |
-| Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included; the request flag and its sleepers are the control service's (0014, 0057, 0061) | `src/exit.ts` (0014, 0057 §6, 0061 C5) |
+| Graceful exit | `/exit` at the next safe boundary — a phase/task/subtask boundary, a session handover (all three continuation scopes), a wrap-up entry (after the stage persist, every verify iteration), or the wait-and-probe loop's sleep (0143 for the handover and wrap-up kinds); the request flag and its sleepers are the control service's (0014, 0057, 0061, 0143) | `src/exit.ts` (0014, 0057 §6, 0061 C5, 0143) |
 | Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and jitter the registry window waits and the scheduled wait reuse (0027, 0055, 0057) | `src/hibernate.ts` (0027, 0055 §6.3, 0057 §6) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
 

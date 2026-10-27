@@ -1,8 +1,10 @@
 // The control modules' shared vocabulary: the pipeline boundary kind and the
-// --interactive sideband's interface. Step mode, the graceful /exit and model
-// failback all pause or reset at the same three safe boundaries, and step's
-// pause takes the sideband instead of opening a second readline over stdin —
-// so their types are shared across src/step.ts, src/interactive.ts,
+// --interactive sideband's interface. Step mode and model failback pause or
+// reset at the same three pipeline boundaries; the graceful /exit lands at
+// those three plus three kinds of its own (the recovery wait, the session
+// handover and the wrap-up entry, src/exit.ts, plans/0057 and plans/0143).
+// Step's pause takes the sideband instead of opening a second readline over
+// stdin — so their types are shared across src/step.ts, src/interactive.ts,
 // src/exit.ts and src/failback.ts.
 //
 // Types only, importing nothing: a leaf every control module can depend on.

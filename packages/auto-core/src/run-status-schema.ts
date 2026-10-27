@@ -149,9 +149,11 @@ const QUESTION_SETTLEMENTS = ["human", "driver", "timeout"] as const
 export type QuestionSettlement = (typeof QUESTION_SETTLEMENTS)[number]
 
 // The safe boundaries a graceful exit can take effect at (ExitRequested's
-// boundary — Boundary | "wait", src/exit.ts and src/control-types.ts: the
-// three step-mode boundaries plus the wait-and-probe loop's sleep).
-const EXIT_BOUNDARIES = ["phase", "task", "subtask", "wait"] as const
+// boundary — Boundary | "wait" | "handover" | "wrapup", src/exit.ts and
+// src/control-types.ts: the three step-mode boundaries, the wait-and-probe
+// loop's sleep, and the session handover and wrap-up entry plans/0143
+// added).
+const EXIT_BOUNDARIES = ["phase", "task", "subtask", "wait", "handover", "wrapup"] as const
 
 export type ExitBoundary = (typeof EXIT_BOUNDARIES)[number]
 

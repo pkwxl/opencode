@@ -347,12 +347,15 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe
     // boundaries (phase/task/subtask, the latter thrown up from runner.ts via
-    // runTask) and the recovery wait (plans/0057 §6, thrown up from
-    // runSession) land here uniformly — the run has stopped at that boundary's
-    // normal wrap-up point (unit state files and .auto/progress.json all
-    // written, isomorphic to a real crash/kill interruption at the same spot);
-    // exit code 3 differs from 2 (blocked/pending, needs manual action):
-    // re-running resumes precisely with no manual operation.
+    // runTask), the recovery wait (plans/0057 §6, thrown up from
+    // runSession), the session handover (thrown up from the continuation
+    // loops in execute.ts and wrapup.ts) and the wrap-up entry (wrapup.ts,
+    // after its stage persist — plans/0143 for both) land here uniformly —
+    // the run has stopped at that boundary's normal wrap-up point (unit state
+    // files and .auto/progress.json all written, isomorphic to a real
+    // crash/kill interruption at the same spot); exit code 3 differs from 2
+    // (blocked/pending, needs manual action): re-running resumes precisely
+    // with no manual operation.
     if (error instanceof ExitRequested) {
       log(`⏸ ${error.message}, progress saved, re-run to resume fully`)
       return 3

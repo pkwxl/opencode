@@ -18,6 +18,7 @@ import { saveProgress, recallProgress } from "../src/resume"
 import { runTask } from "../src/runner"
 import { renderTaskTodo, setSplit } from "../src/tasks"
 import { runWrapup } from "../src/wrapup"
+import { createControl, ExitRequested } from "../src/exit"
 import { renderWrapup } from "../src/prompt"
 import { promptFacts } from "../src/prompt-facts"
 import { promptViews } from "../src/tasks"
@@ -262,6 +263,99 @@ describe("the verification loop (0083 D1–D7)", () => {
       expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1 sample task"])
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toContain("Result: PASS")
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // plans/0143: a fix round's handover is an /exit boundary — the round is
+  // neither booked nor committed past the verdict, so the pause leaves the
+  // scene a kill between the round's sessions would (the uncommitted handoff
+  // document is the re-run's round-entry seeding).
+  test("an /exit pending when a fix session hands itself over: the exit takes effect at the round's handover, the continuation never dispatched (plans/0143)", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The verify session FAILs with a gap list; the fix session hands
+      // itself over (a fresh Status: continue document) with the person's
+      // /exit arriving mid-session; the exit takes effect at that handover.
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          control.requestExit()
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# Handover\n\nHalf the gaps closed; the rest stand.\n\nStatus: continue\n")
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const control = createControl()
+      let caught: unknown
+      try {
+        await runWrapup(client, plan, plan.tasks[0]!, { dir, control } as Opts, chain, { solo: false, label: "wrap-up session" })
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(ExitRequested)
+      const error = caught as ExitRequested
+      expect(error.boundary).toBe("handover")
+      expect(error.label).toBe("T-001 fix 1 session handover")
+      // verify, fix 1 — the continuation fix session never launched, and the
+      // round never committed (the kill scene between the round's sessions).
+      expect(calls.prompts).toHaveLength(2)
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual([])
+      expect(await Bun.file(join(dir, "docs/T-001/handoff.md")).text()).toContain("Status: continue")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // plans/0143 D5: the wrap-up entry is an /exit boundary — the execution
+  // session's work is committed and the wrap-up loop's stage persist has
+  // written the record a re-run re-enters by, so the pause lands between the
+  // execution and the verify session, never mid-verification.
+  test("an /exit pending at the wrap-up entry: the exit takes effect after the stage persist, before the verify session (plans/0143 D5)", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The execution session runs (its work commits); the wrap-up entry
+      // then takes the pending /exit before the verify session dispatches.
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "WORK.md"), "the execution session's work\n")
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const control = createControl()
+      control.requestExit()
+      let caught: unknown
+      try {
+        await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off", control })
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(ExitRequested)
+      const error = caught as ExitRequested
+      expect(error.boundary).toBe("wrapup")
+      expect(error.label).toBe("T-001 wrap-up entry")
+      // Exactly one session ran — the whole-task execution; the verify
+      // session never dispatched.
+      expect(calls.prompts).toHaveLength(1)
+      // The execution's unified commit landed, and the progress record says
+      // the wrapup stage — the persist the probe follows, and what a re-run
+      // re-enters by.
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.some((line) => line.startsWith("T-001 exec "))).toBe(true)
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup" })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

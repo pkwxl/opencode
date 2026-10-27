@@ -123,19 +123,22 @@ export function startInteractive(
     }
     // /exit (design document plans/0014-exit-resume-design.md): not sent to
     // the session, only sets the flag — the actual pause is deferred to the
-    // next phase/task/subtask safe boundary, by which point progress has been
-    // written through the regular wrap-up and the next run resumes exactly.
-    // It does not check whether a session is currently active (unlike the
-    // discard semantics of message forwarding, /exit's intent is independent
-    // of whether a session is attached). A wait-and-probe loop sleeping at
-    // the time wakes and pauses at once (plans/0057 §6).
+    // next phase/task/subtask safe boundary, a session handover or a wrap-up
+    // entry (plans/0143: the continuation loops probe at the handover
+    // verdict's "continue", the wrap-up loop after its stage persist), or a
+    // recovery wait, by which point progress has been written through the
+    // regular wrap-up and the next run resumes exactly. It does not check
+    // whether a session is currently active (unlike the discard semantics of
+    // message forwarding, /exit's intent is independent of whether a session
+    // is attached). A wait-and-probe loop sleeping at the time wakes and
+    // pauses at once (plans/0057 §6).
     if (text === "/exit") {
       // The request routes through the run's control service (the installed
       // services' control): the sideband is one of the entries the services
       // allowlist names, and the request is run-wide state — the safe
       // boundaries and the recovery wait consume it wherever the loop stands.
       services().control.requestExit()
-      log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point, or a recovery wait); progress is persisted, re-run to resume exactly")
+      log("🚪 /exit received: will pause and exit at the next safe boundary (a phase, task or subtask boundary, a session handover, a wrap-up entry, or a recovery wait); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return
     }

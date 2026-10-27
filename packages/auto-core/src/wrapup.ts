@@ -291,6 +291,11 @@ async function runFixRound(
     const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fresh", fix: true, subject, rollbackRedo: async () => undefined }, readHandoff, result.lastText)
     if (decision.type === "natural") break
     if (decision.type === "continue") {
+      // The fix round's handovers are /exit boundaries too (plans/0143): the
+      // round is neither booked nor committed past this point, and the
+      // re-run's round entry seeds from the handoff document — the same
+      // record a kill between the round's sessions leaves.
+      opts.control?.maybeExit("handover", `${task.id} fix ${round} session handover`)
       continuation = true
       continue
     }
@@ -518,6 +523,12 @@ export async function runWrapup(
     await consumeDeadTestMarker(dir, opts, task.id)
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
+    // The wrap-up entry is an /exit boundary (plans/0143 D5): the stage's
+    // persist above is what a re-run re-enters by, and nothing of this
+    // round's verification has started — the pause is the scene a kill at
+    // the same spot leaves. Fires at every iteration (the initial entry and
+    // each re-verification), always after the persist.
+    opts.control?.maybeExit("wrapup", `${task.id} wrap-up entry${round > 0 ? ` (after fix round ${round})` : ""}`)
     const gate = await laneGate(dir, task, opts, plan, input.drain)
     if (gate.kind === "stop") return gate.stop
     let reason: string
