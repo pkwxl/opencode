@@ -670,7 +670,10 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   subsection drafted into the released document later (between rounds, after the previous round's
   findings — no new release mark needed) installs at that round's open. A round without a proposal
   keeps the hand-written gate below. `OPENCODE_AUTO_ANALYSIS=off` skips the analysis and establishes
-  directly from config. Without an installed proposal either shape stops at the **round-start gate**
+  directly from config — the test/recovery floor, not a supported way of working: the project then
+  starts with no brief (the analysis release is the start's only approval channel; `amend --brief`
+  the manual word until then, and a leading survey phase's release still installs one on the re-work
+  bundles). Without an installed proposal either shape stops at the **round-start gate**
   (exit 0): review the setup, fill in `docs/R-NN/round.md` (`## Goal`, `## Acceptance criteria`,
   `## Release criteria`), and commit — the commit is your veto.
 - **Phase boundary (the current phase's tasks all done)**: the human gate first — a survey phase with

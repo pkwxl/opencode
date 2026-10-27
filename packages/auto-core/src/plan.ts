@@ -306,7 +306,7 @@ export async function planPrelude(dir: string, opts: {
       if (previous.type === "stop") return previous
       lines.push(...previous.lines)
     }
-    lines.push(...(await planningNotices(dir, undefined, opts.input)))
+    lines.push(...(await planningNotices(dir, undefined, opts.input, analysisOn)))
     return establish(dir, round, opts, lines)
   }
   const route = await routePhase(dir, { loadPlan, bin, phases: opts.phases ?? "m" })
@@ -401,7 +401,7 @@ export async function planPrelude(dir: string, opts: {
   // "plan" there too). Phased refuses the route below (plans/0101 D4), so the
   // notices are m mode's alone there — a refusal line needs no advisories
   // ahead of it.
-  if (manual && route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input)) log(line)
+  if (manual && route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input, analysisOn)) log(line)
   // Row 5: the interrupted step is finished first (plans/0018 precedence);
   // the loop decides whether the record still matches the route. A hand-add
   // must not run under an open step: its snapshot and resume machinery
@@ -632,16 +632,18 @@ export async function planPrelude(dir: string, opts: {
 const stop = (code: number, lines: string[]): PlanStop => ({ type: "stop", code, lines })
 
 // The person-facing advisory notices of a planning step (plans/0081 D11.3 /
-// D12.3): one line when no project brief exists (the survey phase will
-// propose one — the seed is optional), one when a planning step starts with no
+// D12.3): one line when no project brief exists (the off-switch variant names
+// why no approval will install one), one when a planning step starts with no
 // input (the scaffold is one command away). Neither blocks anything, and
 // neither is a question — planning proceeds by the duties and the
 // default-and-record rule (D16).
-async function planningNotices(dir: string, phase: PhaseUnit | undefined, input: PlanInput | undefined): Promise<string[]> {
+async function planningNotices(dir: string, phase: PhaseUnit | undefined, input: PlanInput | undefined, analysisOn: boolean): Promise<string[]> {
   const lines: string[] = []
   if ((await projectBriefText(dir)) === undefined) {
     lines.push(
-      "ℹ no project brief yet; the project analysis's `## Project brief` proposal installs it (amend --brief the manual override) — or name the reference in this round's planning input",
+      analysisOn
+        ? "ℹ no project brief yet; the project analysis's `## Project brief` proposal installs it (amend --brief the manual override) — or name the reference in this round's planning input"
+        : "ℹ no project brief yet — the analysis flow is off (OPENCODE_AUTO_ANALYSIS=off), so no approved proposal installs one: seed it with `amend --brief <text>`, or name the reference in this round's planning input",
     )
   }
   if (!input && phase !== undefined && !(await readPlanInput(dir, phase))?.trim()) {

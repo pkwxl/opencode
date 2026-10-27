@@ -134,7 +134,7 @@ describe("planPrelude: the phased state refusals (plans/0101 D4) and m mode's ro
         type: "stop",
         code: 0,
         lines: [
-          "ℹ no project brief yet; the project analysis's `## Project brief` proposal installs it (amend --brief the manual override) — or name the reference in this round's planning input",
+          "ℹ no project brief yet — the analysis flow is off (OPENCODE_AUTO_ANALYSIS=off), so no approved proposal installs one: seed it with `amend --brief <text>`, or name the reference in this round's planning input",
           "✓ round R-01 established: single phase P01-implement",
           "next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, " +
             `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
