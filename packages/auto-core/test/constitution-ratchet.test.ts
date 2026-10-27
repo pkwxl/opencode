@@ -48,6 +48,8 @@ const PROBES: Record<keyof typeof CONSTITUTION, RegExp[]> = {
   ],
   TEST_PRINCIPLE: [
     /Test principle:/i,
+    /in code-work phases/i,
+    /In any other phase no driver-run channel exists/i,
     /slow or produce large amounts of output/i,
     /are always run by (the )?DRIVER/i,
     /write the command as a script under/i,

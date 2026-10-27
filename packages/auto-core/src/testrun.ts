@@ -16,10 +16,11 @@ import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { peekHandover } from "./handover"
 import { formatTokens, log } from "./log"
 import type { Opts } from "./opts"
+import { codeWork } from "./phases/registry"
 import type { Task } from "./tasks"
 import { renderHandoffSteer, renderUsageNoteInfo, renderUsageNoteWinddown, type TestRunInfo } from "./prompt"
 import { promptFacts } from "./prompt-facts"
-import { runScript } from "./script"
+import { runScript, scriptTmpDir } from "./script"
 
 // Ondemand context management (OPENCODE_AUTO_STEER, plans/0056): the driver
 // watches a running session's context usage, steers milestone usage notices
@@ -306,6 +307,45 @@ export async function cleanTestHandoffs(dir: string, task: Task): Promise<void> 
 // src/git.ts (narrowed in F4 semantics; the stale cleanup of the steer
 // handover document handoff.md reuses the same one); tracked copies are left
 // to the recovery state machine — deleting one equals creating a dirty area.
+
+// —— The unservable request (plans/0142 D1) ——
+//
+// The channel's derived condition (0083 D9) leaves a session whose phase is
+// not code work with NO marker machinery at all — nothing watches tmp/test.sh,
+// nothing executes it, nothing says so. A session there may still write the
+// marker: the task's own document (formulated in the same phase) or a gap
+// list instructs the driver test protocol by name, and AGENTS.md's principle
+// plus the run banner teach the channel from the config flag alone. The T-058
+// incident measured what 0083 D9's "a stray marker is inert" ruling missed:
+// the marker is not stray — it is a deliberate request nobody will serve — and
+// left on disk it reads as wiring to every later session (the incident's
+// re-verification "verified" it as exactly right, twice). The drop is
+// therefore consumed and surfaced at every scope's close, never silent: this
+// amends D9's housekeeping ruling the way 0126 D3 amended the doc-lane case
+// (an unservable request is consumed and refused, never left for the next
+// session to misread).
+
+// Whether the driver test channel serves the session at all: the derived
+// condition negated, dryrun excluded (the floor — nothing runs, nothing
+// consumes). Covers both dead worlds: the config flag off outright, and the
+// flag on over a phase whose type is not code work.
+export function testChannelOffFor(opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">): boolean {
+  if (opts.dryrun) return false
+  return !(opts.testByDriver && codeWork(opts.phase?.entry))
+}
+
+// Consume a test-request marker no machinery will serve. Returns the reason
+// the channel is off (for the caller's own surfaces — the fix round blocks on
+// it, 0142 D2), undefined when there is nothing to drop.
+export async function consumeDeadTestMarker(dir: string, opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">, label: string): Promise<string | undefined> {
+  if (!testChannelOffFor(opts)) return undefined
+  const marker = join(scriptTmpDir(dir), "test.sh")
+  if (!(await Bun.file(marker).exists())) return undefined
+  await rm(marker, { force: true })
+  const why = opts.testByDriver ? `the phase (${opts.phase?.entry.type ?? "implement"}) is not a code-work phase` : "--test-by-driver is off"
+  log(`⚠ ${label} left tmp/test.sh — a driver-test request — but ${why}, so the channel will never serve it; the request was not executed and the marker was consumed (a leftover would read as wiring for later sessions)`)
+  return why
+}
 
 // --test-by-driver's single test execution = consume the request marker +
 // execute. Split into two steps because a test handover must consume the

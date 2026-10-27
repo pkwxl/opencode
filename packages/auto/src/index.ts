@@ -2075,7 +2075,7 @@ async function logRunBanner(directory: string, config: ProjectConfig) {
   if (await legacyModeFallback(directory)) log(`ℹ mode taken from the legacy persisted value in .auto/config.json; run opencode-auto fix ${directory} to write the full config`)
   if (config.testByDriver) {
     log(
-      `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session` +
+      `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session; the channel serves code-work phases (elsewhere a session runs such a check itself, never through tmp/test.sh)` +
         (config.handoverTest ? "; on test failure with context at its cap, a handover document switches to a fresh session" : ""),
     )
   }

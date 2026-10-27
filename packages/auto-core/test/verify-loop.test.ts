@@ -23,6 +23,7 @@ import { promptFacts } from "../src/prompt-facts"
 import { promptViews } from "../src/tasks"
 import { taskDocPaths } from "../src/docpaths"
 import { establishRound } from "../src/phases"
+import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
 import { loopFixture, artifactTurns, type LoopFixture } from "./fixtures/loop"
 import { reloadUnits, seedUnits } from "./fixtures/units"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
@@ -564,6 +565,127 @@ describe("the driver-run lane gate (0096 D5)", () => {
       expect(outcome).toEqual({ type: "completed" })
       expect(calls.prompts).toHaveLength(2)
       expect(existsSync(join(dir, "docs/T-001/testhands"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// The unservable test request (plans/0142): the channel's derived condition
+// (testByDriver && codeWork) leaves a design-phase session with no marker
+// machinery at all, while the task document / the gap list may still instruct
+// the protocol by name — the T-058 incident's fix round 2 ended waiting on a
+// request nobody served, the round was booked as spent, and the budget block
+// taught three remedies none of which named the dead channel. The drop is now
+// consumed and surfaced at every scope's close (D1); a fix round never books
+// a wait (D2 — the opening persist rewound, bookAttempt skipped).
+describe("the unservable test request (0142 D1/D2)", () => {
+  const designEntry = BUILTIN_PHASE_TYPES.find((entry) => entry.type === "design")!
+  const designOpts = (dir: string): Opts => ({ dir, testByDriver: true, phase: { id: "R-01.P01", entry: designEntry } }) as Opts
+  const seedRepo = async (attempts = 2): Promise<string> => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await seedUnits(dir, `## T-001: sample task [pending]\n${attempts ? `  - attempts: ${attempts}\n` : ""}\nBody.\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+  const failTurn = (dir: string) => async () => {
+    mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+  }
+  const waitingFixTurn = (dir: string) => async () => {
+    mkdirSync(join(dir, "tmp"), { recursive: true })
+    // The waiting session's whole act: the task document says "run it via the
+    // driver test protocol", the marker is the request, the turn ends.
+    await Bun.write(join(dir, "tmp/test.sh"), "bash test/spike.sh\n")
+  }
+  const persistTo = (dir: string) => async (phase: { kind: string; round?: number }) => {
+    await saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase: phase as Parameters<typeof saveProgress>[1]["phase"] })
+  }
+
+  test("a fix round that waits on the dead channel: blocked with the teaching, the round unbooked, the marker consumed", async () => {
+    const dir = await seedRepo()
+    try {
+      const { client, calls } = scriptedClient([failTurn(dir), waitingFixTurn(dir)])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, designOpts(dir), chain, { solo: false, label: "wrap-up session", persist: persistTo(dir) })
+      expect(result).toMatchObject({ type: "blocked" })
+      const question = (result as { question: string }).question
+      expect(question).toContain("ended with a driver-test request pending (tmp/test.sh)")
+      expect(question).toContain("the phase (design) is not a code-work phase")
+      expect(question).toContain("The round is not booked")
+      expect(question).toContain("runs such a check itself in-session")
+      // Unbooked: attempts untouched, the opening persist rewound to the
+      // roundless wrap-up stage (a re-run re-opens round 1, the budget whole).
+      expect(JSON.parse(await Bun.file(join(dir, ".auto/units.json")).text()).tasks["T-001"].attempts).toBe(2)
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup" })
+      // The request consumed — no wiring left for the next session.
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+      // The sessions ran in the incident's order: verify FAIL, then the wait.
+      expect(calls.prompts).toHaveLength(2)
+      expect(promptText(calls.prompts[1]!)).toContain("You are the fix session")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the config-off side of the same block: the message names the flag, not the phase", async () => {
+    const dir = await seedRepo()
+    try {
+      const { client } = scriptedClient([failTurn(dir), waitingFixTurn(dir)])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session" })
+      expect(result).toMatchObject({ type: "blocked" })
+      expect((result as { question: string }).question).toContain("--test-by-driver is off")
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an execution session's dead marker is consumed at its close (D1): the run proceeds, nothing reads it as wiring", async () => {
+    const dir = await seedRepo(0)
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "src.ts"), "// the work\nexport const x = 1\n")
+          mkdirSync(join(dir, "tmp"), { recursive: true })
+          await Bun.write(join(dir, "tmp/test.sh"), "bash test/spike.sh\n")
+        },
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { ...designOpts(dir), subtask: "off" })
+      expect(outcome).toEqual({ type: "completed" })
+      expect(calls.prompts).toHaveLength(2)
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the wrap-up entry consumes a stale marker (D1): a resume straight into wrap-up never verifies the wiring", async () => {
+    const dir = await seedRepo(0)
+    try {
+      mkdirSync(join(dir, "tmp"), { recursive: true })
+      await Bun.write(join(dir, "tmp/test.sh"), "bash test/spike.sh\n")
+      const { client } = scriptedClient([
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, designOpts(dir), chain, { solo: false, label: "wrap-up session" })
+      expect(result).toBeUndefined()
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -28,6 +28,7 @@ import { routingOf, runSession } from "./session"
 import { clientOf, forkSession, sessionAlive, sessionUsed } from "./session-api"
 import {
   archiveHandoff,
+  consumeDeadTestMarker,
   fillHandoffStatus,
   latestTestScript,
   latestTestSeq,
@@ -71,7 +72,17 @@ export async function runExecSession(
   // the phase type's codeWork — the protocol wraps only code-producing
   // execution sessions (a phase-less opts resolves onto implement, the
   // no-phase mode's definition, so the bare runs keep the raw-flag behavior).
-  if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
+  if (!(opts.testByDriver && codeWork(opts.phase?.entry)) || opts.dryrun) {
+    const result = await runSession(client, task, promptText, opts, chain, steer)
+    // The unservable request (plans/0142 D1): in this dead branch no marker
+    // machinery exists, yet a session may leave tmp/test.sh behind — the task
+    // document or a gap list instructs the protocol by name. Execution scopes
+    // consume the drop with its log line (the unit's wrap-up stays the
+    // judge); a fix round's own close decides in runFixRound (D2's block), so
+    // its marker is left for that check.
+    if (!unit.startsWith("fix")) await consumeDeadTestMarker(opts.dir ?? plan.dir, opts, subtask !== undefined ? `${task.id} S${subtask}` : task.id)
+    return result
+  }
   const dir = opts.dir ?? plan.dir
   // The run's git service (git-ops.ts gitOf, the seam's one resolution
   // point: the opts carrier the loop filled, else the holderless production

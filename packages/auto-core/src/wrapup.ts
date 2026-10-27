@@ -62,7 +62,7 @@ import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
 import { shellProfile } from "./shell"
 import { statsModelEvent } from "./stats"
-import { handoffSteer } from "./testrun"
+import { consumeDeadTestMarker, handoffSteer } from "./testrun"
 import { autoSwitches } from "./switches"
 import { commitBlocked, wrapupResolves } from "./unit-commit"
 
@@ -256,6 +256,7 @@ async function runFixRound(
   opts: Opts,
   chain: SessionChain,
   round: number,
+  persist?: (phase: Phase) => Promise<void>,
 ): Promise<UnitStop | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
@@ -303,6 +304,30 @@ async function runFixRound(
   }
   const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
   if (committed.type === "failed") return commitBlocked(`${task.id} fix ${round}`, committed)
+  // The round never books a wait (plans/0142 D2): a fix session that ended
+  // with a test request pending against a channel that will not serve it
+  // (this phase is not code work, or the flag is off) waited on the driver's
+  // own gap — the T-058 incident booked such a round on a 51-second wait and
+  // the budget-spent block then taught three remedies none of which named
+  // the dead channel. The round's work is committed above (hybrid sessions
+  // strand nothing behind the next run's clean gate); the round is NOT
+  // booked — the opening persist (which ran before this round's sessions)
+  // is rewound to the roundless wrap-up stage, so a re-run re-opens this
+  // round fresh rather than counting it spent — and the block teaches the
+  // real exits. D7's rule keeps its rationale — no round is re-run; an
+  // unbooked round re-opens fresh.
+  const deadChannel = await consumeDeadTestMarker(dir, opts, `${task.id} fix ${round}`)
+  if (deadChannel) {
+    await persist?.({ kind: "wrapup" })
+    return {
+      type: "blocked",
+      question:
+        `the fix session of ${task.id} (round ${round}) ended with a driver-test request pending (tmp/test.sh), but the driver test channel does not serve this session — ${deadChannel} — so the request can never execute. ` +
+        `The round is not booked (the budget is untouched; a re-run re-opens this round) and any work its sessions completed is committed. ` +
+        `The driver-test instruction comes from the task's own document or the gap list (both name tmp/test.sh); in a phase without the channel a session runs such a check itself in-session (within the task's rules), ` +
+        `or the task belongs in a code-work phase, or you run the command by hand. Adjust the task's step — and the gap list's entry — accordingly, then re-run.`,
+    }
+  }
   await bookAttempt(dir, task.id)
   return undefined
 }
@@ -486,6 +511,11 @@ export async function runWrapup(
   const git = gitOf(opts)
   const commitRange = commitRangeText(dir, input.baseline ?? [], input.scope)
   for (let round = input.round ?? 0; ; ) {
+    // The wrap-up's entry consumes a stale unservable marker (plans/0142 D1):
+    // a resume straight into the wrap-up (the standing-project shape) would
+    // otherwise hand the verify session a dead tmp/test.sh to read as wiring —
+    // the incident's re-verification "verified" it as exactly right, twice.
+    await consumeDeadTestMarker(dir, opts, task.id)
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
     await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
     const gate = await laneGate(dir, task, opts, plan, input.drain)
@@ -531,7 +561,7 @@ export async function runWrapup(
     }
     round += 1
     await input.persist?.({ kind: "wrapup", round })
-    const stopped = await runFixRound(client, plan, task, opts, chain, round)
+    const stopped = await runFixRound(client, plan, task, opts, chain, round, input.persist)
     if (stopped) return stopped
     // Re-verification runs from scratch (D3/D4): the next loop iteration
     // re-runs the lane gate (carry-forward keeps it narrow) and re-reads

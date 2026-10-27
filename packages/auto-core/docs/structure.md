@@ -113,7 +113,7 @@ Grouped by sub-domain (R10) — the sub-domain column the direction test holds i
 | Stats schema | The stats document's schema half: the persisted v:1 types, the lenient per-field parsers (bad = missing, no throw) and the copy/add/merge functions — pure beside the store, which re-exports the public surface (0102; P5) | `src/stats-schema.ts` (0102 D7) |
 | Proxy-answer ledger | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting (0020; P2) | `src/resolve.ts` (0020) |
 | Driver scripts | `tmp/test.sh` request marker, output capture, watchdog, the side-effect guard (`git stash create` snapshot per repository root; tracked mutations restored, a moved HEAD hard-blocks) (0083; P20) | `src/script.ts`, `src/git.ts` (0083 D11) |
-| Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`, standing for every whole-task session and fix round since 0130) (no session imports) (0023, 0056; P14) | `src/testrun.ts` (0023, 0056, 0059 D6; 0130 D1/D4) |
+| Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`, standing for every whole-task session and fix round since 0130), the unservable-request consume (`testChannelOffFor`/`consumeDeadTestMarker` — a `tmp/test.sh` marker left where the phase-gated channel is off, consumed and surfaced at every scope's close since 0142) (no session imports) (0023, 0056; P14, P12) | `src/testrun.ts` (0023, 0056, 0059 D6; 0130 D1/D4; 0142 D1) |
 
 ### engine — one turn, one dispatch, one ladder
 

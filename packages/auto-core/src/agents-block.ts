@@ -37,14 +37,18 @@ const POINTER = `This directory is driven by opencode-auto. The session prompt a
 // is not a test script and is not routed through tmp/test.sh — and a
 // driver-run script is an observation that never changes git-managed
 // content. The block is rendered per config (testByDriver), so it scopes
-// itself in wording ("in implementation and testing tasks") instead of
-// per phase; the per-phase derivation is the gates' (phases/registry
-// codeWork). The honest caveat is part of the charter: the driver runs
-// whatever script path lands in tmp/test.sh and cannot mechanically tell a
-// lint script — a task document that itself demands a formatting check
-// makes that check acceptance for that task, which the last-but-one
-// sentence states.
-const TEST_PRINCIPLE = `Test principle: in implementation and testing tasks, compilation and test runs — build, typecheck, test suites — which can be slow or produce large amounts of output, are always run by DRIVER outside the session; no session should run them directly. When needed, write the command as a script under \`test/\`, then write that script's path into \`tmp/test.sh\` to tell DRIVER to run it. After running it, DRIVER reports the exit code and the output file path (stdout and stderr merged into one file) back to the session, which reads the file directly to judge the result. A driver-run script is an observation: it must not modify, create or delete tracked files and must not run git state commands (commit, checkout, rebase, …); scratch output goes to \`tmp/\` or other gitignored paths, and a check that inherently rewrites tracked content (snapshot updates, codegen) does not go through the protocol at all. A session the DRIVER runs as a documentation lane (beside sibling lanes writing in this tree) does not use the channel mid-session: record the need in your notes and continue — the wrap-up's test lanes cover the unit's verification. Formatting or style validation is not a test script and is not routed through \`tmp/test.sh\`; a task document that itself demands a formatting or style check makes that check part of that task's acceptance — run it as the task says. Task descriptions and project conventions must not contain instructions that contradict this.`
+// itself in wording instead of per phase; since plans/0142 D3 the wording
+// names the phase-type boundary itself ("code-work phases", the per-phase
+// derivation's own vocabulary — the T-058 incident measured a planner
+// reading the old task-kind words "in implementation and testing tasks" as
+// task descriptions and formulating a design-phase task whose step named
+// the protocol) and states the other side's rule: no channel, in-session
+// run, never tmp/test.sh. The honest caveat is part of the charter: the
+// driver runs whatever script path lands in tmp/test.sh and cannot
+// mechanically tell a lint script — a task document that itself demands a
+// formatting check makes that check acceptance for that task, which the
+// last-but-one sentence states.
+const TEST_PRINCIPLE = `Test principle: in code-work phases (the implement and test types, or a custom phase type declaring \`Code-work: yes\`), compilation and test runs — build, typecheck, test suites — which can be slow or produce large amounts of output, are always run by DRIVER outside the session; no session should run them directly. In any other phase no driver-run channel exists: a task there that needs such a run has its session do it in-session (within the task's own rules), never through \`tmp/test.sh\`. When needed, write the command as a script under \`test/\`, then write that script's path into \`tmp/test.sh\` to tell DRIVER to run it. After running it, DRIVER reports the exit code and the output file path (stdout and stderr merged into one file) back to the session, which reads the file directly to judge the result. A driver-run script is an observation: it must not modify, create or delete tracked files and must not run git state commands (commit, checkout, rebase, …); scratch output goes to \`tmp/\` or other gitignored paths, and a check that inherently rewrites tracked content (snapshot updates, codegen) does not go through the protocol at all. A session the DRIVER runs as a documentation lane (beside sibling lanes writing in this tree) does not use the channel mid-session: record the need in your notes and continue — the wrap-up's test lanes cover the unit's verification. Formatting or style validation is not a test script and is not routed through \`tmp/test.sh\`; a task document that itself demands a formatting or style check makes that check part of that task's acceptance — run it as the task says. Task descriptions and project conventions must not contain instructions that contradict this.`
 
 const COMMIT_PRINCIPLE = `Commit principle: after a session ends, DRIVER performs one unified recursive commit of every change (nested sub-repositories first, then this repository), with commit messages carrying the task number and phase; no session should ever run \`git commit\`/\`amend\`/\`rebase\` or any other commit-type command, nor alter commit history. Background worth preserving belongs in \`docs/\` documents, which DRIVER's commit picks up automatically. Task descriptions and project conventions must not contain instructions that contradict this.`
 

@@ -1590,9 +1590,17 @@ M3.4; leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` are not clea
 `--test-by-driver` (a constitutional option, fixed into the config's `testByDriver` key by `init
 --test-by-driver`; appearing on `run` is a usage error) moves execution rights for "implementation-phase
 commands that can run long or produce massive output — compile/test/build/lint and the like" to the driver.
-It applies to execution sessions — subtask sessions (`subtask: true`, and the streams of `auto`'s split) and
-whole-task sessions (`off` / `ondemand`, and `auto`'s lead); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
-either).
+It applies to execution sessions — subtask sessions (`subtask: true`, and the streams of `auto`'s split),
+whole-task sessions (`off` / `ondemand`, and `auto`'s lead), and the verification loop's fix rounds; bypass
+sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it either). The channel
+serves **code-work phases** — the `implement` and `test` phase types, or a custom phase type declaring
+`Code-work: yes`; in any other phase (analysis, design, …) no marker machinery exists at all: a task there
+that needs such a run has its session do it in-session (within the task's own rules), never through
+`tmp/test.sh`. A marker left behind where the channel cannot serve it (a task document or gap list
+instructing the protocol in a non-code-work phase is the known trap) is consumed at the session's close with
+a log line — never left on disk to read as wiring — and a fix round that ends waiting on such a request
+**blocks unbooked**: the round's budget is untouched and the message names the phase and the three exits
+(run the check in-session, move the task to a code-work phase, or run the command by hand), then re-run.
 
 The protocol mechanics:
 
