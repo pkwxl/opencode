@@ -288,6 +288,9 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 }
 
 // The one-line config summary shared by run's startup banner and status.
+// The phases key rides nowhere in it (plans/0137): init-stamped machinery,
+// not a person surface — the operative phase list shows in the phase
+// progress line and the status tree beside this summary.
 export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
@@ -297,7 +300,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
     (config.wrapup ? "" : " · wrapup off") +
-    ` · context-limit ${config.contextLimit}k · phases ${config.phases}` +
+    ` · context-limit ${config.contextLimit}k` +
     (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
     (config.build ? " · build set" : "") +
     (config.parallel ? ` · parallel ${config.parallel}` : "") +

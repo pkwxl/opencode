@@ -13,7 +13,7 @@ import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFix
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
-import { amendPhasesHold, runTransfer } from "../src/transfer"
+import { runTransfer } from "../src/transfer"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -252,15 +252,13 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // config amend wording never reaches a covered round.
     const held = await f.run()
     expect(held.code).toBe(2)
-    expect(held.lines.some((line) => line.includes("to reshape the round from the findings: move its `R-01 <phases> — <goal>` line in docs/analysis.md"))).toBe(true)
-    expect(held.lines.some((line) => line.includes("the config phases value never applies to it"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("to reshape the round from the findings: move or add its `R-01 <phases> — <goal>` line in docs/analysis.md"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("the config phases value is init-stamped machinery"))).toBe(true)
     expect(held.lines.some((line) => line.includes("--phases <value>"))).toBe(false)
-    // The held boundary admits the reshape (the hold's predicate is the
-    // review moment): the person moves the released roadmap's line — the
-    // authority for the round's tail — and releases the survey. An
-    // `amend --phases` on the covered round is refused outright (plans/0114
-    // D3): the value never applies to it.
-    expect(await amendPhasesHold(f.dir, "survey,implement,test")).toContain("--phases cannot shape R-01: the released roadmap of docs/analysis.md covers the round")
+    // The held boundary admits the reshape: the person moves the released
+    // roadmap's line — the authority for the round's tail — and releases the
+    // survey (`amend --phases` itself retired by plans/0137, the line the
+    // one channel).
     const analysis = join(f.dir, "docs/analysis.md")
     writeFileSync(analysis, (await Bun.file(analysis).text()).replace("- R-01 survey,implement —", "- R-01 survey,implement,test —"))
     const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")

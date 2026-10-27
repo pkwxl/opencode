@@ -41,7 +41,7 @@ import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
-import { amendPhasesHold, runTransfer } from "@opencode-ai/auto-core/transfer"
+import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
@@ -443,10 +443,9 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "phases",
     "--phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; " +
-      '"m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), ' +
+      '"m" default = the manual single phase P01-implement, no planning or handover session — the compatibility floor (plans/0137: machinery kept, not a supported way of working for new projects; a phased project starts at init --phases or --intent); alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), ' +
       "where custom types are defined one per file in .opencode/auto/phases/<type>.md). " +
-      "Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); a phased round's unstarted tail reshapes at the boundary instead — " +
-      "amend --phases there and the next transfer re-derives the tail before constructing (mid-phase the amendment refuses naming the boundary); once the current round is complete any value applies to the next round transfer establishes (plan in m mode)",
+      "init's alone: amend refuses --phases outright (plans/0137 — a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md, the next transfer re-deriving the unstarted tail; the config key is init-stamped machinery), and a mid-round re-init must keep the completed phases and the directories holding work (the prefix guard)",
   ],
   [
     "test-by-driver",
@@ -630,7 +629,7 @@ const COMMANDS: readonly CommandHelp[] = [
     name: "amend",
     summary: "change the config keys given and keep the rest, rewriting what renders from the config",
     synopsis:
-      "opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]",
+      "opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]...|none [--brief <text> | --brief-file <path>]  # revise the config per key (the phases key excepted — init-stamped machinery, plans/0137: a round reshapes by its roadmap line)",
     options: ["frozen", "amend", "mode", "prompt", "phases", "test-by-driver", "handover-test", "auto-number", "wrapup", "agent", "parallel", "tree-lanes", "scan-exempt", "isolate"],
   },
   {
@@ -2214,15 +2213,26 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   }
   // --phases: the phased flow (design document plans/0006-phases-design.md);
   // "m" (the default) = no phase declaration, a single run, behavior unchanged.
-  // The prefix guard over already-completed phases sits below (the completed
-  // phases must form a prefix of the new value, so amend cannot push the flow
-  // state beyond derivation).
+  // amend's half is retired (plans/0137): the config key is init-stamped
+  // machinery — a round's phases reshape through its roadmap line alone, so
+  // the refusal fires before any value validation (a retired flag's value is
+  // never judged). The prefix guard over already-completed phases sits below
+  // (the completed phases must form a prefix of the new value, so a re-init
+  // cannot push the flow state beyond derivation).
   // Two value shapes (M3.6): the letter preset (an admtvk subsequence
   // containing m) or a comma-separated list of phase type ids (custom types
   // from .opencode/auto/phases/ allowed, implement required); the list shape is
   // normalized to a space-free comma string in the config.
   let phases: string | undefined
   if (flags.has("phases")) {
+    if (command === "amend") {
+      console.error(
+        "--phases is retired on amend: a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md " +
+          "(an uncovered round becomes covered the moment its line exists; the next transfer re-derives the unstarted tail) — " +
+          "the config key is init-stamped machinery, chosen at init alone (the single-phase mode fixed at birth)",
+      )
+      process.exit(1)
+    }
     const raw = flags.get("phases") ?? ""
     let parsed: PhaseTypeEntry[] | null
     try {
@@ -2359,7 +2369,7 @@ if (command === "init" || command === "amend") {
     await requireConfigFile("amend", false)
     if (!CONFIG_FLAGS.some((key) => flags.has(key)) && flags.get("brief") === undefined && flags.get("brief-file") === undefined) {
       console.error(
-        `name at least one key to change (for example: opencode-auto amend ${directory} --phases amt), or revise the brief with --brief <text> | --brief-file <path>; ` +
+        `name at least one key to change (for example: opencode-auto amend ${directory} --context-limit 128), or revise the brief with --brief <text> | --brief-file <path>; ` +
           `to refresh the agent contract and the AGENTS.md block without changing a key, run opencode-auto fix ${directory}`,
       )
       process.exit(1)
@@ -2636,23 +2646,12 @@ if (command === "init" || command === "amend") {
       process.exit(1)
     }
   }
-  // Boundary-scoped --phases (auto-core plans/0101 D6): the round's unstarted
-  // tail reshapes at the advance's review moments, so the amend command
-  // refuses the key while the current phase holds pending work — the person
-  // amends at the boundary (or lets run finish the phase) and the next
-  // transfer applies the value to the tail before constructing. A round the
-  // released roadmap covers refuses outright (auto-core plans/0114 D3): the
-  // value never applies to it — the roadmap's line is moved instead —
-  // retiring 0101 D5's post-amend precedence note (the note accepted the
-  // inert write; the refusal names the round's own channel). init keeps the
-  // prefix guard alone: its full overwrite is not the reshape channel.
-  if (amendCommand && flags.has("phases")) {
-    const hold = await amendPhasesHold(directory, config.phases)
-    if (hold) {
-      console.error(hold)
-      process.exit(1)
-    }
-  }
+  // Boundary-scoped --phases retired on amend (plans/0137, retiring the
+  // 0101 D6 hold and the 0114 D3 coverage refusal with it): the roadmap line
+  // is the one reshape channel — covered or uncovered alike — and the config
+  // key never changes after init. The refusal at the flag's parse site names
+  // the line channel. init keeps the prefix guard alone: its full overwrite
+  // is the birth choice, never a reshape.
   // The prompt library and intent packs: load the target directory's
   // .opencode/auto/prompts/ and .opencode/auto/intents/ overrides (a failed
   // protocol check exits right there); init renders no prompts, but loading

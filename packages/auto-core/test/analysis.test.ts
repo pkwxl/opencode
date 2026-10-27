@@ -140,7 +140,7 @@ describe("the project analysis document (plans/0084)", () => {
     // only after a line parses — here it is up front), and both examples.
     const none = RELEASED.split("\n").filter((line) => !/^- R-0|Key work:/.test(line)).join("\n")
     expect(analysisProblems(none, BUILTIN_PHASE_TYPES)).toEqual([
-      "`## Roadmap` plans no round: one line per planned round, `- R-NN <phases> — <goal>` exactly — nothing else between the round id and the dash (bold markers or a parenthetical there breaks the parse; a round's detail goes under the line as prose); <phases> is the round's `amend --phases` value — a letter preset over admtvk containing m, or comma-separated type ids from the known types (analysis, design, implement, test, acceptance, knowledge), at least one of them implement — for example `- R-01 adm — port the retry ladder with tests` or `- R-01 analysis,implement — port the core and tests`",
+      "`## Roadmap` plans no round: one line per planned round, `- R-NN <phases> — <goal>` exactly — nothing else between the round id and the dash (bold markers or a parenthetical there breaks the parse; a round's detail goes under the line as prose); <phases> is the round's phases value — a letter preset over admtvk containing m, or comma-separated type ids from the known types (analysis, design, implement, test, acceptance, knowledge), at least one of them implement — for example `- R-01 adm — port the retry ladder with tests` or `- R-01 analysis,implement — port the core and tests`",
     ])
   })
 

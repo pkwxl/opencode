@@ -10,7 +10,7 @@
 // .opencode/auto/brief.md by the brief install, plans/0081 D15.2 generalized)
 // and hands the round structure to the `## Roadmap` section: one line per
 // planned round, `- R-NN <phases> — <goal>`, whose <phases> is the value
-// `amend --phases` would set for that round.
+// the round's own phases value (the roadmap-line grammar).
 //
 // The gates check grammar only — required sections hold real content, the
 // roadmap lines parse, their phases values resolve. Depth and quality (the
@@ -160,7 +160,7 @@ export function renderAnalysisStub(): string {
     "<!-- The long-term plan for the next few rounds (usually 2-5), one machine-parsed line per -->",
     "<!-- round: `- R-NN <phases> — <goal>` exactly — nothing else between the round id and the dash -->",
     "<!-- (bold markers or a parenthetical there breaks the parse); <phases> is the value -->",
-    "<!-- `amend --phases` sets for that round. -->",
+    "<!-- the round's phases value: a letter preset or comma-separated type ids. -->",
     "<!-- Under each line: that round's key work at task granularity, its acceptance posture, its -->",
     "<!-- dependencies on earlier rounds, and the risks it resolves. The bar: a reader of this roadmap -->",
     "<!-- can tell what each of the next rounds is for without new deciding. -->",
@@ -246,7 +246,7 @@ function nearMissHeads(text: string): string[] {
 // releasable in shape (whether it is good is the person's call — the release
 // line `Clarified: yes` is theirs, checked by phases.ts clarifiedMark).
 // `types` resolves the roadmap's phases values against the builtins plus the
-// project's custom types, the `amend --phases` yardstick.
+// project's custom types — the same yardstick the config key uses.
 export function analysisProblems(text: string, types: readonly PhaseTypeEntry[]): string[] {
   const problems: string[] = []
   for (const heading of ANALYSIS_SECTIONS) {
@@ -261,7 +261,7 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
   if (!rounds.length) {
     const named = near.length ? `; this document's round-like bullets do not parse: ${near.slice(0, 3).join("; ")}${tail}` : ""
     problems.push(
-      `\`## Roadmap\` plans no round: one line per planned round, \`- R-NN <phases> — <goal>\` exactly — nothing else between the round id and the dash (bold markers or a parenthetical there breaks the parse; a round's detail goes under the line as prose); <phases> is the round's \`amend --phases\` value — a letter preset over admtvk containing m, or comma-separated type ids from the known types (${known.join(", ")}), at least one of them implement — for example \`- R-01 adm — port the retry ladder with tests\` or \`- R-01 analysis,implement — port the core and tests\`${named}`,
+      `\`## Roadmap\` plans no round: one line per planned round, \`- R-NN <phases> — <goal>\` exactly — nothing else between the round id and the dash (bold markers or a parenthetical there breaks the parse; a round's detail goes under the line as prose); <phases> is the round's phases value — a letter preset over admtvk containing m, or comma-separated type ids from the known types (${known.join(", ")}), at least one of them implement — for example \`- R-01 adm — port the retry ladder with tests\` or \`- R-01 analysis,implement — port the core and tests\`${named}`,
     )
   } else if (near.length) {
     // A passing roadmap with a decorated leftover is silently lossy: the

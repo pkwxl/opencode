@@ -87,7 +87,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
   const superseded = covered !== undefined && (await phasesDiverge(dir, config!.phases, covered)) ? covered : undefined
   if (superseded !== undefined) {
     lines.push(
-      `ℹ phases (config "${config!.phases}"): ${roundDirName(round)}'s line establishes "${superseded.phases}" under the roadmap of ${ANALYSIS_DOC} — the config value never applies to this round; reshape by moving its \`${roundDirName(round)} <phases> — <goal>\` line there, never by amending the key`,
+      `ℹ phases (config "${config!.phases}"): ${roundDirName(round)}'s line establishes "${superseded.phases}" under the roadmap of ${ANALYSIS_DOC} — the config value never applies to this round; reshape by moving its \`${roundDirName(round)} <phases> — <goal>\` line there`,
     )
   }
   const current = currentPhase(state)
@@ -107,18 +107,15 @@ export async function renderStatus(dir: string): Promise<string[]> {
     // whose tasks are all done but whose survey still records open forks —
     // the round is waiting on the person, and status says so, naming the
     // reshape channel beside the release (plans/0101 D6 — the held boundary
-    // is the designed amendment moment; the channel authority-branched by
-    // plans/0114 D3: a roadmap-covered round reshapes by its moved line, the
-    // config value never reaching it). Beside it the review-seam note
+    // is the designed reshape moment; the one channel since plans/0137: the
+    // roadmap line, a round becoming covered the moment its line exists).
+    // Beside it the review-seam note
     // (plans/0101 D3/D4): the current phase's plan task stands constructed
     // and not yet run — the round waits on the person's dispatch (plan) or
     // its rejection (fix the todo's inputs, re-run transfer).
     const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
     const awaitingPlan = phase === current ? awaitingFormulation(tasks, phase) !== undefined : false
-    const reshapeNote =
-      covered !== undefined
-        ? `where the findings reshape the round, move its \`${roundDirName(round)} <phases> — <goal>\` line in ${ANALYSIS_DOC} (the unstarted phases re-derive at the next transfer)`
-        : "where the findings reshape the round, `amend --phases` re-derives its unstarted phases at the next transfer"
+    const reshapeNote = `where the findings reshape the round, move or add its \`${roundDirName(round)} <phases> — <goal>\` line in ${ANALYSIS_DOC} (the unstarted phases re-derive at the next transfer)`
     lines.push(
       `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\` (${shellProfile().bin} clarify <dir> writes and commits the line); ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
     )

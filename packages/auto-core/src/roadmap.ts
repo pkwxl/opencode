@@ -15,7 +15,7 @@ import { loadPhaseTypes } from "./phases/custom"
 import { resolvePhases } from "./phases/registry"
 
 // One planned round of the roadmap: `- R-01 adm — <goal>`. The phases value
-// is the `amend --phases` grammar — a letter preset or a comma-separated
+// is the phases grammar (the config key's own) — a letter preset or a comma-separated
 // type-id list, spaces around the ids accepted and normalized away on
 // capture (a session's natural `a, b, c` list parses; the line grammar must
 // accept exactly what the phases grammar accepts, or a correct fix bounces);

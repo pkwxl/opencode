@@ -31,9 +31,9 @@
 // review, round-open and exhausted stops 0; the gate-held and
 // nothing-to-advance refusals 2; usage and state errors 1.
 // Since plans/0101 D6 every construct path opens with the re-derivation of
-// the round's unstarted tail — the person's boundary amendment applied —
-// and `amend --phases` is boundary-scoped to match (amendPhasesHold, the
-// shell's amend row calls it): the reshape and its apply are one seam.
+// the round's unstarted tail — the person's reshape applied — and the one
+// reshape channel is the roadmap line (plans/0137 retired `amend --phases`):
+// the reshape and its apply are one seam.
 // The lock is taken here and held across the pre-checks and the loop (runAll
 // re-enters it per process), the plan --force-close precedent; the
 // clean-tree refusals are preflight's (the advance runs only on a committed
@@ -210,9 +210,10 @@ async function applyReleasedBrief(directory: string, round: number): Promise<voi
 
 // The unstarted-tail re-derivation (plans/0101 D6): a round's phases.md tail
 // — every phase with no directory work and no planning yet — is reshaping
-// state, not commitment. The person amends --phases (or moves the released
-// roadmap's line) at a review moment, and this — the next advance — applies
-// the D5 resolution to the tail ahead of the construction: syncPhaseIndex
+// state, not commitment. The person moves or adds the released roadmap's
+// line at a review moment (the one channel since plans/0137), and this —
+// the next advance — applies the
+// D5 resolution to the tail ahead of the construction: syncPhaseIndex
 // replaces the unstarted tail, its own guards carrying the immutability (a
 // completed phase or a directory holding work throws — started planning
 // holds tasks.md and survives by that alone), and the rewrite lands on the
@@ -254,47 +255,6 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
       `started phases are untouched, the rewrite the driver's own commit`,
   )
   return undefined
-}
-
-// The boundary-scoped `amend --phases` guard (plans/0101 D6): the unstarted
-// tail reshapes at the advance's review moments, so the shell's amend row
-// refuses the key mid-phase — the current phase holding pending execute work
-// with no formulation awaiting review, the one state that is not a review
-// moment (the same predicate as the nothing-to-advance refusal above).
-// Ahead of every other guard, the coverage refusal (plans/0114 D3): the
-// round this amendment would shape — the live round, or the next one when
-// the live round is complete, the same target the shell's prefix guard
-// judges — never reads the config value when the released roadmap covers it
-// (the D5 resolution: its line is the phase list), so the write is inert at
-// any phase state and is refused outright naming the round's own channel
-// (0101 D5's precedence note retired by it — the note accepted the inert
-// write). A target the roadmap does not cover keeps the key as its live
-// establishment authority and stays quiet. undefined = the amendment may
-// proceed; m mode never consults the roadmap (D8 — no boundary vocabulary
-// applies). A state the router cannot read stays quiet: the amendment's own
-// guards judge it.
-export async function amendPhasesHold(directory: string, phases: string): Promise<string | undefined> {
-  if (phases === "m") return undefined
-  const { bin } = shellProfile()
-  const round = await currentRound(directory)
-  const state = await readPhases(directory, round).catch(() => undefined)
-  const complete = state !== undefined && state.phases.length > 0 && state.phases.every((unit) => state.done.has(unit.id))
-  const target = complete ? round + 1 : round
-  const covered = await releasedRoadmapRound(directory, target)
-  if (covered !== undefined) {
-    return (
-      `--phases cannot shape ${roundDirName(target)}: the released roadmap of ${ANALYSIS_DOC} covers the round — its line is the phase list the round establishes under, and a config value alone never re-shapes a round the roadmap covers. ` +
-      `Reshape the round's unstarted tail by moving its \`${roundDirName(target)} <phases> — <goal>\` line in ${ANALYSIS_DOC}; the next ${bin} transfer ${directory} applies it before constructing`
-    )
-  }
-  if (state === undefined) return undefined
-  const route = await routePhase(directory, { loadPlan, bin, phases }).catch(() => undefined)
-  if (route === undefined || route.type !== "execute" || awaitingFormulation(route.plan.tasks, route.phase)) return undefined
-  const pending = route.plan.tasks.filter((task) => task.status !== "done").length
-  return (
-    `--phases cannot change mid-phase: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — the round's unstarted tail reshapes at a phase boundary; ` +
-    `finish the phase with ${bin} run ${directory} (or close it), amend, and the next ${bin} transfer ${directory} applies the value before constructing`
-  )
 }
 
 // Shape 1 (plans/0101 D2): the 0084 rows 0/0a–0d re-homed from plan — today's

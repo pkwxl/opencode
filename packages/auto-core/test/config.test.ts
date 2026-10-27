@@ -387,14 +387,14 @@ describe("mergeProjectConfig and formatProjectConfig", () => {
     expect(mergeProjectConfig({ ...existing, autoNumber: true }, {}).autoNumber).toBe(true)
   })
 
-  test("the summary line carries every key's effective value (phases appended last)", () => {
+  test("the summary line carries every key's effective value; the phases key rides nowhere in it (plans/0137: init-stamped machinery)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "mode migrate · agent opencode · subtask off · watchdog idle 10m/max unset · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent opencode · subtask off · watchdog idle 10m/max unset · auto-number on · context-limit 64k",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "mode migrate · agent claude · subtask off · watchdog idle 10m/max 30m · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent claude · subtask off · watchdog idle 10m/max 30m · auto-number on · context-limit 64k",
     )
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).not.toContain("phases")
     // the tests-run-by-driver key enters the summary; the handover modifier follows handoverTest
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· test-by-driver on ·")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· test-by-driver on(handover) ·")

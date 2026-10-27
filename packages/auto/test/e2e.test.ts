@@ -1704,7 +1704,9 @@ describe("CLI: init freezes the project config", () => {
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
       expect(status.out).toContain("⚙ project config (.opencode/auto/config.json): mode migrate · agent opencode")
-      expect(status.out).toContain("phases m")
+      // the phases key rides nowhere in the summary (plans/0137: init-stamped
+      // machinery) — the phase tree below carries the operative list
+      expect(status.out).not.toContain("· phases")
       expect(status.out).toContain("[▶] P01-implement")
       expect(status.out).toContain("[ ] T-001 sample task")
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ subtask: "fast" }))
@@ -1737,13 +1739,13 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("init --phases valid values freeze into the config; the summary carries the phases; the closing line points at transfer (the phased opener)", async () => {
+  test("init --phases valid values freeze into the config (the summary carrying no phases — init-stamped machinery, plans/0137); the closing line points at transfer (the phased opener)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "admtvk"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
-      expect(init.out).toContain("phases admtvk")
+      expect(init.out).not.toContain("· phases")
       // config-only init (plans/0053 D31, re-keyed by plans/0101 D4): the
       // closing line names the rounds' opening command — transfer on a phased
       // project, plan in m mode (which transfer refuses); nothing is written
@@ -1782,9 +1784,12 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(bad.code).toBe(1)
       expect(bad.err).toContain('phases "dmt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md')
       expect(bad.err).toContain("once the current round is complete, any value applies to the next round")
+      // amend's --phases is retired (plans/0137): the refusal names the
+      // line channel, whatever the value — the guard stays init's alone
       const badAmend = await runCli(["amend", dir, "--phases", "dmt"])
       expect(badAmend.code).toBe(1)
-      expect(badAmend.err).toContain("would drop the completed phase docs/R-01/P01-analysis/")
+      expect(badAmend.err).toContain("--phases is retired on amend")
+      expect(badAmend.err).toContain("by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
       // A compatible value passes: the completed phase survives; init/amend no
       // longer rewrite the tail phases — the new value's difference from the
       // index surfaces as a drift for plan's re-sync route to handle (its
@@ -1813,14 +1818,16 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(fresh.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
       const relaxed = await runCli(["amend", dir, "--phases", "admtvk"])
-      expect(relaxed.code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
+      expect(relaxed.code).toBe(1)
+      expect(relaxed.err).toContain("--phases is retired on amend")
+      expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
       // The completed round's index stays as-is (never rewritten)
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [x] P02 design\n- [x] P03 implement\n")
-      // With an invalid phase index, init/amend report an environment error
-      // pointing a person at the fix
+      // With an invalid phase index, any amend reports an environment error
+      // pointing a person at the fix (the guard judges the run's effective
+      // phases value whatever key changed)
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [ ] X1 analysis\n")
-      const broken = await runCli(["amend", dir, "--phases", "admtvk"])
+      const broken = await runCli(["amend", dir, "--context-limit", "96"])
       expect(broken.code).toBe(1)
       expect(broken.err).toContain("docs/R-01/phases.md")
     } finally {
@@ -1897,24 +1904,22 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
       expect(round).toContain("Port the retry ladder and the protocol strings with their tests.")
       expect(round).toContain("## Close")
-      // The coverage refusal (auto-core plans/0114 D3, retiring D5's
-      // post-amend precedence note): the released line covers the round this
-      // amendment targets, so the value never applies to it — the amend is
-      // refused outright naming the line-move channel, agreeing values alike
-      // (the key is not maintained under a covering roadmap at all).
+      // The coverage refusal retired with the channel itself (plans/0137,
+      // absorbing 0114 D3): amend --phases refuses outright whatever the
+      // value and whatever the coverage — the roadmap line the one reshape
+      // channel, the config key init-stamped machinery.
       const diverged = await runCli(["amend", dir, "--phases", "am"])
       expect(diverged.code).toBe(1)
-      expect(diverged.err).toContain("--phases cannot shape R-01: the released roadmap of docs/analysis.md covers the round")
-      expect(diverged.err).toContain("by moving its `R-01 <phases> — <goal>` line in docs/analysis.md")
+      expect(diverged.err).toContain("--phases is retired on amend: a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
       expect(await readConfig(dir)).toMatchObject({ phases: "am" })
       const agreeing = await runCli(["amend", dir, "--phases", "amt"])
       expect(agreeing.code).toBe(1)
-      expect(agreeing.err).toContain("the released roadmap of docs/analysis.md covers the round")
+      expect(agreeing.err).toContain("--phases is retired on amend")
       // The status tree names the divergence (the config default the roadmap
       // rode over): one ℹ line, both values, the line-move channel.
       const status = await runCli(["status", dir])
       expect(status.out).toContain(
-        'ℹ phases (config "am"): R-01\'s line establishes "amt" under the roadmap of docs/analysis.md — the config value never applies to this round; reshape by moving its `R-01 <phases> — <goal>` line there, never by amending the key',
+        'ℹ phases (config "am"): R-01\'s line establishes "amt" under the roadmap of docs/analysis.md — the config value never applies to this round; reshape by moving its `R-01 <phases> — <goal>` line there',
       )
       expect(status.out).toContain("P03-test")
     } finally {
@@ -2851,7 +2856,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
   test("refusals: no config.json, no key, and every non-config option", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const fresh = await runCli(["amend", dir, "--phases", "am"])
+      const fresh = await runCli(["amend", dir, "--context-limit", "128"])
       expect(fresh.code).toBe(1)
       expect(fresh.err).toContain(`nothing to amend: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir}`)
       expect(await readdir(dir)).toEqual([])
@@ -2864,12 +2869,12 @@ describe("CLI: amend (plans/0052 D25)", () => {
       const refused: [string[], string][] = [
         [["-p", "intent"], "-p/--prompt is not an amend option: the planning input is plan's (-p/--file of opencode-auto plan); the brief is revised with --brief <text> | --brief-file <path>"],
         [["--implement-prompt", "plan the work"], "--implement-prompt is retired: plan tasks with opencode-auto plan <dir>"],
-        [["-f", "--phases", "am"], "-f/--force is not an amend option"],
+        [["-f", "--context-limit", "128"], "-f/--force is not an amend option"],
         // The --amend flag is retired everywhere (init no longer takes it, so
         // no command does)
-        [["--amend", "--phases", "am"], "--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"],
-        [["--server", "http://x", "--phases", "am"], "--server is not an amend option: amend takes only config flags (-m/--mode, --agent,"],
-        [["--max-sessions", "1", "--phases", "am"], "--max-sessions is not an amend option"],
+        [["--amend", "--context-limit", "128"], "--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"],
+        [["--server", "http://x", "--context-limit", "128"], "--server is not an amend option: amend takes only config flags (-m/--mode, --agent,"],
+        [["--max-sessions", "1", "--context-limit", "128"], "--max-sessions is not an amend option"],
         [["--source-dir", "legacy"], "--source-dir is retired"],
       ]
       for (const [args, message] of refused) {
@@ -2892,18 +2897,19 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect((await runCli(["transfer", dir])).code).toBe(0)
       await rm(join(dir, "opencode.json"))
       await rm(join(dir, ".opencode/auto/brief.md"), { force: true })
-      const amended = await runCli(["amend", dir, "--test-by-driver", "--phases", "amt", "--parallel", "none", "--agent", "opencode"])
+      const amended = await runCli(["amend", dir, "--test-by-driver", "--parallel", "none", "--agent", "opencode"])
       expect(amended.code).toBe(0)
-      expect(amended.out).toContain("✓ amended (--agent --test-by-driver --phases --parallel); the other keys are unchanged")
+      expect(amended.out).toContain("✓ amended (--agent --test-by-driver --parallel); the other keys are unchanged")
       const config = await readConfig(dir)
-      expect(config).toMatchObject({ contextLimit: 32, phases: "amt", testByDriver: true })
+      // the phases key is init-stamped machinery (plans/0137): amend never
+      // touches it — the value stays what init froze
+      expect(config).toMatchObject({ contextLimit: 32, phases: "am", testByDriver: true })
       expect(config).not.toHaveProperty("parallel")
       expect(config).not.toHaveProperty("agent")
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(renderText(await Bun.file(templateAgent).text(), { testByDriver: true }))
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("tmp/test.sh")
-      // the round step is gone (plans/0053 D32): the new value's extra phase is
-      // NOT created — the index keeps "am" and the difference is a drift for
-      // plan to reconcile
+      // the round step is gone (plans/0053 D32): amend writes no phase state,
+      // and with the phases key untouched there is no drift to reconcile
       expect(await stat(join(dir, "docs/R-01/P03-test")).catch(() => undefined)).toBeUndefined()
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n")
       // amend writes only what renders from the config: the rest is init's and fix's
@@ -2925,7 +2931,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
         [["--subtask", "sometimes"], "--subtask takes off|auto|true|ondemand"],
         [["--handover-test"], "--handover-test requires --test-by-driver"],
         [["-m", "nope"], "--mode must be a registered mode"],
-        [["--phases", "dm"], 'phases "dm" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md'],
+        [["--phases", "dm"], "--phases is retired on amend"],
       ] as [string[], string][]) {
         const result = await runCli(["amend", dir, ...args])
         expect(result.code).toBe(1)
@@ -4425,14 +4431,12 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
         `no reviewed plan task awaits dispatch: R-01.P01 analysis holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
           `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
       )
-      // Mid-phase the tail does not reshape (plans/0101 D6): the boundary-
-      // scoped amend refuses while the phase holds pending work, naming the
-      // boundary channel and the transfer that applies the value.
+      // The boundary-scoped amend --phases is retired (plans/0137): the
+      // reshape channel is the roadmap line alone, mid-phase or not.
       const midPhase = await runCli(["amend", dir, "--phases", "amt"])
       expect(midPhase.code).toBe(1)
-      expect(midPhase.err).toContain("--phases cannot change mid-phase: R-01.P01 analysis holds 1 pending task(s)")
-      expect(midPhase.err).toContain("the round's unstarted tail reshapes at a phase boundary")
-      expect(midPhase.err).toContain(`finish the phase with opencode-auto run ${dir} (or close it), amend, and the next opencode-auto transfer ${dir} applies the value before constructing`)
+      expect(midPhase.err).toContain("--phases is retired on amend")
+      expect(midPhase.err).toContain("by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
       expect(await JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
     } finally {
       await agent.done()

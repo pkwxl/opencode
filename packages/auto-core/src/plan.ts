@@ -873,20 +873,16 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
       `  then release it: ${bin} clarify ${directory} — it writes the \`${CLARIFIED_MARK}\` line to ${survey} and commits it (or add the line, commit, re-run yourself); ` +
         `the phase completes and the approved \`## Project brief\` section is installed`,
     )
-    // The reshape channel (plans/0101 D6, authority-branched by plans/0114
-    // D3): the survey's findings are the round's best evidence of what it
-    // should still do — where they contradict its unstarted phases, this
-    // held boundary is the designed amendment moment (the findings in
-    // hand), and the next transfer applies the value to the tail before
-    // constructing (started phases untouched). The channel is whichever
-    // authority covers the round (the D5 resolution): a covered round
-    // reshapes by its moved roadmap line — an `amend --phases` value never
-    // reaches it — while a config-governed round reshapes through the key.
-    const covered = await releasedRoadmapRound(directory, Number(phase.round.replace(/^R-/, "")))
+    // The reshape channel (plans/0101 D6; the authority branch retired by
+    // plans/0137 — the roadmap line the one channel, `amend --phases`
+    // retired): the survey's findings are the round's best evidence of what
+    // it should still do — where they contradict its unstarted phases, this
+    // held boundary is the designed reshape moment (the findings in hand),
+    // and the next transfer applies the moved or added line to the tail
+    // before constructing (started phases untouched; a round the roadmap
+    // does not cover becomes covered the moment its line exists).
     lines.push(
-      covered !== undefined
-        ? `  to reshape the round from the findings: move its \`${phase.round} <phases> — <goal>\` line in ${ANALYSIS_DOC} — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs (the released roadmap covers the round; the config phases value never applies to it)`
-        : `  to reshape the round from the findings: ${bin} amend ${directory} --phases <value> — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs`,
+      `  to reshape the round from the findings: move or add its \`${phase.round} <phases> — <goal>\` line in ${ANALYSIS_DOC} — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs (the line is the round's phase authority; the config phases value is init-stamped machinery, never the reshape channel)`,
     )
   }
   if (acceptance) {
