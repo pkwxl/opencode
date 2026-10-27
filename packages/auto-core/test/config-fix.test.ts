@@ -100,9 +100,10 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(plan.skipped).toBeUndefined()
   })
 
-  test("a released roadmap covering the current round records the superseded phases key as an info note — no manual finding, nothing written (plans/0114 D2; the class re-ruled 0135)", async () => {
+  test("a covering roadmap line records an info note only when its phases diverge from the config key's — agreement is silent, nothing written (plans/0114 D2; 0135 the class; 0136 divergence-only)", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, phases: "mt" })
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", "", "Clarified: yes", ""].join("\n"))
+    // A real divergence, both values named: config "mt", the line "mtv".
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", "", "Clarified: yes", ""].join("\n"))
     const plan = await planFix(dir)
     // The note is the whole plan: an expected posture with no person act —
     // never a manual finding whose trailer would send the pen after the one
@@ -111,21 +112,34 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       {
         class: "info",
         path: CONFIG,
-        problem: 'phases "mt" is superseded — R-01 establishes under the released roadmap of docs/analysis.md; nothing to repair (reshape rounds by moving its lines)',
+        problem: 'phases (config "mt"): R-01\'s line establishes "mtv" under the released roadmap of docs/analysis.md — nothing to repair (reshape the round by moving its line)',
       },
     ])
-    expect(manual(plan)).toEqual([])
     expect(plan.writes).toEqual([])
     expect(formatFixPlan(plan)).toBe(
-      `  info: ${CONFIG}: phases "mt" is superseded — R-01 establishes under the released roadmap of docs/analysis.md; nothing to repair (reshape rounds by moving its lines)`,
+      `  info: ${CONFIG}: phases (config "mt"): R-01's line establishes "mtv" under the released roadmap of docs/analysis.md — nothing to repair (reshape the round by moving its line)`,
     )
-    // The finding follows the coverage, not the document: a round the
+    // Agreement is the designed state — the line establishes exactly what
+    // init stamped — and names nothing (the field case behind 0136).
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect((await planFix(dir)).findings).toEqual([])
+    // Spelling equivalence: a letter preset and its type-id list are one
+    // value through the establishment registry, never a divergence.
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 implement,test — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect((await planFix(dir)).findings).toEqual([])
+    // A line value that does not resolve reads as divergent (fail loud): it
+    // is the person's word and establishment will judge it.
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect(info(await planFix(dir)).map((finding) => finding.problem)).toContain(
+      `phases (config "mt"): R-01's line establishes "svai" under the released roadmap of docs/analysis.md — nothing to repair (reshape the round by moving its line)`,
+    )
+    // The note follows the coverage, not the document: a round the
     // released roadmap does not cover keeps the key as its live authority.
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 svai — later round", "", "Clarified: yes", ""].join("\n"))
-    expect(info(await planFix(dir))).toEqual([])
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 mtv — later round", "", "Clarified: yes", ""].join("\n"))
+    expect((await planFix(dir)).findings).toEqual([])
     // And an unreleased roadmap never rules.
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 svai — port the core", ""].join("\n"))
-    expect(info(await planFix(dir))).toEqual([])
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", ""].join("\n"))
+    expect((await planFix(dir)).findings).toEqual([])
   })
 
   test("retired keys are dropped, renamed or moved; other keys, unknown keys included, survive", async () => {

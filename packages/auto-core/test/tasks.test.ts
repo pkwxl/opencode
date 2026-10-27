@@ -286,33 +286,44 @@ describe("renderStatus closed marks (plans/0053 D16)", () => {
   })
 })
 
-describe("renderStatus roadmap supersession (plans/0114 D2)", () => {
-  const superseded = (lines: string[]) =>
-    lines.some((line) => line.includes('ℹ phases (config "mt"): superseded — R-01 establishes under the roadmap of docs/analysis.md; reshape the round by moving its `R-01 <phases> — <goal>` line there, never by amending the key'))
+describe("renderStatus roadmap supersession (plans/0114 D2; divergence-only since 0136)", () => {
+  const divergence = (lines: string[]) =>
+    lines.some((line) => line.includes('ℹ phases (config "mt"): R-01\'s line establishes "mtv" under the roadmap of docs/analysis.md'))
 
-  test("a released roadmap covering the round names the config key superseded once, the line-move channel in the line", async () => {
+  test("a covering line whose phases diverge from the config key names both values once, the line-move channel in the line", async () => {
+    await seedUnits(dir, "## T-001: a [pending]\nA.\n")
+    await mkdir(join(dir, ".opencode/auto"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "mt" }))
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", "", "Clarified: yes", ""].join("\n"))
+    const lines = await renderStatus(dir)
+    expect(divergence(lines)).toBe(true)
+    // Exactly once — not per phase.
+    expect(lines.filter((line) => line.includes("line establishes")).length).toBe(1)
+  })
+
+  test("an agreeing line is the designed state and names nothing (the 0136 field case)", async () => {
     await seedUnits(dir, "## T-001: a [pending]\nA.\n")
     await mkdir(join(dir, ".opencode/auto"), { recursive: true })
     await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "mt" }))
     await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
-    const lines = await renderStatus(dir)
-    expect(superseded(lines)).toBe(true)
-    // Exactly once — not per phase.
-    expect(lines.filter((line) => line.includes("superseded")).length).toBe(1)
+    expect((await renderStatus(dir)).some((line) => line.includes("phases (config"))).toBe(false)
+    // Spelling equivalence: a type-id list and its letter preset are one value.
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 implement,test — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect((await renderStatus(dir)).some((line) => line.includes("phases (config"))).toBe(false)
   })
 
   test("no analysis, an unreleased one, a round it does not cover, or m mode: no line — the key is the live authority", async () => {
     await seedUnits(dir, "## T-001: a [pending]\nA.\n")
     await mkdir(join(dir, ".opencode/auto"), { recursive: true })
     await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "mt" }))
-    expect(superseded(await renderStatus(dir))).toBe(false)
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", ""].join("\n"))
-    expect(superseded(await renderStatus(dir))).toBe(false)
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 mt — later round", "", "Clarified: yes", ""].join("\n"))
-    expect(superseded(await renderStatus(dir))).toBe(false)
+    expect(divergence(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", ""].join("\n"))
+    expect(divergence(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-02 mtv — later round", "", "Clarified: yes", ""].join("\n"))
+    expect(divergence(await renderStatus(dir))).toBe(false)
     await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ phases: "m" }))
-    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
-    expect(superseded(await renderStatus(dir))).toBe(false)
+    await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", "", "Clarified: yes", ""].join("\n"))
+    expect(divergence(await renderStatus(dir))).toBe(false)
   })
 })
 

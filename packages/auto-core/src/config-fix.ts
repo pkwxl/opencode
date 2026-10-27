@@ -53,7 +53,7 @@ import {
 } from "./external-dirs"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
-import { releasedRoadmapRound } from "./roadmap"
+import { supersedingPhases } from "./roadmap"
 import { CONTRACT_AGENT } from "./opts"
 import { loadIntents } from "./intent/load"
 import { shellProfile } from "./shell"
@@ -282,23 +282,27 @@ export async function planFix(dir: string): Promise<FixPlan> {
       for (const finding of provenanceFindings(comparison)) findings.push({ class: "manual", path: finding.path, problem: finding.problem })
     }
   }
-  // The roadmap supersession (plans/0114 D2): a released roadmap's line for
-  // the current round is that round's phase list (plans/0101 D5) — the config
-  // key then silently loses its meaning for the round. Nothing is wrong with
-  // the config: the person reshapes rounds by moving roadmap lines, and a
-  // valid key is never rewritten — so the note is info, not manual
-  // (plans/0135): an expected posture recorded against "cleaning up" the key,
-  // it names no person act, exits 0 alone, and no edit of the file could
-  // clear it. m mode never consults the roadmap; a round the roadmap does
-  // not cover keeps the key as its live establishment authority and names
-  // nothing.
+  // The roadmap supersession (plans/0114 D2, divergence-only since 0136): a
+  // released roadmap's line for the current round is that round's phase list
+  // (plans/0101 D5) — the config key then silently loses its meaning for the
+  // round. Nothing is wrong with the config: the person reshapes rounds by
+  // moving roadmap lines, and a valid key is never rewritten — so the note is
+  // info, not manual (plans/0135): an expected posture recorded against
+  // "cleaning up" the key, it names no person act, exits 0 alone, and no edit
+  // of the file could clear it. It fires only on a real divergence
+  // (supersedingPhases resolves both values through the establishment
+  // registry): an agreeing pair is the designed state — the line establishes
+  // exactly what init stamped — and no note surfaces to read as drift. m mode
+  // never consults the roadmap; a round the roadmap does not cover keeps the
+  // key as its live establishment authority and names nothing.
   if (config.phases !== "m") {
     const round = await currentRound(dir)
-    if ((await releasedRoadmapRound(dir, round)) !== undefined) {
+    const superseded = await supersedingPhases(dir, config.phases, round)
+    if (superseded !== undefined) {
       findings.push({
         class: "info",
         path: CONFIG_FILE,
-        problem: `phases "${config.phases}" is superseded — ${roundDirName(round)} establishes under the released roadmap of ${ANALYSIS_DOC}; nothing to repair (reshape rounds by moving its lines)`,
+        problem: `phases (config "${config.phases}"): ${roundDirName(round)}'s line establishes "${superseded.phases}" under the released roadmap of ${ANALYSIS_DOC} — nothing to repair (reshape the round by moving its line)`,
       })
     }
   }

@@ -17,7 +17,7 @@ import { provenanceComparison } from "./bundle"
 import { awaitingFormulation } from "./formulate"
 import { loadProjectConfig } from "./config"
 import { provenanceFindings } from "./provenance"
-import { releasedRoadmapRound } from "./roadmap"
+import { phasesDiverge, releasedRoadmapRound } from "./roadmap"
 import { shellProfile } from "./shell"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
 
@@ -72,18 +72,22 @@ export async function renderStatus(dir: string): Promise<string[]> {
     }
   }
   lines.push(...provenance)
-  // The roadmap supersession (plans/0114 D2): a released roadmap line
-  // covering the current round is that round's phase list (plans/0101 D5) —
-  // the config key then never applies to the round, and the tree says so
-  // once, naming the round's own channel so nobody amends the key "to clean
+  // The roadmap supersession (plans/0114 D2, divergence-only since 0136): a
+  // released roadmap line covering the current round is that round's phase
+  // list (plans/0101 D5) — the config key then never applies to the round.
+  // The note surfaces only a real divergence (phasesDiverge resolves both
+  // values through the establishment registry): an agreeing pair is the
+  // designed state and names nothing, so nobody reads agreement as drift.
+  // The line names the round's own channel so nobody amends the key "to clean
   // up". m mode never consults the roadmap; a config-governed round (no
   // analysis, unreleased, or the roadmap plans no line for it) names
   // nothing — the key is its live establishment authority.
   const config = await loadProjectConfig(dir).catch(() => undefined)
   const covered = config !== undefined && config.phases !== "m" ? await releasedRoadmapRound(dir, round) : undefined
-  if (covered !== undefined) {
+  const superseded = covered !== undefined && (await phasesDiverge(dir, config!.phases, covered)) ? covered : undefined
+  if (superseded !== undefined) {
     lines.push(
-      `ℹ phases (config "${config!.phases}"): superseded — ${roundDirName(round)} establishes under the roadmap of ${ANALYSIS_DOC}; reshape the round by moving its \`${roundDirName(round)} <phases> — <goal>\` line there, never by amending the key`,
+      `ℹ phases (config "${config!.phases}"): ${roundDirName(round)}'s line establishes "${superseded.phases}" under the roadmap of ${ANALYSIS_DOC} — the config value never applies to this round; reshape by moving its \`${roundDirName(round)} <phases> — <goal>\` line there, never by amending the key`,
     )
   }
   const current = currentPhase(state)

@@ -11,6 +11,8 @@
 import { join } from "node:path"
 import { ANALYSIS_DOC } from "./docpaths"
 import { clarifiedMark } from "./phases"
+import { loadPhaseTypes } from "./phases/custom"
+import { resolvePhases } from "./phases/registry"
 
 // One planned round of the roadmap: `- R-01 adm — <goal>`. The phases value
 // is the `amend --phases` grammar — a letter preset or a comma-separated
@@ -50,6 +52,29 @@ export async function releasedRoadmapRound(dir: string, round: number): Promise<
   const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
   if (raw === undefined || !clarifiedMark(raw)) return undefined
   return roadmapRounds(raw).find((entry) => entry.round === round)
+}
+
+// The resolved comparison behind the divergence note (plans/0136): both
+// values resolve through the same registry the round's establishment uses,
+// so a letter preset and its type-id list spell one value and the note
+// surfaces only a real divergence. A line value that fails to resolve reads
+// as divergent (fail loud, P12): it is the person's word and establishment
+// will judge it; the config side is strict-loaded before every caller
+// reaches here.
+export async function phasesDiverge(dir: string, configPhases: string, covered: RoadmapRound): Promise<boolean> {
+  const types = loadPhaseTypes(dir)
+  const resolved = (value: string) => resolvePhases(value, types)?.map((entry) => entry.type).join(",")
+  const configIds = resolved(configPhases)
+  return configIds === undefined || configIds !== resolved(covered.phases)
+}
+
+// The covering line whose phases diverge from the config key's — undefined
+// when the round is not covered, and when it is covered but agrees (the
+// designed state: the line establishes exactly what init stamped, and no
+// note surfaces to read as drift).
+export async function supersedingPhases(dir: string, configPhases: string, round: number): Promise<RoadmapRound | undefined> {
+  const covered = await releasedRoadmapRound(dir, round)
+  return covered !== undefined && (await phasesDiverge(dir, configPhases, covered)) ? covered : undefined
 }
 
 // The released roadmap's lines as a set (plans/0101 D2 shape 4): undefined

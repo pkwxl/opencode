@@ -1910,11 +1910,11 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const agreeing = await runCli(["amend", dir, "--phases", "amt"])
       expect(agreeing.code).toBe(1)
       expect(agreeing.err).toContain("the released roadmap of docs/analysis.md covers the round")
-      // The status tree names the supersession (the config default the
-      // roadmap rode over): one ℹ line, the line-move channel.
+      // The status tree names the divergence (the config default the roadmap
+      // rode over): one ℹ line, both values, the line-move channel.
       const status = await runCli(["status", dir])
       expect(status.out).toContain(
-        'ℹ phases (config "am"): superseded — R-01 establishes under the roadmap of docs/analysis.md; reshape the round by moving its `R-01 <phases> — <goal>` line there, never by amending the key',
+        'ℹ phases (config "am"): R-01\'s line establishes "amt" under the roadmap of docs/analysis.md — the config value never applies to this round; reshape by moving its `R-01 <phases> — <goal>` line there, never by amending the key',
       )
       expect(status.out).toContain("P03-test")
     } finally {
@@ -3030,20 +3030,22 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
     }
   })
 
-  // plans/0135: the superseded phases key under a released roadmap covering
-  // the current round is an expected posture (plans/0114 D2), not drift —
-  // recorded as an info note that fails no gate and asks nothing of anyone.
-  test("fix with only an informational note: notes header, no person trailer, exit 0 (plain and --dryrun)", async () => {
+  // plans/0135/0136: a covering roadmap line that diverges from the config
+  // phases key is an expected posture, not drift — recorded as an info note
+  // that fails no gate and asks nothing of anyone; an agreeing line (the
+  // 0136 field case) prints nothing at all.
+  test("fix with only an informational note: divergence recorded, agreement fully green, no person trailer, exit 0", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
       const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
-      await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+      // Divergence: the line establishes "mtv", the config key holds "mt".
+      await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mtv — port the core", "", "Clarified: yes", ""].join("\n"))
       const dry = await runCli(["fix", dir, "--dryrun"])
       expect(dry.code).toBe(0)
       expect(dry.out).toContain("config-layer notes in")
       expect(dry.out).not.toContain("config-layer findings in")
-      expect(dry.out).toContain('  info: .opencode/auto/config.json: phases "mt" is superseded — R-01 establishes under the released roadmap of docs/analysis.md; nothing to repair (reshape rounds by moving its lines)')
+      expect(dry.out).toContain(`  info: .opencode/auto/config.json: phases (config "mt"): R-01's line establishes "mtv" under the released roadmap of docs/analysis.md — nothing to repair (reshape the round by moving its line)`)
       expect(dry.out).toContain("dryrun: nothing was changed; the note(s) above are informational — nothing to repair")
       expect(dry.err).not.toContain("need a person")
       // nothing was written
@@ -3054,6 +3056,14 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.out).toContain("✓ nothing to fix: the note(s) above are informational — nothing to repair")
       expect(fix.err).not.toContain("need a person")
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      // Agreement: the line establishes exactly what init stamped — the
+      // designed state, fully green, no note anywhere.
+      await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "- R-01 mt — port the core", "", "Clarified: yes", ""].join("\n"))
+      const agree = await runCli(["fix", dir, "--dryrun"])
+      expect(agree.code).toBe(0)
+      expect(agree.out).toContain("✓ nothing to fix: the config layer of")
+      expect(agree.out).not.toContain("info:")
+      expect(agree.out).not.toContain("config-layer notes")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

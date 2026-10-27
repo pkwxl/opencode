@@ -445,7 +445,7 @@ exit code stays green.
 | A stale `external_directory` allow — its symlink or target is gone (auto-core plans/0122) | Manual | Remove the entry if the reference moved |
 | `opencode.json` cannot hold per-pattern allows (malformed file or a flat action, auto-core plans/0122) | Manual | Add them by hand |
 | Bundle provenance: a managed intent-bundle file stale or person-edited (auto-core plans/0100) | Manual | Reported; `sync` plans the upgrade |
-| `phases` superseded by a released roadmap line covering the current round (auto-core plans/0114 D2) | Info | Nothing — recorded; reshape the round by moving its `R-NN` line in `docs/analysis.md` (the config key is inert for the round, never amended) |
+| The config `phases` key diverging from a released roadmap line covering the current round (auto-core plans/0114 D2; divergence-only per 0136 — an agreeing line prints nothing) | Info | Nothing — recorded, both values named; reshape the round by moving its `R-NN` line in `docs/analysis.md` (the config key is inert for the round, never amended) |
 
 The artifact rules are rendered from the config, so they run only when the config (after the key rules are
 applied) loads strictly.
@@ -719,8 +719,9 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   constructing — the driver's own `phase-sync` commit (`PLAN resync R-NN tail to …`). The channel is
   the authority's (auto-core plans/0114): a round the released roadmap covers reshapes by moving its
   `- R-NN <phases> — <goal>` line in `docs/analysis.md` — `amend --phases` refuses outright there
-  (exit 1 naming the line-move channel; the config value never applies to a covered round, `status`
-  names the key superseded, `fix` records it as an informational note — nothing to repair) — while a
+  (exit 1 naming the line-move channel; the config value never applies to a covered round, and where
+  the line's phases differ from the key `status` and `fix` record it as an informational note — nothing
+  to repair; an agreeing line prints nothing) — while a
   config-governed round reshapes through `amend --phases`. Started or completed phases are immutable;
   mid-phase the config-governed amend refuses (exit 1) naming the boundary. The survey gate's release
   is the designed first use: where the inventory contradicts the round's cold tail, reshape with the
