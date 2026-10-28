@@ -68,6 +68,7 @@ import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { recoverRegression } from "./regression"
 import { protect } from "./protect"
+import { peekProgress } from "./resume"
 import { findWallCommit, wallDeclared } from "./wall"
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
@@ -567,35 +568,56 @@ export async function preflight(
   // holder preflight itself built (the composition root's git member —
   // production here; a test wanting the off path installs the double on a
   // holder of its own).
+  // The interrupted-unit exemption (plans/0149): an active progress record —
+  // a unit the last process left mid-flight (a kill, a crash, an /exit inside
+  // the recovery wait) — makes the uncommitted changes that unit's resumable
+  // progress, the same exemption the unit-start gates grant it
+  // (src/loop-task.ts): the resumed unit's close absorbs them with its
+  // unified commit, and the person's interface stays run → /exit → re-run —
+  // a manual git commit between the exit and the re-run is a driver need,
+  // never the person's job. An active record cannot coexist with the
+  // round-start case below (a dispatch implies that run's own gate passed
+  // the round setup's commit), so the exemption takes the whole dirty
+  // verdict. The housekeeping close-out further down skips with it: its
+  // sweep would fold the interrupted unit's batch into a PLAN commit.
+  let exemptResume = false
   if (!opts.dryrun) {
     const gate = await run.git.beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
     if (gate.type === "dirty") {
-      // The round-start gate (plans/0049 G1): the command that establishes
-      // the round (plan; init and continue did before their round steps
-      // retired) leaves the setup uncommitted on purpose — committing it is
-      // the human's review of the round. Its mark is a phase index that git
-      // has never seen.
-      const round = await currentRound(directory)
-      const index = phaseIndexPath(round)
-      if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
-        const phased = opts.phases !== undefined && opts.phases !== "m"
-        // The proposal channel's shortcut (plans/0115): with a released
-        // `### R-NN` round-brief proposal waiting and the brief still the
-        // stub, committing the setup is all this gate asks — the next
-        // transfer installs the proposal verbatim ahead of the construct.
-        const proposal = phased && (await roundBriefText(directory, round)) === undefined ? await releasedRoundBriefProposal(directory, round) : undefined
-        log(
-          `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
-            `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:` +
-            (proposal !== undefined
-              ? ` (a released \`### R-${String(round).padStart(2, "0")}\` round-brief proposal of ${ANALYSIS_DOC} waits — committing the setup is enough, the next transfer installs it verbatim)`
-              : ""),
-        )
+      const interrupted = await peekProgress(directory)
+      if (interrupted?.active === true) {
+        exemptResume = true
+        log(`↻ ${interrupted.task} was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them)`)
       } else {
-        log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
+        // The round-start gate (plans/0049 G1): the command that establishes
+        // the round (plan; init and continue did before their round steps
+        // retired) leaves the setup uncommitted on purpose — committing it is
+        // the human's review of the round. Its mark is a phase index that git
+        // has never seen.
+        const round = await currentRound(directory)
+        const index = phaseIndexPath(round)
+        if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
+          const phased = opts.phases !== undefined && opts.phases !== "m"
+          // The proposal channel's shortcut (plans/0115): with a released
+          // `### R-NN` round-brief proposal waiting and the brief still the
+          // stub, committing the setup is all this gate asks — the next
+          // transfer installs the proposal verbatim ahead of the construct.
+          const proposal = phased && (await roundBriefText(directory, round)) === undefined ? await releasedRoundBriefProposal(directory, round) : undefined
+          log(
+            `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
+              `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:` +
+              (proposal !== undefined
+                ? ` (a released \`### R-${String(round).padStart(2, "0")}\` round-brief proposal of ${ANALYSIS_DOC} waits — committing the setup is enough, the next transfer installs it verbatim)`
+                : ""),
+          )
+        } else {
+          log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
+        }
+        for (const file of gate.files) log(`  ${file}`)
+        progress.close()
+        watcher?.close()
+        return { exit: 2 }
       }
-      for (const file of gate.files) log(`  ${file}`)
-      return { exit: 2 }
     }
   }
   // Branch-isolation leftovers (plans/0074 §4, U-L2): round branches of
@@ -665,7 +687,10 @@ export async function preflight(
   // block (plans/0021-commit-boundary-design.md P3). dryrun makes no commit
   // (the seam's changedFiles read is real here — preflight built the
   // production holder, whose dirty list decides whether anything posts).
-  if (!opts.dryrun && (await run.git.changedFiles(directory)).length) {
+  // The interrupted-unit exemption skips it (plans/0149): the sweep would
+  // absorb the resumed unit's uncommitted batch into a PLAN commit; the
+  // driver's own run-start writes ride the resumed unit's close with it.
+  if (!opts.dryrun && !exemptResume && (await run.git.changedFiles(directory)).length) {
     const settled = await run.git.commitTree(directory, { id: "PLAN", title: "pre-run baseline close-out" }, {
       stage: "housekeeping",
       subject: "PLAN housekeeping pre-run baseline close-out (AGENTS.md pointer block/.gitignore/interrupted-state reset)",

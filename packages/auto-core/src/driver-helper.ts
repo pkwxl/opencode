@@ -139,6 +139,7 @@ import {
 } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
 import { provenanceFindings } from "./provenance"
+import { peekProgress } from "./resume"
 import { roundBriefText } from "./round-brief"
 import { roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
@@ -498,11 +499,21 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   }
 
   // Row 11 — the dirty tree at a start gate (quiet at the two stops whose
-  // uncommitted state is the person's pending review).
+  // uncommitted state is the person's pending review). Under an active
+  // progress record the changes are the interrupted unit's own batch: the
+  // start gate exempts them and the resumed unit's close commits them
+  // (plans/0149) — the teaching must not send the person to hand-commit
+  // what the driver itself resumes.
   if (!uncommittedByDesign && (await changedFiles(dir)).length) {
-    facts.push(`⚠ the worktree holds uncommitted changes — a start gate refuses them (driver-exclusive leftovers self-heal)`)
-    channels.push("the worktree — commit or clean the changes you own; driver-exclusive state files (.auto/, the index ticks, the renames) self-heal at the next start gate")
-    recovery.push(`${bin} run ${dir} — it self-heals the driver-exclusive leftovers and names anything else`)
+    if ((await peekProgress(dir))?.active === true) {
+      facts.push("⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, its close commits the changes")
+      channels.push("the worktree — the interrupted unit's in-flight batch; no manual git work needed, run continues it")
+      recovery.push(`${bin} run ${dir} — the start clean gate exempts an active record's unit and resumes it (plans/0149)`)
+    } else {
+      facts.push(`⚠ the worktree holds uncommitted changes — a start gate refuses them (driver-exclusive leftovers self-heal)`)
+      channels.push("the worktree — commit or clean the changes you own; driver-exclusive state files (.auto/, the index ticks, the renames) self-heal at the next start gate")
+      recovery.push(`${bin} run ${dir} — it self-heals the driver-exclusive leftovers and names anything else`)
+    }
   }
 
   // Row 12 — the destination's release channel: standing wherever a nested

@@ -18,6 +18,7 @@ import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles } from "../src/git"
 import { runAll } from "../src/loop"
 import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, type RunAllOpts } from "../src/loop-preflight"
+import { saveProgress } from "../src/resume"
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
 import { services } from "../src/services"
@@ -118,6 +119,88 @@ describe("removeRetiredInvalidRefs (the retired reference checker's stale list)"
     expect(lines).toEqual(["removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)"])
     // .auto/ is gitignored: the deletion rides no commit and leaves the tree clean
     expect(await changedFiles(dir)).toEqual([])
+  })
+})
+
+describe("the start clean gate's interrupted-unit exemption (plans/0149)", () => {
+  // An initialized, committed project (the same shape the invalid-refs test
+  // builds) so a passing preflight logs nothing but the lines under test.
+  async function project(): Promise<string> {
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  // The ambient OPENCODE_AUTO_* layer scrubbed for the call, the captured
+  // lines and the post-run restore ritual (the invalid-refs test's shape).
+  async function capture(dir: string): Promise<{ lines: string[]; result: Awaited<ReturnType<typeof preflight>> }> {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let result: Awaited<ReturnType<typeof preflight>>
+    try {
+      result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    return { lines, result }
+  }
+
+  test("an active record's uncommitted changes are exempt: one teaching line, nothing committed, no exit", async () => {
+    const dir = await project()
+    await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
+    await Bun.write(join(dir, "seed.txt"), "seed\ninterrupted batch\n")
+    const { lines, result } = await capture(dir)
+    expect("exit" in result).toBe(false)
+    // The exemption line alone; the block and its file list are absent
+    expect(lines).toEqual([
+      "↻ T-001 was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them)",
+    ])
+    // The batch stays uncommitted in the worktree: neither a gate block nor
+    // the housekeeping sweep folded it into a PLAN commit
+    expect(await changedFiles(dir)).toEqual(["seed.txt"])
+    expect((await git(dir, "log", "-1", "--pretty=%s")).trim()).toEqual("init")
+  })
+
+  test("a summarized record (active: false, the graceful-exit rerun) still blocks with the person's teaching", async () => {
+    const dir = await project()
+    await saveProgress(dir, { task: "T-001", at: 1_000, active: false })
+    await Bun.write(join(dir, "seed.txt"), "seed\nperson dirt\n")
+    const { lines, result } = await capture(dir)
+    expect(result).toEqual({ exit: 2 })
+    expect(lines).toEqual([
+      "⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:",
+      "  seed.txt",
+    ])
+  })
+
+  test("no record at all: the person-dirt block stands (the pre-0149 posture)", async () => {
+    const dir = await project()
+    await Bun.write(join(dir, "seed.txt"), "seed\nperson dirt\n")
+    const { result } = await capture(dir)
+    expect(result).toEqual({ exit: 2 })
+  })
+
+  test("an active record over a clean tree logs nothing and passes (the exemption is silent when not dirty)", async () => {
+    const dir = await project()
+    await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
+    const { lines, result } = await capture(dir)
+    expect("exit" in result).toBe(false)
+    expect(lines).toEqual([])
   })
 })
 

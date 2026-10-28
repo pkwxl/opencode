@@ -1554,8 +1554,13 @@ record. When strict recovery rolls a unit back, the retracted work goes into git
 interruption and the re-run (a hand-commit protecting the in-flight work) are **adopted, not blocking**: the
 interrupted session is never reused across them and never rolled back over them — the resume log names what
 was adopted (per repository, the non-driver commit count since the recorded baseline) and a fresh session
-continues from the current committed state; the re-run's stop for a dirty tree belongs to the *graceful-exit*
-rerun, where the worktree really is yours to clean. Exhausted network-failure retries count as "interrupted
+continues from the current committed state. The same holds for the work you *don't* commit: an
+active progress record (a unit left mid-flight by a kill, a crash, or an `/exit` inside the
+recovery wait — e.g. a quota window having closed the session) makes the worktree's uncommitted
+changes that unit's resumable progress — the run-start clean gate **exempts them** with one log
+line, the resumed unit picks the batch up as it stands and its close commits it; `run` → `/exit`
+→ `run` needs no manual git work in between. The stop for a dirty tree belongs to the
+*graceful-exit* rerun alone (no active record), where the worktree really is yours to clean. Exhausted network-failure retries count as "interrupted
 mid-flight with no summary" and keep session-reuse eligibility — recovery prefers to reclaim the original
 session.
 

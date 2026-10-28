@@ -18,6 +18,7 @@ import { ANALYSIS_DOC, reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
 import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { recordResolves } from "../src/resolve"
+import { saveProgress } from "../src/resume"
 import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import { setSwitchModelRegistry } from "../src/switches"
@@ -408,6 +409,22 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await establishRound(g1, { phases: "mt", round: 1 })
     const g1Lines = await renderHelperBrief(g1, { phases: "mt" })
     expect(g1Lines.some((line) => line.startsWith("⚠ the worktree holds uncommitted"))).toBe(false)
+  })
+
+  test("row 11 under an active progress record — the dirt is the interrupted unit's batch and the brief says run resumes it (plans/0149)", async () => {
+    const dir = await repo()
+    const phases = await established(dir, "mt")
+    await task(dir, phases[0]!, "T-001", false)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "state")
+    writeFileSync(join(dir, "notes.md"), "uncommitted person file\n")
+    await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
+    const lines = await renderHelperBrief(dir, { phases: "mt" })
+    // The refusal teaching is gone; the brief sends the pen to run, never to
+    // a hand-commit of what the driver itself resumes
+    expect(lines).toContain("- ⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, its close commits the changes")
+    expect(lines.some((line) => line.startsWith("- the worktree — the interrupted unit's in-flight batch"))).toBe(true)
+    expect(lines.some((line) => line.startsWith("- the worktree — commit or clean"))).toBe(false)
   })
 
   test("row 12 — the destination's release channel rides wherever a nested repository exists", async () => {
