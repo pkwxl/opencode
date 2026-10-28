@@ -14,7 +14,8 @@
 // bounded fix loop follows (plans/0083 D1–D5, the budget re-ruled by plans/
 // 0146): fix rounds run while progress holds — each round closes gaps under
 // the pack's repair discipline and is committed with stage `execute`
-// (subject `<id> fix <round> <title>`), each followed by a re-verification
+// (per-session commits, subject `<id> fix <round>.<session> <short title>`),
+// each followed by a re-verification
 // from scratch; the task blocks only once two consecutive rounds closed no
 // gap (the countable gap list stopped shrinking), never on a round count
 // alone. The round is session-unbounded (plans/0146 D5): gaps are the
@@ -48,7 +49,7 @@ import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { handoffFile, taskDoc, taskDocPaths } from "./docpaths"
 import { handoffStatus, parseResult, type ReportResult } from "./document/roles"
-import type { UnitBaseline } from "./git"
+import { nextFixSession, shortTitle, type UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
 import { ledgerSection } from "./formulate-synthesis"
@@ -174,7 +175,7 @@ async function verifySession(
 ): Promise<VerifyOutcome> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
-  const subject = `${task.id} wrapup ${task.title}`
+  const subject = `${task.id} wrapup ${shortTitle(task.title)}`
   nameSubject(chain, subject)
   const resolves = await wrapupResolves(dir, task.id)
   const views = promptViews(plan, task)
@@ -264,17 +265,18 @@ async function verifySession(
   }
 }
 
-// One fix round (0083 D4): a fresh fix session reads the gap list + the task
-// document, closes exactly the listed gaps under the pack's repair discipline
-// (renderFix) and re-runs the checks covering its own changes; the driver
-// commits its output after the round with stage `execute` (it is execution;
-// the close-out trailer validation is untouched), subject `<id> fix <round>
-// <title>`. The round books into the task's `attempts` (D7). Since plans/
+// One fix round (0083 D4, the commit shape re-ruled by plans/0148 D1): a
+// fresh fix session reads the gap list + the task document, closes exactly
+// the listed gaps under the pack's repair discipline (renderFix) and re-runs
+// the checks covering its own changes; the driver commits each session's
+// batch at its own boundary with stage `execute` (it is execution; the
+// close-out trailer validation is untouched), subject
+// `<id> fix <round>.<session> <short title>`. The round books into the task's `attempts` (D7). Since plans/
 // 0130 D2 the round runs under the standing context-handover protocol: with
 // OPENCODE_AUTO_STEER on the fix session gets usage notices and may hand
 // itself over through docs/<id>/handoff.md (`Status: continue` — a fresh fix
-// session continues from the document, the round's one commit landing only
-// when its sessions are finished); the whole role's usage policy governs (a
+// session continues from the document, each session's own batch committing
+// at its boundary, plans/0148 D1); the whole role's usage policy governs (a
 // fix round is a whole-scope execution dispatch), and the whole stage's own
 // leftover handover document is the engine's consumed seed — a `Status: done`
 // the execution stage left is not this round's signal, and an interrupted
@@ -293,8 +295,6 @@ async function runFixRound(
 ): Promise<UnitStop | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
-  const subject = `${task.id} fix ${round} ${task.title}`
-  nameSubject(chain, subject)
   const views = promptViews(plan, task)
   log(`↻ ${task.id} verification found gaps; fix round ${round} closes exactly ${taskDoc(task.id, "gaps")}`)
   const readHandoff = async (): Promise<string> => Bun.file(join(plan.dir, handoffFile(task))).text().catch(() => "")
@@ -307,7 +307,23 @@ async function runFixRound(
   const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
   let continuation = handoffStatus(priorText) === "continue"
   let feedback = ""
+  // Per-session commits (plans/0148 D1): every session that ends in a
+  // handover-continue commits its own gap batch at the boundary (the
+  // executeWhole pattern — durable work at every safe point, crash-isomorphic
+  // with a kill there), and the natural end commits the last batch; the
+  // subject carries the round and the session's dispatch ordinal
+  // (`<id> fix <round>.<session>`), the numbering derived from the history so
+  // a resumed round instance continues it. A context-wall handover with
+  // nothing durable commits nothing (the unified commit skips a clean tree)
+  // — the ordinal still advances, so git may skip indices. Retry/coldstart
+  // re-dispatches stay uncommitted (the replaced session's partial work
+  // rides the next durable boundary).
+  let session = await nextFixSession(dir, task.id, round)
+  let subject = ""
   for (;;) {
+    const ordinal = session++
+    subject = `${task.id} fix ${round}.${ordinal} ${shortTitle(task.title)}`
+    nameSubject(chain, subject)
     const result = await runExecSession(
       client,
       plan,
@@ -317,7 +333,7 @@ async function runFixRound(
       chain,
       steer,
       undefined,
-      `fix ${round}`,
+      `fix ${round}.${ordinal}`,
     )
     if (result.type === "blocked") return result
     feedback = ""
@@ -325,10 +341,13 @@ async function runFixRound(
     if (decision.type === "natural") break
     if (decision.type === "continue") {
       // The fix round's handovers are /exit boundaries too (plans/0143): the
-      // round is neither booked nor committed past this point, and the
+      // round is neither booked nor committed past this point — the boundary
+      // first, then the handing-over session's own batch commits — and the
       // re-run's round entry seeds from the handoff document — the same
       // record a kill between the round's sessions leaves.
       opts.control?.maybeExit("handover", `${task.id} fix ${round} session handover`)
+      const handed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
+      if (handed.type === "failed") return commitBlocked(`${task.id} fix ${round}.${ordinal}`, handed)
       continuation = true
       continue
     }
@@ -341,7 +360,7 @@ async function runFixRound(
     return decision
   }
   const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
-  if (committed.type === "failed") return commitBlocked(`${task.id} fix ${round}`, committed)
+  if (committed.type === "failed") return commitBlocked(`${task.id} fix ${round}.${session - 1}`, committed)
   // The round never books a wait (plans/0142 D2): a fix session that ended
   // with a test request pending against a channel that will not serve it
   // (this phase is not code work, or the flag is off) waited on the driver's
@@ -592,7 +611,7 @@ export async function runWrapup(
       // synthesized gap list, commits it with the wrap-up stage (the receipts
       // land through the same session close-out commit, like a verify FAIL's
       // gap list) and the fix round below closes it.
-      const subject = `${task.id} wrapup ${task.title}`
+      const subject = `${task.id} wrapup ${shortTitle(task.title)}`
       nameSubject(chain, subject)
       await Bun.write(join(dir, taskDoc(task.id, "gaps")), laneGapList(task, gate.runs, gate))
       const committed = await git.afterSession(dir, opts, task, { stage: "wrapup", subject })

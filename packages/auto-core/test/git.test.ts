@@ -10,6 +10,8 @@ import {
   commitIdentityProblem,
   commitPending,
   commitTitle,
+  nextFixSession,
+  shortTitle,
   commitTree,
   deletedFiles,
   fileCommitted,
@@ -38,6 +40,36 @@ import {
 } from "../src/git-worktree"
 import { noCommitGit } from "../src/git-ops"
 import { git } from "./fixtures/runner"
+
+describe("shortTitle (the commit-subject title form, plans/0148 D2)", () => {
+  test("the leading words, cut at the first colon/paren/em-dash, capped at four", () => {
+    expect(shortTitle("K5 verity (batch B14)")).toBe("K5 verity")
+    expect(shortTitle("K2 families: flakey/dust/delay/ebs/switch/log-writes (batch B12)")).toBe("K2 families")
+    expect(shortTitle("Formulate the Implementation tasks")).toBe("Formulate the Implementation tasks")
+    expect(shortTitle("Formulate the Implementation tasks for the second wave")).toBe("Formulate the Implementation tasks")
+    expect(shortTitle("wall resolution — split in-diff or record the waiver")).toBe("wall resolution")
+    expect(shortTitle("sample task")).toBe("sample task")
+    // A title whose first clause is empty (it starts with the separator)
+    // falls back to its leading words — never an empty subject tail.
+    expect(shortTitle("（中文标题）的迁移任务")).toBe("（中文标题）的迁移任务")
+  })
+})
+
+describe("nextFixSession (the fix round's per-session ordinals, plans/0148 D1)", () => {
+  test("one past the highest <id> fix <round>.<n> subject across every repository root", async () => {
+    const dir = await fresh()
+    await Bun.write(join(dir, "a.txt"), "1\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "T-001 exec sample")
+    await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 2.1 sample")
+    await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 2.3 sample")
+    expect(await nextFixSession(dir, "T-001", 2)).toBe(4)
+    // A different round or task starts fresh at 1; a failed read (no commits
+    // of the shape) is an empty history.
+    expect(await nextFixSession(dir, "T-001", 1)).toBe(1)
+    expect(await nextFixSession(dir, "T-002", 2)).toBe(1)
+  })
+})
 
 async function fresh() {
   const dir = await mkdtemp(join(tmpdir(), "auto-git-"))

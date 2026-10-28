@@ -10,17 +10,7 @@
 // module — each imports it).
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
-import {
-  abortToLandResult,
-  commitTitle,
-  firstLine,
-  git,
-  identityArgs,
-  isConflict,
-  message,
-  type LandResult,
-  type WorktreeResult,
-} from "./git"
+import { abortToLandResult, commitTitle, firstLine, git, identityArgs, isConflict, message, shortTitle, type LandResult, type WorktreeResult } from "./git"
 
 // Create a lane worktree at path (the park, `.auto/worktrees/<task-id>`,
 // gitignored with the rest of `.auto/`) on the new branch `auto-lane/<task-id>`
@@ -251,7 +241,7 @@ export async function deleteBranch(dir: string, branch: string): Promise<Worktre
 // side and concludes; the re-derivation right after sets the true ticks. Any
 // other conflicted path is a real conflict and aborts.
 export async function landBranch(dir: string, branch: string, task: { id: string; title: string }, own: readonly string[] = []): Promise<LandResult> {
-  const subject = message(commitTitle(`${task.id} landing ${task.title}`), task, "landing")
+  const subject = message(commitTitle(`${task.id} landing ${shortTitle(task.title)}`), task, "landing")
   // The identity fallback applies to the merge commit like any other.
   const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", subject, branch])
   if (merged.code === 0) return { type: "ok" }
@@ -301,7 +291,7 @@ export async function currentBranch(dir: string): Promise<string | undefined> {
 // aborts the merge and leaves the worktree clean (the caller reports it — the
 // semantic resolution a session would do is not this merge's to invent).
 export async function mergeLaneUpstream(dir: string, branch: string, task: { id: string; title: string }): Promise<LandResult> {
-  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} merge repair ${task.title}`), task, "merge-repair"), branch])
+  const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", message(commitTitle(`${task.id} merge repair ${shortTitle(task.title)}`), task, "merge-repair"), branch])
   if (merged.code === 0) return { type: "ok" }
   if (isConflict(merged.out, merged.err)) return abortToLandResult(dir, merged, "the worktree")
   return { type: "failed", error: firstLine(merged.err || merged.out) || `git merge exit code ${merged.code}` }

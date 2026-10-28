@@ -47,13 +47,17 @@ describe("manual-driver prompt ratchet", () => {
     // trailer and the carryover self-heal). If one of these fails, the
     // driver's grammar changed: update prompts/ in the same change — that
     // drift is what this ratchet exists to catch.
-    expect(src("execute.ts")).toContain("`${task.id} exec ${task.title}`")
+    expect(src("execute.ts")).toContain("`${task.id} exec ${shortTitle(task.title)}`")
     expect(src("execute.ts")).toContain('stage: "execute"')
     expect(src("execute.ts")).toContain("stage: `subtask ${index}`")
     expect(src("execute.ts")).toContain('stage: "decompose"')
-    expect(src("wrapup.ts")).toContain("`${task.id} wrapup ${task.title}`")
+    expect(src("wrapup.ts")).toContain("`${task.id} wrapup ${shortTitle(task.title)}`")
+    // plans/0148: the fix round commits per session, the subject carrying the
+    // round and the session ordinal (`fix <round>.<session>`), derived from
+    // the log so a resumed round continues the numbering.
+    expect(src("wrapup.ts")).toContain("`${task.id} fix ${round}.${ordinal} ${shortTitle(task.title)}`")
     expect(src("wrapup.ts")).toContain('stage: "wrapup"')
-    expect(src("loop-task.ts")).toContain("`${task.id} done ${task.title}`")
+    expect(src("loop-task.ts")).toContain("`${task.id} done ${shortTitle(task.title)}`")
     expect(src("loop-task.ts")).toContain('stage: "done"')
     expect(src("git.ts")).toContain("`${task.id} carryover driver-state posting`")
     expect(src("git.ts")).toContain('stage: "carryover"')
@@ -79,7 +83,7 @@ describe("manual-driver prompt ratchet", () => {
     // commits, then makes the report commit (wrapup) and the state-writes
     // commit (done) — the exec grammar lives in run.md's share-commit rule.
     const run = text("run.md")
-    for (const literal of ["<task id> exec <task title>", "<task id> fix <round> <task title>", "Auto-Task: <task id>", "Auto-Stage: execute"]) {
+    for (const literal of ["<task id> exec <short title>", "<task id> fix <round>.<session> <short title>", "Auto-Task: <task id>", "Auto-Stage: execute"]) {
       expect(run, "run.md").toContain(literal)
     }
     // plans/0094: a share landed at a handover carries the share ordinal in
@@ -89,14 +93,14 @@ describe("manual-driver prompt ratchet", () => {
     // itself rides the share commit (committed content, a precise revert
     // point; only the gap list stays a disk transient), its deletion a
     // completion write in the close-out's done commit.
-    for (const literal of ["<task id> exec <task title> [<k>]", "<task id> fix <round> <task title> [<k>]"]) {
+    for (const literal of ["<task id> exec <short title> [<k>]", "<task id> fix <round>.<session> <short title>"]) {
       expect(run, "run.md").toContain(literal)
     }
     expect(run, "run.md").toContain("rides the share commit")
     expect(text("run-verify.md")).toContain("the deletion is a completion write")
     const verify = text("run-verify.md")
     expect(verify, "run-verify.md").toContain("share ordinal ` [<k>]`")
-    for (const literal of ["<task id> wrapup <task title>", "<task id> done <task title>", "Auto-Task: <task id>"]) {
+    for (const literal of ["<task id> wrapup <short title>", "<task id> done <short title>", "Auto-Task: <task id>"]) {
       expect(verify, literal).toContain(literal)
     }
     const order = ["Auto-Stage: wrapup", "Auto-Stage: done"].map((stage) => verify.indexOf(stage))
@@ -523,7 +527,7 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).toContain("`Status: continue|done|park <task id>`")
     // The park commit's grammar, stated by both driver-role files.
     for (const doc of [run, verify]) {
-      expect(doc).toContain("<task id> park <task title>")
+      expect(doc).toContain("<task id> park <short title>")
       expect(doc).toContain("Auto-Stage: park")
     }
     // The verification's widened range shapes: the park commits are

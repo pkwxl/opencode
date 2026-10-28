@@ -27,10 +27,10 @@ else — and overwrite that gap list with the current one.
 1. The unit's commit range holds only the unit's own commits: in this repository and in every nested
    repository (the master control's short facts carry their baselines), every commit in
    `<baseline commit>..HEAD` carries the `Auto-Task: <task id>` trailer and the share grammar — subject
-   `<task id> exec <task title>` or `<task id> fix <n> <task title>`, each optionally ending in the
+   `<task id> exec <short title>` or `<task id> fix <n>.<session> <short title>`, each optionally ending in the
    share ordinal ` [<k>]` (the master control appends it when the session ended by handing over),
    trailer `Auto-Stage: execute` — the master control's share commits. Two more commit shapes belong to
-   the range legitimately: the task's own park commits — subject `<task id> park <task title>`, trailers
+   the range legitimately: the task's own park commits — subject `<task id> park <short title>`, trailers
    `Auto-Task: <task id>` and `Auto-Stage: park`, the master control's landing when the task parked on
    another task's work — whose content (the parked handoff, the blocker's `Depends:` amendment) is
    protocol state, excluded from check 3's diff; and other tasks' own commits (an `Auto-Task:` trailer
@@ -77,7 +77,7 @@ else — and overwrite that gap list with the current one.
      list-marked. Every Markdown document you create ends with the terminator as above. Then the wrap-up
      commit: the same add + commit pass, message:
 
-          <task id> wrapup <task title>
+          <task id> wrapup <short title>
 
           Auto-Task: <task id>
           Auto-Stage: wrapup
@@ -90,7 +90,7 @@ else — and overwrite that gap list with the current one.
      `- [ ] <task id>` → `- [x] <task id>`); if `.auto/units.json` holds a record for this task, remove it.
   4. The completion commit: the same add + commit pass, message:
 
-          <task id> done <task title>
+          <task id> done <short title>
 
           Auto-Task: <task id>
           Auto-Stage: done

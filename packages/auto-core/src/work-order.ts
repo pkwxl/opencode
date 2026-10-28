@@ -31,7 +31,7 @@ import { taskDoc, taskDocPaths } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, parseResult } from "./document/roles"
 import { checklistProblems, scanSubtaskStates } from "./document/state"
-import { commitTree, headText, nestedRepoPrefixes, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, unitViolations } from "./git"
+import { commitTree, headText, nestedRepoPrefixes, shortTitle, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, unitViolations } from "./git"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
 import { renderWhole, type PhaseEntry } from "./prompt"
@@ -175,7 +175,7 @@ export async function adoptUnit(
       seq: await latestTestSeq(tmp),
       task,
       unit: task.id,
-      subject: `${task.id} exec ${task.title}`,
+      subject: `${task.id} exec ${shortTitle(task.title)}`,
       label: task.id,
       handovers: 0,
       startUsed: 0,
@@ -224,7 +224,7 @@ export async function adoptUnit(
   // them together with the session's work).
   await markDone(plan, task.id)
   // 4. The unified commit with the Auto-Stage trailer.
-  const settled = await commitTree(dir, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+  const settled = await commitTree(dir, task, { stage: "done", subject: `${task.id} done ${shortTitle(task.title)}` })
   if (!settled.ok) {
     return {
       ok: false,

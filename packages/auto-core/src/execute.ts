@@ -28,7 +28,7 @@ import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, director
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { formatTokens } from "./format"
-import { headText, nestedRepoPrefixes, removeIfUntracked, taskChangedPaths, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { headText, nestedRepoPrefixes, removeIfUntracked, shortTitle, taskChangedPaths, type UnitBaseline, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles } from "./git"
 import { gitOf } from "./git-ops"
 import { pathsOverlap } from "./lanes"
 import { autobanner, log, subbanner } from "./log"
@@ -349,7 +349,7 @@ export async function executeWhole(
   // ondemand mode that once gated it merged into off, plans/0130).
   const usage = sessionRole("whole").usage
   const steer = usage.handover ? handoffSteer(autoSwitches().steer, cap, task) : undefined
-  const subject = `${task.id} exec ${task.title}`
+  const subject = `${task.id} exec ${shortTitle(task.title)}`
   nameSubject(chain, subject)
   // The lead's split. The checklist the stage starts from is the committed
   // copy: one the lead of an interrupted run left uncommitted is that lead's
@@ -590,7 +590,7 @@ export async function executeWhole(
       // the landed consumables riding it (legitimate protocol state inside
       // the unit's close-out range; the wrap-up's range description names
       // the shape).
-      const committed = await git.afterSession(dir, opts, task, { stage: "park", subject: `${task.id} park ${task.title}` })
+      const committed = await git.afterSession(dir, opts, task, { stage: "park", subject: `${task.id} park ${shortTitle(task.title)}` })
       if (committed.type === "failed") return commitBlocked(`${task.id} park`, committed)
       log(`⏸ ${task.id} parked on ${directive}: its landed consumables release its successors; it resumes when ${directive} closes (the block and resume steps: ${handoffFile(task)})`)
       emitStatus({ type: "task-end", task: task.id, outcome: "parked", detail: `parked on ${directive}` })
@@ -704,7 +704,7 @@ export async function ensureDecomposed(
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the files; the files are a hard requirement.
   autobanner(`${task.id} ${task.title}: task understanding + decomposition`)
-  const subject = `${task.id} decompose ${task.title}`
+  const subject = `${task.id} decompose ${shortTitle(task.title)}`
   nameSubject(chain, subject)
   // When a shape-check / missing-artifact re-prompt is dispatched through a
   // fork of the just-ended session (revised 2026-09-18), the next round carries
@@ -884,7 +884,7 @@ export async function runSubtask(
   laneStream = false,
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
-  const subject = `${task.id} S${index} ${text}`
+  const subject = `${task.id} S${index} ${shortTitle(text)}`
   nameSubject(chain, subject)
   // Registry routing (plans/0055 §6.2): a new subtask is a new prompt — its
   // first dispatch selects from the list instead of continuing the task's

@@ -24,7 +24,7 @@ import { closeUnit } from "./close"
 import type { Control } from "./exit"
 import { parseUnitDoc } from "./document/unit"
 import { subtaskStateSpec } from "./document/spec"
-import { changedFiles, driverStateFile, repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
+import { changedFiles, driverStateFile, repoRoots, shortTitle, type GitOps, type UnitBaseline, unitViolations } from "./git"
 import { currentBranch, mergeLaneUpstream } from "./git-worktree"
 import { createDocLaneGit, createDocLaneRegistry, type DocLaneRegistry } from "./git-ops"
 import { hibernatePause } from "./hibernate"
@@ -575,7 +575,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // exit 2, changes stay in the worktree for manual handling. The
     // run's git seam carries the strategy: on the no-commit double the
     // ok answer keeps this warning dead.
-    const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+    const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${shortTitle(task.title)}` })
     if (!settledBlocked.ok) log(`⚠ interruption-scene commit failed: ${settledBlocked.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
     emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: outcome.question })
     return 2
@@ -588,7 +588,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
       log(`⏸ ${task.id} incomplete: ${lines[0]}`)
       for (const line of lines.slice(1)) log(line)
     }
-    const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+    const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${shortTitle(task.title)}` })
     if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
     emitStatus({ type: "task-end", task: task.id, outcome: "incomplete", detail: outcome.reason })
     return 2
@@ -617,7 +617,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
   // commits, an external commit is an isolation break). The run's git seam
   // carries the strategy: on the no-commit double the ok answer and the
   // empty baseline keep both failure paths dead.
-  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${shortTitle(task.title)}` })
   if (!settled.ok) {
     log(
       `⏸ ${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
@@ -1242,7 +1242,7 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       // is registry-live through this finisher): the D6 guard tolerates the
       // quarantine's strays, so they survive for the human instead of being
       // swept into the scene.
-      const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+      const settledBlocked = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${shortTitle(task.title)}` })
       if (!settledBlocked.ok) log(`⚠ interruption-scene commit failed: ${settledBlocked.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
       emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: blocked.question })
       return false
@@ -1490,7 +1490,7 @@ async function runDocUnit(
       log(`⏸ ${task.id} incomplete: ${lines[0]}`)
       for (const line of lines.slice(1)) log(line)
     }
-    const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+    const settledPending = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${shortTitle(task.title)}` })
     if (!settledPending.ok) log(`⚠ interruption-scene commit failed: ${settledPending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
     emitStatus({ type: "task-end", task: task.id, outcome: "incomplete", detail: outcome.reason })
     return { kind: "stop", code: 2 }
@@ -1510,7 +1510,7 @@ async function runDocUnit(
   // and the index tick ride this unit's own scoped commit (dm-glm's
   // measured `T-NNN done` shape — the tick is driver state outside every
   // scope, and the decorator's own-scope add carries it).
-  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${shortTitle(task.title)}` })
   if (!settled.ok) {
     const failure = `${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}`
     log(`⏸ ${failure}. The task mark is still in the worktree; commit manually and re-run`)
@@ -1652,7 +1652,7 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     if (outcome.type === "blocked") await block(directory, unit)
     log(`⏸ ${unit} ${outcome.type === "blocked" ? "is blocked (the reason is recorded only in this log)" : "incomplete, reverted to pending"}:\n${reason}`)
     for (const line of await taskResolveLines(directory, task.id)) log(line)
-    const settled = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${unit} ${outcome.type === "blocked" ? "blocked" : "pending"} ${task.title}` })
+    const settled = await ctx.git.commitTree(directory, task, { stage: "interrupted", subject: `${unit} ${outcome.type === "blocked" ? "blocked" : "pending"} ${shortTitle(task.title)}` })
     if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
     emitStatus({ type: "task-end", task: unit, outcome: outcome.type, detail: reason })
     return 2
@@ -1685,7 +1685,7 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   } else {
     log(`✓ ${task.id} done`)
   }
-  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+  const settled = await ctx.git.commitTree(directory, task, { stage: "done", subject: `${task.id} done ${shortTitle(task.title)}` })
   if (!settled.ok) {
     const failure = `${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}`
     log(`⏸ ${failure}. The task mark is still in the worktree; commit manually and re-run`)

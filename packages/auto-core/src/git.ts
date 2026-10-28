@@ -70,6 +70,41 @@ export function commitTitle(subject: string): string {
   return subject.length > TITLE_MAX ? `${subject.slice(0, TITLE_MAX)}…` : subject
 }
 
+// The concise form of a unit's title for commit subjects (plans/0148 D2):
+// the task id identifies the unit, so the subject carries only the title's
+// leading words — the first clause (cut at the first `:` / `(` / em-dash,
+// where long titles park their parenthetical detail) capped at four words.
+// The full title stays in tasks.md / todo.md and the run banners, where it
+// lives anyway; a mechanical rule, never a judgment of the title's content.
+export function shortTitle(title: string): string {
+  let head = title
+  for (const sep of [":", "(", "（", "—", "–"]) head = head.split(sep)[0]!
+  const words = (head.trim() || title).split(/\s+/).filter(Boolean)
+  return words.slice(0, 4).join(" ")
+}
+
+// The next per-session ordinal of a fix round (plans/0148 D1): the ordinals
+// derive from the history itself — a resumed round instance continues the
+// numbering instead of restarting it (a kill after a handover-boundary
+// commit leaves `T-NNN fix <round>.<n>` in the log; the re-opened round's
+// first dispatch is <n>+1, never a second <n>). Scans every repository root
+// (a round's commits may land in any of them) for the highest
+// `<id> fix <round>.<n>` subject; 1 when none exists (the fresh round, and
+// the no-git floor — a failed read is just an empty history).
+export async function nextFixSession(dir: string, taskId: string, round: number): Promise<number> {
+  const prefix = `${taskId} fix ${round}.`
+  let max = 0
+  for (const root of await repoRoots(dir)) {
+    const log = await git(root, ["log", "--format=%s"]).catch(() => undefined)
+    for (const subject of (log?.out ?? "").split("\n")) {
+      if (!subject.startsWith(prefix)) continue
+      const n = Number.parseInt(subject.slice(prefix.length), 10)
+      if (Number.isFinite(n) && n > max) max = n
+    }
+  }
+  return max + 1
+}
+
 // Commit title with a suffix: base (the execution unit's title, possibly
 // long) + suffix (e.g. `test handover #2 freeze`). When over length it is
 // the **base** that gets truncated — the suffix is the only information

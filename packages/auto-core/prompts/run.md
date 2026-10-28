@@ -228,17 +228,19 @@ iteration.
    describes, so every share commit is a precise revert point to the handoff its successor started from,
    message:
 
-        <task id> exec <task title>
+        <task id> exec <short title>
 
         Auto-Task: <task id>
         Auto-Stage: execute
 
    When the session left `docs/T-NNN/handoff.md` — it ended by handing over — the subject carries the share
-   ordinal: `<task id> exec <task title> [<k>]`, `<k>` one past the count of this task's landed exec shares
+   ordinal: `<task id> exec <short title> [<k>]`, `<k>` one past the count of this task's landed exec shares
    (you count your own landings; a restarted master control derives it from the log the same way). The
-   fix-round subject carries it identically (`<task id> fix <round> <task title> [<k>]`, counting the
-   round's landed fix shares); a share landed without a handover document carries no ordinal. The title is
-   truncated so the subject, ordinal included, stays within 100 characters; the trailers are written
+   fix-round subject carries the round and the session instead (`<task id> fix <round>.<session>`, the
+   session the round's landed fix shares count — a restarted master control derives it from the log the
+   same way). A share landed without a handover document carries no ordinal. The title is the task's
+   short form — its leading words, the task id identifies the unit — truncated so the subject, ordinal
+   included, stays within 100 characters; the trailers are written
    verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
    the porcelain lists only the transient gap list.
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
@@ -252,7 +254,7 @@ iteration.
    master control's writes, under this mechanism alone: the parked handoff as its own park commit (the same
    add + commit pass and gap-list exclusion as step 3), message:
 
-        <task id> park <task title>
+        <task id> park <short title>
 
         Auto-Task: <task id>
         Auto-Stage: park
@@ -291,23 +293,25 @@ iteration.
    - `INCOMPLETE` → the gap list is `docs/T-NNN/gaps.md` (the verification wrote it). First confirm no
      close-out happened and the state files are untouched (`todo.md` present, no `done.md`, the index line
      unticked, no wrapup or done commits atop the shares — a verification that committed or wrote them on
-     INCOMPLETE is a hard failure, stop and report). If two fix rounds have already run for this task, stop
-     and report: the work stays landed as the unit's share commits and reverting it is the person's call.
+     INCOMPLETE is a hard failure, stop and report). The fix budget is progress, not a count: count the
+     gap entries each verification's list carries — a round that shrank the count buys the loop another
+     round; once two consecutive fix rounds closed no gap (the count stopped shrinking), stop and report:
+     the work stays landed as the unit's share commits and reverting it is the person's call.
      Otherwise launch the fix child session (`run-fix.md` with `<task id>` and `<session budget>` filled —
      the session reads the gap list itself), then land its share exactly as step 3 does, with the fix-round
-     subject `<task id> fix <round> <task title>` (`<round>` is the fix round, 1 or 2) and the same
+     subject `<task id> fix <round>.<session> <short title>` (`<round>` the fix round, `<session>` the
+     round's landed fix shares count) and the same
      trailers, check its handover exactly as step 4 does (`Status: continue` → relaunch the fix child; no
      handover document or `Status: done` → the round's fix sessions are finished; the same progress rule
      as step 4's governs the round's fix sessions — a progressing handoff continues, a second consecutive
-     stall stops and reports), then launch a fresh verification child session (step 5 again). A task gets
-     at most two fix rounds.
+     stall stops and reports), then launch a fresh verification child session (step 5 again).
    - `PASS` → the verification has already closed the task out; check its outcome mechanically: the unit's
-     range from the baseline holds only its own commits — the share commits (`T-NNN exec <task title>` /
-     `T-NNN fix <n> <task title>`, each optionally ending in its share ordinal `[<k>]`, each with the
-     `Auto-Task: T-NNN` trailer), optionally this task's own park commits (`T-NNN park <task title>`,
+     range from the baseline holds only its own commits — the share commits (`T-NNN exec <short title>` /
+     `T-NNN fix <n>.<session> <short title>`, each optionally ending in its share ordinal `[<k>]`, each with the
+     `Auto-Task: T-NNN` trailer), optionally this task's own park commits (`T-NNN park <short title>`,
      `Auto-Stage: park`), and — when the task sat in the park — other tasks' own commits (their
      `Auto-Task:` trailers) that landed between its shares, then the close-out's
-     `T-NNN wrapup <task title>` (wrap-up line `WRITE` only), then `T-NNN done <task title>`; `git status
+     `T-NNN wrapup <short title>` (wrap-up line `WRITE` only), then `T-NNN done <short title>`; `git status
      --porcelain` lists nothing (this repository and every nested one); `docs/T-NNN/done.md` exists (no
      `todo.md`), the index line is ticked, and `docs/T-NNN/gaps.md` and `docs/T-NNN/handoff.md` are gone.
      When the wrap-up line was `WRITE`, also check `docs/T-NNN/report.md` mechanically — it exists and is
@@ -439,7 +443,8 @@ The loop under `single`, the deltas:
   then take run-verify's checks over the committed range yourself — the range grammar, the state files,
   the diff against the acceptance, the terminator — and on pass perform its close-out exactly as written
   (the wrap-up report, the done rename, the index tick, the commits). On a failed check write the gap
-  list and run the fix rounds yourself under run-fix.md, at most two, re-verifying after each. The
+  list and run the fix rounds yourself under run-fix.md — while the gap count shrinks, stopping after two
+  consecutive rounds that close no gap — re-verifying after each. The
   verdict line's child-to-master channel is empty here — record the verdicts in the Finish report
   instead, and name the loss honestly there: the verifications ran in the session that did the work, no
   fresh pair of eyes among them; the person's review is the independent check this mode does not have,

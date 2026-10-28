@@ -215,7 +215,7 @@ describe("the verification loop (0083 D1–D7)", () => {
       expect(promptText(calls.prompts[0]!)).toContain("only performs the wrap-up")
       // Exactly one fix round ran — round 2; the spent round 1 never re-ran.
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")
-      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 2 sample task"])
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 2.1 sample task"])
       expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)")
       // The spent count persists with the rewound phase, the progress state
       // riding it (the pre-round-2 persist: two no-progress rounds, count 1).
@@ -258,6 +258,41 @@ describe("the verification loop (0083 D1–D7)", () => {
       // FAIL measurement, before any further write): rounds 2's no-progress
       // held at 1, the baseline count 1.
       expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 3, noProgress: 1, gaps: 1 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a re-opened round continues the session numbering from the log (0148 D1): the fresh round's first dispatch is 1.2, never a second 1.1", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The 0142 rewind shape: an unbooked round 1 already left one session's
+      // batch committed (`fix 1.1`), the record rewound roundless — the
+      // re-run re-opens round 1, and its first dispatch derives the ordinal
+      // from the log: 1.2, never a second 1.1.
+      await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 1.1 sample task")
+      await saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase: { kind: "wrapup" } })
+      const { client } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          await Bun.write(join(dir, "FIXES.md"), "fix round 1 session 2\n")
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
+      expect(outcome).toEqual({ type: "completed" })
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      const fixSubjects = subjects.filter((line) => line.startsWith("T-001 fix "))
+      expect(fixSubjects).toEqual(["T-001 fix 1.2 sample task", "T-001 fix 1.1 sample task"])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -359,10 +394,13 @@ describe("the verification loop (0083 D1–D7)", () => {
       expect(promptText(calls.prompts[1]!)).toContain("Context-budget protocol")
       expect(promptText(calls.prompts[2]!)).toContain("The previous fix session ended with a context-budget handover")
       expect(promptText(calls.prompts[2]!)).toContain("docs/T-001/handoff.md")
-      // The handover split the round's sessions, not the round's budget: one
-      // fix commit carrying the handover document with the work it describes.
+      // The handover split the round's sessions, and each session's batch is
+      // durable at its own boundary (plans/0148 D1): the handing-over session
+      // commits `fix 1.1` carrying the handover document with the work it
+      // describes, the continuation's natural end commits `fix 1.2` with the
+      // rest — the round's session shape readable in git by its indices.
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")
-      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1 sample task"])
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1.2 sample task", "T-001 fix 1.1 sample task"])
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toContain("Result: PASS")
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
     } finally {
@@ -678,7 +716,7 @@ describe("the driver-run lane gate (0096 D5)", () => {
       expect(existsSync(join(dir, "docs/T-001/gaps.md"))).toBe(false)
       // One fix round; round 1's gate re-ran the anchor narrow and greened.
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")
-      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1 sample task"])
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 1.1 sample task"])
       expect(parseLaneReceipt(await Bun.file(join(dir, "docs/T-001/testhands/gate.md")).text())?.verdict).toBe("green")
     } finally {
       rmSync(dir, { recursive: true, force: true })

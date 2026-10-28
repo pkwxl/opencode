@@ -51,7 +51,7 @@ import { cp, mkdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
 import { checklistPrerequisites, subtaskId } from "./document/state"
-import { repoRoots, unitViolations, type GitOps, type UnitBaseline } from "./git"
+import { repoRoots, shortTitle, type GitOps, type UnitBaseline, unitViolations } from "./git"
 import { deleteBranch, mergeBaseSha } from "./git-worktree"
 import type { LaneCacheRule, ParallelLevel, TreeLanesSetting } from "./intent/types"
 import { log } from "./log"
@@ -1137,7 +1137,7 @@ export async function landLane(
   // state files.
   await syncIndexTicks(dir, phase)
   await syncChecklistTicks(dir, owner)
-  const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${task.title}` })
+  const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${shortTitle(task.title)}` })
   if (!settled.ok) {
     // The merge itself is in and the unit's files are the fact; the ticks are
     // cosmetic (D7 step ③'s own note). Finish the landing (④⑤ below keep the

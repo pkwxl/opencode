@@ -22,7 +22,7 @@ import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
 import { ExitRequested, type Control } from "./exit"
 import { formatClientError, formatTokens } from "./format"
-import { unitBaseline } from "./git"
+import { shortTitle, unitBaseline } from "./git"
 import { bookedSleep } from "./hibernate"
 import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
@@ -114,7 +114,7 @@ export async function ensureForkBase(
     }
     const digest = (await Bun.file(join(dir, taskDoc(task.id, "context"))).text().catch(() => "")).trim()
     if (digest) {
-      const subject = `${task.id} ctxbase ${task.title}`
+      const subject = `${task.id} ctxbase ${shortTitle(task.title)}`
       // The base is created with the model selected for the `subtask` route,
       // not `bypass` (§8.4): a base's value is a warm prefix (0003), and a
       // prefix cached under one model is a miss under another — the one-shot
