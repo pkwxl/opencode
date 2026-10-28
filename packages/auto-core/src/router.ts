@@ -240,15 +240,17 @@ export type Router = {
   ): Promise<FailoverDecision | undefined>
   // The escalation's step-1 key-rotation plan (§7 step 1), the decision
   // without its I/O: the provider of the chain's selected entry when its
-  // ring is active, with the rotation that would land — or, for a ring with
-  // no key left that is not down, `rotation: undefined`, naming a provider
-  // whose current key still failed and must be marked down before the
-  // fall-through to the model failover. undefined = no key rotation applies
-  // (a chain model the registry does not know, or a provider without an
-  // active ring): step 1 is a no-op and the caller falls straight through
-  // to the model failover. The spawn config, the host restart and the
-  // re-dispatch fork stay with the caller; the commit and the marks are the
-  // router methods the caller already calls.
+  // ring is active, with the decided key search (order-first, plans/0144
+  // D2) — `rotation.to` present when it lands, undefined when the ring
+  // refuses (every other key flagged or `until`-held; a single-key ring),
+  // either way naming the current key and the flags the search passed so
+  // the caller can apply it through commitRotation (a refusal
+  // unconditionally, a landing after its host precondition). undefined = no
+  // key rotation applies (a chain model the registry does not know, or a
+  // provider without an active ring): step 1 is a no-op and the caller
+  // falls straight through to the model failover. The spawn config, the
+  // host restart and the re-dispatch fork stay with the caller; the commit
+  // and the key state are the router methods the caller already calls.
   keyRotation(facts: RouteFacts, chain: SessionChain): KeyRotationPlan | undefined
   // The exhaustion line of the escalation's fall-through into the
   // wait-and-probe loop: the tier list's down marks as they stand at the
@@ -312,12 +314,13 @@ export type Router = {
   // dispatches through selection like any other — this method runs the
   // selection (waiting through `site.waitWindow` while only the windows
   // block), then realizes the mark-clearing by clearing the probe
-  // candidate's mark before the dispatch (and its provider's ring marks
-  // with it), so the probe runs on the first in-window candidate ignoring
-  // the marks; a successful probe leaves it cleared. undefined = a
-  // non-probe decision (nothing usable — the caller's dispatch answers the
-  // rest). The re-mark on a failed probe stays with the caller (it runs
-  // after the probe session returns).
+  // candidate's mark before the dispatch (and its provider's key state,
+  // flags and `until` marks alike, with it), so the probe runs on the
+  // first in-window candidate ignoring the marks; a successful probe
+  // leaves it cleared. undefined = a non-probe decision (nothing usable —
+  // the caller's dispatch answers the rest). The re-mark on a failed
+  // probe stays with the caller (it runs after the probe session
+  // returns).
   probeSelection(
     facts: RouteFacts,
     switches: Switches,
@@ -344,26 +347,42 @@ export function createRouter(): Router {
   let pending: { order?: string[] } | undefined
   let override: FailbackOverride | undefined
 
-  // Down marks: by the model's internal name (a raw override value by its
-  // model string, matching how selection reads them) and by (provider, key
-  // reference) for a ring. Marks live in memory only (nothing persists); a
-  // new run starts with every model eligible. The resets a failure states
-  // outlive the run, as the account's learned windows, but those only time
-  // the recovery wait's sleep and never become a mark. A mark may carry
-  // `until`, the instant a reset time named: it lasts until that instant
-  // *instead of* the scope boundary, so a boundary clear keeps it and a read
-  // past the instant treats it as cleared.
+  // Model down marks: by the model's internal name (a raw override value by
+  // its model string, matching how selection reads them). Marks live in
+  // memory only (nothing persists); a new run starts with every model
+  // eligible. The resets a failure states outlive the run, as the account's
+  // learned windows, but those only time the recovery wait's sleep and
+  // never become a mark. A mark may carry `until`, the instant a reset time
+  // named: it lasts until that instant *instead of* the scope boundary, so
+  // a boundary clear keeps it and a read past the instant treats it as
+  // cleared.
   const downModels = new Map<string, DownMark>()
+
+  // The key state of the rings (plans/0144 D1), split by whether the
+  // failure stated a reset: an `until` mark per (provider, key reference)
+  // holds a stated reset to its instant — provider state the driver
+  // measured, surviving every boundary clear; a one-shot skip flag per
+  // (provider, key reference) holds a bare failure — the next rotation
+  // search passes the key over, the committing search's caller clears the
+  // flag, and the search after that considers the key again. The flag
+  // carries no duration and no boundary semantics (a key never parks on a
+  // driver-invented schedule — the failback-scope clears never touch key
+  // state). Both kinds live in memory only; a new run starts with every
+  // key eligible.
   const downKeys = new Map<string, Map<string, DownMark>>()
+  const keySkips = new Map<string, Set<string>>()
 
   // The key rings (the state the keyring module held as a singleton until
   // this tranche): the built rings by provider, the current position per
   // provider and whether rotation is active. `rings` is undefined before
   // the run's agent starts, and every reader then answers "no ring":
   // selection's rule 4 never excludes, nothing rotates, the startup block
-  // shows declared counts only. The position never moves back — a cleared
-  // key mark does not rewind it, only a failure of the current key advances
-  // it (§6.4), so there is no restart churn.
+  // shows declared counts only. The position never moves back on its own —
+  // §6.4's restart-churn floor holds as "no restart without a failure" —
+  // but a rotation's search is order-first since plans/0144 D2, so a
+  // rotation lands on the earliest key the run holds no evidence against
+  // (an earlier key than the current one included), and /failback rewinds
+  // every position to 0 (D3).
   let rings: Map<string, ModelReference[]> | undefined
   let providers: Set<string> | undefined
   let positions = new Map<string, number>()
@@ -399,40 +418,67 @@ export function createRouter(): Router {
   let classifyUsageSink: ClassifyUsageSink | undefined
   let synthesisUsageSink: ClassifyUsageSink | undefined
 
-  // Marks at a scope boundary: the boundary clears every mark the scope
-  // covers — phase clears under every scope, task under task (default) and
-  // finer, and "session" is the new-session start of scope=session, which is
-  // also the only scope that clears there. A mark with `until` lasts until
-  // that instant instead, so it survives the clear and reads as up once the
-  // instant has passed. Calling this at a boundary the scope does not cover
-  // is a no-op.
+  // Marks at a scope boundary: the boundary clears every model mark the
+  // scope covers — phase clears under every scope, task under task
+  // (default) and finer, and "session" is the new-session start of
+  // scope=session, which is also the only scope that clears there. A mark
+  // with `until` lasts until that instant instead, so it survives the clear
+  // and reads as up once the instant has passed. Key state never
+  // participates (plans/0144 D1): an `until` key mark survives every
+  // boundary as provider-stated evidence, and a skip flag is one-shot
+  // search state, not boundary state. Calling this at a boundary the scope
+  // does not cover is a no-op.
   const clearDownMarks = (boundary: Boundary | "session", scope: FailbackScope): void => {
     if (!failbackApplies(scope, boundary)) return
     dropScopeCleared(downModels)
-    for (const marks of downKeys.values()) dropScopeCleared(marks)
   }
   const dropScopeCleared = (marks: Map<string, DownMark>): void => {
     for (const [key, mark] of marks) if (mark.until === undefined) marks.delete(key)
   }
 
-  // The key-mark reads and writes the ring methods share, and the ring
+  // The key-state writes and reads the ring methods share, and the ring
   // state's shared readers: methods of the returned object cannot name the
   // object itself, so everything one method calls on another goes through
   // these closures (the object exposes them verbatim).
+  // The split write (plans/0144 D1): a stated reset writes an `until` mark
+  // (replacing any bare flag the same failure left — the fact upgrades the
+  // guess); a bare failure writes a one-shot skip flag (beside an `until`
+  // mark, should one hold, the union excluding the key no longer than the
+  // instant already did).
   const markKeyDown = (provider: string, key: string, until?: number): void => {
+    if (until === undefined) {
+      let skips = keySkips.get(provider)
+      if (skips === undefined) {
+        skips = new Set()
+        keySkips.set(provider, skips)
+      }
+      skips.add(key)
+      return
+    }
+    clearKeySkip(provider, key)
     let marks = downKeys.get(provider)
     if (marks === undefined) {
       marks = new Map()
       downKeys.set(provider, marks)
     }
-    marks.set(key, until !== undefined ? { until } : {})
+    marks.set(key, { until })
   }
+  // A key is excluded when it carries a skip flag or an active `until`
+  // mark (a rotation search skips it; rule 4 counts it out). Key marks
+  // always carry `until` — the flag is the until-less half's whole state.
   const isKeyDown = (provider: string, key: string, now: number): boolean => {
-    const mark = downKeys.get(provider)?.get(key)
-    return mark !== undefined && (mark.until === undefined || mark.until > now)
+    if (keySkips.get(provider)?.has(key)) return true
+    const until = downKeys.get(provider)?.get(key)?.until
+    return until !== undefined && until > now
   }
+  const clearKeySkip = (provider: string, key: string): void => {
+    keySkips.get(provider)?.delete(key)
+  }
+  // Clears one provider's key state, both kinds: the recovery probe's ring
+  // half (§6.3) and /failback.
   const clearKeyDownMarks = (provider: string): void => {
     downKeys.get(provider)?.clear()
+    keySkips.get(provider)?.clear()
   }
   // Whether the run's rings rotate: false before activation and under an
   // external server.
@@ -459,25 +505,43 @@ export function createRouter(): Router {
   // — so §6.2 rule 4 then keeps the provider's entries out of selection.
   // Hoisted for the keyRotation fence; the object exposes it verbatim.
   const hasActiveRing = (provider: string): boolean => rings !== undefined && active && rings.get(provider) !== undefined
-  // Would a rotation land on a key? The current key will be marked down
-  // (step 1 of §7), so the search starts after it and wraps, skipping every
-  // key that is down; undefined = no ring, inactive rings, or the ring is
-  // exhausted (every key down). Mutates nothing. Hoisted for the keyRotation
-  // fence; the object exposes it verbatim.
+  // The ring's key search (§7 step 1; order-first with the one-shot flags
+  // of plans/0144 D2): it starts at declared index 0 and considers every
+  // key except the current one, landing on the first that carries no skip
+  // flag and no active `until` mark — the earliest key the run holds no
+  // evidence against, so a recovered earlier key is re-preferred the
+  // moment a rotation fires at all (a rotation is a restart whichever key
+  // it lands on, so landing earlier costs nothing). The flagged keys it
+  // visits join `passed`, and committing the search consumes them,
+  // landing or not — the escalation applies a refusal too, so a flag
+  // never outlives the search that passed it. undefined = no ring,
+  // inactive rings, or the rings never activated; a real ring always
+  // answers, with `to` undefined when it refuses to land (every other key
+  // flagged or `until`-held; a single-key ring always refuses). Mutates
+  // nothing. Hoisted for the keyRotation fence; the object exposes it
+  // verbatim.
   const ringRotation = (provider: string, now: number): RingRotation | undefined => {
     const keys = rings?.get(provider)
-    if (!ringsActive() || keys === undefined || keys.length < 2) return undefined
+    if (!ringsActive() || keys === undefined) return undefined
     const from = (positions.get(provider) ?? 0) % keys.length
-    for (let step = 1; step < keys.length; step++) {
-      const index = (from + step) % keys.length
-      if (!isKeyDown(provider, keys[index]!.ref, now))
-        return {
-          provider,
-          from: { ref: keys[from]!, index: from, total: keys.length },
-          to: { ref: keys[index]!, index, total: keys.length },
-        }
+    let passed: string[] | undefined
+    for (let index = 0; index < keys.length; index++) {
+      if (index === from) continue
+      const ref = keys[index]!.ref
+      if (keySkips.get(provider)?.has(ref)) {
+        ;(passed ??= []).push(ref)
+        continue
+      }
+      const until = downKeys.get(provider)?.get(ref)?.until
+      if (until !== undefined && until > now) continue
+      return {
+        provider,
+        from: { ref: keys[from]!, index: from, total: keys.length },
+        to: { ref: keys[index]!, index, total: keys.length },
+        passed: passed ?? [],
+      }
     }
-    return undefined
+    return { provider, from: { ref: keys[from]!, index: from, total: keys.length }, passed: passed ?? [] }
   }
   // A reset time that became known after a mark was written (the
   // classifier's answer arriving after the turn ended): an existing mark
@@ -506,9 +570,10 @@ export function createRouter(): Router {
     downModels.delete(model)
   }
   // The recovery probe's ring half (§6.3): the probe candidate ignores the
-  // down marks, the ring and the cap, so an exhausted ring's key marks clear
-  // for the probe — the position stays where it is. Hoisted for the
-  // probeSelection fence; the object exposes it verbatim.
+  // down marks, the ring and the cap, so the provider's key state — skip
+  // flags and `until` marks alike — clears for the probe while the
+  // position stays where it is. Hoisted for the probeSelection fence; the
+  // object exposes it verbatim.
   const clearRingMarks = (provider: string): void => {
     if (rings?.has(provider) !== true) return
     clearKeyDownMarks(provider)
@@ -534,7 +599,11 @@ export function createRouter(): Router {
     // The /failback consumption point shared by the three safe boundaries
     // (right after the pause hooks): a hit resets the failover state (the
     // down marks), and with arguments it also redefines the run-time model
-    // order. Returns whether it consumed. The chain's selected entry is
+    // order. Plans/0144 D3: the operator's command is the person's reset
+    // signal — the key rings rewind with it (all key state cleared, an
+    // `until` included, and every position back to the first key), so the
+    // next dispatch runs on key 1 in declared order. Returns whether it
+    // consumed. The chain's selected entry is
     // cleared with the raw candidate at the boundary that holds the chain
     // (the next prompt re-selects from the list) — the subtask boundary
     // calls resetRoute beside this consumption; the task and phase
@@ -545,13 +614,16 @@ export function createRouter(): Router {
       if (pending === undefined) return false
       downModels.clear()
       downKeys.clear()
+      keySkips.clear()
+      positions = new Map()
       const order = pending.order
       pending = undefined
+      const rewind = ringsActive() && rings !== undefined && rings.size > 0 ? "; key rings rewound to their first key" : ""
       if (order !== undefined) {
         override = { wildcard: order[0]!, fallback: order.slice(1) }
-        log(`⇄ /failback applied: primary model redefined as ${override.wildcard}, fallback order ${override.fallback.join(", ") || "(none)"}; fallback state reset`)
+        log(`⇄ /failback applied: primary model redefined as ${override.wildcard}, fallback order ${override.fallback.join(", ") || "(none)"}; fallback state reset${rewind}`)
       } else {
-        log(`⇄ /failback applied: fallback state reset, next prompt returns to the primary model`)
+        log(`⇄ /failback applied: fallback state reset, next prompt returns to the primary model${rewind}`)
       }
       return true
     },
@@ -579,24 +651,37 @@ export function createRouter(): Router {
       return mark !== undefined && (mark.until === undefined || mark.until > now)
     },
 
-    // Key marks, per provider and key reference (the ring position itself
-    // never moves back; only whether a key is down lives here). The three
-    // the ring methods share are the closures above, exposed verbatim.
+    // Key state, per provider and key reference (the ring position itself
+    // never moves back on its own; which keys are excluded lives here).
+    // markKeyDown is the split write of plans/0144 D1: `until` present = a
+    // stated reset held to its instant; absent = a one-shot skip flag the
+    // next rotation search passes over and its commit clears.
     markKeyDown,
-    // The key-mark counterpart of extendModelDownMark: an existing key mark
-    // lasts until `until`.
+    // The key-state counterpart of extendModelDownMark: an existing `until`
+    // mark lasts until the new instant, and an existing skip flag converts
+    // to an `until` mark — the same failure's reset stated late, the fact
+    // upgrading the guess. No state at all reads false, as before (no
+    // resurrection).
     extendKeyDownMark: (provider, key, until) => {
+      const skips = keySkips.get(provider)
+      if (skips?.has(key) === true) {
+        skips.delete(key)
+        markKeyDown(provider, key, until)
+        return true
+      }
       const marks = downKeys.get(provider)
       const mark = marks?.get(key)
       if (marks === undefined || mark === undefined) return false
       marks.set(key, { ...mark, until })
       return true
     },
+    // The `until`-mark reader (a flagged key answers undefined — the flag
+    // is not a duration; isKeyDown reads both kinds).
     keyDownMark: (provider, key) => downKeys.get(provider)?.get(key),
     isKeyDown,
-    // Clears one provider's key marks: the recovery probe's ring half (the
-    // probe candidate ignores the down marks and the ring). The ring
-    // position lives beside the marks now and never moves back either.
+    // Clears one provider's key state, both kinds: the recovery probe's
+    // ring half (the probe candidate ignores the down marks and the ring).
+    // The ring position lives beside the state and never moves.
     clearKeyDownMarks,
     clearDownMarks,
 
@@ -614,10 +699,12 @@ export function createRouter(): Router {
       active = !external
     },
     ringsActive,
-    // §6.2 rule 4: does this provider's key ring have a key that is not down?
-    // True for every provider when the rings never activated or are inactive
-    // (an external server cannot rotate, so the ring never excludes a
-    // candidate), and for providers without a ring.
+    // §6.2 rule 4: does this provider's key ring have a key that is not
+    // excluded (flagged or `until`-held)? An exhausted ring — every key
+    // carrying one of the two kinds — keeps the provider's entries out of
+    // selection. True for every provider when the rings never activated or
+    // are inactive (an external server cannot rotate, so the ring never
+    // excludes a candidate), and for providers without a ring.
     ringHasUsableKey: (provider, now) => {
       const keys = rings?.get(provider)
       if (!ringsActive() || keys === undefined) return true
@@ -626,14 +713,20 @@ export function createRouter(): Router {
     hasActiveRing,
     currentKey,
     ringRotation,
-    // Commits a decided rotation: the current key is marked down and the
-    // position advances. The position stays where it landed afterwards — a
-    // cleared mark never moves it back (§6.4). `until` is a reset time the
-    // failure-message classifier read (§7.1): the key's mark lasts until then
-    // instead of the scope boundary.
+    // Applies a decided search (§7 step 1, plans/0144 D1/D2): the from
+    // key's failure is written (an `until` the classifier read = the stated
+    // reset held to its instant; otherwise the one-shot skip flag), the
+    // flags the search passed over clear (the one-shot consumed — the next
+    // search considers those keys again; a refusal applies this half
+    // alone), and the position moves only when the search landed. The
+    // position stays where it landed afterwards — nothing moves it back on
+    // its own (§6.4's floor), but the next search starts at declared order
+    // and may land on an earlier key.
     commitRotation: (rotation, until) => {
       markKeyDown(rotation.provider, rotation.from.ref.ref, until)
-      positions.set(rotation.provider, rotation.to.index)
+      const skips = keySkips.get(rotation.provider)
+      if (skips !== undefined) for (const ref of rotation.passed) skips.delete(ref)
+      if (rotation.to !== undefined) positions.set(rotation.provider, rotation.to.index)
     },
     // The spawn config content for the managed server's next spawn (§4.3
     // injection): every registry provider's entry — the active ring's current
@@ -691,7 +784,8 @@ export function createRouter(): Router {
     // Marks the ring's current key down without moving the position: what a
     // failed recovery probe does to the key it ran on, and what an exhausted
     // ring's escalation does before it falls through; `until` as for
-    // commitRotation.
+    // commitRotation (a stated reset held to its instant, a bare failure the
+    // one-shot skip flag).
     markCurrentKeyDown: (provider, until) => {
       const key = currentKey(provider)
       if (key !== undefined) markKeyDown(provider, key.ref, until)
@@ -839,11 +933,13 @@ export function createRouter(): Router {
     },
     // The step-1 plan (see the type comment): the ring state this reads is
     // this instance's own — the same instance the escalation's commits and
-    // marks go through.
+    // marks go through. An active ring always answers a search (a
+    // single-key ring by refusing to land), so the rotation is present
+    // whenever the provider gates pass.
     keyRotation: (facts, chain) => {
       const provider = facts.registry.models.get(chain.modelEntry ?? "")?.provider
       if (provider === undefined || !hasActiveRing(provider)) return undefined
-      return { provider, rotation: ringRotation(provider, facts.clock.now()) }
+      return { provider, rotation: ringRotation(provider, facts.clock.now())! }
     },
     // The exhaustion line (see the type comment): reads this instance's
     // marks as they stand at the call — after the escalation wrote its
@@ -1156,11 +1252,13 @@ type FailoverDecision = {
 }
 
 // The escalation's step-1 key-rotation plan (the answer of `keyRotation`):
-// the provider whose ring moves, and the rotation that would land — or
-// undefined for a ring with no key left that is not down, whose current
-// key still failed and must be marked down before the fall-through to the
-// model failover.
-type KeyRotationPlan = { provider: string; rotation: RingRotation | undefined }
+// the provider whose ring moves, and the decided key search — which lands
+// (`to`) on the first eligible key of declared order, or refuses (`to`
+// undefined: every other key flagged or `until`-held, a single-key ring)
+// while still naming the current key and the flags it passed; the caller
+// applies either shape through commitRotation, the refusal unconditionally
+// and the landing after its host precondition.
+type KeyRotationPlan = { provider: string; rotation: RingRotation }
 
 // The down marks one failure's escalation may write (the answer of
 // `downTarget`, fed to `lateReset`): the chain's selected entry, and the

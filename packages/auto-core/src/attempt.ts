@@ -106,9 +106,10 @@ export async function attempt(
   // capabilities when a session exists).
   const resumable = chain.id !== undefined || chain.pending !== undefined ? (await clientOf(client, chain.agent)).capabilities.resume : true
   // Session-scope failback (§6.4): a brand-new session starts from the
-  // preferred model — the marks clear before the plan's selection (the pick
-  // then returns the primary at the session's first prompt, as the scope
-  // promises) and the chain's route resets with them. A resumed takeover and
+  // preferred model — the model marks clear before the plan's selection
+  // (the pick then returns the primary at the session's first prompt, as
+  // the scope promises) and the chain's route resets with them (key state
+  // never clears at a boundary, plans/0144 D1). A resumed takeover and
   // a consumed fork keep their state: the migrated session a failover forked
   // out goes the pending path and must not oscillate back.
   const takeover = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined

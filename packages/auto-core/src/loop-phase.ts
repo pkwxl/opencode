@@ -488,8 +488,10 @@ async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory })
   // failback retry (phase boundary): every scope resets at the phase
   // boundary; /failback requests are consumed at the same point. Registry
-  // routing (plans/0055 §6.4): every scope covers the phase boundary, so the
-  // down marks clear here.
+  // routing (plans/0055 §6.4): every scope covers the phase boundary, so
+  // the model down marks clear here (key state never clears at a boundary,
+  // plans/0144 D1; /failback below clears it wholesale and rewinds the
+  // rings).
   ctx.router.clearDownMarks("phase", autoSwitches().modelFailbackScope)
   ctx.router.consumeFailback()
   return 0

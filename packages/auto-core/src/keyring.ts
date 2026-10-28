@@ -11,14 +11,16 @@
 // (and the registry's whole provider set, the streaming-timeout floor's
 // domain — plans/0127), the label logs use for one key, and the rotation
 // shape the escalation decides on. The run state — the built rings, the
-// current position per
-// provider and whether rotation is active — lives in the router service
-// (createRouter's key-ring methods, one instance per run; the position never
-// moves back — a cleared key mark does not rewind it, only a failure of the
-// current key advances it, §6.4). Rotation is a server restart: the next key
-// is written into the spawn config and the managed server restarts, after
-// which the caller re-dispatches the same model from a fork of the failed
-// session (§7 step 1, src/session.ts).
+// current position per provider, the one-shot skip flags and the `until`
+// marks of plans/0144, and whether rotation is active — lives in the router
+// service (createRouter's key-ring methods, one instance per run; the
+// position never moves back on its own — §6.4's floor, "no restart without
+// a failure" — but the search is order-first since 0144 D2, so a rotation
+// lands on the earliest key the run holds no evidence against, and
+// /failback rewinds every position to 0, D3). Rotation is a server restart:
+// the landed key is written into the spawn config and the managed server
+// restarts, after which the caller re-dispatches the same model from a fork
+// of the failed session (§7 step 1, src/session.ts).
 //
 // Activation happens where the run's agent hosts start (src/agent-pool.ts),
 // which knows whether the opencode servers are managed or external. Under an
@@ -67,10 +69,21 @@ export function ringKeyLabel(key: RingKey): string {
   return `${key.index + 1}/${key.total} ${key.ref.label}`
 }
 
-// A decided rotation (§7 step 1): the current key `from` is marked down, the
-// ring advances to `to`. Deciding (the router's ringRotation) mutates
-// nothing; committing (its commitRotation) writes the mark and the position,
-// so a caller can check the preconditions (a host that can take a new spawn
-// config) first.
-// AUTO-DECISION: rotation is decide-then-commit rather than one mutating call (the escalation must not leave a mark or move a position it could not act on — no host, no setConfig — while a decided-but-uncommitted rotation stays replayable)
-export type RingRotation = { provider: string; from: RingKey; to: RingKey }
+// A decided key search (§7 step 1; the search order-first and the one-shot
+// flags of plans/0144 D2): the search starts at declared index 0 and
+// considers every key except the current one (`from`, the failure being
+// rotated away from). It lands (`to`) on the first key that carries no
+// skip flag and no active `until` mark — the earliest key the run holds no
+// evidence against, a recovered earlier key included — and `passed` names
+// the flagged keys it visited before stopping, by reference string. `to`
+// undefined = the ring refuses to land right now (every other key flagged
+// or `until`-held; a single-key ring always refuses). Deciding (the
+// router's ringRotation) mutates nothing, and committing (its
+// commitRotation) applies the search either way: the passed flags clear
+// (the one-shot consumed — the next search considers those keys again),
+// the from key's failure is written (a stated reset held to its instant, a
+// bare failure a fresh flag), and the position moves only when the search
+// landed. A landed search stays replayable — a caller that finds no host
+// commits nothing and every flag stands.
+// AUTO-DECISION: rotation is decide-then-commit rather than one mutating call (the escalation must not leave a mark, clear a flag or move a position it could not act on — no host, no setConfig — while a decided-but-uncommitted search stays replayable; a refusal, needing no host, commits unconditionally)
+export type RingRotation = { provider: string; from: RingKey; to?: RingKey; passed: string[] }

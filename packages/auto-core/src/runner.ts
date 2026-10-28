@@ -799,8 +799,10 @@ export async function runTask(
           // preferred model (task granularity is naturally covered by the chain
           // being destroyed per task); /failback requests are consumed at the
           // same point (and may redefine the model order wholesale). Registry routing
-          // (plans/0055 §6.4): the same boundary clears the down marks the scope
-          // covers, and the chain's selected entry with the raw candidate.
+          // (plans/0055 §6.4): the same boundary clears the model down marks the
+          // scope covers, and the chain's selected entry with the raw candidate
+          // (key state never clears at a boundary — plans/0144 D1: an `until` key
+          // mark is provider-stated evidence, a skip flag one-shot search state).
           // The failback holders and the marks live in the run's router, which
           // rides the session options (the pipeline sits below the services'
           // entry modules): the loop fills it from the installed services; a

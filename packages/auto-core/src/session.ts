@@ -330,20 +330,27 @@ async function switchModel(run: SessionRun, why: string, until?: number, classif
   return true
 }
 
-// Escalation step 1 (plans/0055 §7): a quota/auth/rate failure whose model
-// runs on a provider with a key ring moves the ring first — mark the
-// current key down, write the next key into the spawn config, restart the
-// managed server, then re-dispatch the *same* model from a fork of the
-// failed session (the retry path's source choice and note). An auth error
-// counts here because a revoked key looks like one. Only when no key is
-// left that is not down (no ring, inactive rings, an exhausted ring, no
-// host that can take a new spawn config) does the caller fall through to
-// the model failover of step 2 — which then marks the model down and lets
-// selection's ring predicate (§6.2 rule 4) skip every entry on the
-// exhausted provider.
+// Escalation step 1 (plans/0055 §7; the search order-first since plans/0144
+// D2): a quota/auth/rate failure whose model runs on a provider with a key
+// ring moves the ring first — write the from key's failure (a stated reset
+// held to its instant, a bare failure the one-shot skip flag), write the
+// landed key into the spawn config, restart the managed server, then
+// re-dispatch the *same* model from a fork of the failed session (the
+// retry path's source choice and note). The landed key is the first key of
+// declared order the run holds no evidence against, so a recovered earlier
+// key is re-preferred the moment a rotation fires at all. An auth error
+// counts here because a revoked key looks like one. Only when the search
+// refuses to land (no ring, inactive rings, every other key flagged or
+// `until`-held, no host that can take a new spawn config) does the caller
+// fall through to the model failover of step 2 — which then marks the model
+// down (the task's own exclusion of the provider's entries), while the
+// ring predicate (§6.2 rule 4) holds them out whenever every key is
+// flagged or `until`-held.
 // AUTO-RESOLVE: the design says the re-dispatch's "source choice and note are those of the retry path" — may the note keep the retry path's literal "transient session error" wording? -> no, the two note forms and the mechanism are the retry path's, but the lead names the key failure ("failed on this provider's key (…) retried on the next key of the ring") (a quota-failed fork told about a transient error would misread the tail message it carries; the forms explain a repeated prompt alike, so only the lead changes)
-// `until` as for switchModel: the failed key's mark lasts until the reset
-// time the classifier read.
+// `until` as for switchModel: a stated reset holds the failed key to the
+// instant the classifier read; without one the key carries the one-shot
+// skip flag (plans/0144 D1) — the next rotation's search passes over it
+// once, and the search after that considers it again.
 async function rotateProviderKey(run: SessionRun, why: string, until?: number): Promise<boolean> {
   const { chain, task } = run
   // The step-1 decision is the router's: the plan names the provider and
@@ -352,13 +359,15 @@ async function rotateProviderKey(run: SessionRun, why: string, until?: number): 
   // re-dispatch fork — stays here.
   const plan = run.router.keyRotation(run.routing, chain)
   if (plan === undefined) return false
-  if (plan.rotation === undefined) {
-    // No key is left that is not down (an exhausted or single-key ring):
-    // the current key failed all the same, so it is marked down before the
-    // fall-through, and §6.2 rule 4 keeps every entry on this provider out
-    // of the selection that follows.
-    // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
-    run.router.markCurrentKeyDown(plan.provider, until)
+  if (plan.rotation.to === undefined) {
+    // The ring refuses to land (every other key flagged or `until`-held, or
+    // a single-key ring): the refused search is applied all the same — the
+    // flags it passed consume (the next search considers those keys again,
+    // plans/0144 D2) and the current key's failure is written — before the
+    // fall-through, where the model mark of step 2 keeps this provider's
+    // entries out of the selection for the task's scope.
+    // AUTO-DECISION: the refusal commits unconditionally (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears; the consumption is the same one-shot every applied search pays — a flag never outlives the search that passed it)
+    run.router.commitRotation(plan.rotation, until)
     return false
   }
   // Rotation restarts the chain's host (§8.1: the pool applies restart to
@@ -592,11 +601,11 @@ async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause):
       await statsQuotaWait(opts.dir, sleep.model, paused ? Math.min(sleep.ms, Math.max(0, run.clock.now() - began)) : sleep.ms)
     if (paused) await pauseForExit(run)
     // The probe candidate's provider, when its ring kept the candidate
-    // unusable: the probe ignores the ring (§6.3), so the ring's key marks
-    // clear for the probe and the key it ran on is re-marked on failure —
-    // the same clear-and-re-mark the model mark gets, and the position
-    // never moves.
-    // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared mark (the probe ran on the current key alone; the earlier keys' marks would have cleared at the same boundaries anyway, and a wrapped rotation onto them later is the §6.4 semantics a boundary clear already has)
+    // unusable: the probe ignores the ring (§6.3), so the provider's key
+    // state — skip flags and `until` marks alike — clears for the probe
+    // and the key it ran on is re-marked on failure, the same
+    // clear-and-re-mark the model mark gets; the position never moves.
+    // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared key (the probe ran on the current key alone; the earlier keys hold no state after the clear, so the next rotation's order-first search lands on the first of them (plans/0144 D2) — re-marking them would park keys the probe never tested)
     // The selection itself (the wait-and-reselect loop and the clear half
     // of the mark dance) is the router's `probeSelection`, with this
     // loop's limits fetch and window sleeper handed in as callbacks; the

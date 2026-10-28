@@ -322,8 +322,10 @@ async function taskBracket(directory: string, unit: string, title: string, lead:
 //   - the /failback consumption point: the chain was destroyed with the
 //     unit's pipeline, no chain.model to clear; apply the model-order
 //     override (if any). Registry routing (plans/0055 §6.4): the chain's
-//     destruction is also where the task-scope down marks clear — the marks
-//     are run state, not chain state.
+//     destruction is also where the task-scope model down marks clear — the
+//     marks are run state, not chain state (key state never clears at a
+//     boundary, plans/0144 D1; the /failback consumption below clears it
+//     wholesale and rewinds the rings).
 // exitProbe: the scheduler's drain rule — under concurrency a /exit seen at
 // a landing stops dispatching and takes effect only after the last lane
 // lands (maybeExit would throw mid-drain and abandon in-flight work), so

@@ -965,7 +965,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     }
   })
 
-  test("an exhausted ring falls through to model failover on the next candidate", async () => {
+  test("a refusing ring falls through to model failover on the next candidate, the passed flags consumed", async () => {
     const routing = facts()
     routing.router.activateRings(routing.registry, false)
     const agent = make({ turn: classTurn("usage limit reached, quota exceeded", undefined, 2) })
@@ -973,17 +973,21 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     const chain = deepChain()
     const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
     expect(result.type).toBe("idle")
-    // a fails on key A (rotation), fails again on key B (exhausted): the
-    // model itself is marked down and b takes over via a fork.
+    // a fails on key A (rotation), fails again on key B (the two-key ring
+    // refuses — the search passes A and lands nowhere): the refusal applies
+    // (A's flag consumed, B's failure written) and the model itself is
+    // marked down, so b takes over via a fork.
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a", "other/b"])
     expect(restarts).toHaveLength(1)
     expect(configs).toHaveLength(1)
     expect(chain.modelEntry).toBe("b")
     expect(services().router.isModelDown("a", Date.now())).toBe(true)
-    // Every key of the ring is down now, so §6.2 rule 4 keeps a out (the
-    // spawn config still names the current key — a restart for any other
-    // reason spawns on the last position).
-    expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(false)
+    // The refusal consumed the flag of the key the search passed (the next
+    // retry checks A again, plans/0144 D2); the provider's entries leave
+    // this selection through the model mark, and the spawn config still
+    // names the current key — the position never moves on a refusal.
+    expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(true)
+    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_A}", Date.now())).toBe(false)
     expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } })
   })
 
@@ -1003,30 +1007,44 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     expect(chain.modelEntry).toBe("a")
   })
 
-  test("a cleared key mark does not move the ring back; only a failure of the current key advances it (wrapping onto the cleared key)", async () => {
+  test("the skip flag is one-shot: the refusing search consumes it, and the later retry re-checks the earlier key (plans/0144)", async () => {
     const routing = facts()
     routing.router.activateRings(routing.registry, false)
-    // First dispatch: turn 1 fails with quota, the ring rotates A → B.
+    // First dispatch: turn 1 fails with quota on key A, the ring rotates
+    // A → B (A flagged) and the forked re-dispatch succeeds.
     const first = fakeHost()
     const firstAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
     await runSession(firstAgent.client, task, "p", optsWith(first.host, routing), deepChain(), undefined, undefined, DEFAULTS)
+    expect(first.restarts).toHaveLength(1)
     expect(first.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
-    // A scope boundary clears every mark: the ring stays on key B (the
-    // config still names it — no restart churn) and the model is eligible
-    // again, so the next dispatch selects a.
-    services().router.clearDownMarks("task", "task")
-    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } })
-    // That dispatch fails on key B: only now does the ring move — wrapping
-    // onto key A, whose mark the boundary cleared.
+    // Second dispatch fails on key B: the two-key ring refuses — the search
+    // passes A and lands nowhere — the refusal applies (A's flag consumed,
+    // B's failure written) and the model failover takes over.
     const second = fakeHost()
     const secondAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
-    const chain = deepChain()
-    const result = await runSession(secondAgent.client, task, "q", optsWith(second.host, routing), chain, undefined, undefined, DEFAULTS)
-    expect(result.type).toBe("idle")
-    expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
-    expect(second.restarts).toHaveLength(1)
-    expect(second.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
-    expect(chain.modelEntry).toBe("a")
+    const secondChain = deepChain()
+    const secondResult = await runSession(secondAgent.client, task, "q", optsWith(second.host, routing), secondChain, undefined, undefined, DEFAULTS)
+    expect(secondResult.type).toBe("idle")
+    expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "other/b"])
+    expect(second.restarts).toEqual([])
+    expect(secondChain.modelEntry).toBe("b")
+    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_A}", Date.now())).toBe(false)
+    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_B}", Date.now())).toBe(true)
+    // Third dispatch, the model mark cleared at its boundary (key state
+    // never clears at one, plans/0144 D1): a is selected again, the
+    // position still holds B — whose failure this dispatch re-states — and
+    // the order-first search lands on A, the clean earlier key: the later
+    // retry checks it again.
+    services().router.clearDownMarks("task", "task")
+    const third = fakeHost()
+    const thirdAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+    const thirdChain = deepChain()
+    const thirdResult = await runSession(thirdAgent.client, task, "r", optsWith(third.host, routing), thirdChain, undefined, undefined, DEFAULTS)
+    expect(thirdResult.type).toBe("idle")
+    expect(thirdAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    expect(third.restarts).toHaveLength(1)
+    expect(third.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
+    expect(thirdChain.modelEntry).toBe("a")
   })
 
   test("under an external server the rings are inactive, with a note, and quota goes straight to model failover", async () => {
