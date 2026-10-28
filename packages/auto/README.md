@@ -1549,7 +1549,12 @@ reason is printed in the run log and the progress record turns into a summary st
 longer reused — human attention may take hours and changes the environment, so the old session's context is
 no longer trustworthy); after rerunning, a new session continues precisely from the tick state and stage
 record. When strict recovery rolls a unit back, the retracted work goes into git stash (message prefix
-`auto-rollback`); the log says how to retrieve it. Exhausted network-failure retries count as "interrupted
+`auto-rollback`); the log says how to retrieve it. Foreign commits you land between an unexpected
+interruption and the re-run (a hand-commit protecting the in-flight work) are **adopted, not blocking**: the
+interrupted session is never reused across them and never rolled back over them — the resume log names what
+was adopted (per repository, the non-driver commit count since the recorded baseline) and a fresh session
+continues from the current committed state; the re-run's stop for a dirty tree belongs to the *graceful-exit*
+rerun, where the worktree really is yours to clean. Exhausted network-failure retries count as "interrupted
 mid-flight with no summary" and keep session-reuse eligibility — recovery prefers to reclaim the original
 session.
 

@@ -670,7 +670,9 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
     if (head === sha) continue
     const foreign = await foreignCommits(root, sha)
     if (foreign > 0) {
-      problems.push(`${rel}: ${foreign} non-driver commit(s) since baseline (no Auto-Stage trailer); external commits mixed in, session context is stale`)
+      // Factual line only; the interpretation (adoption, no reuse, no
+      // rollback) is the recovery ladder's (plans/0145 D1).
+      problems.push(`${rel}: ${foreign} non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)`)
     }
   }
   return problems

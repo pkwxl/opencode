@@ -352,7 +352,6 @@ export async function runTask(
           return { alive, usage: alive ? await sessionUsage(recalledClient, session, recalled.used) : undefined }
         },
       })
-      if (verdict.kind === "dirty") return { type: "dirty", files: verdict.files }
       if (verdict.kind === "reuse") {
         resumeSession(chain, verdict.session, verdict.usage, Date.now(), resumeNote(recalled.phase, true, strict))
         // Session-agent binding and the continuation's model (plans/0055 §8.2,

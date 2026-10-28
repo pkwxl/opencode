@@ -123,9 +123,6 @@ export type LivenessProbe = (session: string) => Promise<{ alive: boolean; usage
 
 // What the ladder decided for one recalled record:
 type RecoveryVerdict =
-  // External commits mixed into baseline..HEAD: no rollback (a rollback only
-  // reclaims the driver's own changes), the dirty worktree goes to a human.
-  | { kind: "dirty"; files: string[] }
   // The interrupted session is reused: the caller takes the takeover (its own
   // chain transitions and log line); the record's model/agent ride along for
   // the continuation's binding (plans/0055 §6.2/§8.2 — the first dispatch
@@ -201,10 +198,20 @@ export async function recoveryLadder(record: Progress, run: LadderRun): Promise<
   if (run.strict && record.active === true && rerun && !handedOff && record.baseline !== undefined) {
     // Strict verification and rollback (plans/0022 3.1 ③④): applies to active
     // records that will re-run, were not handed over, and carry a baseline.
-    // External commits mixed in: no rollback, the dirty outcome goes to a
-    // human.
+    // Foreign commits mixed in (plans/0145 D1): the recorded session's view of
+    // the present is distorted — never reused — and a rollback is refused
+    // (0022 3.3 reclaims only driver commits and never rewrites a person's
+    // history), but the unit is not stopped for it: the person already acted,
+    // by committing and by re-running, so the current committed state is
+    // adopted as the scene and a fresh session continues from it, the why
+    // naming what was adopted (the detection record — P8's line, not a block).
     const drift = await baselineIntact(run.dir, record.baseline)
-    if (drift.length) return { kind: "dirty", files: drift }
+    if (drift.length) {
+      return {
+        kind: "fresh",
+        why: `foreign commits since the recorded baseline adopted as the current state (${drift.join("; ")}); the interrupted session's context is stale`,
+      }
+    }
     // §10 item 11 (plans/0055): the recorded model is judged by eligibility —
     // a window change that only moves the fresh pick does not roll a unit
     // back; a model marked down, outside its windows, excluded by the agent

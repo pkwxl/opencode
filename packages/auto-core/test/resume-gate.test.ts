@@ -2,8 +2,12 @@
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Opts } from "../src/opts"
 import type { Phase, Progress } from "../src/resume"
+import { git, unitBaseline } from "../src/git"
 import { phaseText, recoveryLadder, resumeNote, unitReruns, type LadderRun, type LivenessProbe, type UnitRerunCtx } from "../src/resume-gate"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -161,8 +165,9 @@ describe("resumeNote (interruption-recovery note)", () => {
 // ---- (requireArtifact) both run. The verdicts carry no phase wording — ----
 // ---- each caller renders its own precision (the task caller phaseText, ----
 // ---- the step caller its session kind), pinned by the caller drives in  ----
-// ---- test/resume.test.ts. The dirty arm (drift since the baseline       ----
-// ---- needs a real repository) is covered through the step caller by     ----
+// ---- test/resume.test.ts. The adoption arm (drift since the recorded    ----
+// ---- baseline needs a real repository) is pinned below with a seeded    ----
+// ---- temp repository and through the step caller by                     ----
 // ---- test/artifact.test.ts's strict suite.                              ----
 
 describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
@@ -201,6 +206,34 @@ describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
   test("strict: intact baseline + usable session + eligible model → reuse", async () => {
     const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ switches: STRICT, strict: true, probe: healthy }))
     expect(verdict.kind).toBe("reuse")
+  })
+
+  test("strict: foreign commits since the recorded baseline → fresh with adoption (plans/0145 D1) — never reused, never rolled back, the run not stopped", async () => {
+    // A person's hand-commit between the interruption and the re-run (the
+    // t089-100 incident's shape): the recorded session's view of the present
+    // is distorted, but the person already acted, by committing and by
+    // re-running — the current committed state is adopted as the scene and a
+    // fresh session continues from it, the why naming what was adopted.
+    const dir = await mkdtemp(join(tmpdir(), "auto-ladder-drift-"))
+    try {
+      await git(dir, ["init", "-q"])
+      await writeFile(join(dir, "seed.txt"), "s")
+      await git(dir, ["add", "-A"])
+      await git(dir, ["commit", "-qm", "seed"])
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "human.txt"), "human edit")
+      await git(dir, ["add", "-A"])
+      await git(dir, ["commit", "-qm", "human commit"])
+      // The session is alive and the model eligible — adoption wins anyway:
+      // a live session is never continued across foreign commits.
+      const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline }), run({ switches: STRICT, strict: true, dir, probe: healthy }))
+      expect(verdict).toEqual({
+        kind: "fresh",
+        why: "foreign commits since the recorded baseline adopted as the current state (.: 1 non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)); the interrupted session's context is stale",
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test("strict: --new-session → rollback naming the flag (the collapsed string both callers share)", async () => {

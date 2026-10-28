@@ -113,8 +113,9 @@ export async function requireArtifact<T>(
   // resume (OPENCODE_AUTO_STRICT_RESUME): check the unit baseline and the
   // effective model before reuse (plans/0022-session-recovery-fidelity-design.md
   // 3.1); when fidelity cannot be kept, roll back to the baseline and redo as a
-  // fresh step — foreign commits mixed in go straight to dirty for a human (git
-  // untouched).
+  // fresh step — foreign commits mixed in bar reuse and rollback alike and are
+  // adopted as the current scene (plans/0145 D1), the step redone in a new
+  // session with git untouched.
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
@@ -149,7 +150,6 @@ export async function requireArtifact<T>(
           return { alive, usage: alive ? await sessionUsage(recalledClient, session, recalled!.used) : undefined }
         },
       })
-      if (verdict.kind === "dirty") return { type: "dirty", files: verdict.files }
       if (verdict.kind === "reuse") {
         resumedSession = verdict.session
         resumedUsage = verdict.usage

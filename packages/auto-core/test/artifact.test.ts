@@ -1,7 +1,7 @@
 // Unit tests for src/artifact.ts: requireArtifact phase-step recovery (spec.step), the standalone unit gate (spec.unitStart), strict resume (STRICT_RESUME).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -500,17 +500,40 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     }
   })
 
-  test("external commits since the baseline → dirty for a human (no rollback, no session)", async () => {
+  test("external commits since the baseline → adopted as the current scene (plans/0145 D1): no reuse, no rollback, the step redone in a new session", async () => {
+    // The person's hand-commit between the interruption and the re-run: the
+    // recorded session's view is stale, but the run is not stopped for it —
+    // the commit stays in history untouched and a fresh session continues
+    // from it (the t089-100 incident's shape).
     const { dir } = await seeded({ model: "kimi/k2" })
     try {
       await writeFile(join(dir, "human.txt"), "human edit")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "human commit")
       const { client, state } = stepClient("ses_plan_old")
-      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => {}), STRICT)
-      expect(typeof value === "object" && "type" in value && value.type).toBe("dirty")
-      expect(state.creates).toBe(0)
+      let resetCalled = false
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "))
+      })
+      try {
+        expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      } finally {
+        printed.mockRestore()
+      }
+      // Not dirty: the step continued — the fresh session redid it.
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      expect(state.prompts).toEqual(["ses_new_1"])
+      // The interrupted session is never reused across foreign commits.
+      // Nothing rolled back or stashed; the person's commit stays in history.
       expect(await git(dir, "stash", "list")).toBe("")
+      expect(await git(dir, "log", "--oneline")).toContain("human commit")
+      // The detection record: the resume log names what was adopted.
+      const line = lines.find((value) => value.includes("resuming the interruption point"))
+      expect(line).toContain("foreign commits since the recorded baseline adopted as the current state")
+      expect(line).toContain(".: 1 non-driver commit(s) since the recorded baseline")
+      expect(line).toContain("redoing this step in a new session")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
