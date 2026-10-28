@@ -446,7 +446,8 @@ exit code stays green.
 | `.gitignore` holds the retired `/.gitignore` entry (projects initialized before plans/0138) | Fixable | Remove the entry — the ignore set is a tracked project surface; the file surfaces untracked and lands in git with the next commit |
 | `.gitignore` holds the retired `/opencode.json` entry (projects initialized before plans/0138) | Manual | Remove the line by hand to surface `opencode.json` as a tracked project surface — or keep the line and own it if the file must stay local (raw secrets belong in references, never literals) |
 | `opencode.json` missing | Fixable | Write the built-in template (left alone when it exists, possibly containing manual edits) |
-| `opencode.json` missing the `external_directory` allow for a root symlink's resolved target (auto-core plans/0122) | Fixable | Insert the allow additively (person entries kept, always winning the evaluation tie) |
+| `opencode.json` missing the working-directory knowledge boundary — the `"/**": "deny"` + `"/tmp/**": "allow"` pair under `permission.external_directory` (auto-core plans/0147) | Fixable | Insert the pair additively (person entries kept, always winning the evaluation tie) |
+| `opencode.json` missing the root-symlink read-only stamps — the `external_directory` allow or the matching `permission.edit` deny for a root symlink's resolved target (auto-core plans/0122; 0147) | Fixable | Insert both layers additively (person entries kept, always winning the evaluation tie) |
 | A stale `external_directory` allow — its symlink or target is gone (auto-core plans/0122) | Manual | Remove the entry if the reference moved |
 | `opencode.json` cannot hold per-pattern allows (malformed file or a flat action, auto-core plans/0122) | Manual | Add them by hand |
 | Bundle provenance: a managed intent-bundle file stale or person-edited (auto-core plans/0100) | Manual | Reported; `sync` plans the upgrade |

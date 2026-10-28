@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
-import { hostname, tmpdir } from "node:os"
+import { homedir, hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
 import { subtaskDoc, taskDoc } from "@opencode-ai/auto-core/docpaths"
@@ -1347,27 +1347,29 @@ describe("CLI: init freezes the project config", () => {
     const corpus = await mkdtemp(join(tmpdir(), "auto-cli-corpus-"))
     const readOpencode = () => Bun.file(join(dir, "opencode.json")).text()
     try {
-      // The floor: no root symlinks — no stamp line, no external_directory.
+      // The floor: no root symlinks — no stamp line; the external_directory
+      // the fresh file carries is the knowledge boundary alone (plans/0147).
       const plain = await runCli(["init", dir])
       expect(plain.code).toBe(0)
       expect(plain.out).not.toContain("stamped: opencode.json")
-      expect(JSON.parse(await readOpencode()).permission).not.toHaveProperty("external_directory")
+      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow" })
 
       await symlink(corpus, join(dir, "linux"))
       await commitFixture(dir)
       // A re-init stamps the person's existing file additively.
       const stamped = await runCli(["init", dir])
       expect(stamped.code).toBe(0)
-      expect(stamped.out).toContain(`stamped: opencode.json permission.external_directory allows for ${corpus}/**`)
+      expect(stamped.out).toContain(`stamped: opencode.json the root-symlink read-only stamps (external_directory allow + edit deny) for ${corpus}/**`)
       const written = JSON.parse(await readOpencode())
-      expect(written.permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+      expect(written.permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
 
       // A removed entry is a fixable finding; -f applies without asking.
       await writeFile(join(dir, "opencode.json"), JSON.stringify({ ...written, permission: { read: "allow" } }, null, 2) + "\n")
       const fixed = await runCli(["fix", dir, "-f"])
       expect(fixed.code).toBe(0)
-      expect(fixed.out).toContain("fixed: opencode.json: insert the root-symlink external_directory allow(s)")
-      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+      expect(fixed.out).toContain("fixed: opencode.json: insert the knowledge boundary (deny /** , allow /tmp/**)")
+      expect(fixed.out).toContain("fixed: opencode.json: insert the root-symlink allow(s) and their read-only edit deny(s)")
+      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
     } finally {
       await rm(dir, { recursive: true, force: true })
       await rm(corpus, { recursive: true, force: true })
@@ -5949,7 +5951,9 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
   async function wallProject(wall: boolean): Promise<{ dir: string; corpus: string }> {
     const root = await mkdtemp(join(tmpdir(), "auto-cli-wall-"))
     const dir = join(root, "project")
-    const corpus = join(root, "corpus")
+    // The corpus lives OUTSIDE /tmp (plans/0147): the knowledge boundary's
+    // receipts allowance covers /tmp, and a reference there cannot seal.
+    const corpus = await mkdtemp(join(homedir(), "auto-cli-wall-corpus-"))
     await mkdir(dir, { recursive: true })
     await mkdir(corpus, { recursive: true })
     await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
@@ -6031,7 +6035,8 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       expect(record).toContain("Wall-sealed: docs/R-01/P01-spec-read/spec-notes.md")
       expect(record).toContain("Wall-sealed: docs/T-100/notes.md")
       const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+      // The wall's deny beside the knowledge boundary's pair (plans/0147).
+      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" })
       // Repeated closure never re-closes: the wall derives closed, the next
       // advance is P02's ordinary review stop.
       const again = await agent.run(["transfer", dir])
@@ -6101,7 +6106,8 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       expect(retrofit.out).toContain("sealed reference wall closed (P01-spec-read Spec read)")
       expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(false)
       const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+      // The wall's deny beside the knowledge boundary's pair (plans/0147).
+      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" })
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })

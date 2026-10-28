@@ -4,12 +4,18 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
   applyExternalAllows,
+  applyKnowledgeBoundary,
   externalAllowsStatus,
   externalDirectoryEntries,
+  knowledgeBoundaryMissing,
   missingExternalDirectoryAllows,
+  missingReadOnlyEditDenies,
+  readOnlyEditEntries,
   rootSymlinkRealPaths,
   staleExternalDirectoryAllows,
   stampExternalDirectories,
+  stampKnowledgeBoundary,
+  stampReadOnlyEdits,
 } from "../src/external-dirs"
 
 // The corpus and the project side by side under tmp (siblings, never nested:
@@ -170,10 +176,16 @@ describe("externalAllowsStatus and applyExternalAllows", () => {
       await chmod(file, 0o444)
 
       const status = await externalAllowsStatus(project)
-      expect(status).toEqual({ status: "needs-stamp", missing: [`${corpus}/**`] })
+      // The read-only composite (plans/0147 D2): both layers named — the
+      // external_directory allow and the edit-layer deny.
+      expect(status).toEqual({ status: "needs-stamp", missing: [`${corpus}/**`, `edit:${corpus}/**`] })
       expect(await applyExternalAllows(project)).toBe(true)
       expect(await readFile(file, "utf8")).toBe(
-        JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow" }, read: "allow" } }, null, 2) + "\n",
+        JSON.stringify(
+          { permission: { external_directory: { [`${corpus}/**`]: "allow" }, read: "allow", edit: { "*": "ask", [`${corpus}/**`]: "deny" } } },
+          null,
+          2,
+        ) + "\n",
       )
       expect(await externalAllowsStatus(project)).toEqual({ status: "unchanged" })
       expect(await applyExternalAllows(project)).toBe(false)
@@ -268,5 +280,72 @@ describe("the wall's entry readers and the closure write", () => {
     const created = stampWallClosure(noSection, ["/corpus"])!
     expect((JSON.parse(created) as any).permission.external_directory).toEqual({ [stampKey("/corpus")]: "deny" })
     expect(stampWallClosure("not json", ["/corpus"])).toBeUndefined()
+  })
+})
+
+// —— The working-directory knowledge boundary and the read-only composite (plans/0147) ——
+
+describe("stampKnowledgeBoundary (plans/0147 D1)", () => {
+  test("inserts deny-/** then allow-/tmp at the front; existing allows keep functioning after the deny; idempotent", () => {
+    const before = JSON.stringify({ permission: { external_directory: { "/corpus/**": "allow", "/person/**": "deny" } } }) + "\n"
+    const stamped = stampKnowledgeBoundary(before)!
+    const parsed = JSON.parse(stamped) as any
+    // The deny first, /tmp after it (winning its tie), the existing corpus
+    // allow after both (still winning its tie against the deny), the
+    // person's key last.
+    expect(Object.keys(parsed.permission.external_directory)).toEqual(["/**", "/tmp/**", "/corpus/**", "/person/**"])
+    expect(stampKnowledgeBoundary(stamped)).toBe(stamped)
+    // A person's own /** key of any action is the same wall: present, never inserted over.
+    const personWall = JSON.stringify({ permission: { external_directory: { "/**": "ask" } } }) + "\n"
+    expect(knowledgeBoundaryMissing(personWall)).toBe(true)
+    const stamped2 = stampKnowledgeBoundary(personWall)!
+    expect((JSON.parse(stamped2) as any).permission.external_directory["/**"]).toBe("ask")
+    expect((JSON.parse(stamped2) as any).permission.external_directory["/tmp/**"]).toBe("allow")
+    expect(stampKnowledgeBoundary("not json")).toBeUndefined()
+  })
+
+  test("an absent permission or section gains the pair; apply writes idempotently", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-boundary-"))
+    try {
+      const file = join(dir, "opencode.json")
+      await writeFile(file, JSON.stringify({ model: "mine" }, null, 2) + "\n")
+      expect(await applyKnowledgeBoundary(dir)).toBe(true)
+      const parsed = JSON.parse(await readFile(file, "utf8")) as any
+      expect(parsed.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow" })
+      expect(parsed.model).toBe("mine")
+      expect(await applyKnowledgeBoundary(dir)).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("stampReadOnlyEdits (plans/0147 D2)", () => {
+  const entries = readOnlyEditEntries(["/corpus"])
+
+  test("an absent edit rule materializes as the object form preserving the effective default; a bare action becomes the leading * entry", () => {
+    const absent = stampReadOnlyEdits(JSON.stringify({ permission: {} }) + "\n", entries)!
+    expect((JSON.parse(absent) as any).permission.edit).toEqual({ "*": "ask", "/corpus/**": "deny" })
+    const bare = stampReadOnlyEdits(JSON.stringify({ permission: { edit: "allow" } }) + "\n", entries)!
+    expect((JSON.parse(bare) as any).permission.edit).toEqual({ "*": "allow", "/corpus/**": "deny" })
+  })
+
+  test("an existing edit object keeps its order, the deny placed to beat the blanket action and lose to the person's later keys", () => {
+    const object = stampReadOnlyEdits(JSON.stringify({ permission: { edit: { "/person/**": "allow", "*": "allow" } } }) + "\n", entries)!
+    expect(Object.keys((JSON.parse(object) as any).permission.edit)).toEqual(["/person/**", "*", "/corpus/**"])
+    // A person key already on the deny's key is never inserted over.
+    expect(missingReadOnlyEditDenies(JSON.stringify({ permission: { edit: { "/corpus/**": "ask" } } }) + "\n", entries)).toEqual([])
+    expect(stampReadOnlyEdits("not json", entries)).toBeUndefined()
+  })
+})
+
+describe("the stamp ordering under the boundary (plans/0147 D1/D2)", () => {
+  test("a symlink allow lands after the /** deny and therefore wins its tie; without the deny, the 0122 front insert", () => {
+    const withBoundary = JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow" } } }) + "\n"
+    const stamped = stampExternalDirectories(withBoundary, externalDirectoryEntries(["/corpus"]))!
+    expect(Object.keys((JSON.parse(stamped) as any).permission.external_directory)).toEqual(["/**", "/corpus/**", "/tmp/**"])
+    const without = JSON.stringify({ permission: { external_directory: { "/person/**": "deny" } } }) + "\n"
+    const stamped0122 = stampExternalDirectories(without, externalDirectoryEntries(["/corpus"]))!
+    expect(Object.keys((JSON.parse(stamped0122) as any).permission.external_directory)).toEqual(["/corpus/**", "/person/**"])
   })
 })

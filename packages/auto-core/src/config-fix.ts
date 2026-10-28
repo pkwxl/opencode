@@ -18,11 +18,15 @@
 //     config loads strictly once the key rules are applied; otherwise they are
 //     reported as skipped.
 //   - Files a person may have edited (opencode.json, brief.md) are only
-//     written when missing, as init does. Two exceptions: moving the retired
-//     source/destDir into brief.md (appends to its sections), and inserting
+//     written when missing, as init does. Three exceptions: moving the retired
+//     source/destDir into brief.md (appends to its sections); inserting
 //     the root-symlink external_directory allows into opencode.json
 //     (plans/0122 — additive, exactly those allow entries, the person's
-//     rules kept and always winning the evaluation tie).
+//     rules kept and always winning the evaluation tie); and inserting the
+//     working-directory knowledge boundary with the symlink targets'
+//     read-only edit denies (plans/0147 — additive, exactly the
+//     deny-`/**` + allow-`/tmp/**` pair and those deny entries, the
+//     person's later rules still winning).
 // validateProjectConfig stays strict: run, status and amend name `fix`
 // in a strict failure when a key rule applies (fixHint); `fix --dryrun`
 // lists the same findings without writing.
@@ -49,15 +53,7 @@ import {
   retiredGitignoreEntries,
 } from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
-import {
-  applyExternalAllows,
-  externalDirectoryEntries,
-  missingExternalDirectoryAllows,
-  OPENCODE_CONFIG_FILE,
-  rootSymlinkRealPaths,
-  staleExternalDirectoryAllows,
-  stampExternalDirectories,
-} from "./external-dirs"
+import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, readOnlyEditEntries, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
 import { supersedingPhases } from "./roadmap"
@@ -268,33 +264,53 @@ export async function planFix(dir: string): Promise<FixPlan> {
     })
   }
 
-  // The template write carries the stamp when root symlinks exist (plans/
-  // 0122), so one pass sets a fresh file up completely; the file itself stays
-  // the template byte-for-byte when it does not.
+  // The template write carries the boundary (plans/0147) and the read-only
+  // symlink stamps (plans/0122 + 0147 D2), so one pass sets a fresh file up
+  // completely; the file itself stays the template byte-for-byte when no
+  // symlinks exist.
   const stampedTemplate = async () => {
     const text = await Bun.file(templateConfig).text()
-    const stamped = stampExternalDirectories(text, externalDirectoryEntries(await rootSymlinkRealPaths(dir)))
-    return stamped ?? text
+    const realPaths = await rootSymlinkRealPaths(dir)
+    let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
+    if (next !== undefined) next = stampReadOnlyEdits(next, readOnlyEditEntries(realPaths))
+    return next ?? text
   }
   if (!(await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).exists())) {
     fixable(OPENCODE_CONFIG_FILE, "missing", "write the template", async () => Bun.write(join(dir, OPENCODE_CONFIG_FILE), await stampedTemplate()))
   } else {
-    // The root-symlink external_directory allows (plans/0122): missing
-    // entries are fixable (the write re-derives from disk at apply time —
-    // idempotent); a stale allow or a file that cannot hold per-pattern
-    // entries is manual (never guess, never delete person content).
+    const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text()
+    // The working-directory knowledge boundary (plans/0147 D1): standing
+    // projects keep the pre-boundary bytes; missing boundary keys are fixable
+    // (the person widens by appending later keys, which win the tie), a file
+    // that cannot hold per-pattern entries is manual.
+    const boundaryMissing = knowledgeBoundaryMissing(text)
+    if (boundaryMissing === undefined) {
+      findings.push({
+        class: "manual",
+        path: OPENCODE_CONFIG_FILE,
+        problem: "the permission.external_directory section cannot hold the working-directory knowledge boundary (malformed file or a flat action) — add it by hand",
+      })
+    } else if (boundaryMissing) {
+      fixable(OPENCODE_CONFIG_FILE, "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)", "insert the knowledge boundary (deny /** , allow /tmp/**)", () => applyKnowledgeBoundary(dir))
+    }
+    // The root-symlink read-only composite (plans/0122, the write side since
+    // 0147 D2): missing entries in either layer are fixable (the write
+    // re-derives from disk at apply time — idempotent); a stale allow or a
+    // file that cannot hold per-pattern entries is manual (never guess, never
+    // delete person content).
     const realPaths = await rootSymlinkRealPaths(dir)
     if (realPaths.length) {
-      const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text()
       const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(realPaths))
-      if (missing === undefined) {
+      const editMissing = missingReadOnlyEditDenies(text, readOnlyEditEntries(realPaths))
+      if (missing === undefined || editMissing === undefined) {
         findings.push({
           class: "manual",
           path: OPENCODE_CONFIG_FILE,
-          problem: "the permission.external_directory section cannot hold the root-symlink allows (malformed file or a flat action) — add them by hand",
+          problem: "the permission.external_directory or permission.edit section cannot hold the root-symlink read-only stamps (malformed file or a flat action) — add them by hand",
         })
-      } else if (missing.length) {
-        fixable(OPENCODE_CONFIG_FILE, `permission.external_directory lacks the allow for ${missing.join(", ")}`, "insert the root-symlink external_directory allow(s)", () => applyExternalAllows(dir))
+      } else if (missing.length || editMissing.length) {
+        const named = [...missing, ...editMissing.map((key) => `edit ${key}`)]
+        fixable(OPENCODE_CONFIG_FILE, `the root-symlink stamps are incomplete (${named.join(", ")})`, "insert the root-symlink allow(s) and their read-only edit deny(s)", () => applyExternalAllows(dir))
       }
       for (const key of (await staleExternalDirectoryAllows(text, realPaths)) ?? []) {
         findings.push({

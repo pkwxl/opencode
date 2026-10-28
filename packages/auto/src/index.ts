@@ -2859,17 +2859,19 @@ if (command === "init" || command === "amend") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
   }
-  // The root-symlink external_directory allows (plans/0122): init sets them
-  // up whether it just created opencode.json or found a person's file — one
-  // additive insert of exactly the allow entries, the person's rules kept
-  // (theirs always win the evaluation tie). No root symlinks writes nothing
-  // (the byte-identical floor); a file that cannot hold the entries is a
-  // warning here and a fix finding there — init never fails on it.
+  // The root-symlink read-only stamps (plans/0122, the composite since
+  // plans/0147): init sets them up whether it just created opencode.json or
+  // found a person's file — one additive insert of exactly the stamp entries
+  // (the external_directory allow beside its edit-layer deny, the template's
+  // knowledge boundary beneath both), the person's rules kept (theirs always
+  // win the evaluation tie). No root symlinks writes nothing (the
+  // byte-identical floor); a file that cannot hold the entries is a warning
+  // here and a fix finding there — init never fails on it.
   if (!amendCommand) {
     const allows = await externalAllowsStatus(directory)
     if (allows.status === "needs-stamp") {
       await applyExternalAllows(directory)
-      console.log(`stamped: opencode.json permission.external_directory allows for ${allows.missing.join(", ")}`)
+      console.log(`stamped: opencode.json the root-symlink read-only stamps (external_directory allow + edit deny) for ${[...new Set(allows.missing.map((key) => key.replace(/^edit:/, "")))].join(", ")}`)
     } else if (allows.status === "malformed") {
       console.log("⚠ opencode.json cannot hold the root-symlink external_directory allows (malformed or a flat action); fix reports the detail")
     }

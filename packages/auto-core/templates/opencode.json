@@ -9,6 +9,10 @@
     "question": "allow",
     "webfetch": "deny",
     "websearch": "deny",
+    "external_directory": {
+      "/**": "deny",
+      "/tmp/**": "allow"
+    },
     "bash": {
       "*": "allow",
       "/tmp/*": "allow",

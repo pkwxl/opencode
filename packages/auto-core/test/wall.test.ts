@@ -10,7 +10,7 @@
 // written, the door standing.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { commitTree } from "../src/git"
 import { establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
@@ -56,7 +56,11 @@ describe("the Wall: field grammar (D1, src/phases/custom.ts)", () => {
 async function wallProject(command = "true", doors = "linux"): Promise<{ dir: string; corpus: string; phase: PhaseUnit; ctx: WallCtx }> {
   const dir = await freshRepo()
   made.push(dir)
-  const corpus = mkdtempSync(join(tmpdir(), "auto-wall-corpus-"))
+  // The corpus lives OUTSIDE /tmp (plans/0147): the knowledge boundary's
+  // receipts allowance covers /tmp, and every /tmp-covering allow at "allow"
+  // reads as the boundary's own — a /tmp-resident reference cannot seal and
+  // its person-glob tests cannot exist there.
+  const corpus = mkdtempSync(join(homedir(), "auto-wall-corpus-"))
   made.push(corpus)
   writeFileSync(join(corpus, "timer.c"), "void tick(void) {}\n")
   await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
@@ -152,6 +156,34 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     await Bun.write(join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
     expect(await wallBoundary(ctx, phase)).toEqual([])
     expect((await opencode(dir)).permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+  })
+
+  test("the knowledge-boundary interplay (plans/0147): a /tmp-resident reference cannot seal — the receipts allowance beats the wall's deny; the boundary's own keys are never person-authored", async () => {
+    const { dir, phase, ctx } = await wallProject()
+    // A /tmp-resident corpus with the door re-pointed at it and its stamp in
+    // place — the unsealable shape once the boundary ships its /tmp pair.
+    const corpus = mkdtempSync(join(tmpdir(), "auto-wall-tmp-"))
+    made.push(corpus)
+    writeFileSync(join(corpus, "timer.c"), "void tick(void) {}\n")
+    rmSync(join(dir, "linux"))
+    symlinkSync(corpus, join(dir, "linux"))
+    const config = await opencode(dir)
+    config.permission.external_directory = { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow", ...config.permission.external_directory }
+    await Bun.write(join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
+    const blocked = await wallBoundary(ctx, phase)
+    expect(blocked.join("\n")).toContain("the wall cannot close: the reference target(s)")
+    expect(blocked.join("\n")).toContain(corpus)
+    expect(blocked.join("\n")).toContain("inside the knowledge boundary's allowed /tmp subtree")
+    expect(blocked.join("\n")).toContain("move the reference out of /tmp")
+    // Nothing mutated: the door still stands, no wall commit, the boundary's
+    // own keys never read as person-authored.
+    expect(existsSync(join(dir, "linux"))).toBe(true)
+    expect(await findWallCommit(dir)).toBeUndefined()
+    // The person narrows the allowance by hand: the close proceeds (the
+    // corpus allow — the driver's stamp — still admits, then retires).
+    delete config.permission.external_directory["/tmp/**"]
+    await Bun.write(join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
+    expect(await wallBoundary(ctx, phase)).toEqual([])
   })
 
   test("a door that was never present blocks naming the state and its remedy", async () => {

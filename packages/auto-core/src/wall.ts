@@ -49,7 +49,7 @@
 import { rm, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { taskDir } from "./docpaths"
-import { allowBase, coveringAllowKeys, externalDirectoryLive, OPENCODE_CONFIG_FILE, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
+import { allowBase, boundaryAllowedTargets, coveringAllowKeys, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
 import { git, scriptGuardSnapshot, type GitOps } from "./git"
 import { allowWrite, protectAdditional, reprotect } from "./protect"
 import { loadPhaseTypes } from "./phases/custom"
@@ -195,14 +195,17 @@ async function recreatedDoors(dir: string, record: WallRecord): Promise<WallDoor
 
 // The live allow entries covering the recorded targets, split by hand: the
 // exact stamp keys (0122's bytes, re-derivable — the driver's own, to
-// retire) and everything else (a person-authored entry — the driver never
-// removes the person's words; the person removes their own line).
+// retire), the knowledge boundary's canonical keys (plans/0147 — the
+// driver's own too, re-derivable from the template, never retired), and
+// everything else (a person-authored entry — the driver never removes the
+// person's words; the person removes their own line).
 function coveringEntries(text: string, targets: readonly string[]): { stamps: string[]; person: string[] } {
   const keys = coveringAllowKeys(text, targets)
+  const live = externalDirectoryLive(text)
   const stamps = new Set(targets.map(stampKey))
   return {
     stamps: keys.filter((key) => stamps.has(key)),
-    person: keys.filter((key) => !stamps.has(key)),
+    person: keys.filter((key) => !stamps.has(key) && !isBoundaryKey(live ?? {}, key)),
   }
 }
 
@@ -441,6 +444,18 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
       return [
         `⏸ the wall cannot close: ${OPENCODE_CONFIG_FILE} carries person-authored external_directory allow(s) ${person.join(", ")} covering the reference target(s) — ` +
           `the driver retires only the allows it stamped itself; remove the person-authored entr${person.length === 1 ? "y" : "ies"} and re-run`,
+      ]
+    }
+    // The knowledge-boundary interplay (plans/0147 D3): a reference inside
+    // the boundary's allowed /tmp subtree cannot seal — the receipts
+    // convention's standing allowance beats the wall's per-target deny
+    // under last-match-wins, so the close refuses, teaching the move.
+    const unsealable = boundaryAllowedTargets(externalDirectoryLive(text), targets)
+    if (unsealable.length) {
+      return [
+        `⏸ the wall cannot close: the reference target(s) ${unsealable.join(", ")} sit inside the knowledge boundary's allowed /tmp subtree — ` +
+          `that allowance is the receipts convention's standing exception and it beats the wall's per-target deny, so the seal cannot hold; ` +
+          `move the reference out of /tmp (or narrow the allowance by hand) and re-run`,
       ]
     }
   }

@@ -1,4 +1,5 @@
-// External-directory allows for root symlinks (plans/0122): a project that
+// External-directory allows for root symlinks (plans/0122) and the
+// working-directory knowledge boundary (plans/0147): a project that
 // plants a corpus or reference behind a top-level symlink (`linux` →
 // /workspace/linux) reads it through the symlink in relative form without any
 // permission cost, but the moment a session names the real path — the read
@@ -9,20 +10,37 @@
 // project path enters code; the root symlink itself is the declared surface):
 // every top-level symlink of the target directory whose real path lies
 // outside the project root contributes `"<realpath>/**": "allow"` under
-// `permission.external_directory` of the target's own opencode.json. init
+// `permission.external_directory` of the target's own opencode.json — and,
+// since plans/0147 D2, the matching `"<realpath>/**": "deny"` under
+// `permission.edit`: the symlink's target is reference knowledge, opened
+// read-only (the t083 incident's first fork read a sibling checkout's future
+// state through exactly such an opening and ported it as a "fix"). init
 // stamps the entries (into the template when it creates the file, additively
 // into an existing one — the one conscious widening of "a person's file is
-// only written when missing": exactly these allow entries are inserted,
-// nothing else); fix keeps them in sync as a fixable finding. The write is a
+// only written when missing": exactly these entries are inserted, nothing
+// else); fix keeps them in sync as a fixable finding. The write is a
 // mechanical grammar (P7) and pure derivation from disk (P6 — re-running
 // reproduces the same bytes; the machine-specific real path lives only in the
 // gitignored opencode.json, never in git); with no root symlinks nothing is
 // written and every byte stays as before (P10).
 //
+// The boundary (plans/0147 D1): the template ships
+// `external_directory: { "/**": "deny", "/tmp/**": "allow" }` — every path
+// outside the working directory denied (sibling checkouts, other forks, the
+// main checkout — the knowledge the agent must not read), /tmp excepted (the
+// standing receipts convention the target projects' own test scripts mount);
+// the person widens by later keys, never the agent. fix carries the boundary
+// to standing projects as its own fixable finding.
+//
 // Ordering: opencode evaluates a permission object's rules last-match-wins,
-// so the driver inserts its entries at the FRONT of external_directory — a
-// person's later rules (the compliance wall's deny) always win the tie, and a
-// key the person already set, to any action, is never inserted over.
+// so order matters only within one action's patterns. The driver inserts its
+// allow entries AFTER any `"/**"` key (the boundary's catch-all deny —
+// whoever set it — so the allows function), and otherwise at the front of
+// external_directory — a person's later rules (the compliance wall's deny)
+// always win the tie, and a key the person already set, to any action, is
+// never inserted over. The edit-layer denies insert after a leading `"*"`
+// key of the edit object (so they beat the blanket action) and otherwise at
+// its front — again with every person key that follows still winning.
 import { chmod, readdir, realpath, stat, writeFile } from "node:fs/promises"
 import { join, sep } from "node:path"
 
@@ -76,6 +94,15 @@ export function externalDirectoryEntries(realPaths: readonly string[]): Record<s
   return entries
 }
 
+// The edit-layer entries of the read-only composite (plans/0147 D2):
+// `"<path>/**": "deny"` for each — the write side of a symlink target
+// closed while the external_directory allow opens the read side.
+export function readOnlyEditEntries(realPaths: readonly string[]): Record<string, "deny"> {
+  const entries: Record<string, "deny"> = {}
+  for (const real of realPaths) entries[`${real}/**`] = "deny"
+  return entries
+}
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -97,7 +124,54 @@ export function missingExternalDirectoryAllows(text: string, entries: Record<str
   return Object.keys(entries).filter((key) => !(key in external))
 }
 
-// The pure stamp: parse, insert the missing entry keys at the front of
+// The edit-layer denies the file does not yet carry (plans/0147 D2): absent
+// from permission.edit entirely — the same person-key split (an edit key the
+// person already set, to any action, is never inserted over). An absent or
+// bare-action edit rule means every deny is missing (the stamp materializes
+// the object form, the blanket action preserved as its leading `"*"` entry);
+// undefined when the text is malformed or the edit rule is neither an action
+// nor a pattern object.
+export function missingReadOnlyEditDenies(text: string, entries: Record<string, "deny">): string[] | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const permission = value.permission
+  if (permission === undefined) return Object.keys(entries)
+  if (!isPlainObject(permission)) return undefined
+  const edit = permission.edit
+  if (edit === undefined || typeof edit === "string") return Object.keys(entries)
+  if (!isPlainObject(edit)) return undefined
+  return Object.keys(entries).filter((key) => !(key in edit))
+}
+
+// Rebuild a pattern object with `inserted` placed after its `"*"` key when
+// one exists (the blanket action the inserted denies must beat), else at
+// the front — every existing key keeps its relative order (a person's later
+// keys keep winning the tie).
+function objectWithInserted<T>(existing: Record<string, unknown>, inserted: Record<string, T>): Record<string, unknown> {
+  const keys = Object.keys(existing)
+  const cut = keys.includes("*") ? keys.indexOf("*") + 1 : 0
+  const out: Record<string, unknown> = {}
+  for (const key of keys.slice(0, cut)) out[key] = existing[key]
+  Object.assign(out, inserted)
+  for (const key of keys.slice(cut)) out[key] = existing[key]
+  return out
+}
+
+// Rebuild external_directory with the missing allow entries placed after its
+// `"/**"` key when present (the boundary's catch-all deny — whoever set it —
+// so the allows function beneath it), else at the front (0122's own
+// ordering, the file without a boundary).
+function externalWithAllows(existing: Record<string, unknown>, inserted: Record<string, "allow">): Record<string, unknown> {
+  const keys = Object.keys(existing)
+  const cut = keys.indexOf("/**") + 1
+  const out: Record<string, unknown> = {}
+  for (const key of keys.slice(0, cut)) out[key] = existing[key]
+  Object.assign(out, inserted)
+  for (const key of keys.slice(cut)) out[key] = existing[key]
+  return out
+}
+
+// The pure stamp: parse, insert the missing entry keys into
 // permission.external_directory (creating the section when absent), keep every
 // other key and the person's key order untouched, serialize with the
 // template's 2-space indent and trailing newline. Returns the text unchanged
@@ -110,13 +184,40 @@ export function stampExternalDirectories(text: string, entries: Record<string, "
   if (missing === undefined || !missing.length) return missing === undefined ? undefined : text
   const permission = isPlainObject(value.permission) ? value.permission : {}
   const personExternal = isPlainObject(permission.external_directory) ? permission.external_directory : {}
-  const inserted: Record<string, unknown> = {}
+  const inserted: Record<string, "allow"> = {}
   for (const key of missing) inserted[key] = entries[key]
   // external_directory moves to the front of permission (key order inside
   // permission carries no matching meaning — order matters only within one
   // action's patterns), the person's other permission keys keep their order.
   const { external_directory: _replaced, ...personPermission } = permission
-  const next = { ...value, permission: { external_directory: { ...inserted, ...personExternal }, ...personPermission } }
+  const next = { ...value, permission: { external_directory: externalWithAllows(personExternal, inserted), ...personPermission } }
+  return JSON.stringify(next, null, 2) + "\n"
+}
+
+// The read-only composite's edit-layer stamp (plans/0147 D2): insert the
+// missing `"<realpath>/**": "deny"` keys into permission.edit — an absent or
+// bare-action rule materializes as the object form with the blanket action
+// preserved as its leading `"*"` entry; an existing object keeps its order
+// with the denies placed to function (after a leading `"*"` key, else at the
+// front). Returns the text unchanged when nothing is missing, undefined on
+// the malformed shapes — never a guess.
+export function stampReadOnlyEdits(text: string, entries: Record<string, "deny">): string | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const missing = missingReadOnlyEditDenies(text, entries)
+  if (missing === undefined || !missing.length) return missing === undefined ? undefined : text
+  const permission = isPlainObject(value.permission) ? value.permission : {}
+  const inserted: Record<string, "deny"> = {}
+  for (const key of missing) inserted[key] = entries[key]
+  let edit: Record<string, unknown>
+  const existing = permission.edit
+  if (existing === undefined || typeof existing === "string") {
+    edit = { "*": existing ?? "ask", ...inserted }
+  } else {
+    edit = objectWithInserted(existing as Record<string, unknown>, inserted)
+  }
+  const { edit: _replaced, ...personPermission } = permission
+  const next = { ...value, permission: { ...personPermission, edit } }
   return JSON.stringify(next, null, 2) + "\n"
 }
 
@@ -145,32 +246,121 @@ export async function staleExternalDirectoryAllows(text: string, currentRealPath
 // The planning half of the sync (no writes): what the stamp would do with the
 // file as it stands. `no-symlinks` and `unchanged` are the byte-identical
 // floor; `missing`/`malformed` hand the decision to their callers (init
-// creates the file; fix reports it).
+// creates the file; fix reports it). Since plans/0147 D2 the stamp is the
+// read-only composite — `missing` names either layer's absent keys.
 export async function externalAllowsStatus(dir: string): Promise<
   { status: "no-symlinks" } | { status: "missing" } | { status: "malformed" } | { status: "unchanged" } | { status: "needs-stamp"; missing: string[] }
 > {
   const realPaths = await rootSymlinkRealPaths(dir)
   if (!realPaths.length) return { status: "no-symlinks" }
   const entries = externalDirectoryEntries(realPaths)
+  const editEntries = readOnlyEditEntries(realPaths)
   const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text().catch(() => undefined)
   if (text === undefined) return { status: "missing" }
   const missing = missingExternalDirectoryAllows(text, entries)
-  if (missing === undefined) return { status: "malformed" }
-  if (!missing.length) return { status: "unchanged" }
-  return { status: "needs-stamp", missing }
+  const editMissing = missingReadOnlyEditDenies(text, editEntries)
+  if (missing === undefined || editMissing === undefined) return { status: "malformed" }
+  const all = [...missing, ...editMissing.map((key) => `edit:${key}`)]
+  if (!all.length) return { status: "unchanged" }
+  return { status: "needs-stamp", missing: all }
 }
 
-// The apply half: re-derive from disk and write the stamp when it changes
-// anything (chmod 0644 first when the file is read-only — the
-// saveProjectConfig precedent). Idempotent; a no-op on the floor states.
+// The apply half: re-derive from disk and write the read-only composite (the
+// external_directory allows and, since plans/0147 D2, the edit-layer denies)
+// when either layer changes anything (chmod 0644 first when the file is
+// read-only — the saveProjectConfig precedent). Idempotent; a no-op on the
+// floor states.
 export async function applyExternalAllows(dir: string): Promise<boolean> {
   const realPaths = await rootSymlinkRealPaths(dir)
   if (!realPaths.length) return false
-  const entries = externalDirectoryEntries(realPaths)
   const file = join(dir, OPENCODE_CONFIG_FILE)
   const text = await Bun.file(file).text().catch(() => undefined)
   if (text === undefined) return false
-  const stamped = stampExternalDirectories(text, entries)
+  let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
+  if (next === undefined) return false
+  next = stampReadOnlyEdits(next, readOnlyEditEntries(realPaths))
+  if (next === undefined || next === text) return false
+  await chmod(file, 0o644).catch(() => {})
+  await writeFile(file, next)
+  return true
+}
+
+// —— The working-directory knowledge boundary (plans/0147 D1) ——
+//
+// The template ships it; fix carries it to standing projects (their committed
+// opencode.json keeps the pre-boundary bytes — init only writes the file when
+// missing). The boundary is exactly two keys, inserted at the front of
+// external_directory in this order: `"/**": "deny"` (everything outside the
+// working directory denied) then `"/tmp/**": "allow"` (the receipts
+// convention) — a later key beats the deny, so the person widens by appending
+// their own keys, and existing symlink allows (0122's front-inserted stamps)
+// land after the deny by this very insertion and keep functioning.
+
+// The boundary keys in their canonical order (the deny first — anything
+// inserted after it wins the tie against it).
+export const KNOWLEDGE_BOUNDARY: Record<string, "deny" | "allow"> = { "/**": "deny", "/tmp/**": "allow" }
+
+// Whether the file carries the boundary: every boundary key present, to any
+// action (a person's own `/**` rule is the same wall — never inserted over).
+// undefined on the malformed shapes (the fix rule reports those as manual).
+export function knowledgeBoundaryMissing(text: string): boolean | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const permission = value.permission
+  if (permission === undefined) return true
+  if (!isPlainObject(permission)) return undefined
+  const external = permission.external_directory
+  if (external === undefined) return true
+  if (!isPlainObject(external)) return undefined
+  return Object.keys(KNOWLEDGE_BOUNDARY).some((key) => !(key in external))
+}
+
+// The boundary's stamp: insert the missing boundary keys at the front of
+// permission.external_directory in canonical order (creating the section when
+// absent), every existing key kept in its order — existing allows and person
+// rules end up after the deny and therefore win their ties. Returns the text
+// unchanged when the boundary is present, undefined on the malformed shapes.
+export function stampKnowledgeBoundary(text: string): string | undefined {
+  const value = parseConfig(text)
+  if (value === undefined) return undefined
+  const missing = knowledgeBoundaryMissing(text)
+  if (missing === undefined || !missing) return missing === undefined ? undefined : text
+  const permission = isPlainObject(value.permission) ? value.permission : {}
+  const personExternal = isPlainObject(permission.external_directory) ? permission.external_directory : {}
+  const inserted: Record<string, "deny" | "allow"> = {}
+  for (const [key, action] of Object.entries(KNOWLEDGE_BOUNDARY)) if (!(key in personExternal)) inserted[key] = action
+  const { external_directory: _replaced, ...personPermission } = permission
+  const next = { ...value, permission: { external_directory: { ...inserted, ...personExternal }, ...personPermission } }
+  return JSON.stringify(next, null, 2) + "\n"
+}
+
+// Whether a live external_directory key is the boundary's own canonical
+// entry (the exact key at its canonical action — re-derivable from the
+// template, the same argument as a 0122 stamp's bytes): never a
+// person-authored widening for the wall's split, never retired.
+export function isBoundaryKey(live: Record<string, string>, key: string): boolean {
+  return live[key] === KNOWLEDGE_BOUNDARY[key]
+}
+
+// The targets the boundary's canonical allowances cover (plans/0147, the
+// wall interplay): a reference inside the allowed /tmp subtree cannot seal —
+// the receipts convention's standing allowance beats the wall's per-target
+// deny under last-match-wins, so the seal cannot hold. The wall's close
+// refuses such targets, teaching the move.
+export function boundaryAllowedTargets(live: Record<string, string> | undefined, targets: readonly string[]): string[] {
+  if (live === undefined) return []
+  const allowed = Object.entries(KNOWLEDGE_BOUNDARY).filter(([, action]) => action === "allow").map(([key]) => key)
+  return targets.filter((target) => allowed.some((key) => isBoundaryKey(live, key) && allowCovers(key, target)))
+}
+
+// The boundary's apply half (fix's fixable rule): write the stamp when it
+// changes anything. Idempotent; a no-op when present or the file is missing
+// (init owns the missing-file case).
+export async function applyKnowledgeBoundary(dir: string): Promise<boolean> {
+  const file = join(dir, OPENCODE_CONFIG_FILE)
+  const text = await Bun.file(file).text().catch(() => undefined)
+  if (text === undefined) return false
+  const stamped = stampKnowledgeBoundary(text)
   if (stamped === undefined || stamped === text) return false
   await chmod(file, 0o644).catch(() => {})
   await writeFile(file, stamped)

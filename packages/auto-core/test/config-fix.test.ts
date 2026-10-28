@@ -244,9 +244,23 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     // A missing brief is no finding and no write: seed it with init/amend --brief.
     expect(await Bun.file(join(dir, BRIEF)).exists()).toBe(false)
     expect((await planFix(dir)).findings).toEqual([])
-    // A person's opencode.json is never compared, only written when missing.
+    // A person's opencode.json is never overridden — but since plans/0147 it
+    // is compared for the knowledge boundary: a file lacking the deny/`/tmp`
+    // pair gains one fixable finding (the additive insert; every person key
+    // kept and still winning the tie). With the boundary present, no finding.
     await writeFile(join(dir, "opencode.json"), '{"model":"mine"}\n')
+    const personPlan = await planFix(dir)
+    expect(fixable(personPlan)).toEqual([
+      {
+        class: "fixable",
+        path: "opencode.json",
+        problem: "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)",
+        change: "insert the knowledge boundary (deny /** , allow /tmp/**)",
+      },
+    ])
+    await applyFix(personPlan)
     expect((await planFix(dir)).findings).toEqual([])
+    expect((JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any).model).toBe("mine")
   })
 
   // plans/0122: the root-symlink external_directory allows — the template
@@ -267,7 +281,11 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       expect(fixable(stamped).map((finding) => `${finding.path}: ${finding.problem}`)).toEqual(["opencode.json: missing"])
       await applyFix(stamped)
       const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(written.permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+      // The template's boundary (plans/0147) beneath the symlink's read-only
+      // composite: the deny first, the corpus allow after it (it must win the
+      // tie), /tmp excepted, the edit layer closing the write side.
+      expect(written.permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
+      expect(written.permission.edit).toEqual({ "*": "allow", [`${corpus}/**`]: "deny" })
       expect((await planFix(dir)).findings).toEqual([])
     } finally {
       await rm(corpus, { recursive: true, force: true })
@@ -288,20 +306,30 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
         {
           class: "fixable",
           path: "opencode.json",
-          problem: `permission.external_directory lacks the allow for ${corpus}/**`,
-          change: "insert the root-symlink external_directory allow(s)",
+          problem: "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)",
+          change: "insert the knowledge boundary (deny /** , allow /tmp/**)",
+        },
+        {
+          class: "fixable",
+          path: "opencode.json",
+          problem: `the root-symlink stamps are incomplete (${corpus}/**, edit ${corpus}/**)`,
+          change: "insert the root-symlink allow(s) and their read-only edit deny(s)",
         },
       ])
       await applyFix(plan)
       const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(Object.keys(written.permission.external_directory)).toEqual([`${corpus}/**`, "/person/**"])
+      // The boundary's deny first, the corpus allow after it (winning the
+      // tie), the person's own key last (still winning its ties).
+      expect(Object.keys(written.permission.external_directory)).toEqual(["/**", `${corpus}/**`, "/tmp/**", "/person/**"])
       expect(written.permission.external_directory["/person/**"]).toBe("deny")
+      expect(written.permission.edit).toEqual({ "*": "ask", [`${corpus}/**`]: "deny" })
       expect(written.model).toBe("mine")
       expect((await planFix(dir)).findings).toEqual([])
-      // A person-owned entry on the same key reads as present: no finding.
+      // A person-owned entry on the same key reads as present: no finding —
+      // with the boundary beside it, the file is clean.
       await writeFile(
         join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" }, edit: { "*": "allow", [`${corpus}/**`]: "ask" } } }, null, 2) + "\n",
       )
       expect((await planFix(dir)).findings).toEqual([])
     } finally {
@@ -316,7 +344,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     try {
       await writeFile(
         join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow", "/gone/**": "allow" } } }, null, 2) + "\n",
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow", "/gone/**": "allow" }, edit: { "*": "allow", [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
       )
       const stale = await planFix(dir)
       expect(manual(stale)).toEqual([
@@ -330,11 +358,18 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
 
       await writeFile(join(dir, "opencode.json"), "not json")
       const malformed = await planFix(dir)
+      // A malformed file reports both stamp families' manual findings — the
+      // boundary's and the symlink composite's — never a guess of a write.
       expect(manual(malformed)).toEqual([
         {
           class: "manual",
           path: "opencode.json",
-          problem: "the permission.external_directory section cannot hold the root-symlink allows (malformed file or a flat action) — add them by hand",
+          problem: "the permission.external_directory section cannot hold the working-directory knowledge boundary (malformed file or a flat action) — add it by hand",
+        },
+        {
+          class: "manual",
+          path: "opencode.json",
+          problem: "the permission.external_directory or permission.edit section cannot hold the root-symlink read-only stamps (malformed file or a flat action) — add them by hand",
         },
       ])
       expect(malformed.writes).toEqual([])
