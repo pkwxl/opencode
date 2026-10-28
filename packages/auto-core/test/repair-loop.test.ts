@@ -48,10 +48,12 @@ const repairTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript 
     if (id) {
       mkdirSync(join(dir, "docs", id), { recursive: true })
       if (failing.has(id)) {
-        // The verification loop's FAIL channel (plans/0083 D2/D3): no report
-        // at all — the gap list instead, its closing result line the verdict,
-        // no terminator. Every verify round of the failing task rewrites it;
-        // the fix-round sessions take the default turn (nothing to write).
+        // The verification loop's FAIL channel (plans/0083 D2/D3, the
+        // countable grammar of plans/0146 D1): no report at all — the gap
+        // list instead, one `### Gap N —` heading per gap, its closing
+        // result line the verdict, no terminator. Every verify round of the
+        // failing task rewrites it; the fix-round sessions take the default
+        // turn (nothing to write).
         writeFileSync(
           join(dir, "docs", id, "gaps.md"),
           [
@@ -63,7 +65,9 @@ const repairTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript 
             "",
             "## Gaps",
             "",
-            "- The acceptance gap stands: the required behavior is not delivered (src/widget.ts).",
+            "### Gap 1 — the acceptance gap stands",
+            "",
+            "The required behavior is not delivered (src/widget.ts): do what the acceptance asks.",
             "",
             "Result: FAIL the acceptance gap",
             "",
@@ -181,9 +185,10 @@ describe("repair (task level, m mode)", () => {
     const f = await fixture("m", repairTurns(new Set(["T-002"])))
     const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
     expect(code).toBe(2)
-    // The block message names the verdict and the rounds spent (plans/0083 D5).
+    // The block message names the verdict, the stalled count and the rounds
+    // spent (plans/0083 D5, the budget re-ruled by plans/0146 D3).
     expect(lines.some((line) => line.includes("the verification of T-002 concluded Result: FAIL"))).toBe(true)
-    expect(lines.some((line) => line.includes("2 fix rounds already ran (the budget is 2)"))).toBe(true)
+    expect(lines.some((line) => line.includes("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)"))).toBe(true)
     expect(lines.some((line) => line.includes("docs/T-002/gaps.md"))).toBe(true)
     expect(lines.some((line) => line.includes("repair round"))).toBe(false)
     // Both fix rounds ran before the block (the loop precedes the ladder).

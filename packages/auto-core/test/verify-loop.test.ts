@@ -56,9 +56,11 @@ function scriptedClient(scripts: Array<() => Promise<unknown>>) {
   })
 }
 
-// A FAIL gap list (0083 D3's form: verified-OK summary, one entry per gap,
-// the closing result line, no terminator).
-const gapListText = (id: string, reason = "the acceptance gap stands") =>
+// A FAIL gap list (0083 D3's form, the countable grammar of plans/0146 D1:
+// verified-OK summary, one `### Gap N — <title>` heading per gap under
+// `## Gaps`, the closing result line, no terminator). count controls the gap
+// count — the progress rule's measure.
+const gapListText = (id: string, reason = "the acceptance gap stands", count = 1) =>
   [
     `# Gaps (${id})`,
     "",
@@ -68,7 +70,7 @@ const gapListText = (id: string, reason = "the acceptance gap stands") =>
     "",
     "## Gaps",
     "",
-    `- ${reason} (src/widget.ts): do what the acceptance asks.`,
+    ...Array.from({ length: count }, (_, i) => `### Gap ${i + 1} — ${reason}${count > 1 ? ` (${i + 1} of ${count})` : ""}`),
     "",
     `Result: FAIL ${reason}`,
     "",
@@ -189,10 +191,12 @@ describe("the verification loop (0083 D1–D7)", () => {
       await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "init")
-      // One fix round already spent before the interruption: the record says
-      // wrapup + round 1. The resumed run re-enters at the verify session
-      // (the whole-task session does not run again) and has one round left.
-      await saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase: { kind: "wrapup", round: 1 } })
+      // One fix round already spent before the interruption — and it closed
+      // no gap (plans/0146 D4's state: round 1, one no-progress round, the
+      // baseline count 1): the resumed run re-enters at the verify session
+      // (the whole-task session does not run again), and round 2 is the last
+      // chance — a second no-progress FAIL blocks.
+      await saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase: { kind: "wrapup", round: 1, noProgress: 1, gaps: 1 } })
       const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
@@ -212,9 +216,107 @@ describe("the verification loop (0083 D1–D7)", () => {
       // Exactly one fix round ran — round 2; the spent round 1 never re-ran.
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")
       expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toEqual(["T-001 fix 2 sample task"])
-      expect((outcome as { question: string }).question).toContain("2 fix rounds already ran (the budget is 2)")
-      // The spent count persists with the rewound phase.
-      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 2 })
+      expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)")
+      // The spent count persists with the rewound phase, the progress state
+      // riding it (the pre-round-2 persist: two no-progress rounds, count 1).
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 2, noProgress: 2, gaps: 1 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // plans/0146 D2/D3: the budget is progress, not a count — a round that
+  // shrinks the gap list buys the loop another round; only two consecutive
+  // no-progress rounds block.
+  test("progress extends the loop (0146): 2 gaps → 1 → 1 → 1 blocks only at round 3, the message naming the stalled count", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      let verify = 0
+      const gapsAt = [2, 1, 1, 1]
+      const verifyScript = async () => {
+        await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001", "the acceptance gap stands", gapsAt[verify++] ?? 1))
+      }
+      const fixScript = async () => {
+        await Bun.write(join(dir, "FIXES.md"), `fix round ${verify - 1}\n`)
+      }
+      const { client } = scriptedClient([verifyScript, fixScript, verifyScript, fixScript, verifyScript, fixScript, verifyScript])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const persist = (phase: NonNullable<Parameters<typeof saveProgress>[1]["phase"]>) => saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase })
+      const outcome = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session", persist })
+      expect(outcome).toMatchObject({ type: "blocked" })
+      // Round 1 shrank 2 → 1 (progress, the streak reset); rounds 2 and 3
+      // each held at 1 — the two consecutive no-progress rounds that block.
+      expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (3 fix rounds spent, the gap list still counts 1 gap)")
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toHaveLength(3)
+      // The record holds the pre-round-3 persist (the block fires after the
+      // FAIL measurement, before any further write): rounds 2's no-progress
+      // held at 1, the baseline count 1.
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 3, noProgress: 1, gaps: 1 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("progress to a PASS (0146): 2 gaps → 1 → the evidence report completes, the loop never blocks", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      let verify = 0
+      const verifyScript = async () => {
+        verify++
+        mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+        if (verify <= 2) await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001", "the acceptance gap stands", 3 - verify))
+        else await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+      }
+      const fixScript = async () => {
+        await Bun.write(join(dir, "FIXES.md"), `fix round ${verify - 1}\n`)
+      }
+      const { client } = scriptedClient([verifyScript, fixScript, verifyScript, fixScript, verifyScript])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const outcome = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session" })
+      expect(outcome).toBeUndefined()
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a FAIL gap list without the countable grammar: one re-prompt with feedback, still failing → blocked (0146 D1)", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The session writes a freeform gap list — no `### Gap N —` headings:
+      // the FAIL-side shape gate demands the countable grammar (the progress
+      // rule measures it), the re-prompt carries the feedback, the second
+      // failure blocks.
+      const { client, calls } = scriptedClient([
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/gaps.md"), `# Gaps (T-001)\n\n## Gaps\n\n- the acceptance gap stands (src/widget.ts): do what the acceptance asks.\n\nResult: FAIL the gap stands\n`)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session" })
+      expect(result).toMatchObject({ type: "blocked" })
+      expect((result as { question: string }).question).toContain("no `### Gap N — <title>` heading")
+      expect((result as { question: string }).question).toContain("hidden blockage")
+      expect(calls.prompts.length).toBe(2)
+      expect(promptText(calls.prompts[1]!)).toContain("### Gap N — <one-line title>")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -562,13 +664,15 @@ describe("the driver-run lane gate (0096 D5)", () => {
       expect(promptText(calls.prompts[1]!)).toContain("You are the fix session")
       expect(promptText(calls.prompts[2]!)).toContain("only performs the wrap-up")
       // The synthesized gap list: committed with the wrapup stage, the 0083
-      // form (verified-OK summary, the red lane with its bounded evidence,
-      // the closing Result: FAIL line), transient (deleted at the PASS).
+      // form with the countable grammar of plans/0146 D1 (verified-OK
+      // summary, the red lane as a `### Gap N —` heading with its bounded
+      // evidence, the closing Result: FAIL line), transient (deleted at the
+      // PASS).
       const gapsCommit = (await git(dir, "log", "--diff-filter=A", "-n1", "--format=%H", "--", "docs/T-001/gaps.md")).trim()
       const show = Bun.spawn(["git", "-C", dir, "show", `${gapsCommit}:docs/T-001/gaps.md`], { stdout: "pipe" })
       const gaps = await new Response(show.stdout).text()
       expect(gaps).toContain("Result: FAIL the anchor lane gate is red (LANE_RC=1)")
-      expect(gaps).toContain("Lane `gate` red")
+      expect(gaps).toContain("### Gap 1 — lane `gate` red")
       expect(gaps).toContain("the widget is broken")
       expect(gaps).toContain("lint")
       expect(existsSync(join(dir, "docs/T-001/gaps.md"))).toBe(false)
@@ -581,7 +685,7 @@ describe("the driver-run lane gate (0096 D5)", () => {
     }
   })
 
-  test("red past the budget → blocked with the repair fact, the message naming the red lanes", async () => {
+  test("red past the budget → blocked with the repair fact, the message naming the red lanes and the stalled count", async () => {
     const dir = await laneRepo({ gate: `echo "the widget is broken"; exit 1` })
     try {
       const fix = fixTurn(dir, false)
@@ -590,7 +694,7 @@ describe("the driver-run lane gate (0096 D5)", () => {
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off", testByDriver: true })
       expect(outcome).toMatchObject({ type: "blocked", repair: { reason: "the anchor lane gate is red (LANE_RC=1)" } })
       expect((outcome as { question: string }).question).toContain("the driver-run test lanes of T-001 concluded red")
-      expect((outcome as { question: string }).question).toContain("2 fix rounds already ran (the budget is 2)")
+      expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)")
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")
       expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toHaveLength(2)
     } finally {

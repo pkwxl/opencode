@@ -684,7 +684,7 @@ describe("renderWrapup", () => {
     expect(text).toContain("`Result: PASS` ends the report (docs/T-002/report.md, the last line of body text before the terminator)")
     expect(text).toContain("`Result: FAIL <one-sentence reason>` ends the gap list (docs/T-002/gaps.md, the last line of body text, no terminator)")
     expect(text).toContain("docs/T-002/gaps.md (overwriting whatever is there)")
-    expect(text).toContain("at most two fix rounds")
+    expect(text).toContain("two consecutive fix rounds close no gap")
     // (b)-class discipline comes from the built-in intent pack ## acceptance / ### result-line
     expect(text).toContain("Never write PASS for a check you did not run or observe")
     // The charter's own wording is English; the retired Chinese verdict never returns.

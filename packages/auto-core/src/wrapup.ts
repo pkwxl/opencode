@@ -11,10 +11,16 @@
 // else). Since plans/0096 D5 every round opens with the driver-run lane gate
 // (below): the pack's lane table runs as parallel driver processes and the
 // anchor pre-gate decides whether the verify session dispatches at all. A
-// bounded fix loop follows: at most FIX_ROUNDS fix sessions, each
-// closing exactly the listed gaps under the pack's repair discipline and
-// committed with stage `execute` (subject `<id> fix <round> <title>`), each
-// followed by a re-verification from scratch; past the budget today's ladder
+// bounded fix loop follows (plans/0083 D1–D5, the budget re-ruled by plans/
+// 0146): fix rounds run while progress holds — each round closes gaps under
+// the pack's repair discipline and is committed with stage `execute`
+// (subject `<id> fix <round> <title>`), each followed by a re-verification
+// from scratch; the task blocks only once two consecutive rounds closed no
+// gap (the countable gap list stopped shrinking), never on a round count
+// alone. The round is session-unbounded (plans/0146 D5): gaps are the
+// natural handover boundaries, and a context-wall handover may land mid-gap
+// with no gap closed — progress is measured per round, so such sessions
+// cost nothing against it. Past the block today's ladder
 // continues verbatim — block with the repair fact (--repair: closeUnit +
 // append) or exit 2 for the person.
 // Before 0083 the wrap-up session narrated: the only verdict (plans/0044
@@ -66,11 +72,17 @@ import { consumeDeadTestMarker, handoffSteer } from "./testrun"
 import { autoSwitches } from "./switches"
 import { commitBlocked, wrapupResolves } from "./unit-commit"
 
-// The constant budget of fix rounds per task (plans/0083 D5): the FIX_ROUNDS
-// name plans/0044 deleted returns with one clear meaning — at most two fix
-// rounds, then the escalation ladder of plans/0079 §4 unchanged (block with
-// the repair fact → `--repair` → the human). No CLI flag, no config key;
-// width, if ever needed, arrives run-side the way `--repair`'s did.
+// The fix loop's two named constants in one (plans/0083 D5, re-ruled by
+// plans/0146 D3): the minimum rounds before a block may fire, and the
+// consecutive-no-progress threshold — the task blocks only once FIX_ROUNDS
+// rounds have run AND the last FIX_ROUNDS rounds each closed no gap (the
+// gap count did not shrink). Rounds above the minimum are bounded by
+// progress itself: between two no-progress rounds a progress round must
+// strictly shrink the count, so a loop starting from N gaps runs at most
+// 2 + N rounds. Then the escalation ladder of plans/0079 §4 unchanged
+// (block with the repair fact → `--repair` → the human). No CLI flag, no
+// config key; width, if ever needed, arrives run-side the way `--repair`'s
+// did.
 const FIX_ROUNDS = 2
 
 // report.md shape problems (empty = pass): the path is fixed and known to the
@@ -81,6 +93,27 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
   const text = await Bun.file(join(dir, rel)).text().catch(() => "")
   if (!text.trim()) return [`${rel} missing or empty`]
   return docShapeProblems(text, rel)
+}
+
+// The mechanical gap count of a gap list (plans/0146 D1): one `### Gap N —`
+// heading per gap — the countable grammar the wrap-up template teaches, the
+// fix session reads, and the driver's own lane-gap writer emits. The
+// progress rule keys on this count alone, never on the entries' content.
+export function countGaps(text: string): number {
+  let n = 0
+  for (const line of text.split("\n")) if (/^### Gap\b/.test(line)) n += 1
+  return n
+}
+
+// The FAIL-side shape gate (0083 D3, the grammar extended by plans/0146 D1):
+// the gap list must be present, non-empty, and carry at least one
+// `### Gap N —` heading — the countable form the progress rule measures. A
+// freeform list without the headings is a malformed FAIL for the
+// one-re-prompt rule, exactly like a missing one.
+function gapsShapeProblems(text: string, rel: string): string[] {
+  if (!text.trim()) return [`${rel} missing or empty (a FAIL verdict's gap list; write no report, write that file)`]
+  if (countGaps(text) === 0) return [`${rel} carries no \`### Gap N — <title>\` heading under \`## Gaps\` (one heading per gap — the form the DRIVER counts for the fix budget)`]
+  return []
 }
 
 // The verification verdict of one ended verify session (0083 D2/D3): PASS is
@@ -169,15 +202,15 @@ async function verifySession(
     )
     if (result.type === "blocked") return { kind: "stop", stop: result }
     const verdict = await verifyVerdict(dir, task)
-    // The verdict-side shape gate (0083 D3): a FAIL verdict requires the gap
-    // list present and non-empty; a PASS or no verdict requires the report
-    // shape (existence / non-trivial / terminator — unchanged).
+    // The verdict-side shape gate (0083 D3, the grammar extended by plans/
+    // 0146 D1): a FAIL verdict requires the gap list present, non-empty and
+    // countable (at least one `### Gap N —` heading); a PASS or no verdict
+    // requires the report shape (existence / non-trivial / terminator —
+    // unchanged).
     const gapsRel = taskDoc(task.id, "gaps")
     const problems =
       verdict.kind === "fail"
-        ? (await Bun.file(join(dir, gapsRel)).text().catch(() => "")).trim()
-          ? []
-          : [`${gapsRel} missing or empty (a FAIL verdict's gap list; write no report, write that file)`]
+        ? gapsShapeProblems(await Bun.file(join(dir, gapsRel)).text().catch(() => ""), gapsRel)
         : await reportProblems(dir, task)
     if (!problems.length) {
       if (verdict.kind === "fail") {
@@ -216,7 +249,7 @@ async function verifySession(
     feedback =
       verdict.kind === "fail"
         ? `\n\nThe last time you ended the session, the FAIL verdict reached the DRIVER but ${gapsRel} did not pass checks: ${problems.join("; ")}. This is a hard requirement: ` +
-          `write no report; write the task's gap list into ${gapsRel} — the compact summary of what you verified as OK, then one entry per gap — ` +
+          `write no report; write the task's gap list into ${gapsRel} — the compact summary of what you verified as OK, then one entry per gap as a \`### Gap N — <one-line title>\` heading under a \`## Gaps\` heading — ` +
           `ending with the \`Result: FAIL <one-sentence reason>\` line as its last line of body text, before ending the session.`
         : `\n\nThe last time you ended the session, ${rel} did not pass checks: ${problems.join("; ")}. This is a hard requirement: ` +
           `write the task report into that file, complete, with \`${EOF_MARK}\` alone on the last line of body text, before ending the session.`
@@ -263,7 +296,7 @@ async function runFixRound(
   const subject = `${task.id} fix ${round} ${task.title}`
   nameSubject(chain, subject)
   const views = promptViews(plan, task)
-  log(`↻ ${task.id} verification found gaps; fix round ${round} of ${FIX_ROUNDS} closes exactly ${taskDoc(task.id, "gaps")}`)
+  log(`↻ ${task.id} verification found gaps; fix round ${round} closes exactly ${taskDoc(task.id, "gaps")}`)
   const readHandoff = async (): Promise<string> => Bun.file(join(plan.dir, handoffFile(task))).text().catch(() => "")
   const steer = sessionRole("whole").usage.handover ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task) : undefined
   // Interruption seeding: a leftover handover document at the round's entry
@@ -453,18 +486,26 @@ async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?:
 }
 
 // One red lane's entry for the synthesized gap list: the finding plus its
-// bounded evidence, the same shape a verify session's FAIL writes.
+// bounded evidence. The first line is heading-ready (plans/0146 D1 — no
+// bullet): laneGapList numbers every entry as a `### Gap N — <title>`
+// heading, the countable grammar the progress rule measures.
 function laneGap(run: LaneRun): string {
-  const head = `- Lane \`${run.lane}\` red${run.timedOut ? " — killed by the watchdog" : run.code ? ` — LANE_RC=${run.code}` : ""}${run.log ? `, log ${run.log}` : ""}:`
+  const head = `lane \`${run.lane}\` red${run.timedOut ? " — killed by the watchdog" : run.code ? ` — LANE_RC=${run.code}` : ""}${run.log ? `, log ${run.log}` : ""}`
   return [head, ...(run.evidence?.length ? run.evidence : ["(the log is empty)"])].map((line, i) => (i === 0 ? line : `    ${line}`)).join("\n")
 }
 
 // The driver-synthesized gap list (D5: "synthesize the gap list the fix
 // session closes; reuse the existing gaps.md flow") — the 0083 D3 form: the
-// verified-OK summary, one entry per gap, the closing Result: FAIL line, no
-// terminator (transient like every gap list, overwritten by each round).
+// verified-OK summary, one entry per gap as a `### Gap N — <title>` heading
+// (plans/0146 D1 — the countable grammar, uniform with what the verify
+// sessions write), the closing Result: FAIL line, no terminator (transient
+// like every gap list, overwritten by each round).
 function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: string; gaps: string[] }): string {
   const green = runs.filter((run) => run.verdict === "green")
+  const entries = gate.gaps.map((gap, i) => {
+    const [head, ...body] = gap.split("\n")
+    return [`### Gap ${i + 1} — ${head}`, ...body].join("\n")
+  })
   return [
     `# Gaps (${task.id})`,
     "",
@@ -476,23 +517,29 @@ function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: strin
     "",
     "## Gaps",
     "",
-    ...gate.gaps,
+    ...entries,
     "",
     `Result: FAIL ${gate.reason}`,
     "",
   ].join("\n")
 }
 
-// Runs the task's verification loop (0083 D1–D5) and closes it out: verify
+// Runs the task's verification loop (0083 D1–D5, the budget re-ruled by
+// plans/0146) and closes it out: verify
 // session → PASS → wrapup commit → done; FAIL → gap list → fix round →
-// re-verify from scratch → …; FIX_ROUNDS spent and still FAIL → today's
-// blocked path with the repair fact, the message naming the rounds spent.
+// re-verify from scratch → …; two consecutive no-progress rounds and still
+// FAIL → today's blocked path with the repair fact, the message naming the
+// rounds spent and the stalled count.
 // Since plans/0096 D5 every round opens with the lane gate above: a red gate
 // substitutes the driver-synthesized gap list for the verify session's
 // (committed with the same wrapup stage) and enters the same fix loop;
 // carry-forward makes the post-fix re-run narrow. round is the fix rounds
-// this task has already spent (resume, D7: a round counts once it opens, so a
-// resumed run never re-runs a spent round); persist advances the progress
+// this task has already spent (resume, D7: a round counts once it opens, so
+// a resumed run never re-runs a spent round); noProgress and gaps carry the
+// progress rule's state (plans/0146 D4 — the consecutive no-progress rounds
+// and the count the last FAIL measured), persisted with the round at every
+// wrapup-stage write so a kill anywhere re-enters with the loop's exact
+// state; persist advances the progress
 // record's wrapup stage; baseline is the unit's start SHA baseline (the
 // charter's commit range); scope is D7's effective-scope pathspec of a doc
 // lane's unit (absent on every serial unit — the charter's range stays
@@ -510,19 +557,26 @@ export async function runWrapup(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  input: { solo: boolean; label: string; round?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; docLane?: boolean },
+  input: { solo: boolean; label: string; round?: number; noProgress?: number; gaps?: number; persist?: (phase: Phase) => Promise<void>; baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; docLane?: boolean },
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
   const commitRange = commitRangeText(dir, input.baseline ?? [], input.scope)
+  // The progress rule's state (plans/0146 D2): lastGaps = the count the
+  // previous FAIL measured (undefined before this loop's first FAIL — that
+  // one only seeds, no round preceded it), noProgress = the consecutive
+  // fix rounds that closed no gap. Both ride the resumed phase record and
+  // every wrapup-stage persist below.
+  let lastGaps = input.gaps
+  let noProgress = input.noProgress ?? 0
   for (let round = input.round ?? 0; ; ) {
     // The wrap-up's entry consumes a stale unservable marker (plans/0142 D1):
     // a resume straight into the wrap-up (the standing-project shape) would
     // otherwise hand the verify session a dead tmp/test.sh to read as wiring —
     // the incident's re-verification "verified" it as exactly right, twice.
     await consumeDeadTestMarker(dir, opts, task.id)
-    autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round} of ${FIX_ROUNDS})` : ""}`)
-    await input.persist?.({ kind: "wrapup", ...(round > 0 ? { round } : {}) })
+    autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round})` : ""}`)
+    await input.persist?.(wrapupStage(round, noProgress, lastGaps))
     // The wrap-up entry is an /exit boundary (plans/0143 D5): the stage's
     // persist above is what a re-run re-enters by, and nothing of this
     // round's verification has started — the pause is the scene a kill at
@@ -550,11 +604,22 @@ export async function runWrapup(
       if (outcome.kind === "stop") return outcome.stop
       reason = outcome.reason
     }
-    if (round >= FIX_ROUNDS) {
-      // The budget is spent: today's ladder verbatim (plans/0079 §4) — the
+    // The progress measurement (plans/0146 D2): count the gap list this FAIL
+    // just produced (the driver-synthesized one on the red path, the verify
+    // session's on the other) and judge the round that preceded it. The
+    // first FAIL of a loop instance only seeds the baseline; every later one
+    // compares — a strictly smaller count is progress and clears the streak,
+    // anything else (same count, grown count) extends it.
+    const gapsNow = countGaps(await Bun.file(join(dir, taskDoc(task.id, "gaps"))).text().catch(() => ""))
+    if (lastGaps !== undefined) noProgress = gapsNow < lastGaps ? 0 : noProgress + 1
+    lastGaps = gapsNow
+    if (round >= FIX_ROUNDS && noProgress >= FIX_ROUNDS) {
+      // No progress across the last two fix rounds (plans/0146 D3): today's
+      // ladder verbatim (plans/0079 §4) — the
       // repair fact carries the verdict to a `--repair` round, else the block
-      // waits for the person; the message names the rounds spent (D5) and its
-      // source (a red lane gate or the verification itself).
+      // waits for the person; the message names the rounds spent and the
+      // stalled count (D5) and its source (a red lane gate or the
+      // verification itself).
       const { bin } = shellProfile()
       const lead =
         gate.kind === "red"
@@ -564,20 +629,32 @@ export async function runWrapup(
         type: "blocked",
         repair: { reason },
         question:
-          `${lead} and ${round} fix round${round === 1 ? "" : "s"} already ran (the budget is ${FIX_ROUNDS}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
+          `${lead} and the last two fix rounds closed no gap (${round} fix rounds spent, the gap list still counts ${lastGaps} gap${lastGaps === 1 ? "" : "s"}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
           `The work and the gap list are committed; accept the result with ${bin} close ${task.id} --reason <text>; ` +
           `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
           `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
       }
     }
     round += 1
-    await input.persist?.({ kind: "wrapup", round })
+    await input.persist?.(wrapupStage(round, noProgress, lastGaps))
     const stopped = await runFixRound(client, plan, task, opts, chain, round, input.persist)
     if (stopped) return stopped
     // Re-verification runs from scratch (D3/D4): the next loop iteration
     // re-runs the lane gate (carry-forward keeps it narrow) and re-reads
     // everything, overwriting the gap list wholesale.
   }
+}
+
+// The wrapup stage's progress record (plans/0083 D7, the fields of plans/
+// 0146 D4): round = the fix rounds already spent (a round counts once it
+// opens), noProgress = the consecutive rounds that closed no gap (omitted at
+// zero), gaps = the count the last FAIL measured (the progress baseline).
+// All three ride every wrapup-stage persist — the loop entry's and the
+// pre-fix-round's — so a kill anywhere re-enters with the loop's exact
+// state; the 0142 dead-channel rewind writes the roundless form and thereby
+// drops all three (the unbooked round re-opens, its verification re-seeds).
+function wrapupStage(round: number, noProgress: number, gaps: number | undefined): Phase {
+  return { kind: "wrapup", ...(round > 0 ? { round } : {}), ...(noProgress > 0 ? { noProgress } : {}), ...(gaps !== undefined ? { gaps } : {}) }
 }
 
 // Result line of the task report (FAIL stops the run): the parser lives in the

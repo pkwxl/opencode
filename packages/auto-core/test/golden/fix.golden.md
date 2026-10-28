@@ -11,7 +11,7 @@ Write the migration script.
 
 You are the fix session for this task: its verification session judged the work incomplete and listed the gaps — you close exactly those gaps. The tree holds the work so far; build on it, do not restart, and do not redo what the verification already accepted.
 
-Read first: docs/T-002/gaps.md — the verification's gap list (a compact summary of what was verified as OK, then one entry per gap: the required action that is missing or wrong, where — files —, and what exactly to do) — and docs/T-002/todo.md, the task document, for the goal and acceptance behind the gaps.
+Read first: docs/T-002/gaps.md — the verification's gap list (a compact summary of what was verified as OK, then one entry per gap as a `### Gap N — <one-line title>` heading under a `## Gaps` heading: the required action that is missing or wrong, where — files —, and what exactly to do) — and docs/T-002/todo.md, the task document, for the goal and acceptance behind the gaps.
 
 Work:
 

@@ -70,7 +70,11 @@ export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 // - wrapup: the wrap-up session phase — the verification session since
 //   plans/0083 (D1/D7: one session does verify + report); round = the fix
 //   rounds this task has already spent (a round counts once it opens, so a
-//   resumed run never re-runs a spent fix round; absent = none yet). The
+//   resumed run never re-runs a spent fix round; absent = none yet);
+//   noProgress = the consecutive fix rounds that closed no gap and gaps =
+//   the count the last FAIL measured (plans/0146 D4 — the progress rule's
+//   state, riding every wrapup-stage persist; absent = no baseline yet, the
+//   next FAIL seeds it). The
 //   kind stays "wrapup" for resume compatibility with pre-0083 records.
 // - closeout: the wrap-up is finished, only the task report result-line check
 //   and the completion mark remain (no session); on resume the wrap-up is
@@ -95,7 +99,7 @@ export type Phase =
   | { kind: "decompose" }
   | { kind: "whole" }
   | { kind: "subtasks"; index?: number }
-  | { kind: "wrapup"; round?: number }
+  | { kind: "wrapup"; round?: number; noProgress?: number; gaps?: number }
   | { kind: "closeout" }
   | { kind: "step"; step: StepKind; unit: string }
 
@@ -214,16 +218,26 @@ async function readProgress(dir: string): Promise<Progress | undefined> {
   return raw ? parseProgress(raw) : undefined
 }
 
-// The wrapup phase's fix-round count (plans/0083 D7): kept only when it is a
-// non-negative finite number, dropped otherwise (a corrupt or hand-edited
-// record re-enters with zero rounds spent — conservative for the budget:
+// The wrapup phase's fix-round count (plans/0083 D7) and the progress rule's
+// state (plans/0146 D4): kept only when each field is a non-negative finite
+// number, dropped otherwise (a corrupt or hand-edited record re-enters with
+// zero rounds spent and no progress baseline — conservative for the budget:
 // re-running a verify round is always safe, skipping a spent fix round
-// never re-books it).
+// never re-books it, and a lost baseline only delays the no-progress streak
+// by one FAIL, never blocks early).
 function sanitizePhaseRound(phase: Phase | undefined): Phase | undefined {
-  if (phase?.kind !== "wrapup" || phase.round === undefined) return phase
-  return typeof phase.round === "number" && Number.isFinite(phase.round) && phase.round >= 0
-    ? phase
-    : { kind: "wrapup" }
+  if (phase?.kind !== "wrapup") return phase
+  const count = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined)
+  const round = phase.round === undefined ? undefined : count(phase.round)
+  const noProgress = phase.noProgress === undefined ? undefined : count(phase.noProgress)
+  const gaps = phase.gaps === undefined ? undefined : count(phase.gaps)
+  if (round === undefined && phase.round !== undefined) return { kind: "wrapup" }
+  return {
+    kind: "wrapup",
+    ...(round !== undefined ? { round } : {}),
+    ...(noProgress !== undefined ? { noProgress } : {}),
+    ...(gaps !== undefined ? { gaps } : {}),
+  }
 }
 
 function parseProgress(raw: string): Progress | undefined {

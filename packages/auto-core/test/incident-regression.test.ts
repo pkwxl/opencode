@@ -314,16 +314,17 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3; the verify
       },
     ])
 
-  test("Result: FAIL → the fix loop runs its two rounds, then blocked with the reason and the spent rounds, task not done, gap list committed, phase rewound to wrapup", async () => {
+  test("Result: FAIL → the fix loop runs its rounds, then blocked on the stalled count with the reason and the spent rounds, task not done, gap list committed, phase rewound to wrapup", async () => {
     const dir = await incidentRepo(`## T-001: acceptance [pending]\n\nCheck x.\n\n## T-002: follow-up [pending]\n\nFollow-up work.\n`)
-    // The verify loop's FAIL protocol (0083 D2/D3): no report at all — the gap
-    // list with its closing FAIL result line instead; fix rounds write source
-    // (so each posts its own `T-001 fix <n>` commit); the gap list is
+    // The verify loop's FAIL protocol (0083 D2/D3, the countable grammar of
+    // plans/0146 D1): no report at all — the gap list with one `### Gap N —`
+    // heading and its closing FAIL result line instead; fix rounds write
+    // source (so each posts its own `T-001 fix <n>` commit); the gap list is
     // rewritten by every re-verification.
     const gapList = () =>
       Bun.write(
         join(dir, "docs/T-001/gaps.md"),
-        ["# Gaps (T-001)", "", "## Verified OK", "", `- ${filler}`, "", "## Gaps", "", "- x is not exported under the expected name (src.ts).", "", "Result: FAIL x is not exported under the expected name", ""].join("\n"),
+        ["# Gaps (T-001)", "", "## Verified OK", "", `- ${filler}`, "", "## Gaps", "", "### Gap 1 — x is not exported under the expected name", "", "src.ts: export it under the expected name.", "", "Result: FAIL x is not exported under the expected name", ""].join("\n"),
       )
     try {
       const { client } = scriptedClient([
@@ -344,7 +345,7 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3; the verify
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
       expect(outcome).toMatchObject({ type: "blocked" })
       expect((outcome as { question: string }).question).toContain("the verification of T-001 concluded Result: FAIL (x is not exported under the expected name)")
-      expect((outcome as { question: string }).question).toContain("2 fix rounds already ran (the budget is 2)")
+      expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)")
       const after = await reloadUnits(dir)
       expect(after.tasks[0]!.status).not.toBe("done")
       expect(after.tasks[1]!.status).toBe("pending")
@@ -357,8 +358,10 @@ describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3; the verify
       expect(await git(dir, "ls-files")).not.toContain("docs/T-001/report.md")
       expect(await git(dir, "show", "HEAD:docs/T-001/gaps.md")).toContain("Result: FAIL")
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
-      // The rounds spent persist with the rewound phase (0083 D7).
-      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 2 })
+      // The rounds spent persist with the rewound phase (0083 D7), the
+      // progress state riding it (plans/0146 D4 — the pre-round-2 persist:
+      // one no-progress round, the baseline count 1).
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 2, noProgress: 1, gaps: 1 })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

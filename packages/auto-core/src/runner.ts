@@ -893,19 +893,24 @@ async function runCloseout(
   // Wrap-up session: skipped entirely when config.wrapup=false
   // (--no-wrapup, default true) — or by a closeout resume (the wrap-up
   // already finished before the interruption; only the result check and the
-  // completion remain). Since plans/0083 (D1–D5) the wrap-up session is the
-  // verification session, and a FAIL verdict opens the bounded fix loop
-  // inside runWrapup (verify → gaps.md → fix → re-verify, at most FIX_ROUNDS
-  // rounds, then today's ladder); the report.md and gaps.md shape gates live
-  // inside it too. The loop is lane-local (D8): it sits in the closeout tail,
+  // completion remain). Since plans/0083 (D1–D5, the budget re-ruled by
+  // plans/0146) the wrap-up session is the verification session, and a FAIL
+  // verdict opens the bounded fix loop inside runWrapup (verify → gaps.md →
+  // fix → re-verify, rounds running while progress holds — two consecutive
+  // no-gap rounds block — then today's ladder); the report.md and gaps.md
+  // shape gates live inside it too. The loop is lane-local (D8): it sits in the closeout tail,
   // so every lane runs it without parent involvement.
   if (input.resume?.kind !== "closeout" && (opts.wrapup ?? true)) {
     const stopped = await runWrapup(client, plan, task, opts, chain, {
       solo: input.solo,
       label: "wrapup session",
       // D7: the fix rounds this task has already spent (a round counts
-      // once it opens, so a resumed run never re-runs a spent round).
+      // once it opens, so a resumed run never re-runs a spent round), with
+      // the progress rule's state (plans/0146 D4 — the consecutive
+      // no-progress rounds and the count the last FAIL measured).
       round: input.resume?.kind === "wrapup" ? (input.resume.round ?? 0) : 0,
+      ...(input.resume?.kind === "wrapup" && input.resume.noProgress !== undefined ? { noProgress: input.resume.noProgress } : {}),
+      ...(input.resume?.kind === "wrapup" && input.resume.gaps !== undefined ? { gaps: input.resume.gaps } : {}),
       persist: input.persist,
       baseline: input.baseline,
       // plans/0099 D7/D9/D11: a doc lane's unit threads its effective scope
