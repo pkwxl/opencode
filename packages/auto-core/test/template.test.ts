@@ -118,7 +118,6 @@ describe("built-in template registry", () => {
       "formulate-synthesize",
       "handoff-steer",
       "knowledge",
-      "number-recovery",
       "park-release",
       "phase-append",
       "phase-handover",

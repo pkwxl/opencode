@@ -82,7 +82,7 @@ const taskSet = (c: SessionCtx): Opts => ({
   git: c.git,
 })
 
-// The shared bypass set (numbering restore, planning, appending, handover
+// The shared bypass set (planning, appending, handover
 // distillation, knowledge extraction): plan's stop condition owns their
 // questions; no task-execution fields, no phase, no control. idleMs and mode
 // ride on every site per the ruled merge — the probe interval follows the
@@ -106,17 +106,13 @@ const bypassSet = (c: SessionCtx): Opts => ({
   intent: c.opts.intent,
 })
 
-describe("sessionOpts (the eight-site field-set pin)", () => {
+describe("sessionOpts (the six-site field-set pin)", () => {
   test("task site: the full execution set, leadSplit absent while the fleet can fork", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
   })
 
   test("task site: leadSplit false when the fleet cannot fork — the only conditional key", () => {
     expect(sessionOpts(degraded, { site: "task", phase })).toStrictEqual({ ...taskSet(degraded), leadSplit: false })
-  })
-
-  test("plan-numbering site (the planning step's numbering restore)", () => {
-    expect(sessionOpts(ctx, { site: "plan-numbering" })).toStrictEqual(bypassSet(ctx))
   })
 
   test("task site under plan's stop condition: human questions on (plans/0095 D4)", () => {
@@ -128,10 +124,6 @@ describe("sessionOpts (the eight-site field-set pin)", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
     const running: SessionCtx = { ...ctx, opts: { ...ctx.opts, stopBefore: undefined } }
     expect("humanQuestions" in sessionOpts(running, { site: "task", phase })).toBe(false)
-  })
-
-  test("append-numbering site (the appending step's numbering restore)", () => {
-    expect(sessionOpts(ctx, { site: "append-numbering" })).toStrictEqual(bypassSet(ctx))
   })
 
   test("phase-append site (the appending session)", () => {

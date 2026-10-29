@@ -246,7 +246,7 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     await tickIndexLine(join(dir, "docs", phase.unit.round, PHASE_INDEX_NAME), phase.unit.id)
   }
 
-  // —— Records of closed units cleared (D19); .auto/next-task untouched. ——
+  // —— Records of closed units cleared (D19). ——
   await clearRecords(dir, closingTasks, new Set(closingPhases.map((phase) => qualifiedPhase(phase.unit))))
 
   // —— The close commit and its check (D21) ——
@@ -488,8 +488,7 @@ function closeBody(
 
 // Clear the resumable records of the closed units only (D19): these records
 // resume their own unit, and closing another unit does not change what that
-// unit's session knows. .auto/next-task is untouched (closed ids are never
-// reused).
+// unit's session knows.
 async function clearRecords(dir: string, tasks: readonly ClosingTask[], closedPhases: ReadonlySet<string>): Promise<void> {
   const ids = tasks.map((task) => task.id)
 

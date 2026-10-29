@@ -3584,8 +3584,8 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
       expect(lines).toContain("classifier: [operator]  free")
       expect(lines).toContain("  implement (m) · builtin · execute tier simple")
       expect(lines).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✓")
-      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, knowledge, prior-knowledge, number-recovery, diagnose, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
-      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, number-recovery, diagnose, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
+      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, knowledge, prior-knowledge, diagnose, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
+      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
       for (const value of [...Object.values(SECRETS), "127.0.0.1:7890"]) expect(shown.out).not.toContain(value)
       expect(await Bun.file(join(dir, RUN_LOCK_FILE)).exists()).toBe(true)
 
@@ -4458,14 +4458,14 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
       expect(planned.out).toContain(`next: review them, then run: opencode-auto run ${dir}`)
       // The artifacts: the input verbatim, the index with the done
       // formulation line first and the planned task after it (plans/0095),
-      // the task document carrying the phase field, the numbering record
-      // advanced past both ids.
+      // the task document carrying the phase field — and no numbering
+      // record (plans/0150: the next number is derived, nothing persisted).
       expect(await Bun.file(join(dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("Add a hello task.\n")
       expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toBe(
         "# Tasks (R-01.P01)\n\n- [x] T-001 Formulate the Implementation tasks\n- [ ] T-002 task T-002\n",
       )
       expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P01")
-      expect(await Bun.file(join(dir, ".auto/next-task")).text()).toBe("3\n")
+      expect(await Bun.file(join(dir, ".auto/next-task")).exists()).toBe(false)
       // The input commit, the formulation construction commit, then the
       // formulation unit's own commits; the tree is clean.
       const subjects = (await git("log", "--format=%s", "-6")).trim().split("\n")

@@ -463,9 +463,9 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "auto-number",
-    "--auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — " +
-      "the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); " +
-      "if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning",
+    "--auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat among the target directory's task artifacts — " +
+      "the next free number is derived from them (the highest number any task index lists or any docs/T-* path holds, + 1) and phase planning sessions continue from it (no longer restarting from T-001 each phase); " +
+      "a fresh clone or fork worktree continues exactly where its own files say (no record is kept, nothing is recovered)",
   ],
   ["wrapup", "--wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)"],
   [

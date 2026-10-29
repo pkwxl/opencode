@@ -38,7 +38,7 @@ import type { PhaseKey } from "./phases/registry"
 // readable trailers (so scripts can locate rollback points). Auto-Task carries
 // the task id (T-F*/PLAN etc.), Auto-Stage the phase and ordinal (for a pseudo
 // task, the bypass phase label: phase-plan/phase-handover/phase-transition/
-// knowledge/numbering/final-plan/doc-migrate/housekeeping/carryover etc.);
+// knowledge/final-plan/doc-migrate/housekeeping/carryover etc.);
 // Auto-Stage is also the machine criterion for a "driver commit" (the unit
 // close-out check detects external commits by it). The commit of the
 // repository containing the target directory additionally records the final

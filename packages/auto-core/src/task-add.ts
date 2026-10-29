@@ -15,7 +15,7 @@
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { beginUnit, commitTree } from "./git"
-import { advanceNextTask, readNextTask, taskNumberFloor } from "./numbering"
+import { taskNumberFloor } from "./numbering"
 import { phaseHandoverDoc, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { qualifiedPhase, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths } from "./tasks"
 
@@ -24,33 +24,18 @@ type AddedTask =
   | { type: "dirty"; files: string[] }
   | { type: "failed"; question: string }
 
-// The next task number (the id is T-NNN, zero-padded to three). Without
-// autoNumber it is the deterministic floor (the highest number any index
-// lists or any docs/T-* directory holds, + 1 — append planning's rule for a
-// missing record, plans/0053 D25). With it, the record leads but never below
-// the floor, so a hand-edited or stale record cannot collide with the disk.
-// AUTO-DECISION: a missing record is never recovered here — the recovery is
-// an AI session over git history and this path starts none. The floor alone
-// picks the number (it is safe against everything on disk), the record is
-// left missing for the next planning session to recover properly, and it is
-// advanced afterwards only where it already existed or the floor proves a
-// brand-new project (1), the two states where advancing writes no guess.
-function nextNumber(dir: string, autoNumber: boolean): Promise<{ n: number; recordExisted: boolean }> {
-  return (async () => {
-    const floor = await taskNumberFloor(dir)
-    const record = autoNumber ? await readNextTask(dir) : undefined
-    return { n: Math.max(record ?? 0, floor), recordExisted: record !== undefined }
-  })()
-}
-
-export async function addTask(dir: string, phase: PhaseUnit, title: string, opts: { autoNumber?: boolean } = {}): Promise<AddedTask> {
+export async function addTask(dir: string, phase: PhaseUnit, title: string): Promise<AddedTask> {
   const phaseText = `${phaseLabel(phase)} ${phaseName(phase)}`
   const task = { id: "PLAN", title: `task add (${phaseText})` }
   // The unit-start gate every planning-side write shares (savePlanInput's):
   // driver-state leftovers self-heal, anything else is dirty for the human.
   const gate = await beginUnit(dir, {}, task)
   if (gate.type === "dirty") return gate
-  const { n, recordExisted } = await nextNumber(dir, Boolean(opts.autoNumber))
+  // The next task number (the id is T-NNN, zero-padded to three): the
+  // deterministic floor — the highest number any index lists or any docs/T-*
+  // path holds, + 1 (plans/0150: derived from the surviving files, no
+  // record; safe against everything on disk by construction).
+  const n = await taskNumberFloor(dir)
   const id = `T-${String(n).padStart(3, "0")}`
   // The stale handover (plans/0053 D25/F13) goes first, in its own commit: a
   // phase that was already distilled would archive the handover unchanged
@@ -97,7 +82,6 @@ export async function addTask(dir: string, phase: PhaseUnit, title: string, opts
         `The task is left in the worktree; commit manually — a re-run would add it again`,
     }
   }
-  if (opts.autoNumber && (recordExisted || n === 1)) await advanceNextTask(dir, [id])
   return { type: "added", id, index, ...(handoverRemoved !== undefined ? { handoverRemoved } : {}) }
 }
 

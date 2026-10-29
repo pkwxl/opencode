@@ -57,13 +57,6 @@ const taskDoc = (id: string, phase: string) =>
 // condition).
 function act(text: string): number {
   if (execute(text)) return text.includes(LEAD_MARK) ? Number(process.env.FAKE_CLAUDE_LEAD_CONTEXT ?? SMALL) : SMALL
-  // The numbering record is missing and auto-numbering is on: restore it with
-  // the deterministic floor the prompt carries.
-  if (text.includes("You are the recoverer of the task-numbering record")) {
-    const floor = /from T-(\d+) on/.exec(text)?.[1]
-    if (floor) writeFileSync(".auto/next-task", `${Number(floor)}\n`)
-    return SMALL
-  }
   // The appending session: append one new line after the existing ones and
   // write the new task's document, touching nothing else. Told apart from the
   // fresh planning prompts (which name the phase's task index too) by its own

@@ -20,7 +20,7 @@ import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from 
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { dirtyStopLines, formatTokens, log } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
-import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
+import { taskNumber, taskNumberFloor } from "./numbering"
 import { REQUIRED_TYPE, phaseType, type PhaseTypeEntry } from "./phases/registry"
 import { currentRound, phaseHandoverDoc, phaseKey, phaseTitle, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, roundBriefPath } from "./docpaths"
@@ -218,23 +218,10 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     log(`⏸ nothing to plan ${phaseTitle(phase)} against: m-mode planning plans against a planning input, and ${planInputPath(phase)} is missing or empty`)
     return 1
   }
-  // auto numbering (config.autoNumber): the record must exist before
-  // construction allocates the formulation number; a missing record is
-  // restored first (no historical evidence writes 1 directly, with evidence
-  // an AI inference session opens, see src/numbering.ts), and a blocked
-  // restore exits 2. The restore session itself produces one unified commit
-  // (stage=numbering), ahead of construction.
-  if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "plan-numbering" }))
-    if (numbering.type === "dirty") {
-      for (const line of dirtyStopLines("worktree not clean before restoring the numbering record", numbering.files)) log(line)
-      return 2
-    }
-    if (numbering.type === "blocked") {
-      log(`⏸ numbering-record restore session blocked (implicit block, investigate and re-run):\n${numbering.question}`)
-      return 2
-    }
-  }
+  // auto numbering (config.autoNumber): the next number is derived from the
+  // surviving task artifacts at each allocation (the deterministic floor,
+  // src/numbering.ts — no record, no restore session since plans/0150), so
+  // nothing runs here ahead of construction.
   // The planning input (plans/0053 D9), unchanged: a new text is persisted to
   // the phase's plan-input.md and committed on its own before construction;
   // without one the step plans against the persisted file. A changed input
@@ -297,7 +284,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     { todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[]; audit: string[]; digest: string; landed: boolean; id?: string }
   > => {
     const charter = formulationAcceptance(planFacts(ctx), charterPhaseEntry(ctx, phase))
-    const n = await formulationNumber(directory, phase, Boolean(opts.autoNumber))
+    const n = await formulationNumber(directory, phase)
     const facts = planFacts(ctx)
     const baseInput = ctx.manual
       ? {
@@ -488,7 +475,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         id = composed.id
         log(`✓ the landed formulation todo of ${id} stands — the floor assembly is unchanged (plans/0097 D6)`)
       } else {
-        const landed = await constructFormulation(directory, phase, composed.todo, { autoNumber: opts.autoNumber })
+        const landed = await constructFormulation(directory, phase, composed.todo)
         if (landed.type === "dirty") {
           for (const line of dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
           return 2
@@ -942,21 +929,11 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     log(`⏸ nothing to append ${phaseTitle(phase)} against: appending plans against a planning input, and ${planInputPath(phase)} is missing or empty`)
     return 1
   }
-  // auto numbering: same as planPhase (a missing record is restored first, a
-  // blocked restore exits 2).
-  let numberStart: number | undefined
-  if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle, directory, sessionOpts(ctx, { site: "append-numbering" }))
-    if (numbering.type === "dirty") {
-      for (const line of dirtyStopLines("worktree not clean before restoring the numbering record", numbering.files)) log(line)
-      return 2
-    }
-    if (numbering.type === "blocked") {
-      log(`⏸ numbering-record restore session blocked (implicit block, investigate and re-run):\n${numbering.question}`)
-      return 2
-    }
-    numberStart = numbering.next
-  }
+  // auto numbering: same derivation as planPhase — the append numbering
+  // start is the deterministic floor over the surviving files (plans/0150),
+  // never a persisted record; without autoNumber it stays undefined (the
+  // historical shape, unchanged).
+  const numberStart: number | undefined = opts.autoNumber ? await taskNumberFloor(directory) : undefined
   // The planning input (D9), exactly as in planPhase: a new text is persisted
   // and committed before the unit starts; a different text restarts an open
   // step in a new session, so no reused session plans against a text it never
@@ -1002,9 +979,9 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // start is the highest number among them + 1 (D25: the highest taken or
   // listed id + 1).
   // AUTO-DECISION: the collect enforces the numbering start only under
-  // autoNumber (the record's value), exactly as planPhase does — without the
-  // record only collisions with taken or listed ids are refused, so a gap id
-  // the session picks below the prompt's start stays acceptable, as in planning.
+  // autoNumber, exactly as planPhase does — without it only collisions with
+  // taken or listed ids are refused, so a gap id the session picks below the
+  // prompt's start stays acceptable, as in planning.
   const taken = await takenTaskIds(directory, phase)
   const before = new Set([...taken, ...snap.entries.map((entry) => entry.id)])
   const listed = Math.max(0, ...[...before].map((id) => taskNumber(id) ?? 0)) + 1
@@ -1094,12 +1071,6 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       log(`⏸ task-append session blocked (implicit block, investigate and re-run):\n${appended.question}`)
     }
     return 2
-  }
-  // auto numbering: on append success the numbering record advances to this
-  // run's highest new number + 1 (only ever increases).
-  if (numberStart !== undefined) {
-    const next = await advanceNextTask(directory, appended)
-    log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
   }
   log(`✓ task append complete: ${taskIndex} gained ${appended.length} task(s)`)
   ctx.planned = appended

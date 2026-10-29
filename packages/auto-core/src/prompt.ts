@@ -734,19 +734,6 @@ function resolveList(items: ResolveEntry[] | undefined): string | undefined {
   return lines.length ? lines.join("\n") : undefined
 }
 
-// The number-record recovery session of auto numbering (config.autoNumber,
-// src/numbering.ts): a one-shot bypass session whose artifact =
-// .auto/next-task as written by the AI (a single positive integer). floor
-// is the lower bound of used numbers from the driver's deterministic scan,
-// one value shared by the template input and the driver-side collect
-// check.
-export function renderNumberRecovery(facts: PromptFacts, input: { floor: number }): string {
-  return renderPrompt(facts, "number-recovery", {
-    floor: String(input.floor),
-    floorPadded: String(input.floor).padStart(3, "0"),
-  })
-}
-
 // Phase handover distillation session (design doc plans/0006-phases-design.md
 // F.1 step 1): a one-shot bypass session that reads through this phase's
 // task index and docs/ artifacts and distills the permanent-path handover

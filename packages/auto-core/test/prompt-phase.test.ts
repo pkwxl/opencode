@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
-import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
+import { renderKnowledge, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
 import { formulationAcceptance } from "../src/formulate"
 import { promptFacts } from "../src/prompt-facts"
@@ -356,29 +356,6 @@ describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D2
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
-  })
-})
-
-describe("renderNumberRecovery (number recovery session)", () => {
-  test("injects the floor and the evidence checklist; the hard output protocol points at .auto/next-task", () => {
-    // The template library may have been overridden by another case in the same process; reset to built-ins only
-    usePromptLibrary(undefined)
-    const text = renderNumberRecovery(facts, { floor: 5 })
-    // Protocol-sensitive markers: what the DRIVER parses out of the session's output
-    expect(text).toContain(".auto/next-task")
-    // The floor is injected (raw and zero-padded forms)
-    expect(text).toContain("= 5")
-    expect(text).toContain("T-005")
-    expect(text).toContain("must not be smaller than this")
-    // The evidence checklist covers git history (to find numbers whose artifacts were deleted) and every phase's task index
-    expect(text).toContain("git log --oneline")
-    expect(text).toContain("tasks.md")
-    expect(text).not.toContain("PLAN")
-    // Hard output protocol: the content is only a positive integer not smaller than the floor
-    expect(text).toContain("positive integer")
-    expect(text).toContain("write nothing else")
-    expect(text).toContain("only file this session may write is .auto/next-task")
-    expect(text).not.toMatch(/\{\{|\}\}/)
   })
 })
 

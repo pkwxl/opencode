@@ -10,7 +10,6 @@ import type { FakeAgentOptions } from "./fixtures/agent"
 import { loopFixture, pastMessage, taskDoc, type LoopFixture } from "./fixtures/loop"
 import { unitBaseline } from "../src/git"
 import { IMPLIED_MODEL } from "../src/models"
-import { readNextTask } from "../src/numbering"
 import { completePhase, establishRound, type PhaseUnit } from "../src/phases"
 import { saveProgress } from "../src/resume"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
@@ -193,16 +192,17 @@ describe("closed tasks in the handover distillation (plans/0053 D16)", () => {
 
 describe("m-mode planning (plans/0053 D9, D12)", () => {
   test(
-    "the input is persisted on its own commit before the planning unit, and the numbering record advances",
+    "the input is persisted on its own commit before the planning unit, and numbering continues from the floor",
     async () => {
       const f = await fixture("m")
       const { code, lines } = await f.run({ stopBefore: "execute", planInput: { text: "Port the retry policy." }, autoNumber: true })
       expect(code).toBe(0)
       expect(lines).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
-      expect(lines).toContain("✓ numbering record advanced: next available task number T-002(.auto/next-task)")
       expect(lines).toContain("✓ planned 1 task(s) (T-002) into docs/R-01/P01-implement/tasks.md")
       expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("Port the retry policy.\n")
-      expect(await readNextTask(f.dir)).toBe(3)
+      // plans/0150: the next number is derived from the surviving files —
+      // nothing is persisted, and no record file appears.
+      expect(await Bun.file(join(f.dir, ".auto/next-task")).exists()).toBe(false)
       expect(await Bun.file(join(f.dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("- [ ] T-002")
       // The commit chain after the setup (plans/0095): the input on its own
       // (plan-input), the construction (phase-formulate), then the

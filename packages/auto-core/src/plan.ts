@@ -518,7 +518,7 @@ export async function planPrelude(dir: string, opts: {
     }
     const mid = await midPipelineTask(dir)
     if (mid) return stop(1, [midPipelineLine(mid)])
-    const added = await addTask(dir, route.phase, opts.newTask, { autoNumber: opts.autoNumber })
+    const added = await addTask(dir, route.phase, opts.newTask)
     if (added.type === "dirty") {
       return stop(2, dirtyStopLines("worktree not clean before adding the task", added.files))
     }

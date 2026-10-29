@@ -914,7 +914,7 @@ export async function plannedTaskProblems(
 
 // Problems of one newly planned task (empty = accepted): a new id (not a task
 // directory that existed before the session, and not below the numbering
-// record's start), no done.md, and a todo.md that passes the mandatory spec
+// start), no done.md, and a todo.md that passes the mandatory spec
 // check (non-trivial, eof, the Goal / Scope / Acceptance anchors) and carries
 // `Phase: <this phase>`. The task's dependency declaration is returned
 // alongside when the document checks pass, so a caller checking a whole index

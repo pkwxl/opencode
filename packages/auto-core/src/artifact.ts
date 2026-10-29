@@ -86,7 +86,7 @@ export async function requireArtifact<T>(
     // rollback would reset past the input commit made just before this call.
     restart?: string
     // Session role (model-routing key, plans/0017-model-routing-design.md C.1): one-shot
-    // bypass sessions declare it (e.g. knowledge / number-recovery); undefined →
+    // bypass sessions declare it (e.g. knowledge / diagnose); undefined →
     // roleOf falls to bypass. Phase-step sessions with spec.step need not declare it
     // (roleOf derives it from the step variant); one that does (m-mode planning,
     // implement-scan, plans/0053 D12) is routed by it, and strict resume checks

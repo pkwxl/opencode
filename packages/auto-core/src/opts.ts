@@ -332,19 +332,17 @@ export type SessionCtx = {
 
 // Which loop session is asking for its options: one id per call site the
 // builder serves (phase-append is that session's resume-point step name;
-// plan-numbering / append-numbering are the numbering-record restore sessions
-// construction and appending open; the phase-plan site retired with the
-// bypass planning session — plans/0095, the formulation task runs under the
-// task site). The task variant carries its phase as the caller-computed
-// PhaseKey — computing it here would need the phases value graph, which opts
-// must not pull under every importer — and, since plans/0068 S5, the stream
-// ordinal of a stream lane unit (the task pipeline runs exactly that
-// checklist item), and, since plans/0126 D3, the doc-lane flag of a
-// documentation-scoped unit running beside siblings in this tree.
+// the phase-plan site retired with the bypass planning session — plans/0095,
+// the formulation task runs under the task site — and the plan-numbering /
+// append-numbering sites with the numbering record — plans/0150, the number
+// is derived, no restore session opens). The task variant carries its phase
+// as the caller-computed PhaseKey — computing it here would need the phases
+// value graph, which opts must not pull under every importer — and, since
+// plans/0068 S5, the stream ordinal of a stream lane unit (the task pipeline
+// runs exactly that checklist item), and, since plans/0126 D3, the doc-lane
+// flag of a documentation-scoped unit running beside siblings in this tree.
 type SessionSite =
   | { site: "task"; phase: PhaseKey; stream?: number; docLane?: boolean }
-  | { site: "plan-numbering" }
-  | { site: "append-numbering" }
   | { site: "phase-append" }
   | { site: "handover" }
   | { site: "knowledge" }
@@ -423,7 +421,7 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       ...(site.docLane ? { docLane: true } : {}),
     }
   }
-  // the bypass sessions (numbering restore, planning, appending, handover
+  // the bypass sessions (planning, appending, handover
   // distillation, knowledge extraction) share one set: a stop condition in
   // force (plan's, transfer's) makes their questions the human's, and they
   // carry no task-execution

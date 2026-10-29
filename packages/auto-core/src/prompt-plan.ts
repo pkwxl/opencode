@@ -82,9 +82,11 @@ export function existingTaskList(tasks: readonly ExistingTask[]): string {
 // input/inputPath are required (append always plans against a planning
 // input: --append without input is a usage error, D23), and existingTasks is
 // the pre-joined line list of the index as it stands (existingTaskList).
-// numberStart is the append numbering start (from the .auto/next-task record
-// under autoNumber, otherwise the highest taken or listed id + 1, D25); it
-// always exists in practice, hence the single unconditional numbering clause.
+// numberStart is the append numbering start (the deterministic floor under
+// autoNumber — the highest number any index lists or any docs/T-* path
+// holds, + 1, plans/0150; otherwise the highest taken or listed id + 1,
+// D25); it always exists in practice, hence the single unconditional
+// numbering clause.
 // AUTO-DECISION: the mode split lives entirely in optional slots — a two-branch
 // intro on {{#if phase}}, the whole duties section (placement paragraph and
 // planDuties together) behind {{#if planDuties}}, no phase-plan-style

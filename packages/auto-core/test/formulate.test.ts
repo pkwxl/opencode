@@ -132,11 +132,11 @@ describe("the formulation state (plans/0095 D1/D4)", () => {
   })
 
   test("the number preview matches the allocation (a pending unit keeps its id)", async () => {
-    expect(await formulationNumber(dir, phase, false)).toBe(1)
+    expect(await formulationNumber(dir, phase)).toBe(1)
     const landed = await constructFormulation(dir, phase, BODY)
     expect(landed.type).toBe("constructed")
     if (landed.type === "constructed") expect(landed.numberStart).toBe(2)
-    expect(await formulationNumber(dir, phase, false)).toBe(1)
+    expect(await formulationNumber(dir, phase)).toBe(1)
   })
 })
 
@@ -153,7 +153,7 @@ describe("the construction landing (plans/0095 D1)", () => {
   })
 
   test("fresh: the todo's shape and grammar, the index's first line, the PLAN formulate commit", async () => {
-    const landed = await constructFormulation(repo, phase, BODY, { autoNumber: false })
+    const landed = await constructFormulation(repo, phase, BODY)
     expect(landed).toEqual({ type: "constructed", id: "T-001", numberStart: 2 })
     if (landed.type !== "constructed") throw new Error("unreachable")
     const todo = await Bun.file(join(repo, "docs/T-001/todo.md")).text()
@@ -176,12 +176,12 @@ describe("the construction landing (plans/0095 D1)", () => {
   })
 
   test("idempotent: an unchanged body re-lands nothing; a changed body rewrites in its own commit", async () => {
-    const first = await constructFormulation(repo, phase, BODY, { autoNumber: false })
+    const first = await constructFormulation(repo, phase, BODY)
     if (first.type !== "constructed") throw new Error(`expected constructed, got ${first.type}`)
-    const again = await constructFormulation(repo, phase, BODY, { autoNumber: false })
+    const again = await constructFormulation(repo, phase, BODY)
     expect(again).toEqual({ type: "current", id: first.id, numberStart: 2 })
     expect((await git(repo, "rev-list", "--count", "HEAD")).trim()).toBe("2")
-    const changed = await constructFormulation(repo, phase, { ...BODY, scope: BODY.scope + "\n\nAn amended source list." }, { autoNumber: false })
+    const changed = await constructFormulation(repo, phase, { ...BODY, scope: BODY.scope + "\n\nAn amended source list." })
     expect(changed).toEqual({ type: "current", id: first.id, numberStart: 2 })
     expect(await Bun.file(join(repo, "docs/T-001/todo.md")).text()).toContain("An amended source list.")
     expect((await git(repo, "rev-list", "--count", "HEAD")).trim()).toBe("3")
@@ -189,10 +189,10 @@ describe("the construction landing (plans/0095 D1)", () => {
   })
 
   test("in flight: a formulation unit already in_progress is never rewritten", async () => {
-    await constructFormulation(repo, phase, BODY, { autoNumber: false })
+    await constructFormulation(repo, phase, BODY)
     const { begin } = await import("../src/tasks")
     await begin(repo, "T-001")
-    const refused = await constructFormulation(repo, phase, { ...BODY, scope: "a changed scope" }, { autoNumber: false })
+    const refused = await constructFormulation(repo, phase, { ...BODY, scope: "a changed scope" })
     expect(refused.type).toBe("failed")
     expect(refused.type === "failed" && refused.question).toContain("already in progress")
     expect(await Bun.file(join(repo, "docs/T-001/todo.md")).text()).toContain(BODY.scope)
@@ -200,7 +200,7 @@ describe("the construction landing (plans/0095 D1)", () => {
 
   test("foreign: the constructor refuses a phase whose index lists other work", async () => {
     await Bun.write(join(repo, taskIndexPath(phase)), renderTaskIndex("R-01.P01", [{ id: "T-009", title: "hand-listed" }]))
-    const refused = await constructFormulation(repo, phase, BODY, { autoNumber: false })
+    const refused = await constructFormulation(repo, phase, BODY)
     expect(refused.type).toBe("failed")
     expect(existsSync(join(repo, "docs/T-001"))).toBe(false)
   })

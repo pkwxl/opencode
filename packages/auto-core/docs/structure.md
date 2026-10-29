@@ -108,7 +108,7 @@ Grouped by sub-domain (R10) — the sub-domain column the direction test holds i
 | Progress record | `.auto/progress.json`, session reuse on resume (0018; P6) | `src/resume.ts` (0018, 0022) |
 | Resume gate | Unit-ownership gate, the shared recovery ladder (foreign commits on an unexpected-interruption resume adopted as the scene, never a stop — 0145), resume/interruption wording; the run-start clean gate's active-record exemption 0149 | `src/resume-gate.ts` (the run-start half in `src/loop-preflight.ts`) |
 | Handover recovery | `.auto/handover.json` breakpoints of a test handover (0023) | `src/handover.ts` (0023 §I–§N) |
-| Numbering | `--auto-number`, `.auto/next-task` (0001) | `src/numbering.ts` (0001) |
+| Numbering | `--auto-number`, the floor derivation over the surviving task artifacts (0001; 0150 — the record and its recovery session retired) | `src/numbering.ts` (0001; 0150) |
 | Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket, per-model protocol-drift counters, quota waits, knowledge-digest counters with the 25% digest cap on the planning prompt's prevRound slot (0019, 0055) | `src/stats.ts` (0019, 0055 §7.1, 0057 §11 item 7, 0061 R3) |
 | Stats schema | The stats document's schema half: the persisted v:1 types, the lenient per-field parsers (bad = missing, no throw) and the copy/add/merge functions — pure beside the store, which re-exports the public surface (0102; P5) | `src/stats-schema.ts` (0102 D7) |
 | Proxy-answer ledger | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting (0020; P2) | `src/resolve.ts` (0020) |

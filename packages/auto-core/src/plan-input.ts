@@ -41,7 +41,7 @@ export type SavedPlanInput =
 
 // Persist an input and commit it on its own (`Auto-Task: PLAN`,
 // `Auto-Stage: plan-input`). The tree must be clean first: preflight
-// guaranteed it and numbering may have committed since, so the gate is a unit
+// guaranteed it, so the gate is a unit
 // start's (beginUnit: driver-state leftovers self-heal, anything else is
 // dirty). title names the phase in the commit subject.
 export async function savePlanInput(dir: string, phase: PlanPhase, input: PlanInput, title: string): Promise<SavedPlanInput> {

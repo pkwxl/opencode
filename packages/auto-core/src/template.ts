@@ -50,7 +50,6 @@ import tplFormulateSynthesize from "../templates/prompts/formulate-synthesize.md
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
-import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplParkRelease from "../templates/prompts/park-release.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
@@ -121,7 +120,6 @@ const embedded: Record<string, string> = {
   // rendered as pre-built text the way intent-pack sections are, injected at
   // diagnosis time only — never a persisted copy in the target.
   "_mode-brief": tplModeBrief,
-  "number-recovery": tplNumberRecovery,
   // The dependency park's release note (plans/0096 D7): the resumed task's
   // first dispatch carries it — the blocker's id, how it ended and the
   // re-merge surface (the blocker's changed paths ∩ the task's Touches:).
@@ -169,7 +167,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // and the task block are the session's whole assignment — an override
   // dropping either sends the fix at nothing.
   fix: ["{{taskBlock}}", "{{gapsFile}}"],
-  "number-recovery": [".auto/next-task"],
   // The plan-step consistency verifier (plans/0080 §5): the driver parses the
   // reply's `Consistent:` line verbatim, and an override must still show the
   // charter and the prompt under review — a verdict without both is a check

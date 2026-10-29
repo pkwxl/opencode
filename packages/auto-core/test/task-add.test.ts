@@ -9,7 +9,6 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { addTask } from "../src/task-add"
-import { readNextTask, writeNextTask } from "../src/numbering"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import { renderTaskIndex, renderTaskTodo, taskStatePaths } from "../src/tasks"
 import { git } from "./fixtures/runner"
@@ -67,37 +66,22 @@ describe("addTask: what lands on disk", () => {
 })
 
 describe("addTask: the numbering choice", () => {
-  test("without autoNumber: the highest listed or existing number + 1", async () => {
+  test("the highest listed or existing number + 1, derived from the surviving files (plans/0150 — no record)", async () => {
     await seed(["T-001", "T-002"])
     expect(resultId(await addTask(dir, phase, TITLE))).toBe("T-003")
     // A task directory nobody lists still takes its number.
     await Bun.write(join(dir, taskStatePaths("T-007").pending), "# T-007\n")
     expect(resultId(await addTask(dir, phase, TITLE))).toBe("T-008")
-    expect(await readNextTask(dir)).toBeUndefined()
+    // Nothing is persisted: the derivation reads only, every time.
+    expect(await Bun.file(join(dir, ".auto/next-task")).exists()).toBe(false)
   })
 
-  test("with autoNumber: the record leads never below the floor, and advances afterwards", async () => {
-    await seed(["T-001", "T-002"])
-    await writeNextTask(dir, 5)
-    expect(resultId(await addTask(dir, phase, TITLE, { autoNumber: true }))).toBe("T-005")
-    expect(await readNextTask(dir)).toBe(6)
-    // A record below the disk evidence never collides: the floor wins.
-    await writeNextTask(dir, 2)
-    expect(resultId(await addTask(dir, phase, TITLE, { autoNumber: true }))).toBe("T-006")
-    expect(await readNextTask(dir)).toBe(7)
-  })
-
-  test("with autoNumber and a missing record: used at the floor, created only for a brand-new project", async () => {
-    await seed(["T-001", "T-002"])
-    expect(resultId(await addTask(dir, phase, TITLE, { autoNumber: true }))).toBe("T-003")
-    expect(await readNextTask(dir)).toBeUndefined()
-    // A fresh project (floor 1): the record is advanced, as ensureNumbering
-    // would have written it directly.
+  test("a fresh project (no evidence) numbers from T-001", async () => {
     const fresh = await mkdtemp(join(tmpdir(), "auto-task-add-"))
     try {
       const [p] = await syncPhaseIndex(fresh, 1, "m")
-      expect(resultId(await addTask(fresh, p!, TITLE, { autoNumber: true }))).toBe("T-001")
-      expect(await readNextTask(fresh)).toBe(2)
+      expect(resultId(await addTask(fresh, p!, TITLE))).toBe("T-001")
+      expect(await Bun.file(join(fresh, ".auto/next-task")).exists()).toBe(false)
     } finally {
       await rm(fresh, { recursive: true, force: true })
     }

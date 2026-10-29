@@ -12,7 +12,7 @@ import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } f
 import { failbackApplies } from "./failback"
 import { formatTokens } from "./format"
 import { removeIfUntracked, unitBaseline, type UnitBaseline } from "./git"
-import { advanceNextTask, readNextTask, taskNumber } from "./numbering"
+import { taskNumber } from "./numbering"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type UnitStop } from "./opts"
@@ -823,10 +823,7 @@ export async function runTask(
       // prerequisite is it) — before the wrap-up judges the charter. Problems
       // block the unit (a conscious v1 simplification: the one feedback
       // retry of the bypass era is not rebuilt; a re-run dispatches a fresh
-      // session over the surviving files). On pass, the numbering record
-      // advances to the highest listed number + 1 when it exists —
-      // construction already advanced past the formulation number, and the
-      // deterministic floor covers a missing record either way.
+      // session over the surviving files).
       if (task.formulate !== undefined) {
         const [round, phaseId] = plan.phase.split(".")
         const phase = { round: round!, id: phaseId!, dir: dirname(plan.index) }
@@ -843,7 +840,6 @@ export async function runTask(
         if (problems.length) {
           return { type: "blocked", question: `the formulation output is invalid: ${problems.join("; ")}` }
         }
-        if ((await readNextTask(dir)) !== undefined) await advanceNextTask(dir, checked.ids)
         log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)${ledger !== undefined ? `, the coverage map holds all ${ledger.rows.length} ledger row(s)` : ""}`)
         // Plan-time inversion detection (plans/0096 D6): a soft warn beside
         // the accepted collect — a task's Scope referencing a consumable of

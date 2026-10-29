@@ -2,15 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  advanceNextTask,
-  ensureNumbering,
-  NEXT_TASK_FILE,
-  readNextTask,
-  taskNumber,
-  taskNumberFloor,
-  writeNextTask,
-} from "../src/numbering"
+import { taskNumber, taskNumberFloor } from "../src/numbering"
 
 function tempDir() {
   return mkdtemp(join(tmpdir(), "auto-numbering-"))
@@ -30,36 +22,8 @@ describe("taskNumber", () => {
   })
 })
 
-describe("readNextTask / writeNextTask", () => {
-  test("missing file → undefined; a valid positive integer reads back (a trailing newline tolerated)", async () => {
-    const dir = await tempDir()
-    try {
-      expect(await readNextTask(dir)).toBeUndefined()
-      await writeNextTask(dir, 7)
-      expect(await Bun.file(join(dir, NEXT_TASK_FILE)).text()).toBe("7\n")
-      expect(await readNextTask(dir)).toBe(7)
-      await Bun.write(join(dir, NEXT_TASK_FILE), "  12\n")
-      expect(await readNextTask(dir)).toBe(12)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("invalid content (non-numeric / zero / negative / non-integer) → undefined, treated as missing", async () => {
-    const dir = await tempDir()
-    try {
-      for (const text of ["abc", "0", "-2", "1.5", "", "3 4"]) {
-        await Bun.write(join(dir, NEXT_TASK_FILE), text)
-        expect(await readNextTask(dir)).toBeUndefined()
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("taskNumberFloor", () => {
-  test("an empty directory (no historical evidence at all) → 1", async () => {
+describe("taskNumberFloor (the whole derivation, plans/0150 — no record, no recovery)", () => {
+  test("an empty directory (no evidence at all) → 1", async () => {
     const dir = await tempDir()
     try {
       expect(await taskNumberFloor(dir)).toBe(1)
@@ -121,63 +85,17 @@ describe("taskNumberFloor", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
-})
 
-describe("advanceNextTask", () => {
-  test("no record yet: writes this batch's highest number + 1", async () => {
+  test("nothing is written: the derivation reads only (a fork-shaped tree continues its own lineage's numbers)", async () => {
     const dir = await tempDir()
     try {
-      expect(await advanceNextTask(dir, ["T-002", "T-005"])).toBe(6)
-      expect(await readNextTask(dir)).toBe(6)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("only ever increases: the record stands while this batch's numbers are below it", async () => {
-    const dir = await tempDir()
-    try {
-      await writeNextTask(dir, 10)
-      expect(await advanceNextTask(dir, ["T-003"])).toBe(10)
-      expect(await readNextTask(dir)).toBe(10)
-      // advances only past the existing record
-      expect(await advanceNextTask(dir, ["T-010", "T-012"])).toBe(13)
-      expect(await readNextTask(dir)).toBe(13)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("all non-numeric ids (T-F etc.) → the record starts at 1", async () => {
-    const dir = await tempDir()
-    try {
-      expect(await advanceNextTask(dir, ["T-F1"])).toBe(1)
-      expect(await readNextTask(dir)).toBe(1)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("ensureNumbering (the pure-function surface; the AI recovery-session path is covered by e2e)", () => {
-  test("a record exists → used directly, no session", async () => {
-    const dir = await tempDir()
-    try {
-      await writeNextTask(dir, 9)
-      // the client is passed as null: never touched when a record exists
-      const result = await ensureNumbering(undefined as never, dir, {} as never)
-      expect(result).toEqual({ type: "ok", next: 9 })
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("no record and no historical evidence at all (floor = 1) → writes 1 directly, no session", async () => {
-    const dir = await tempDir()
-    try {
-      const result = await ensureNumbering(undefined as never, dir, {} as never)
-      expect(result).toEqual({ type: "ok", next: 1 })
-      expect(await readNextTask(dir)).toBe(1)
+      // Two sibling lineages' numbers live only in git (other branches of a
+      // shared repository); the derivation over this directory's files never
+      // sees them, and no record file appears.
+      await Bun.write(join(dir, "docs/T-004/todo.md"), "# T-004: baseline tip\n")
+      expect(await taskNumberFloor(dir)).toBe(5)
+      expect(await Bun.file(join(dir, ".auto/next-task")).exists()).toBe(false)
+      expect(await taskNumberFloor(dir)).toBe(5)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

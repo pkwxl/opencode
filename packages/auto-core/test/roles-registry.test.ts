@@ -41,7 +41,6 @@ const ROLE_TABLE: Record<ModelRole, Tier | "execute"> = {
   "phase-handover": "simple",
   knowledge: "simple",
   "prior-knowledge": "simple",
-  "number-recovery": "simple",
   diagnose: "simple",
   bypass: "simple",
 }
@@ -173,7 +172,7 @@ describe("the session-role registry (U-R5, plans/0060 §5.6)", () => {
   })
 
   test("the knowledge family's variants and the planning variants all route inside their descriptors", () => {
-    expect(sessionRole("knowledge").routing).toEqual(["knowledge", "prior-knowledge", "number-recovery", "diagnose"])
+    expect(sessionRole("knowledge").routing).toEqual(["knowledge", "prior-knowledge", "diagnose"])
     expect(sessionRole("planning").routing).toEqual(["phase-plan", "implement-scan"])
     expect(sessionRole("decompose").templates).toEqual(["decompose"])
     expect(sessionRole("subtask").templates).toEqual(["subtask", "fanout"])

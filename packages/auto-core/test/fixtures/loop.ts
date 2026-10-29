@@ -71,9 +71,8 @@ export function taskDoc(id: string, phase: string, title = `task ${id}`): string
 }
 
 // The first task number no docs/T-NNN directory uses yet (the former init
-// shortcut's rule; with the numbering record the driver checks this start
-// against .auto/next-task, which the driver itself advances past the written
-// ids, so "highest on disk + 1" stays valid in every harness scenario).
+// shortcut's rule; numbering derives from the surviving files since
+// plans/0150, so "highest on disk + 1" is the whole allocation).
 function nextTaskNumber(dir: string): number {
   let max = 0
   for (const name of readdirSync(join(dir, "docs"))) {

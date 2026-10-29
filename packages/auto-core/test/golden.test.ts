@@ -24,7 +24,6 @@ import {
   renderFix,
   renderHandoffSteer,
   renderKnowledge,
-  renderNumberRecovery,
   renderPhaseHandover,
   renderPriorKnowledge,
   renderSplitRejected,
@@ -417,8 +416,7 @@ describe("golden render snapshots", () => {
     )
   })
 
-  test("bypass family (number recovery/handover steer/stuck loop/dryrun)", () => {
-    golden("number-recovery", renderNumberRecovery(facts, { floor: 7 }))
+  test("bypass family (handover steer/stuck loop/dryrun)", () => {
     golden("handoff-steer", renderHandoffSteer(facts, docs))
     golden("usage-note-info", renderUsageNoteInfo(facts, docs))
     golden("usage-note-winddown", renderUsageNoteWinddown(facts, docs))

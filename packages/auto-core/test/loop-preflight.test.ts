@@ -17,7 +17,7 @@ import { ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles } from "../src/git"
 import { runAll } from "../src/loop"
-import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, type RunAllOpts } from "../src/loop-preflight"
+import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, removeRetiredNumberingRecord, type RunAllOpts } from "../src/loop-preflight"
 import { saveProgress } from "../src/resume"
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
@@ -117,6 +117,49 @@ describe("removeRetiredInvalidRefs (the retired reference checker's stale list)"
     }
     expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
     expect(lines).toEqual(["removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)"])
+    // .auto/ is gitignored: the deletion rides no commit and leaves the tree clean
+    expect(await changedFiles(dir)).toEqual([])
+  })
+})
+
+describe("removeRetiredNumberingRecord (the retired auto-numbering record, plans/0150)", () => {
+  test("no leftover: nothing to do", async () => {
+    const dir = await repo({})
+    expect(await removeRetiredNumberingRecord(dir)).toBe(false)
+  })
+
+  test("a leftover .auto/next-task is deleted at run start with one log line", async () => {
+    // The same initialized, committed shape the invalid-refs test builds.
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    await Bun.write(join(dir, ".auto/next-task"), "7\n")
+    // The ambient OPENCODE_AUTO_* layer is scrubbed for the call (its startup
+    // line would otherwise join the captured lines); restored after.
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      expect("exit" in result).toBe(false)
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    expect(await Bun.file(join(dir, ".auto/next-task")).exists()).toBe(false)
+    expect(lines).toEqual(["removed: .auto/next-task (numbering record retired; an earlier release wrote it)"])
     // .auto/ is gitignored: the deletion rides no commit and leaves the tree clean
     expect(await changedFiles(dir)).toEqual([])
   })

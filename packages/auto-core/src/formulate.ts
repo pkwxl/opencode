@@ -12,8 +12,7 @@ import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { beginUnit, commitTree } from "./git"
 import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
-import { log } from "./log"
-import { advanceNextTask, NEXT_TASK_FILE, readNextTask, taskNumber, taskNumberFloor } from "./numbering"
+import { taskNumber, taskNumberFloor } from "./numbering"
 import { phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
@@ -78,15 +77,12 @@ export async function formulationState(dir: string, phase: PlanPhase): Promise<F
 // preview needs it before construction commits): a standing formulation keeps
 // its id's number — wherever it sits in the index (plans/0101 D4's awaiting
 // predicate, the same widening the digest-keep made); a fresh construction
-// takes the record, never below the deterministic floor — the same allocation
-// constructFormulation makes, over the same unchanged state (nothing runs
-// between the two).
-export async function formulationNumber(dir: string, phase: PlanPhase, autoNumber: boolean): Promise<number> {
+// takes the deterministic floor — the same allocation constructFormulation
+// makes, over the same unchanged state (nothing runs between the two).
+export async function formulationNumber(dir: string, phase: PlanPhase): Promise<number> {
   const standing = await standingFormulation(dir, phase)
   if (standing) return taskNumber(standing.id) ?? (await taskNumberFloor(dir))
-  const floor = await taskNumberFloor(dir)
-  const record = autoNumber ? await readNextTask(dir) : undefined
-  return Math.max(record ?? 0, floor)
+  return taskNumberFloor(dir)
 }
 
 // The construction (plans/0095 D1): write the formulation task's todo.md plus
@@ -108,7 +104,6 @@ export async function constructFormulation(
   dir: string,
   phase: PhaseUnit,
   body: { goal: string; scope: string; acceptance: string },
-  opts: { autoNumber?: boolean } = {},
 ): Promise<ConstructedFormulation> {
   const state = await formulationState(dir, phase)
   if (state.type === "foreign") {
@@ -124,12 +119,12 @@ export async function constructFormulation(
   const gate = await beginUnit(dir, {}, task)
   if (gate.type === "dirty") return gate
   // The number: a re-entry keeps the formulation task's own id (the index
-  // line and any audit trail already name it); a fresh construction takes the
-  // record (never below the deterministic floor — addTask's rule), so a
-  // hand-edited or stale record cannot collide with the disk.
+  // line and any audit trail already name it); a fresh construction takes
+  // the deterministic floor (plans/0150: the surviving files are the whole
+  // numbering evidence — a fork worktree continues its own lineage's
+  // numbers, and nothing persisted can push past them).
   const floor = await taskNumberFloor(dir)
-  const record = opts.autoNumber ? await readNextTask(dir) : undefined
-  const n = state.type === "pending" ? taskNumber(state.id) ?? floor : Math.max(record ?? 0, floor)
+  const n = state.type === "pending" ? taskNumber(state.id) ?? floor : floor
   const id = `T-${String(n).padStart(3, "0")}`
   const title = formulateTitle(phase)
   const pending = taskStatePaths(id).pending
@@ -160,10 +155,6 @@ export async function constructFormulation(
       type: "failed",
       question: `formulation commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The task is left in the worktree; commit manually — a re-run writes the same content and does not duplicate it`,
     }
-  }
-  if (opts.autoNumber && (record !== undefined || n === 1)) {
-    const next = await advanceNextTask(dir, [id])
-    log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
   }
   return { type: fresh ? "constructed" : "current", id, numberStart: n + 1 }
 }

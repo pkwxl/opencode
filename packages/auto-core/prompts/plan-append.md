@@ -65,7 +65,6 @@ plan only, do not implement anything.
   one of the two; a `Closed:` field means closed without completing — do not assume its deliverables exist).
 - Every task number already taken anywhere: all `docs/R-*/P<nn>-*/tasks.md` index lines plus the `docs/T-NNN/`
   directories on disk. Numbers live on after their round ends; a number is never reused.
-- The numbering record `.auto/next-task` (see Numbering).
 - Planning context: `.opencode/auto/brief.md` (project intent), `docs/R-NN/round.md` (this round's goal and
   criteria, phased mode), the current phase's `plan-input.md` if one exists, the prior phases' `handover.md`
   documents (the sole channel of cross-phase memory — do not read prior phases' raw docs/), and the relevant
@@ -127,18 +126,16 @@ plan only, do not implement anything.
 
 ## Numbering
 
-- `.auto/next-task` present (auto numbering on): start from the number it records, never below the highest taken
-  number + 1 (use the larger). After writing the tasks, update the record to the highest used number + 1 — it
-  only ever increases.
-- Config `autoNumber` set but the record missing (a fresh clone — `.auto/` is gitignored): stop and let a driver
-  planning command rebuild it first; its recovery session reads git history, which a file scan cannot.
-- No record and no `autoNumber`: start from the highest taken or listed number + 1.
+- Start from the highest taken or listed number + 1 (every `docs/R-*/P<nn>-*/tasks.md` index line plus the
+  `docs/T-NNN/` directories on disk) — with auto numbering on the prompt names this start explicitly and it
+  is a hard floor; with auto numbering off it is the rule itself. No record exists and none is written: the
+  next number derives from the surviving artifacts alone (plans/0150).
 
 ## Hands off — driver-exclusive
 
 - Never edit, reorder or renumber an existing index line, and never change an existing task's document.
 - No `- [x]` ticks, no `todo.md` → `done.md` renames, no `docs/T-NNN/subtasks.md`, no `phases.md` edits, no
-  writes under `.auto/` except the `.auto/next-task` update above, no chmod.
+  writes under `.auto/`, no chmod.
 - No state-changing git commands (no commit, add, stash or the like) — the person reviews and commits; the next
   driver run needs a clean worktree.
 

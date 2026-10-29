@@ -193,7 +193,7 @@ describes how this run executes and how a person watches it → run.**
 | `commit` | **Retired** | — | Committing cannot be turned off. `false` was retired on 2026-09-15, and the key went entirely on 2026-09-29 with the flag: a stored `true` (what an older init wrote) loads and is ignored like an unknown key; any other stored value fails loading with exit 1 (`fix` deletes the key) |
 | `testByDriver` | `true` / `false` | `false` | Compile/test/build/lint commands are executed by the driver (sessions request them via a `test/` script + the `tmp/test.sh` marker), see [Test execution protocol](#test-execution-protocol---test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | On test failure with the context at its limit, write a handover document and continue in a new session; requires `testByDriver: true`, otherwise config validation fails (exit code 1) |
-| `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat in the target directory; the next available number is persisted in `.auto/next-task`, consumed by the phase planning session and recovered first when the record is missing — see the end of [Phased flow](#phased-flow---phases) |
+| `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat among the target directory's task artifacts; the next available number is derived from them (the highest number any task index lists or any `docs/T-*` path holds, + 1) — no record is kept — see the end of [Phased flow](#phased-flow---phases) |
 | `phases` | A subsequence of `admtvk` containing `m`, or a list of phase type ids containing `implement` (comma-separated string or JSON array) | `"m"` | Init-stamped machinery (plans/0137): the birth shape alone — `init --phases` / an `--intent` bundle's manifest stamps it, `amend --phases` is retired (a round's phases reshape through its `- R-NN <phases> — <goal>` roadmap line in `docs/analysis.md`, never the key), and `status` prints no phases segment (the round's operative list is the phase tree). The released roadmap line covering a round is that round's authority (only a diverging line is recorded — an informational note, nothing to repair); the key governs a round no released line covers. Phased flow (a analysis → d design → m implementation → t test → v acceptance → k knowledge distillation; the list form may reference custom types under `.opencode/auto/phases/`); `"m"` = the single-phase mode — the compatibility floor (plans/0137: machinery kept, not a supported way of working for new projects; a phased project starts at `init --phases` or `--intent`), no phases declared, the implicit `docs/R-01/P01-implement`, no handover sessions, tasks listed by a person or planned from a planning input (see [Planning tasks with AI](#planning-tasks-with-ai)). The letters are human shorthand for the CLI only — the durable names are the full type ids (`P02-implement`, never `P02-m`), and the comma form (`--phases analysis,design,implement,test`) is the first-class expressive spelling, any order, repeats allowed. See [Phased flow](#phased-flow---phases) |
 | `intent` | A loaded intent pack's name (the built-in `default`, or one of `.opencode/auto/intents/*.md`) | `default` (key not written) | The active intent pack (auto-core plans/0079 §2): quality bars, phase duties, governance and artifact conventions injected into the prompts. `init --intent <name>` selects it (on init the value may also name an **intent bundle** — a directory with a `bundle.json` manifest, custom phase types, the pack and a mode — which init materializes into the ordinary `.opencode/auto/` surfaces and stamps `phases`/`mode`/further config keys from its manifest; explicit flags win over the manifest); `amend --intent` revises the key. A missing pack fails loading strictly; the run's preflight logs the active pack and its provenance |
 | `parallel` | `none` / `low` / `medium` / `high` | `none` (key not written) | The parallel planning level (auto-core plans/0046; concurrent execution live since plans/0068): selects the `## parallelism` guidance injected into the planning prompts — and, on concurrent runs, into the decomposition prompts — so tasks are arranged for parallel execution, their `Depends:`/`Touches:` declarations keeping concurrent units disjoint. Execution width stays per run: `run --max-sessions 2` under a level executes concurrently at the `treeLanes` tier (see [Parallel execution](#parallel-execution-parallel---max-sessions)); `none`/absent means serial, and `--max-sessions` above 1 without a level is a usage error pointing at `init --parallel`. The level also sets the landing-conflict posture: `low` blocks on the first conflict, `medium`/`high` allow one repair re-dispatch before blocking |
@@ -318,7 +318,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subta
 | `--test-by-driver [true]` | Execution rights for compile/test/build/lint commands move to the driver (default/bare flag `false`), written to the config: execution sessions no longer run such commands in-session; instead they write the command as a script in `test/`, write the script path into `tmp/test.sh` to request execution by the driver, and the exit code and output file are fed back for the AI to read and judge directly. The switch also decides whether the test-execution principle block enters AGENTS.md and whether the test protocol section enters the agent contract and execution prompts. See [Test execution protocol](#test-execution-protocol---test-by-driver) |
 | `--handover-test [true]` | Must be combined with `--test-by-driver` (otherwise a usage error, exit code 1), written to the config: when a test fails and the session context reaches `contextLimit`, the AI is asked to write a handover document and continue in a new session, preventing repeated trial-and-error inside a bloated context |
 | `--scan-exempt none\|<globs>` | The scan exemptions, written to the config's `scanExempt` key as a comma-separated glob list (commas inside `{a,b}` stay in the glob; default none, key not written; `none` deletes the key): deliverable paths the process-document reference scan (destination repositories' files alone, plans/0108) and the document terminator scan skip. An empty list, an absolute glob or one containing `..` is a usage error |
-| `--auto-number` / `--no-auto-number` | Auto numbering switch, written to the config's `autoNumber` key (default `--auto-number` = on, `--no-auto-number` is the disabling toggle; both switches present without `=false` is a usage error): with it on, task numbers (T-NNN) never repeat in the target directory; the phase planning session continues numbering from the `.auto/next-task` record and recovers it first when missing. The `phases = "m"` planning session (see [Planning tasks with AI](#planning-tasks-with-ai)) also continues from that record. See [Phased flow](#phased-flow---phases) |
+| `--auto-number` / `--no-auto-number` | Auto numbering switch, written to the config's `autoNumber` key (default `--auto-number` = on, `--no-auto-number` is the disabling toggle; both switches present without `=false` is a usage error): with it on, task numbers (T-NNN) never repeat among the target directory's task artifacts; the phase planning session continues numbering from the derived next free number (the highest number any task index lists or any `docs/T-*` path holds, + 1 — no record is kept). The `phases = "m"` planning session (see [Planning tasks with AI](#planning-tasks-with-ai)) continues the same way. See [Phased flow](#phased-flow---phases) |
 | `--name <name> --email <email>` | The commit identity pair (auto-core plans/0073): when no global/`GIT_*` identity resolves in the repository at the target root — including one `init` just bootstrapped in a non-git directory — init writes them as **repository-local** `user.name`/`user.email` (never `--global`; the tool never edits the person's global config). A resolving global identity always wins and nothing is written. Not config keys (they never enter config.json); the pair must be given together (a commit identity needs both) with one-line non-empty values; every other command refuses them. Without them and without a resolving identity, init refuses (exit code 1) with the manual `git config` guidance |
 | `-f` / `--force` | Skip the overwrite confirmation and the clean-worktree check, for CI and automation scripts (shared with `reset` / `fix`); on `amend` / `run` it is a usage error (amend discards no keys, so there is no overwrite confirmation to skip) |
 
@@ -860,7 +860,8 @@ sections.
 
 `plan [dir] --append -p <text> | --file <path>` appends tasks to the **current phase**: existing lines in
 the task index are untouched, new tasks are appended after them per the planning input, numbering continuing
-(`autoNumber` on: continues from and advances `.auto/next-task`; otherwise from the largest occupied or
+(`autoNumber` on: from the derived next free number — the highest number any index lists or any `docs/T-*`
+path holds, + 1; otherwise from the largest occupied or
 listed number + 1). It never switches phases — whichever phase routing points at right now is the phase
 appended to, including one on a handover route whose handover document is already written, or one held back
 by a phase gate. In `m` mode with a non-empty index, an input-carrying `plan` already appends, so `--append`
@@ -899,9 +900,9 @@ task number, write a conforming `docs/T-NNN/todo.md`, append the index line, and
   `## Goal`; `## Scope` and `## Acceptance` are written as unrestricted, each noting its provenance
   (`Added by plan --new-task`). Sharpen `docs/T-NNN/todo.md` before `run` when the task needs a tighter
   scope or pinned criteria — the stop lines point there. The title must be one line.
-- **Numbering**: `autoNumber` on — continues from and advances `.auto/next-task`; otherwise the largest
-  occupied or listed number + 1. A missing numbering record is *not* recovered here (that recovery is a
-  session); the deterministic scan picks the number, and the next planning session recovers the record.
+- **Numbering**: the largest occupied or listed number + 1, derived from the surviving files — the same
+  rule with `autoNumber` on or off (plans/0150: no record, no recovery; the derivation is safe against
+  everything on disk by construction).
 - **A stale handover is removed first**, in its own commit before the add (the phase is distilled again
   once the task runs) — the add itself is one commit, and both require a **clean worktree** (exit 2
   otherwise): like every planning-side write, `--new-task` never rides a dirty tree, so after
@@ -945,7 +946,7 @@ further.
   merged/stashed files); a closed phase gets a **mechanical handover** written by the driver (a handover.md
   with all four sections, recording the close reason and each task's done/closed status, no distillation
   session); in `.auto/` **only the closed units' own** run records are cleared (units.json entries, progress
-  record, session handover). `.auto/next-task` never rolls back — closed numbers are never reused.
+  record, session handover).
 - **Dependencies**: open tasks whose `Depends:` explicitly names the unit being closed block the close and
   are listed one by one; `--cascade` closes them too (the reason annotated with the cascade origin, iterated
   to the closure). A default `Depends:` (implicitly following the predecessor) counts as satisfied; the
@@ -2094,23 +2095,16 @@ an unknown type key is a usage error at run start.
 - **Auto numbering (on by default, disabled by `init --no-auto-number`)**: disabled, the phase planning
   session is no longer given a starting number, but task directories `docs/T-NNN/` stay globally unique
   and the driver still rejects numbers colliding with other phases or completed tasks. Enabled,
-  task numbers **never repeat** in the target directory: the next available number is persisted in
-  `.auto/next-task` (content: a single
-  positive integer, maintained by the driver; `.auto/` is gitignored, so fresh clones lack it naturally),
-  the phase planning session
-  continues numbering from that record, and the driver validates that output reuses no occupied number (a
-  reuse is invalid output — retried once
-  with feedback, still failing as an implicit block with exit code 2); after successful planning the
-  record advances to this run's largest number + 1 (grows only).
-  **When the record is missing it is recovered first**: with no number evidence anywhere in existing
-  files (each phase's task index `tasks.md`,
-  task directories `docs/T-NNN/` and other artifact file names — a brand-new project), 1 is written
-  directly; otherwise a one-shot bypass
-  **numbering recovery session** reads the archives and git commit history to derive the next number (git
-  history can discover numbers whose artifacts were
-  deleted), and the driver validates its write against the lower bound of a deterministic scan (below the
-  bound is invalid — retried once with feedback, still failing as an
-  implicit block with exit code 2).
+  task numbers **never repeat** among the target directory's task artifacts: the next available number is
+  **derived from them** (the highest number any task index `tasks.md` lists or any `docs/T-*` path holds,
+  + 1 — plans/0150; no record is kept and no recovery session runs), the phase planning session
+  continues numbering from that derived start, and the driver validates that output reuses no occupied
+  number and starts no lower than the derived start (a violation is invalid output — retried once
+  with feedback, still failing as an implicit block with exit code 2). A fresh clone or fork worktree
+  continues exactly where its own files say — parallel forks of one baseline assign the same numbers to
+  the same logical tasks and stay comparable. A number whose artifacts were deleted becomes available
+  again (docs are write-once by design, so deleting one is off protocol; a full restart already re-issues
+  from T-001).
 
 - **Opening the next round (`transfer`, plans/0101)**: once a round's phases are all complete
   (`run` stops at the round's last boundary, exit code `0`),
@@ -2283,7 +2277,8 @@ plans/0053 D12):
   session's share as its exec commit, completion as its wrapup/done commits (planning is the phase's
   first task unit since 0095; the older `Auto-Stage: phase-plan` no longer exists).
 - Model routing keeps the `implement-scan` role; existing routing config needs no change.
-- Numbering: with `autoNumber` on, continue from `.auto/next-task` and advance after planning; off, start
+- Numbering: with `autoNumber` on, continue from the derived next free number (the highest number any
+  index lists or any `docs/T-*` path holds, + 1 — plans/0150); off, start
   after the largest occupied number.
 - When the planning session is interrupted, the next `run` (or `plan`) finishes this step first, then
   executes tasks; like the phased

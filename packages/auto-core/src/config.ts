@@ -58,13 +58,14 @@ export type ProjectConfig = {
   // and a new session continues from it, preventing repeated trial and error
   // inside a huge context.
   handoverTest: boolean
-  // --auto-number: auto numbering — task numbers (T-NNN) never repeat in the
-  // target directory; the next available number is persisted in
-  // .auto/next-task and planning sessions continue numbering from that record;
-  // when the record is missing, an AI recovery session first derives and
-  // restores it before continuing. Default true (stable-refs D5 flip);
-  // --no-auto-number stays as the off switch (once off, numbering re-runs from
-  // T-001, matching the historical behavior).
+  // --auto-number: auto numbering — task numbers (T-NNN) never repeat among
+  // the target directory's task artifacts; the next available number is
+  // derived on demand from those artifacts (the highest number any task
+  // index lists or any docs/T-* path holds, + 1 — plans/0150, the record and
+  // its AI recovery session retired), so a fresh clone or fork worktree
+  // continues exactly where its own files say. Default true (stable-refs D5
+  // flip); --no-auto-number stays as the opt-out (planning sessions get no
+  // enforced numbering start, the historical shape).
   autoNumber: boolean
   // --no-wrapup: turns off the task wrap-up sessions (renderWrapup: the
   // wrap-up sessions after subtask/whole-task execution completes and after a

@@ -171,7 +171,8 @@ export type FailbackScope = "phase" | "task" | "subtask" | "session"
 // (plans/0030 D12): the vocabulary no longer contains understand — the merged session
 // routes under the decompose role, an understand= key in old config fails strictly as an
 // invalid key; verify-*/review-*/final-plan left the table with the three mechanisms'
-// retirement (plans/0044 D1), equally strict failures.
+// retirement (plans/0044 D1), equally strict failures; number-recovery left with the
+// numbering record (plans/0150), the same way.
 export const MODEL_ROLES = [
   "decompose",
   "whole",
@@ -182,7 +183,6 @@ export const MODEL_ROLES = [
   "knowledge",
   "prior-knowledge",
   "implement-scan",
-  "number-recovery",
   // The blockage diagnosis session (plans/0082 §4 D4): the read-only
   // side-channel that proposes a remediation plan over the dossier.
   "diagnose",

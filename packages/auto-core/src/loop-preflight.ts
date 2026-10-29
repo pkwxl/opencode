@@ -145,10 +145,10 @@ export type RunAllOpts = {
   // session's context is dropped, exact phase re-entry is kept), passed
   // through to runTask.
   newSession?: boolean
-  // auto numbering (config.autoNumber): task numbers never repeat in the
-  // target directory — a phase planning session continues the numbering from
-  // the .auto/next-task record; a missing record is restored first through an
-  // AI recovery session's inference (see src/numbering.ts).
+  // auto numbering (config.autoNumber): task numbers never repeat among the
+  // target directory's task artifacts — a planning session continues from
+  // the deterministic floor over those artifacts (see src/numbering.ts,
+  // plans/0150; no record, no restore session).
   autoNumber?: boolean
   // --no-wrapup (config.wrapup, default true): turn off the task wrap-up
   // session, passed through to runTask.
@@ -553,6 +553,11 @@ export async function preflight(
   // .auto/invalid-refs.md an earlier release left is removed the same way
   // (see removeRetiredInvalidRefs below).
   if (!opts.dryrun && (await removeRetiredInvalidRefs(directory))) log("removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)")
+  // The retired auto-numbering record: a .auto/next-task an earlier release
+  // wrote is removed the same way (see removeRetiredNumberingRecord below)
+  // — the number is derived from the surviving files since plans/0150, so
+  // the stale record reads as nothing.
+  if (!opts.dryrun && (await removeRetiredNumberingRecord(directory))) log("removed: .auto/next-task (numbering record retired; an earlier release wrote it)")
   // the start clean gate (plans/0021-commit-boundary-design.md P3): the
   // worktree must be clean — everything the execution units after it
   // (task/subtask/hidden task) depend on is fixed by the previous commit. A
@@ -717,10 +722,9 @@ export async function preflight(
 // wrapup is off; a type without tasks runs its own knowledge session.
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
 // rebuilds, the dryrun precheck), the phased loop's planning and handover
-// sessions, and m mode's planning scan. number-recovery (a rare recovery
-// path inside a run) and prior-knowledge (shell-orchestrated outside runAll)
-// stay off the list: both are simple sessions, so the bypass need keeps
-// their tier covered.
+// sessions, and m mode's planning scan. prior-knowledge
+// (shell-orchestrated outside runAll) stays off the list: a simple session,
+// so the bypass need keeps its tier covered.
 // AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans or scans.
 function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phases: string): DispatchNeed[] {
   // An invalid phases value fails at its own validation (config load, the
@@ -794,6 +798,19 @@ export async function removeRetiredCurrent(dir: string): Promise<boolean> {
 // ours — and the deletion rides no commit (.auto/ never enters git).
 export async function removeRetiredInvalidRefs(dir: string): Promise<boolean> {
   const file = join(dir, ".auto", "invalid-refs.md")
+  if (!(await Bun.file(file).exists())) return false
+  await rm(file, { force: true })
+  return true
+}
+
+// Removes the retired auto-numbering record (.auto/next-task) when an
+// earlier release left one; returns whether it did. Same shape as
+// removeRetiredInvalidRefs: the file lives inside the driver's own
+// gitignored state directory, so any instance of it is ours, and the
+// deletion rides no commit (plans/0150 — the next number is derived from
+// the surviving files; the record reads as nothing).
+export async function removeRetiredNumberingRecord(dir: string): Promise<boolean> {
+  const file = join(dir, ".auto", "next-task")
   if (!(await Bun.file(file).exists())) return false
   await rm(file, { force: true })
   return true
