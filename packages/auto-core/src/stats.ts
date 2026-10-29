@@ -32,6 +32,7 @@
 // the two halves are separable, and a type-only importer binds no store
 // code); this module is the store and the public APIs, re-exporting the
 // schema's public surface so its consumers keep their single import point.
+import { appendFileSync, mkdirSync } from "node:fs"
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { currentRound } from "./phases"
@@ -52,6 +53,7 @@ import {
   num,
   parseStatsDoc,
   SYNTHESIS_BUCKET,
+  taskStintRecord,
   type Bucket,
   type DecomposeRun,
   type DigestStat,
@@ -81,12 +83,21 @@ export {
   type SessionStat,
   type StatsDoc,
   type StatsResume,
+  type TaskStintRecord,
   type TierStat,
   type Totals,
   type Usage,
 } from "./stats-schema"
 
 const FILE = join(".auto", "stats.json")
+
+// The task-usage ledger (plans/0152): one append-only JSON line per closed
+// task stint, appended at the single seam where the store destroys the stint
+// (statsTask's id-change branch). Never truncated or rotated by this module —
+// unlike the per-run journals, the ledger's whole purpose is cross-run
+// retention; best-effort like every journal (P18), a failed append is
+// silently skipped.
+const LEDGER_FILE = join(".auto", "task-usage.jsonl")
 
 // AUTO-DECISION: time reads use a module-level replaceable clock. The
 // alternative was an optional now parameter on each API such as
@@ -393,11 +404,14 @@ export async function statsPhase(dir: string | undefined, phase: string): Promis
 }
 
 // Task switch (at runTaskLoop's task banner): after the fold, when the id
-// changes reset taskB and clear the sessions map (plan :49; before the clear
-// the aggregate is already in the three buckets — losing per-session display
-// history is an accepted trade-off) and persist; same id is idempotent —
-// resuming the same task after an interruption does not reset, does not
-// double-count, and keeps the per-session continuation.
+// changes, first append the closing stint to the task-usage ledger (plans/0152
+// — the record of exactly what this step destroys: the task bucket and the
+// per-session map; the stint's figures live on in the phase/round aggregates
+// regardless), then reset taskB and clear the sessions map and persist; same
+// id is idempotent — resuming the same task after an interruption does not
+// reset, does not double-count, keeps the per-session continuation, and
+// appends no ledger line (the stint is still open; its record lands at the
+// eventual close, covering the whole bracket across the restarts).
 // AUTO-DECISION: the tasks count = +1 on entering a different task id
 // (including this process's first entry), accumulated in the phase/round
 // buckets (the "N tasks in the phase / N tasks in this round" message caliber);
@@ -411,6 +425,7 @@ export async function statsTask(dir: string | undefined, id: string): Promise<vo
   const { handle } = await ensure(dir)
   fold(handle)
   if (handle.doc.taskB.id === id) return
+  appendTaskStint(dir, handle)
   handle.doc.taskB = emptyBucket(id, clock())
   handle.doc.taskB.tasks = 1
   handle.doc.phaseB.tasks += 1
@@ -418,6 +433,23 @@ export async function statsTask(dir: string | undefined, id: string): Promise<vo
   handle.doc.sessions = {}
   handle.boot.task = emptyTotals()
   queueWrite(dir, handle)
+}
+
+// Append one closed stint's record to the task-usage ledger (plans/0152).
+// Called only from statsTask's id-change branch, after the closing fold and
+// before the bucket reset; unconditional in the closing id (the bypass shape's
+// unnamed bucket is a bracket too — its session entries carry their own task
+// ids). Best-effort: a write failure is silently skipped (the P18 journals
+// doctrine — recording is never a run failure), and the store's own
+// persistence below is unaffected.
+function appendTaskStint(dir: string, handle: Handle): void {
+  try {
+    const record = taskStintRecord(handle.doc, clock())
+    mkdirSync(dirname(join(dir, FILE)), { recursive: true })
+    appendFileSync(join(dir, LEDGER_FILE), JSON.stringify(record) + "\n")
+  } catch {
+    // A missed ledger line is tolerated; the aggregates keep the figures.
+  }
 }
 
 type StatsScope = "task" | "phase" | "round"
@@ -609,6 +641,8 @@ export async function statsSessionEnd(
     at: 0,
   }
   entry.task = active?.task ?? (entry.task || doc.taskB.id)
+  if (model !== undefined) entry.model = model
+  if (tier !== undefined) entry.tier = tier
   entry.aiMs += active?.aiMs ?? 0
   entry.wallMs += (active?.aiMs ?? 0) + (active?.waitMs ?? 0)
   entry.rounds += 1

@@ -667,6 +667,219 @@ describe("stats sessions and waits", () => {
   })
 })
 
+// plans/0152 — the task-usage ledger: one append-only JSON line per closed
+// task stint, appended at statsTask's id-change branch (the single seam where
+// the store destroys the task bucket and the per-session map). The line is
+// self-contained: the closing bucket's figures plus the embedded session log.
+describe("the task-usage ledger", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-ledger-"))
+    now = 100_000
+    installServices(createServices({ clock: fixedClock(() => now) }))
+  })
+
+  afterEach(async () => {
+    uninstallServices()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function readDoc(): Promise<StatsDoc> {
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  async function writeDoc(doc: unknown) {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, ".auto", "stats.json"), JSON.stringify(doc))
+  }
+
+  async function readLedger(): Promise<Array<Record<string, any>>> {
+    const raw = await Bun.file(join(dir, ".auto", "task-usage.jsonl")).text().catch(() => undefined)
+    if (raw === undefined) return []
+    return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  }
+
+  function usage(input: number): Usage {
+    return { input, output: 10, reasoning: 5, cacheRead: 90, cacheWrite: 20, cost: 0.01, steps: 2 }
+  }
+
+  test("a task switch appends one self-contained stint line per bracket: the pre-task bucket records too, the closing figures match the bucket, the session log embeds with model/tier", async () => {
+    await loadStats(dir)
+    now += 1000 // pre-task driver work in the unnamed bucket
+    await statsPhase(dir, "R-01.P01")
+    await statsTask(dir, "T-001") // closes the unnamed pre-task bracket: the unconditional first line
+    await statsSessionBegin(dir, "T-001")
+    now += 4000
+    await statsSessionEnd(dir, "s1", usage(100), "glm", "simple", "T-001")
+    now += 1000 // between sessions: wall only
+    await statsSessionBegin(dir, "T-001")
+    now += 2000
+    await statsSessionEnd(dir, "s2", usage(50), "glm", "deep", "T-001")
+    now += 500 // post-session wall, still T-001's stint
+    await statsTask(dir, "T-002") // closes T-001's stint: the second line
+    await flushStats(dir)
+    const doc = await readDoc()
+
+    const lines = await readLedger()
+    expect(lines).toHaveLength(2)
+
+    expect(lines[0].task).toBe("") // the unnamed pre-task bracket is a bracket too
+    expect(lines[0].phase).toBe("R-01.P01")
+    expect(lines[0].since).toBe(100_000)
+    expect(lines[0].at).toBe(101_000)
+    expect(lines[0].wallMs).toBe(1000)
+    expect(lines[0].sessions).toBe(0)
+    expect(lines[0].sessionLog).toEqual([])
+
+    const rec = lines[1]
+    expect(rec.v).toBe(1)
+    expect(rec.task).toBe("T-001")
+    expect(rec.phase).toBe("R-01.P01")
+    expect(rec.round).toBe(doc.round)
+    expect(rec.since).toBe(101_000)
+    expect(rec.at).toBe(108_500)
+    expect(rec.sessions).toBe(2)
+    expect(rec.aiMs).toBe(6000) // 4000 + 2000
+    expect(rec.wallMs).toBe(7500) // + the 1000 between + the 500 after
+    expect(rec.usage).toEqual({
+      input: 150, output: 20, reasoning: 10, cacheRead: 180, cacheWrite: 40, cost: 0.02, steps: 4,
+    })
+    expect(rec.models.glm.usage.input).toBe(150)
+    expect(rec.models.glm.sessions).toBe(2)
+    expect(rec.tiers.simple.sessions).toBe(1)
+    expect(rec.tiers.deep.sessions).toBe(1)
+    expect(rec.sessionLog).toHaveLength(2)
+    const [e1, e2] = rec.sessionLog
+    expect(e1.session).toBe("s1")
+    expect(e1.task).toBe("T-001")
+    expect(e1.model).toBe("glm")
+    expect(e1.tier).toBe("simple")
+    expect(e1.rounds).toBe(1)
+    expect(e1.aiMs).toBe(4000)
+    expect(e1.usage.input).toBe(100)
+    expect(e2.session).toBe("s2")
+    expect(e2.model).toBe("glm")
+    expect(e2.tier).toBe("deep")
+    expect(e2.usage.input).toBe(50)
+    expect(e1.at).toBeLessThanOrEqual(e2.at) // ordered by last-active moment
+  })
+
+  test("the same id is idempotent: a resume switches nothing and appends no line (the stint is still open)", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001") // from the unnamed bucket: one line (the pre-task bracket, test 1's shape)
+    now += 1000
+    await statsTask(dir, "T-001") // same id: no switch, no line — T-001's stint is still open
+    await flushStats(dir)
+    const lines = await readLedger()
+    expect(lines.map((l) => l.task)).toEqual([""]) // no T-001 line exists
+    expect((await readDoc()).taskB.id).toBe("T-001")
+  })
+
+  test("the stint closes across a restart: flush → reload → switch lands one line covering the whole bracket", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 3000
+    await statsSessionEnd(dir, "s1", usage(100), "glm", "simple", "T-001")
+    await flushStats(dir) // graceful process end (the kill -9 shape loads the same bracket)
+    now += 2000 // downtime: in no bucket (depreciation semantics)
+    await loadStats(dir)
+    await statsTask(dir, "T-002")
+    await flushStats(dir)
+    const lines = await readLedger()
+    expect(lines.map((l) => l.task)).toEqual(["", "T-001"])
+    const rec = lines[1]
+    expect(rec.since).toBe(100_000)
+    expect(rec.at).toBe(105_000)
+    expect(rec.aiMs).toBe(3000)
+    expect(rec.wallMs).toBe(3000)
+    expect(rec.sessions).toBe(1)
+    expect(rec.sessionLog[0].session).toBe("s1")
+    expect(rec.sessionLog[0].usage.input).toBe(100)
+  })
+
+  test("the append is best-effort: an unwritable ledger never fails the switch, the store persists regardless", async () => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await mkdir(join(dir, ".auto", "task-usage.jsonl")) // a directory in the ledger's place: every append fails
+    await loadStats(dir)
+    await statsTask(dir, "T-001") // must not throw
+    await statsTask(dir, "T-002")
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.id).toBe("T-002") // the switches completed
+    expect(doc.phaseB.tasks).toBe(2) // the counting is unaffected by the failed appends
+  })
+
+  test("a sibling lane's booking is embedded with its own task id, not folded into the closing bucket", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 1000
+    await statsSessionEnd(dir, "s1", usage(30), "glm", "simple", "T-001")
+    // A sibling unit's late booking while the bucket holds T-001: phase/round
+    // + per-session only (the sibling-bucket skip), begun under its own key so
+    // the entry carries its own task.
+    await statsSessionBegin(dir, "T-009")
+    await statsSessionEnd(dir, "s2", usage(70), "glm", "simple", "T-009")
+    await statsTask(dir, "T-002")
+    const lines = await readLedger()
+    const rec = lines.at(-1)!
+    expect(rec.task).toBe("T-001")
+    expect(rec.usage.input).toBe(30) // s2's usage never entered the task bucket
+    expect(rec.sessions).toBe(1)
+    expect(rec.sessionLog).toHaveLength(2) // but its record is embedded — nothing destroyed unrecorded
+    expect(rec.sessionLog[0]).toMatchObject({ session: "s1", task: "T-001" })
+    expect(rec.sessionLog[1]).toMatchObject({ session: "s2", task: "T-009", usage: { input: 70 } })
+  })
+
+  test("session model/tier round-trip through the lenient parse: present kept, absent missing, bad dropped", async () => {
+    await writeDoc({
+      v: 1,
+      round: 1,
+      phase: "m",
+      lastWriteAt: 90_000,
+      taskB: { id: "T-001" },
+      phaseB: { id: "m" },
+      roundB: { id: "1" },
+      sessions: {
+        s1: { task: "T-001", aiMs: 1, wallMs: 2, rounds: 1, usage: {}, at: 5, model: "glm", tier: "deep" },
+        s2: { task: "T-001", aiMs: 1, wallMs: 2, rounds: 1, usage: {}, at: 6 },
+        s3: { task: "T-001", aiMs: 1, wallMs: 2, rounds: 1, usage: {}, at: 7, model: 42 },
+      },
+      history: { rounds: 0 },
+    })
+    await loadStats(dir)
+    await statsTask(dir, "T-002") // closes T-001: the entries land in the ledger as parsed
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.sessions).toEqual({}) // cleared by the switch (the ledger holds them now)
+    const rec = (await readLedger()).at(-1)!
+    expect(rec.sessionLog[0]).toMatchObject({ session: "s1", model: "glm", tier: "deep" })
+    expect(rec.sessionLog[1].model).toBeUndefined() // absent stays absent
+    expect(rec.sessionLog[2].model).toBeUndefined() // a bad value reads as missing
+  })
+
+  test("a re-opened task yields one line per stint, each with its own bracket", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    now += 1000
+    await statsTask(dir, "T-002") // closes stint 1 of T-001
+    now += 2000
+    await statsTask(dir, "T-001") // closes T-002; T-001 re-opened
+    now += 3000
+    await statsTask(dir, "T-003") // closes stint 2 of T-001
+    await flushStats(dir)
+    const lines = await readLedger()
+    expect(lines.map((l) => l.task)).toEqual(["", "T-001", "T-002", "T-001"]) // the leading unnamed bracket, then one line per stint
+    expect(lines[1].wallMs).toBe(1000)
+    expect(lines[2].wallMs).toBe(2000)
+    expect(lines[3].wallMs).toBe(3000)
+    expect(lines[3].since).toBeGreaterThanOrEqual(lines[1].at) // the second stint's bracket starts at/after the first closed
+  })
+})
+
 // Per-model and per-tier usage, the `classify` bucket and the protocol-drift
 // counters (plans/0055 §7.1 "Stats", §10 items 3 and 12): booked beside the
 // bucket's own usage at the same session-booking point, persisted

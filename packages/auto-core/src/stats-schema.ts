@@ -133,6 +133,10 @@ export const SYNTHESIS_BUCKET = "synthesis"
 export type Bucket = Totals & { id: string; since: number }
 
 // Per-sessionID accumulation (requirement 2: sub-session continuation); task is the owning task, at is the last-active moment (eviction order).
+// model/tier (plans/0152 D3): the dispatch's internal model name and routed
+// tier, stamped at the booking seam — the task-usage ledger's session log
+// carries the per-session model split; absent on older documents (lenient
+// parse = missing) and until the first booking that names one.
 export type SessionStat = {
   task: string
   aiMs: number
@@ -140,6 +144,8 @@ export type SessionStat = {
   rounds: number
   usage: Usage
   at: number
+  model?: string
+  tier?: string
 }
 
 export type StatsDoc = {
@@ -399,6 +405,8 @@ function parseSessions(raw: unknown): Record<string, SessionStat> {
       rounds: num(s.rounds),
       usage: parseUsage(s.usage),
       at: num(s.at),
+      ...(str(s.model) ? { model: str(s.model) } : {}),
+      ...(str(s.tier) ? { tier: str(s.tier) } : {}),
     }
   }
   return sessions
@@ -561,4 +569,66 @@ export function mergeDigestStats(into: Totals, from: Totals) {
   }
   if (from.digests.capped) digests.capped = (digests.capped ?? 0) + from.digests.capped
   if (from.digests.knowledgePhases) digests.knowledgePhases = (digests.knowledgePhases ?? 0) + from.digests.knowledgePhases
+}
+
+// ===== the task-usage ledger record (plans/0152) =====
+
+// One closed task stint's record, appended as one JSON line to the
+// append-only `.auto/task-usage.jsonl` at the moment the store destroys the
+// stint (the statsTask id-change branch): the closing task bucket's final
+// figures plus the whole per-session map embedded (the same step clears it),
+// so each line is a self-contained bracket — task/phase/round identity, the
+// since/at window, elapsed and token figures, the optional per-model /
+// per-tier sections, and the session log ordered by last-active moment with
+// every entry's own `task` (sibling-lane strays included — nothing the store
+// destroys is destroyed unrecorded; the analysis filters). A task re-opened
+// later produces one line per stint; the reader groups by `task`. No in-tool
+// reader (P21): the consumer is the comparative analysis over fork worktrees,
+// for which the plain-JSON line is machine-addressable per P18.
+export type TaskStintRecord = {
+  v: 1
+  task: string
+  phase: string
+  round: number
+  since: number
+  at: number
+  aiMs: number
+  wallMs: number
+  waitMs: number
+  sessions: number
+  usage: Usage
+  models?: Record<string, ModelStat>
+  tiers?: Record<string, TierStat>
+  sessionLog: Array<SessionStat & { session: string }>
+}
+
+// Deep copy of one session entry (the record must not alias the live
+// document's interiors — the same step that appends the line resets them).
+function copySessionStat(s: SessionStat): SessionStat {
+  return { ...s, usage: { ...s.usage } }
+}
+
+// Pure assembly of the closing stint's record from the document (the store
+// calls this after the final fold, before the bucket reset).
+export function taskStintRecord(doc: StatsDoc, at: number): TaskStintRecord {
+  const bucket = doc.taskB
+  const sessionLog = Object.entries(doc.sessions)
+    .sort((a, b) => a[1].at - b[1].at)
+    .map(([session, entry]) => ({ session, ...copySessionStat(entry) }))
+  return {
+    v: 1,
+    task: bucket.id,
+    phase: doc.phase,
+    round: doc.round,
+    since: bucket.since,
+    at,
+    aiMs: bucket.aiMs,
+    wallMs: bucket.wallMs,
+    waitMs: bucket.waitMs,
+    sessions: bucket.sessions,
+    usage: { ...bucket.usage },
+    ...(bucket.models !== undefined ? { models: copyModelStats(bucket.models) } : {}),
+    ...(bucket.tiers !== undefined ? { tiers: copyTierStats(bucket.tiers) } : {}),
+    sessionLog,
+  }
 }
