@@ -42,7 +42,7 @@ import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
 import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, LANE_LOG_DIR, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
@@ -186,7 +186,7 @@ export async function runRegressionLane(
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
   const pollMs = opts.pollMs ?? DEFAULT_SCRIPT_POLL_MS
-  const logDir = opts.logDir ?? LANE_LOG_DIR
+  const logDir = opts.logDir ?? laneLogDir()
   await mkdir(logDir, { recursive: true })
   const seq = (await latestRegressionSeq(dir, round)) + 1
   // The light snapshot doubles as the heads (runTestLanes's own move) and,
