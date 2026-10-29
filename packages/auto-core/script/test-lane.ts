@@ -7,6 +7,14 @@
 // - gate: both lanes in one `bun test` pass (the whole suite) — the unit
 //   gate, failing above baseline × 1.25 (the baseline is recorded in
 //   test/lanes.ts and re-measured at the program's final pass).
+// The repo and gate lanes run their files across worker processes (bun test
+// --parallel: one file per worker, worker count the host's core count, the
+// same posture as the package's plain `bun test` script), and the unit lane
+// rides the same flag — on the 2026-10 re-measure host its serial pass
+// could no longer meet the 5 s dev-loop budget (12.4 s serial, 4.2 s
+// parallel); a golden refresh (UPDATE_GOLDEN / UPDATE_TURN_TRACE) runs
+// serial instead — the golden files are shared destinations parallel
+// workers would race on.
 // Exit code: 0 within budget, 1 over budget; a test failure propagates the
 // test run's own exit code. As with plain `bun test`, run it with the ambient
 // OPENCODE_AUTO_* driver layer unset (it can steer switch-reading tests).
@@ -26,8 +34,10 @@ const budgetMs = lane === "unit" ? UNIT_BUDGET_MS : lane === "gate" ? gateBudget
 
 // Always run from the package root, whatever the invoker's directory.
 const root = join(import.meta.dir, "..")
+const goldenRefresh = process.env.UPDATE_GOLDEN === "1" || process.env.UPDATE_TURN_TRACE === "1"
+const parallel = !goldenRefresh
 const start = Date.now()
-const proc = Bun.spawn([process.execPath, "test", ...files], { cwd: root, stdout: "inherit", stderr: "inherit" })
+const proc = Bun.spawn([process.execPath, "test", ...(parallel ? ["--parallel"] : []), ...files], { cwd: root, stdout: "inherit", stderr: "inherit" })
 const code = await proc.exited
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2)}s`
 

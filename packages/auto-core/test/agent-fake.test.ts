@@ -3975,7 +3975,10 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     await git(repo, "add", "-A")
     await git(repo, "commit", "-qm", "pack")
     const agent = make({ turn: docTurns(repo) })
-    const code = await runDocLoop(docCtx(repo, serverOf(agent), { testByDriver: true, intent: "verify" }), phase)
+    // The lane logs ride the seam into the repo's ignored tmp/ (runDocLoop's
+    // scrub deletes the ambient OPENCODE_AUTO_* layer, the preload's scratch
+    // included — the env overlay here is the redirect that survives it).
+    const code = await runDocLoop(docCtx(repo, serverOf(agent), { testByDriver: true, intent: "verify" }), phase, { OPENCODE_AUTO_LANE_LOG_DIR: join(repo, "tmp") })
     expect(code).toBe(0)
     expect(lines).toContain("✓ all tasks complete")
     // Both units' lanes ran and their receipts landed as committed evidence.

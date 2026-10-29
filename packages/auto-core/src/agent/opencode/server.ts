@@ -285,9 +285,23 @@ export async function spawnOpencodeServer(
     })
     proc.on("exit", (code) => {
       clearTimeout(id)
-      let msg = `Server exited with code ${code}`
-      if (output.trim()) msg += `\nServer output: ${output}`
-      reject(new Error(msg))
+      // The exit event can land before the pipe delivers the process's last
+      // chunks (an early-exiting server's error lines arrive just ahead of
+      // EOF, and under load the exit notification wins the race): hold the
+      // rejection back until both output streams have closed, so the message
+      // carries the whole output the contract names — bounded by a short
+      // grace, as a detached grandchild holding the pipe must never hang the
+      // error path.
+      const closed = (stream: ChildProcess["stdout"]) =>
+        !stream || stream.destroyed || stream.readableEnded
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => stream.once("close", resolve))
+      const grace = new Promise<void>((resolve) => setTimeout(resolve, 100))
+      void Promise.race([Promise.all([closed(proc.stdout), closed(proc.stderr)]), grace]).then(() => {
+        let msg = `Server exited with code ${code}`
+        if (output.trim()) msg += `\nServer output: ${output}`
+        reject(new Error(msg))
+      })
     })
     proc.on("error", (error) => {
       clearTimeout(id)

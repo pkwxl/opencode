@@ -27,13 +27,31 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { beforeEach } from "bun:test"
+import { afterAll, beforeEach } from "bun:test"
 import { createServices, installServices } from "../src/services"
 
 const xdg = mkdtempSync(join(tmpdir(), "auto-core-xdg-"))
 process.env.XDG_CONFIG_HOME = xdg
 delete process.env.OPENCODE_AUTO_MODELS
 process.on("exit", () => rmSync(xdg, { recursive: true, force: true }))
+
+// The lane-log seam (plans/0151 D1): a driver-run lane or regression lane
+// whose caller injects no logDir writes the shared default /tmp/opencode —
+// a machine-wide directory other tenants of the host use. The preload points
+// the seam at a per-global scratch dir instead (under `bun test --parallel`
+// every file runs in its own worker global, its own preload run, its own
+// dir — concurrent workers never share a lane-log path). captureRun keeps
+// the seam across its OPENCODE_AUTO_* scrub (an output redirect, not a
+// switch); a helper with its own scrub takes the redirect from the test
+// that launches lanes. Tests that inject their own logDir, and the seam's
+// unit tests passing explicit env records, are unaffected: the explicit
+// value always wins over the environment. The afterAll cleans per file
+// (parallel workers do not reliably run process exit handlers; the handler
+// stays as the serial-run belt).
+const laneLogs = mkdtempSync(join(tmpdir(), "auto-core-lanelog-"))
+process.env.OPENCODE_AUTO_LANE_LOG_DIR = laneLogs
+process.on("exit", () => rmSync(laneLogs, { recursive: true, force: true }))
+afterAll(() => rmSync(laneLogs, { recursive: true, force: true }))
 
 installServices(createServices())
 beforeEach(() => {

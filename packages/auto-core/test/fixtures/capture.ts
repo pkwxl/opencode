@@ -5,7 +5,9 @@
 // process hygiene, not local tidiness:
 //   - the ambient OPENCODE_AUTO_* layer is saved and scrubbed around the run
 //     (a run parses the environment it is handed — ambient switches from an
-//     unrelated shell would make it non-deterministic), restored afterwards;
+//     unrelated shell would make it non-deterministic), restored afterwards
+//     (the lane-log seam excepted: an output redirect rather than a switch,
+//     it rides the scrub — see LANE_LOG_SEAM below);
 //   - `plant` overlays explicit values on the scrubbed layer for this run
 //     alone (a switch a case turns on or off itself, whatever the ambient
 //     layer holds — e.g. loop-isolation's OPENCODE_AUTO_LANE_ISOLATION);
@@ -25,6 +27,13 @@ import { autoSwitches, setSwitchModelRegistry } from "../../src/switches"
 
 const OPENCODE_AUTO = /^OPENCODE_AUTO_/
 
+// The lane-log seam (plans/0151 D1) rides the scrub instead of being
+// scrubbed: it is an output redirect, not a switch — it cannot steer a run,
+// while losing it would send every lane the run launches to the machine-
+// shared default /tmp/opencode (the test preload points the seam at a
+// per-global scratch dir exactly so parallel workers never share it).
+const LANE_LOG_SEAM = "OPENCODE_AUTO_LANE_LOG_DIR"
+
 export type CaptureOptions = {
   // Values planted over the scrubbed layer for this run alone; deleted
   // again in the finally beside the ambient restore.
@@ -35,7 +44,7 @@ export type CaptureOptions = {
 // capture console.log, await the run, and restore everything — the switch
 // memo reset on both sides included.
 export async function captureRun(run: () => Promise<number>, opts: CaptureOptions = {}): Promise<{ code: number; lines: string[] }> {
-  const saved = Object.entries(process.env).filter(([key]) => OPENCODE_AUTO.test(key))
+  const saved = Object.entries(process.env).filter(([key]) => OPENCODE_AUTO.test(key) && key !== LANE_LOG_SEAM)
   for (const [key] of saved) delete process.env[key]
   const planted = Object.entries(opts.plant ?? {})
   for (const [key, value] of planted) process.env[key] = value

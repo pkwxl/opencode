@@ -177,7 +177,7 @@ With that said, you may want to try these methods, as they might work for you.
 
 ### Testing the auto family (`packages/auto-core`, `packages/auto`)
 
-CI runs each package's plain `bun test` through `bun turbo test`. The auto-core suite is additionally split into test lanes with wall-time budgets (see `packages/auto-core/script/test-lane.ts` and `test/lanes.ts`); run them from `packages/auto-core`:
+CI runs each package's plain `bun test` through `bun turbo test`. The auto-core suite is additionally split into test lanes with wall-time budgets (see `packages/auto-core/script/test-lane.ts` and `test/lanes.ts`); the lanes and the plain `test` script run their files across worker processes (`bun test --parallel`, one file per worker at the host's core count — a golden refresh via `UPDATE_GOLDEN`/`UPDATE_TURN_TRACE` stays serial, its destination files being shared); run them from `packages/auto-core`:
 
 - `bun run test:unit` — the pure, in-memory test files; the dev-loop gate, budgeted at 5 s.
 - `bun run test:repo` — the files that create a git repository or spawn a process; wall time printed, no budget.

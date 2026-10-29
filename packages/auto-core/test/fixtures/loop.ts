@@ -332,9 +332,15 @@ export type LoopFixture = {
 }
 
 const OPENCODE_AUTO = /^OPENCODE_AUTO_/
+// The lane-log seam (plans/0151 D1) rides the scrub instead of being
+// scrubbed: an output redirect, not a switch — a run through the loop here
+// reaches the wall's regression lanes, and losing the seam would send their
+// logs to the machine-shared default /tmp/opencode (the test preload points
+// it at a per-global scratch dir so parallel workers never share it).
+const LANE_LOG_SEAM = "OPENCODE_AUTO_LANE_LOG_DIR"
 
 async function withQuietConsole(run: () => Promise<number>): Promise<LoopRunResult> {
-  const saved = Object.entries(process.env).filter(([key]) => OPENCODE_AUTO.test(key))
+  const saved = Object.entries(process.env).filter(([key]) => OPENCODE_AUTO.test(key) && key !== LANE_LOG_SEAM)
   for (const [key] of saved) delete process.env[key]
   const lines: string[] = []
   const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {

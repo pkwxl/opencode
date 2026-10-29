@@ -10,7 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test",
+    "test": "bun test --parallel",
     "test:unit": "bun ./script/test-lane.ts unit",
     "test:repo": "bun ./script/test-lane.ts repo",
     "test:gate": "bun ./script/test-lane.ts gate"

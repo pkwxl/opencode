@@ -271,7 +271,10 @@ export const UNIT_LANE: readonly string[] = [
   "test/wrapup-result.test.ts",
 ]
 
-// The dev-loop budget on every machine: the whole `unit` lane under 5 s.
+// The dev-loop budget on every machine: the whole `unit` lane under 5 s
+// (the lane runs parallel like the others; on the 2026-10 re-measure host
+// 4.2 s parallel against 12.4 s serial — the serial shape no longer meets
+// the budget there).
 export const UNIT_BUDGET_MS = 5_000
 
 // The gate budget is relative, not absolute: baseline × 1.25, where the
@@ -281,13 +284,17 @@ export const UNIT_BUDGET_MS = 5_000
 // shared-container host that executed stage A), re-measured at the
 // program's final consolidation pass (210 s over three runs of 207–211 s on
 // the macOS host that executed stages D–F — a representative figure, not a
-// fastest one), and re-measured again when plans/0068 S3's scheduler tests
+// fastest one), re-measured again when plans/0068 S3's scheduler tests
 // grew the repo lane (five runs of 212–263 s on the same macOS host; the
 // recorded 230 s sits mid-spread, covering the load variance the host
-// showed); any changed gate host re-records it the same way. The
-// absolute 30 s figure stays the original gate-machine reference only, not
-// the rule.
-export const GATE_BASELINE_MS = 230_000
+// showed), and re-measured again when the suite went multi-core
+// (2026-10-29: every lane runs `bun test --parallel` — one worker per file
+// at the host's core count, golden refreshes serial — six runs of 13.7–14.9 s
+// on the 90-core Linux gate host where the serial pass measures 101.6 s; the
+// recorded 14 s sits mid-spread); any changed
+// gate host re-records it the same way. The absolute 30 s figure stays the
+// original gate-machine reference only, not the rule.
+export const GATE_BASELINE_MS = 14_000
 
 // The `gate` lane's fail line: baseline × 1.25.
 export const gateBudgetMs = (): number => Math.round(GATE_BASELINE_MS * 1.25)
