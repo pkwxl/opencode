@@ -39,7 +39,11 @@ independence is auditable from the notes alone. Capabilities with no public inte
 their own (internal enablers) are specified property-first: their notes state the invariants
 and guarantees — no lost wakeup, ordering and flush visibility, latency bounds, never-fail
 reserves — never mechanism narration, and their acceptance criteria are consumer-shaped
-where a consumer is imminent.
+where a consumer is imminent. Where the person's comparative arrangement pairs this
+phase's runs, the survey's pair rule applies here too: the two specifications are diffed
+entry against entry — binding on the consolidated document, for a consolidation may drop
+what the notes carried — every difference adjudicated against the reference and landing
+Unresolved for the person, never one run silently kept.
 
 The sealed wall: this phase's close seals the reference wall — the driver
 removes the reference door(s) and the admitting allows as one recorded act
@@ -48,11 +52,16 @@ This document carries the sealing semantics alone; the door path(s) are the
 project's own fill here at materialization (`Wall: seal <door>` — the
 top-level reference symlink names, comma or space separated; an unfilled
 field seals against every top-level symlink that resolves outside the
-project). Evidence layer, this phase's pre-wall duty: the verification
-reports keep verdicts and counts in-tree; their anchors and spot-check
-citations — any reference internals — land in the project's declared
-out-of-tree compliance home beside the divergence receipts, never in a
-session-readable document. Commit messages are covered by the same rule:
+project). The evidence layer is this phase's pre-wall duty, and sampled
+accuracy verification rides it: each task re-reads the reference for
+its riskiest distilled contracts — exact values, bounds and limits,
+corner and state-edge semantics — before its notes stand, for a wrong
+contract in a note is the wall's silent failure, the later phases
+implementing and testing it faithfully so nothing downstream catches
+it. The verification reports keep verdicts and counts in-tree; their
+anchors and spot-check citations — any reference internals — land in
+the project's declared out-of-tree compliance home beside the
+divergence receipts, never in a session-readable document. Commit messages are covered by the same rule:
 they are the one in-tree channel that can never be restated — no reference
 anchor, identifier or file:line ever rides one, this phase's sessions and
 the driver's own commits alike.

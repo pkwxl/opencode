@@ -88,11 +88,18 @@ fill there, never shipped content). The person approves these through the fork f
 other decision, and installs the approved lane rows into the materialized pack.
 
 Enumeration consistency, later rounds: the first survey's enumeration is built to run as an
-independent pair under the person's comparative arrangement (fork arms of the project), the
-pair diffed id by id, every difference landing as an Unresolved catalog row for the person —
-never one run silently kept. A later round's survey is a delta enumeration over new ids
-alone: entries already recorded are frozen at their spec version, and a challenge to a frozen
-entry is a recorded baseline change (its evidence, its impact, the person's decision,
-re-validating the affected implementation and tests) — never a re-survey side effect.
+independent pair under the person's comparative arrangement (fork arms of the project), and
+the pair diff covers every surface the survey hands downstream — the catalog rows diffed id
+by id, the decision records (`Fork:` and `Settled:` lines, recorded gaps) diffed by their
+subject, and the closed anchor set itself, an anchor one run carries and the other never
+names is a difference like any other (the completeness criterion binds the set only if the
+pair checks it). Every difference lands as an Unresolved row for the person — never one run
+silently kept — and the pair resolves before the phase closes: what a survey settles
+propagates into every later phase, so its differences are adjudicated before anything
+builds on them, never after. A later round's survey is a delta enumeration over new ids
+alone: entries already recorded are frozen at their spec version, and a challenge to a
+frozen entry is a recorded baseline change (its evidence, its impact, the person's
+decision, re-validating the affected implementation and tests) — never a re-survey side
+effect.
 
 <!-- auto: eof -->

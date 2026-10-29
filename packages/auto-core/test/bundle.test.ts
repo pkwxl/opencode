@@ -355,6 +355,29 @@ describe("bundle sources", () => {
     expect(extraction).toContain("never mechanism narration")
   })
 
+  // The widened consistency gate (plans/0154): the survey's pair diff
+  // covers what propagates — the decisions ledger by subject and the
+  // closed anchor set itself beside the catalog rows, resolving at the
+  // survey's close before anything builds on it — and the spec-read
+  // duties gain sampled accuracy verification over the riskiest
+  // contract classes plus the pair clause for comparative arrangements.
+  // The other two postures keep their shapes (cleanroom's discipline).
+  test("the shipped cleanroom duties carry the widened consistency gate and sampled verification (plans/0154)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    const survey = bundle.types.find((entry) => entry.type === "survey")!
+    const duties = survey.planDuties!.replaceAll("\n", " ")
+    expect(duties).toContain("the decision records (`Fork:` and `Settled:` lines, recorded gaps) diffed by their subject")
+    expect(duties).toContain("the closed anchor set itself")
+    expect(duties).toContain("resolves before the phase closes")
+    const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
+    const extraction = specRead.planDuties!.replaceAll("\n", " ")
+    expect(extraction).toContain("riskiest distilled contracts")
+    expect(extraction).toContain("the wall's silent failure")
+    expect(extraction).toContain("binding on the consolidated document")
+    expect(extraction).toContain("never one run silently kept")
+  })
+
   // The two-lane concurrency model (plans/0126 D1): every shipped pack — the
   // builtin default and the three bundles — carries the width-keyed
   // doc-concurrency teaching, level-free; the bundles' code-depth
