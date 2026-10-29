@@ -208,8 +208,15 @@ async function isExecutable(path: string): Promise<boolean> {
 // new commit of their own.
 
 // Where lane logs live (the lane protocol's prescribed path, D1: logs under
-// /tmp/opencode/). Tests inject a private directory through the opts.
-export const LANE_LOG_DIR = "/tmp/opencode"
+// /tmp/opencode/). Tests inject a private directory through the opts. The
+// environment seam (plans/0151 D1): OPENCODE_AUTO_LANE_LOG_DIR redirects the
+// lane and regression logs — a driving environment that isolates concurrent
+// runs of sibling worktrees (the cleanroom sandbox's per-run dir, 0147 D3's
+// named residual reopened) owns the choice; the default stays the prescribed
+// path and no environment fact lives in this source (P16).
+export function laneLogDir(env: Record<string, string | undefined> = process.env): string {
+  return env.OPENCODE_AUTO_LANE_LOG_DIR || "/tmp/opencode"
+}
 
 // How many log lines a red receipt's bounded evidence carries (the ends of
 // the failure region, D1).
@@ -273,7 +280,7 @@ export async function runTestLanes(
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
   const pollMs = opts.pollMs ?? DEFAULT_SCRIPT_POLL_MS
-  const logDir = opts.logDir ?? LANE_LOG_DIR
+  const logDir = opts.logDir ?? laneLogDir()
   await mkdir(logDir, { recursive: true })
   // The set-level guard's one snapshot (taken before anything launches; the
   // check runs after every lane exited) doubles as the receipts' recorded

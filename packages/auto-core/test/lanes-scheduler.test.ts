@@ -392,6 +392,21 @@ async function laneProject(text = "## T-001: the widget [pending]\nBuild the wid
 
 // —— The park path-length guard (§10's S6 hardening) —— //
 
+describe("laneBranch (the branch grammar, plans/0151 D2)", () => {
+  test("carries the target directory's digest: two arms of one object store dispatching the same unit land on distinct branches", () => {
+    const main = laneBranch("T-042", "/ws/cleanroom/baseline")
+    const arm = laneBranch("T-042", "/ws/cleanroom/forks/baseline-t042-forkA")
+    expect(main).toMatch(/^auto-lane\/T-042-[0-9a-f]{8}$/)
+    expect(arm).toMatch(/^auto-lane\/T-042-[0-9a-f]{8}$/)
+    expect(main).not.toBe(arm)
+  })
+
+  test("stable within one target directory — a re-dispatched lane resumes on the same branch (D16)", () => {
+    expect(laneBranch("T-042", "/ws/cleanroom/baseline")).toBe(laneBranch("T-042", "/ws/cleanroom/baseline"))
+    expect(laneBranch("T-042", "/ws/cleanroom/baseline")).not.toBe(laneBranch("T-043", "/ws/cleanroom/baseline"))
+  })
+})
+
 describe("laneParkProblem (§10, Windows MAX_PATH)", () => {
   test("no check off Windows: undefined on darwin and linux whatever the depth", () => {
     const deep = "/".padEnd(300, "x")
@@ -428,7 +443,7 @@ describe("dispatchLane (§6.5 ①–⑤)", () => {
     expect(await Bun.file(join(lane.worktree, "opencode.json")).exists()).toBe(true)
     expect(await Bun.file(join(lane.worktree, ".gitignore")).text()).toContain(".auto/")
     expect(await Bun.file(join(lane.worktree, ".opencode", "agent", "auto.md")).exists()).toBe(true)
-    expect((await git(lane.worktree, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(laneBranch("T-001"))
+    expect((await git(lane.worktree, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(laneBranch("T-001", dir))
     // The registry records the dispatch; attempts booked through begin.
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({
       status: "in_progress",
@@ -534,7 +549,7 @@ describe("landLane (D7's five steps)", () => {
     expect(units.tasks["T-001"].worktree).toBeUndefined()
     expect(units.tasks["T-001"].pid).toBeUndefined()
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(false)
-    expect((await git(dir, "branch", "--list", laneBranch("T-001"))).trim()).toBe("")
+    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toBe("")
     const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text())
     expect(stats.lanes["T-001"]).toEqual({ tokens: 100, wallMs: 1000, sessions: 2 })
   })
@@ -555,7 +570,7 @@ describe("landLane (D7's five steps)", () => {
     expect(await Bun.file(join(dir, "docs", "T-001", "todo.md")).text()).toBe("# T-001: main side\n")
     expect(await changedFiles(dir)).toEqual([])
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
-    expect((await git(dir, "branch", "--list", laneBranch("T-001"))).trim()).toContain(laneBranch("T-001"))
+    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBe(lanePark("T-001"))
   })
 
@@ -797,7 +812,7 @@ ${run.lines.join("\n")}
     expect(await changedFiles(dir)).toEqual([])
     // The blocked lane's scene is kept: worktree, branch, registry record.
     expect(await parkEntries()).toEqual(["T-002"])
-    expect((await git(dir, "branch", "--list", laneBranch("T-002"))).trim()).toContain(laneBranch("T-002"))
+    expect((await git(dir, "branch", "--list", laneBranch("T-002", dir))).trim()).toContain(laneBranch("T-002", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-002"].worktree).toBe(lanePark("T-002"))
   })
 
@@ -1224,7 +1239,7 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
 // dead worker the record names).
 async function crashScene(unit: SchedUnit, pid: number, report?: LaneReport): Promise<void> {
   const park = join(dir, lanePark(unit.id))
-  const added = await createGitOps().addWorktree(dir, park, laneBranch(unit.id))
+  const added = await createGitOps().addWorktree(dir, park, laneBranch(unit.id, dir))
   if (!added.ok) throw new Error(added.error)
   // The scaffolding a real dispatch copies in (the report written later under
   // .auto/ must be ignored dirt, not a landing violation).
@@ -1325,7 +1340,7 @@ describe("recoverOrphanLanes (D14)", () => {
     // A straggler git knows about (the dispatch died between the worktree's
     // creation and the registry write)…
     const stray = join(dir, lanePark("T-009"))
-    const added = await createGitOps().addWorktree(dir, stray, laneBranch("T-009"))
+    const added = await createGitOps().addWorktree(dir, stray, laneBranch("T-009", dir))
     expect(added.ok).toBe(true)
     // …and one that only exists as a directory holding a live run lock.
     const locked = join(dir, lanePark("T-010"))
@@ -1344,7 +1359,7 @@ describe("recoverOrphanLanes (D14)", () => {
     }
     expect(code).toBeUndefined()
     expect(await dirExists(stray)).toBe(false)
-    expect((await git(dir, "branch", "--list", laneBranch("T-009"))).trim()).toBe("")
+    expect((await git(dir, "branch", "--list", laneBranch("T-009", dir))).trim()).toBe("")
     expect(lines.some((line) => line.includes("removed: the park straggler"))).toBe(true)
     expect(await dirExists(locked)).toBe(true)
     expect(lines.some((line) => line.includes("leaving it alone"))).toBe(true)

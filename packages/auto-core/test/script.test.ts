@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, runScript, scriptTmpDir } from "../src/script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir } from "../src/script"
 
 describe("scriptTmpDir", () => {
   test("the path is the tmp/ subdirectory under the target directory", () => {
@@ -10,6 +10,17 @@ describe("scriptTmpDir", () => {
     expect(scriptTmpDir(dir)).toBe(join(dir, "tmp"))
     // A trailing separator is normalized away
     expect(scriptTmpDir(`${dir}/`)).toBe(join(dir, "tmp"))
+  })
+})
+
+describe("laneLogDir (plans/0151 D1, the environment seam)", () => {
+  test("the default is the lane protocol's prescribed path", () => {
+    expect(laneLogDir({})).toBe("/tmp/opencode")
+  })
+
+  test("OPENCODE_AUTO_LANE_LOG_DIR redirects the lane and regression logs; the empty string counts as unset", () => {
+    expect(laneLogDir({ OPENCODE_AUTO_LANE_LOG_DIR: "/ws/proj/tmp/sbx/lane-logs" })).toBe("/ws/proj/tmp/sbx/lane-logs")
+    expect(laneLogDir({ OPENCODE_AUTO_LANE_LOG_DIR: "" })).toBe("/tmp/opencode")
   })
 })
 

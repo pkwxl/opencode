@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
 import { subtaskDoc, taskDoc } from "@opencode-ai/auto-core/docpaths"
 import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
+import { laneBranch } from "@opencode-ai/auto-core/lanes"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { createServices, installServices, services } from "@opencode-ai/auto-core/services"
@@ -5378,7 +5379,7 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       expect(await Bun.file(join(dir, taskStatePaths(second).complete)).exists()).toBe(false)
       // The blocked lane's scene is kept; the main tree is clean.
       expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([second])
-      expect((await git("branch", "--list", `auto-lane/${second}`)).trim()).toContain(`auto-lane/${second}`)
+      expect((await git("branch", "--list", laneBranch(second, dir))).trim()).toContain(laneBranch(second, dir))
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
       await agent.done()
@@ -5704,7 +5705,7 @@ describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
       // isolation), while the nested repository rides the round branch — the
       // main tree's pkg and the park's copied pkg both sit on auto/R-01, the
       // original branch never moved by any of it.
-      expect((await git("branch", "--list", "auto-lane/T-001")).trim()).toContain("auto-lane/T-001")
+      expect((await git("branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
       expect((await git("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(mainBranch)
       expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
       const parkPkg = gitOf(join(dir, ".auto", "worktrees", "T-001", "pkg"))

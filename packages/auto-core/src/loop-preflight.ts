@@ -858,7 +858,7 @@ export async function recoverOrphanLanes(gitOps: GitOps, dir: string): Promise<n
     // always schedules, so a "keep" is always the cap).
     while (report === undefined) {
       if (orphanRedispatch(await unitAttempts(dir, record.unit)).type === "keep") {
-        log(`⏸ ${record.unit} hit its dispatch attempts cap (${LANE_DISPATCH_CAP}) without completing; the scene is kept at ${lanePark(record.unit)} — inspect it manually (the lane branch ${laneBranch(record.unit)} holds the last attempt's commits) and re-run after fixing it`)
+        log(`⏸ ${record.unit} hit its dispatch attempts cap (${LANE_DISPATCH_CAP}) without completing; the scene is kept at ${lanePark(record.unit)} — inspect it manually (the lane branch ${laneBranch(record.unit, dir)} holds the last attempt's commits) and re-run after fixing it`)
         return 2
       }
       const dispatched = await dispatchLane(gitOps, dir, { id: record.unit, title: record.unit })
@@ -951,8 +951,8 @@ async function pruneLaneStragglers(gitOps: GitOps, dir: string, records: readonl
     const pruned = await gitOps.pruneWorktrees(dir)
     if (!pruned.ok) log(`⚠ git worktree prune failed: ${pruned.error}`)
     for (const name of prunedDirs) {
-      const deleted = await deleteBranch(dir, laneBranch(name))
-      if (!deleted.ok) log(`⚠ deleting the straggler's lane branch ${laneBranch(name)} failed: ${deleted.error}`)
+      const deleted = await deleteBranch(dir, laneBranch(name, dir))
+      if (!deleted.ok) log(`⚠ deleting the straggler's lane branch ${laneBranch(name, dir)} failed: ${deleted.error}`)
       log(`removed: the park straggler ${join(".auto", "worktrees", name)} (a worktree with no lane record)`)
     }
   }

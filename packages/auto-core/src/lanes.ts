@@ -47,6 +47,7 @@
 // dispatches carry. OPENCODE_AUTO_LANE_ISOLATION keeps its meaning beneath
 // whatever tier is active: it still forces the worktree lane machinery,
 // serially, under every tier (D10's closing rule).
+import { createHash } from "node:crypto"
 import { cp, mkdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
@@ -712,9 +713,17 @@ function reRootSplit(baseline: readonly { root: string; sha: string }[], from: s
 
 // —— The protocol paths (§8: all new English literals, registered) ——
 
-// The lane branch grammar: `auto-lane/<task-id>`, stable across a task's
-// retries (D16 — a re-dispatched lane resumes on the same branch).
-export const laneBranch = (unit: string): string => `auto-lane/${unit}`
+// The lane branch grammar: `auto-lane/<task-id>-<digest>`, where <digest> is
+// the first 8 hex of the target directory's path. Stability is per target
+// directory (D16 — a re-dispatched lane resumes on the same branch), but the
+// branch namespace belongs to the object store and fork arms of one
+// repository share the store (plans/0129): the digest keeps two arms
+// dispatching the same unit out of each other's namespace while a
+// directory's own retries stay on one branch (plans/0151 D2). land's
+// original-branch derivation matches on the `auto-lane/` prefix, which the
+// grammar keeps.
+export const laneBranch = (unit: string, dir: string): string =>
+  `auto-lane/${unit}-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}`
 
 // The park path of a unit's lane, relative to the target directory: the
 // worktree lives under `.auto/worktrees/` (D16), gitignored with the rest of
@@ -846,7 +855,7 @@ export async function dispatchLane(
 ): Promise<LaneDispatch> {
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
-  const branch = laneBranch(task.id)
+  const branch = laneBranch(task.id, dir)
   // §10's park path-length guard runs first, before any write: a worktree
   // this host cannot address would fail mid-creation (block-with-path).
   const tooLong = laneParkProblem(dir, task.id)
@@ -1077,7 +1086,7 @@ export async function landLane(
   report: LaneReport,
 ): Promise<Landing> {
   const worktree = join(dir, lanePark(task.id))
-  const branch = laneBranch(task.id)
+  const branch = laneBranch(task.id, dir)
   // D7's step ④ booking (the report's figures into the parent's run stats,
   // the detail folding into the phase/round buckets — the S4 roll-up) plus
   // the 0067 bus's landing event: one helper, the three call sites below
@@ -1179,7 +1188,7 @@ export async function landLane(
 // a park nothing references. Returns whether both fully succeeded.
 async function teardownLane(gitOps: GitOps, dir: string, unit: string): Promise<boolean> {
   const worktree = join(dir, lanePark(unit))
-  const branch = laneBranch(unit)
+  const branch = laneBranch(unit, dir)
   const removed = await gitOps.removeWorktree(dir, worktree)
   if (!removed.ok) log(`⚠ removing the lane worktree ${lanePark(unit)} failed: ${removed.error} (the lane landed; clean up manually)`)
   const deleted = await deleteBranch(dir, branch)
