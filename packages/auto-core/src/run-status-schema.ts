@@ -265,8 +265,9 @@ export type RunStatusEvent =
   // parent-level facts of the isolation machinery — the task-start/task-end
   // brackets above carry the unit narrative; these carry the lane identity,
   // so the future 0067 bus can carry a lane the way it carries a run.
-  // `lane` is the unit id (the branch `auto-lane/<id>` and the park
-  // `.auto/worktrees/<id>/` derive from it). Nothing here parses lane
+  // `lane` is the unit id (the park `.auto/worktrees/<id>/` derives from it;
+  // the branch `auto-lane/<id>-<digest>` adds the target directory's digest,
+  // plans/0151 D2). Nothing here parses lane
   // terminal text (F13's rule): the events carry typed facts only, and the
   // human story rides the prefix relay's log lines.
   //   - lane-dispatch: the parent spawned the lane's worker (`worktree` the

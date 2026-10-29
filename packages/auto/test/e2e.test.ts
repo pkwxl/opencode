@@ -5084,9 +5084,11 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       expect(lanes.out).toContain(`${TASK} done (lane landed:`)
       const log = await isolated.git("log", "--format=%B")
       expect(log).toContain("Auto-Stage: landing")
-      // The park is torn down and the lane branch deleted after landing.
+      // The park is torn down and the lane branch deleted after landing
+      // (the digest grammar's own name — an exact pattern without it could
+      // never match, plans/0151 D2).
       expect(await readdir(join(isolated.dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
-      expect((await isolated.git("branch", "--list", `auto-lane/${TASK}`)).trim()).toBe("")
+      expect((await isolated.git("branch", "--list", laneBranch(TASK, isolated.dir))).trim()).toBe("")
     } finally {
       await serial.agent.done()
       await isolated.agent.done()
@@ -5252,7 +5254,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
       expect((await git("status", "--porcelain")).trim()).toBe("")
       expect(await parkThere()).toBe(false)
-      expect((await git("branch", "--list", `auto-lane/${TASK}`)).trim()).toBe("")
+      expect((await git("branch", "--list", laneBranch(TASK, dir))).trim()).toBe("")
       expect((await units()).tasks[TASK]?.attempts).toBe(2)
       expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
     } finally {
@@ -5335,7 +5337,7 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
       expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toContain("alpha")
       expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      expect((await git("branch", "--list", "auto-lane/T-001")).trim()).toBe("")
+      expect((await git("branch", "--list", laneBranch("T-001", dir))).trim()).toBe("")
       expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
@@ -5372,7 +5374,8 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       // `main` is no host luck: the fixture's initial branch is pinned by the
       // suite's global git config (T-127), so the instruction naming it is the
       // real main-tree branch, and the literal cannot drift with the host.
-      expect(run.out).toContain(`merge main into auto-lane/${second}`)
+      // The lane branch carries the digest grammar's full name (plans/0151 D2).
+      expect(run.out).toContain(`merge main into ${laneBranch(second, dir)}`)
       expect(run.out).toContain(`${second} is blocked`)
       expect(run.out).toContain("blocked and its landing hit a conflict")
       expect(await Bun.file(join(dir, taskStatePaths(first).complete)).exists()).toBe(true)

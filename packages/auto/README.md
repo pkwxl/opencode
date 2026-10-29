@@ -659,6 +659,14 @@ opencode-auto run <dir> --max-sessions 2     # 2. up to two units execute side b
   selection; per run, never persisted. The switch keeps its meaning beneath every tier (it forces the worktree
   machinery whatever `treeLanes` says, taking the tier-1 materialization when the tier in force is 1). At `--max-sessions 1` (the default) none of this machinery exists for any
   project whatever the level: same loops, same prompts, byte for byte.
+- **The lane-log directory**: the driver-run lane and regression logs land under `/tmp/opencode/` — one global
+  path every project and every fork arm shares. `OPENCODE_AUTO_LANE_LOG_DIR=<dir>` redirects this run's
+  driver-run lane and regression logs (whatever the session count — the `--test-by-driver` channel and the
+  regression lane included), every receipt `Log:` line naming the actual path — what concurrent runs of
+  sibling worktrees (the fork A/B family) and a per-run sandbox export, so one run's evidence never poses as
+  another's; empty counts as unset, and an unset environment keeps the prescribed path byte for byte. Per
+  run, never persisted; agent sessions never see the variable (the driver's env scrub), so a session-run
+  lane's logs keep the prescribed default.
 
 ### The advance command (transfer)
 

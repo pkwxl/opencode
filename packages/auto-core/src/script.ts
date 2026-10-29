@@ -197,7 +197,8 @@ async function isExecutable(path: string): Promise<boolean> {
 // background processes — the cheap lanes concurrently, an anchor only once
 // they green (an anchor started beside a red cheap lane is a doomed long
 // run), a lane declared exclusive alone in the tree. Each lane writes its log
-// under /tmp/opencode/ with the exit code appended (`LANE_RC=$?`, the line
+// under the lane-log dir (/tmp/opencode/ by default, plans/0151 D1's seam)
+// with the exit code appended (`LANE_RC=$?`, the line
 // the session-side protocol reads too) and is watched by the same
 // idle-progress watchdog runScript uses. The stash guard extends to the whole
 // set: one snapshot before the first launch, one check after every lane has

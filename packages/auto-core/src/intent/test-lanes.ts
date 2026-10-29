@@ -146,7 +146,8 @@ export function testLanesProblem(pack: IntentPack): string | undefined {
 //                                           target directory itself)
 //   Start: <ISO 8601> / End: <ISO 8601>
 //   Verdict: green | red
-//   Log: <the lane's log path under /tmp/opencode/>
+//   Log: <the lane's log path (the lane-log dir, /tmp/opencode/ by default
+//                                          — plans/0151 D1's seam may redirect it)>
 //   Carried: <receipt path>                (carry receipts only)
 // The three machine fields (Lane/Heads/Verdict) are what carry-forward and
 // the anchor pre-gate read; everything else is evidence for the sessions.

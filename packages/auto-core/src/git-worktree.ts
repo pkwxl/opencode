@@ -13,7 +13,9 @@ import { dirname, join, relative } from "node:path"
 import { abortToLandResult, commitTitle, firstLine, git, identityArgs, isConflict, message, shortTitle, type LandResult, type WorktreeResult } from "./git"
 
 // Create a lane worktree at path (the park, `.auto/worktrees/<task-id>`,
-// gitignored with the rest of `.auto/`) on the new branch `auto-lane/<task-id>`
+// gitignored with the rest of `.auto/`) on the new lane branch
+// `auto-lane/<task-id>-<digest>` (plans/0151 D2 — the digest keys the target
+// directory)
 // at the repository's current HEAD (plans/0068 D1: the lane's commit boundary
 // — beginUnit's clean gate, the SHA baseline, commitTree and unitViolations —
 // then holds per worktree by construction). path and branch are the caller's
