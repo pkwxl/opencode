@@ -38,20 +38,38 @@ depth/grading question list: a grading depth the analysis or round brief implies
 in the survey with its derivation; a genuinely person-owned policy call is a `Fork:` line
 like any other — nothing the person must decide sits outside the fork list. A reference of a
 few hundred to ~1k lines in one or two areas with no open scope decisions is exactly one
-task: read it, write the short survey, and record `Forks: none` — the round then flows
+task: read it, write the short survey and the capability catalog beside it (proportionately
+small — the enumeration recorded as rows, so the pair-diff and the completeness criterion
+bind at every scale), and record `Forks: none` — the round then flows
 straight into the deep phase. A reference of tens of thousands of lines, many areas, or
 genuine open decisions gets the full posture: the inventory tasks this phase needs (usually
 one — inventory is enumeration, not reading) plus a closing consolidation task that alone
-writes survey.md in this phase directory, made of: the reference's map (subsystem areas,
-sizes, structure), the decisions ledger (every `Settled:` line with its derivation, every
-`Fork:` line with its project-level consequences and its `Recommend:` default), environment
-facts and gaps (a missing tool is a gap, named as one — a recorded gap the person reads; driver-helper renders the standing list), a proposed MUST baseline, the capability catalog — `docs/capability-catalog.md`, the project's standing enumeration baseline, one row per capability: its stable id and anchor, level, contract strength, status, dependencies, evidence, spec version, acceptance case; the statuses Required, Deferred, Optional, Retired, Unresolved — and Unresolved is never silently treated as Optional, it is the person's adjudication queue — complete when every anchor of the closed set has its row, gap rows included, and beside that evidence a `## Project brief`
+writes survey.md in this phase directory and the capability catalog beside it. survey.md is
+made of: the reference's map (subsystem areas, sizes, structure), the decisions ledger
+(every `Settled:` line with its derivation, every `Fork:` line with its project-level
+consequences and its `Recommend:` default), environment facts and gaps (a missing tool is a
+gap, named as one — a recorded gap the person reads; driver-helper renders the standing
+list), a proposed MUST baseline, and beside that evidence a `## Project brief`
 section proposing the project's constants: the goal in the target's own terms, the reference
 location and wall kind (under rule separation, the platform boundary), the target, the
 constraints that bind every round, and the scope posture with every settled decision and each
 fork's recommended default. The survey decides what the person's approved decisions already
 decide and records the derivation for the person to veto; the person disposes only of the
 genuine forks — never write the person's `Clarified:` line.
+
+The capability catalog — `docs/capability-catalog.md`, the project's standing enumeration
+baseline. One row per capability: its stable id and anchor, level, contract strength,
+status, dependencies, evidence, spec version, acceptance case; the statuses Required,
+Deferred, Optional, Retired, Unresolved — and Unresolved is never silently treated as
+Optional, it is the person's adjudication queue. Complete when every anchor of the closed
+set has its row, gap rows included. Every level and contract-strength assignment names its
+evidence in its row — the consumers, standards, or invariants that demand it — so the
+layering is reproducible from the rows; the criteria themselves ride the brief's
+methodology, never the template. And the rows stay identifier-clean: ids, anchor names,
+statuses, evidence kinds and public specification vocabulary alone — never the reference's
+private identifiers, never a reference file:line. The catalog is a standing in-tree
+document every later phase reads; the specification notes' identifier hygiene binds it the
+same way.
 
 The survey also proposes the declarations a cleanroom project owes, as part of its environment
 facts and its `## Project brief` proposal: the lane rows — build, the paradigm-constraint

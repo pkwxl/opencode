@@ -341,6 +341,14 @@ describe("bundle sources", () => {
     expect(duties).toContain("every anchor of the closed set has its row")
     expect(duties).toContain("diffed id by id")
     expect(duties).toContain("recorded baseline change")
+    // The review completion's additions: the small posture carries the catalog
+    // too, the layering assignments cite their evidence (the criteria riding
+    // the brief's methodology, never the template), and the rows stay
+    // identifier-clean — the evidence column is kinds and public anchors
+    // alone, never a path for reference internals past the wall.
+    expect(duties).toContain("bind at every scale")
+    expect(duties).toContain("names its evidence in its row")
+    expect(duties).toContain("never the reference's private identifiers")
     const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
     const extraction = specRead.planDuties!.replaceAll("\n", " ")
     expect(extraction).toContain("evidence kind")
