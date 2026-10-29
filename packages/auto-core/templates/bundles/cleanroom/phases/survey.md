@@ -8,9 +8,14 @@ Phase-artifacts: survey.md
 Survey duties — this phase sizes the reference and hands the person only the genuinely open
 decisions. Inventory-level reading only: no distillation, no specification (the spec-read
 phase after it does that), and no implementation. Size first, and let the size set the
-posture: enumerate the reference at the location the brief names — subsystem areas, line
-counts, structure, the platform interfaces at the boundary, the wall kind the brief declares —
-in this planning session's own read-only survey. Decisions come from the person's approved
+posture: enumerate capabilities against the closed observable surface the brief's methodology
+names — published specifications, device documentation, consumer-facing entry families with
+the declared consumer set — a finite, listable anchor set, while the reference at the
+location the brief names (subsystem areas, line counts, structure, the platform interfaces
+at the boundary, the wall kind the brief declares) serves sizing and the targeted reading of
+specific entries in this planning session's own read-only survey: the source tree is never
+the enumeration instrument. Every enumerated capability carries a stable id derived from its
+anchor, so two enumerations of the same service diff id by id. Decisions come from the person's approved
 words, newest first: the current project brief (the latest approved proposal — it replaces
 every earlier one wholesale) and this round's round brief, then the approved project
 analysis (docs/analysis.md — in this planning prompt's input, or read the file) as the
@@ -40,7 +45,7 @@ one — inventory is enumeration, not reading) plus a closing consolidation task
 writes survey.md in this phase directory, made of: the reference's map (subsystem areas,
 sizes, structure), the decisions ledger (every `Settled:` line with its derivation, every
 `Fork:` line with its project-level consequences and its `Recommend:` default), environment
-facts and gaps (a missing tool is a gap, named as one — a recorded gap the person reads; driver-helper renders the standing list), a proposed MUST baseline, and beside that evidence a `## Project brief`
+facts and gaps (a missing tool is a gap, named as one — a recorded gap the person reads; driver-helper renders the standing list), a proposed MUST baseline, the capability catalog — `docs/capability-catalog.md`, the project's standing enumeration baseline, one row per capability: its stable id and anchor, level, contract strength, status, dependencies, evidence, spec version, acceptance case; the statuses Required, Deferred, Optional, Retired, Unresolved — and Unresolved is never silently treated as Optional, it is the person's adjudication queue — complete when every anchor of the closed set has its row, gap rows included, and beside that evidence a `## Project brief`
 section proposing the project's constants: the goal in the target's own terms, the reference
 location and wall kind (under rule separation, the platform boundary), the target, the
 constraints that bind every round, and the scope posture with every settled decision and each
@@ -63,5 +68,13 @@ remove at the spec-read close, proposed so the person fills it into the sealing 
 document's `Wall:` line at materialization (the wall's concrete door path is the person's
 fill there, never shipped content). The person approves these through the fork flow like any
 other decision, and installs the approved lane rows into the materialized pack.
+
+Enumeration consistency, later rounds: the first survey's enumeration is built to run as an
+independent pair under the person's comparative arrangement (fork arms of the project), the
+pair diffed id by id, every difference landing as an Unresolved catalog row for the person —
+never one run silently kept. A later round's survey is a delta enumeration over new ids
+alone: entries already recorded are frozen at their spec version, and a challenge to a frozen
+entry is a recorded baseline change (its evidence, its impact, the person's decision,
+re-validating the affected implementation and tests) — never a re-survey side effect.
 
 <!-- auto: eof -->

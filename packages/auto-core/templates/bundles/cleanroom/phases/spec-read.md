@@ -33,6 +33,14 @@ phase's sessions read the reference lawfully, so a session may be told the
 colliding identifier outright. The committed receipt carries counts and note ids alone;
 a reference identifier never persists in any session-readable document.
 
+Entry provenance, property-first: every specification entry records its evidence kind —
+published specification, standard, black-box observation, or directed source read — so
+independence is auditable from the notes alone. Capabilities with no public interface of
+their own (internal enablers) are specified property-first: their notes state the invariants
+and guarantees — no lost wakeup, ordering and flush visibility, latency bounds, never-fail
+reserves — never mechanism narration, and their acceptance criteria are consumer-shaped
+where a consumer is imminent.
+
 The sealed wall: this phase's close seals the reference wall — the driver
 removes the reference door(s) and the admitting allows as one recorded act
 at the next person's advance, and every later phase is mechanically walled.

@@ -321,6 +321,32 @@ describe("bundle sources", () => {
     }
   })
 
+  // The enumeration and provenance discipline (plans/0153): the shipped
+  // cleanroom survey enumerates against the closed observable surface the
+  // brief's methodology names (the source tree never the enumeration
+  // instrument), lands the standing capability catalog with its status
+  // semantics and completeness criterion, and teaches the pair-diff /
+  // delta-round rule; the spec-read duties carry per-entry provenance and
+  // the property-first clause for internal enablers. The other two
+  // postures keep their survey shapes (the discipline is cleanroom's).
+  test("the shipped cleanroom duties carry the enumeration and provenance discipline (plans/0153)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    const survey = bundle.types.find((entry) => entry.type === "survey")!
+    const duties = survey.planDuties!.replaceAll("\n", " ")
+    expect(duties).toContain("closed observable surface the brief's methodology names")
+    expect(duties).toContain("never the enumeration instrument")
+    expect(duties).toContain("docs/capability-catalog.md")
+    expect(duties).toContain("Unresolved is never silently treated as Optional")
+    expect(duties).toContain("every anchor of the closed set has its row")
+    expect(duties).toContain("diffed id by id")
+    expect(duties).toContain("recorded baseline change")
+    const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
+    const extraction = specRead.planDuties!.replaceAll("\n", " ")
+    expect(extraction).toContain("evidence kind")
+    expect(extraction).toContain("never mechanism narration")
+  })
+
   // The two-lane concurrency model (plans/0126 D1): every shipped pack — the
   // builtin default and the three bundles — carries the width-keyed
   // doc-concurrency teaching, level-free; the bundles' code-depth
