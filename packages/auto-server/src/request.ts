@@ -20,7 +20,10 @@ export class RequestError extends Error {}
 
 // The per-run options (the payload's `options`; the flags the CLI's `run`
 // takes as its own session flags, in their JSON form). interactive is
-// deliberately absent — see parseOptions.
+// deliberately absent — see parseOptions. repair/stopAfter/boundary are the
+// run-side widths the CLI's run gained since (0079 §4, 0128, 0101 D1) —
+// plain-run fields, refused under a plan or transfer payload (the core
+// carries no budget under a stop condition; the worker enforces the pair).
 export type RunRequestOptions = {
   verbose?: boolean
   waitAnswer?: number
@@ -30,6 +33,9 @@ export type RunRequestOptions = {
   dryrun?: boolean
   maxSessions?: number
   server?: string
+  repair?: number
+  stopAfter?: string
+  boundary?: "stop" | "flow"
 }
 
 // The options after validation, defaults resolved (the CLI's parse* helpers'
@@ -38,7 +44,8 @@ export type RunRequestOptions = {
 // since 0068 the core runs maxSessions ≥ 2 as concurrent lanes under a
 // parallel level, and the worker maps the value straight into the core's
 // run options; parseOptions below is what holds this service at one session
-// per run).
+// per run). repair defaults to 0 (none), boundary to "stop" (the reading of
+// absent — only "flow" is threaded into the run, the CLI's own shape).
 export type RunOptions = {
   verbose: boolean
   waitAnswer: number
@@ -48,6 +55,9 @@ export type RunOptions = {
   dryrun: boolean
   maxSessions: number
   server: string | undefined
+  repair: number
+  stopAfter: string | undefined
+  boundary: "stop" | "flow"
 }
 
 // The constitutional config keys (the CLI's CONFIG_FLAGS plus the two
@@ -78,18 +88,24 @@ export const CONFIG_KEYS: Record<string, string> = {
   "auto-number": "--auto-number (use --no-auto-number to turn off)",
   "no-auto-number": "--no-auto-number (use --auto-number to turn on)",
   wrapup: "--wrapup (use --no-wrapup to turn off)",
-  "no-wrapup": "--no-wrapup (use --no-wrapup to turn on)",
+  "no-wrapup": "--no-wrapup (use --wrapup to turn on)",
   phases: "--phases <value>",
   parallel: "--parallel <value>",
+  intent: "--intent <value>",
+  treeLanes: "--tree-lanes <value>",
+  "tree-lanes": "--tree-lanes <value>",
+  isolate: "--isolate <value>",
   scanExempt: "--scan-exempt <value>",
   "scan-exempt": "--scan-exempt <value>",
 }
-// Keys no flag reaches (plans/0049 G9): the refusal names the file alone.
-export const HAND_EDITED_KEYS = new Set(["acceptanceGate", "build"])
+// Keys no flag reaches (plans/0049 G9; the tier-1 lane knobs beside
+// --tree-lanes the same class, plans/0096 D9): the refusal names the file
+// alone.
+export const HAND_EDITED_KEYS = new Set(["acceptanceGate", "build", "lanes"])
 
 // The per-run options a run request accepts (the CLI `run` session flags'
 // JSON form); interactive is deliberately absent — see parseOptions.
-export const OPTION_KEYS = new Set(["verbose", "waitAnswer", "waitBetween", "permission", "newSession", "dryrun", "maxSessions", "server"])
+export const OPTION_KEYS = new Set(["verbose", "waitAnswer", "waitBetween", "permission", "newSession", "dryrun", "maxSessions", "server", "repair", "stopAfter", "boundary"])
 const PERMISSION_MODES: readonly PermissionMode[] = ["auto-allow", "ask-allow", "ask-deny", "ask-fail"]
 
 // Every name the env-switch registry answers to: the live switches plus the
@@ -110,7 +126,7 @@ function fail(message: string): never {
 }
 
 export function runOptionDefaults(): RunOptions {
-  return { verbose: false, waitAnswer: 0, waitBetween: 0, permission: "ask-deny", newSession: false, dryrun: false, maxSessions: 1, server: undefined }
+  return { verbose: false, waitAnswer: 0, waitBetween: 0, permission: "ask-deny", newSession: false, dryrun: false, maxSessions: 1, server: undefined, repair: 0, stopAfter: undefined, boundary: "stop" }
 }
 
 // The run request's options: strict allowlist, values validated like the
@@ -122,7 +138,7 @@ export function runOptionDefaults(): RunOptions {
 // error pointing at the CLI until that unit lands.
 export function parseOptions(raw: unknown): RunOptions {
   if (raw === undefined) return runOptionDefaults()
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("options must be an object holding the run's per-run options (verbose, waitAnswer, waitBetween, permission, newSession, dryrun, maxSessions, server)")
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("options must be an object holding the run's per-run options (verbose, waitAnswer, waitBetween, permission, newSession, dryrun, maxSessions, server, repair, stopAfter, boundary)")
   const given = raw as Record<string, unknown>
   for (const key of Object.keys(given)) {
     if (key in CONFIG_KEYS) fail(frozenRefusal("options.", key, CONFIG_KEYS[key]!))
@@ -180,6 +196,36 @@ export function parseOptions(raw: unknown): RunOptions {
     const value = given.server
     if (typeof value !== "string" || !value.trim()) fail("options.server takes a URL string (the external agent server this run talks to)")
     parsed.server = value
+  }
+  // --repair (the CLI's run option, auto-core plans/0079 §4): the bounded
+  // repair budget, 0..10 rounds; 0 (also the serialized default's spelling
+  // of absent) = none — the first FAIL verdict blocks.
+  if ("repair" in given) {
+    const value = given.repair
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 10) {
+      fail("options.repair takes 0..10 (automatic repair rounds before blocking for the human; 0 = none, the default)")
+    }
+    parsed.repair = value
+  }
+  // --stop-after (auto-core plans/0128): the task id whose completion ends
+  // this run — the serial path alone (the core's own confinement; the
+  // maxSessions cap keeps every daemon run serial today).
+  if ("stopAfter" in given) {
+    const value = given.stopAfter
+    if (typeof value !== "string" || !/^T-\d{3,}$/.test(value)) {
+      fail("options.stopAfter takes a task id (T-NNN): the task whose completion ends this run")
+    }
+    parsed.stopAfter = value
+  }
+  // --boundary (auto-core plans/0101 D1): run's phase-boundary shape — stop
+  // (the default) ends the run at each clean phase end naming transfer, flow
+  // crosses the boundaries continuously.
+  if ("boundary" in given) {
+    const value = given.boundary
+    if (value !== "stop" && value !== "flow") {
+      fail("options.boundary takes stop or flow (stop ends the run at each clean phase end, the default; flow crosses the boundaries continuously as before)")
+    }
+    parsed.boundary = value
   }
   return parsed
 }
@@ -293,4 +339,35 @@ export function parsePlan(raw: unknown): PlanPayload {
   }
   if (append && input === undefined) fail('plan.append rides a planning input: pass "input" with it (appending adds the tasks planned from the input)')
   return { ...(input !== undefined ? { input } : {}), append }
+}
+
+// The transfer payload (plans/0101 D2, the service absorb): a request
+// carrying `transfer` runs the worker as the CLI's `transfer` command does —
+// runTransfer, one person-bracketed advance resolved by state (the project
+// start, the phase boundary, the round close/open), the loop under
+// stopBefore "formulate" inside it, its questions riding the interactive
+// transport like every other ask. `resynthesize` is the CLI's
+// transfer-only flag (plans/0101 D3): bypass the digest-keep of a standing
+// plan task so the reconstruct lands the new todo for review. Daemon-written
+// on the worker payload (the transfer operation spawns it after its own
+// request-shape checks) or written by this shell's own `transfer` CLI
+// command — never client-written: POST /runs refuses a `transfer` field, the
+// advance surface is POST /projects/<project>/transfer.
+export type TransferPayload = { resynthesize?: boolean }
+
+export function parseTransfer(raw: unknown): TransferPayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail('transfer must be an object: { "resynthesize"?: true|false }')
+  }
+  const given = raw as Record<string, unknown>
+  for (const key of Object.keys(given)) {
+    if (key === "resynthesize") continue
+    fail(`transfer.${key} is not a transfer field (resynthesize)`)
+  }
+  let resynthesize: boolean | undefined
+  if ("resynthesize" in given) {
+    if (typeof given.resynthesize !== "boolean") fail("transfer.resynthesize takes true|false (bypass the digest-keep of a standing plan task: the synthesis re-voices the sources and the reconstruct lands the new todo for review)")
+    resynthesize = given.resynthesize
+  }
+  return { ...(resynthesize !== undefined ? { resynthesize } : {}) }
 }

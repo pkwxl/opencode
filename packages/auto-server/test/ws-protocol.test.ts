@@ -134,8 +134,11 @@ describe("the daemon-side routing (interactiveHandlers over one hub)", () => {
     const stub = await stubServer()
     const watcher = wsClient(stub.url("/client?scopes=answer,control"))
     try {
-      await watcher.opened
-      expect(watcher.frames[0]).toMatchObject({ type: "hello", run: "run-000001", state: "running", worker: false })
+      // The hello arrives as its own message event after the client-side
+      // handshake resolves — await the frame itself (nextOf, the helper
+      // every later assertion here uses), never frames[0] at `opened`.
+      const hello = await watcher.nextOf((frame) => frame.type === "hello", "the client's hello")
+      expect(hello).toMatchObject({ type: "hello", run: "run-000001", state: "running", worker: false })
       // A late joiner sees the questions it came to answer: the worker
       // raises two, the second client connects and is replayed both.
       const worker = wsClient(stub.url("/worker"))

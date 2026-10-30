@@ -169,6 +169,13 @@ export class AutoApi {
     return this.call("POST", `/projects/${encodeURIComponent(project)}/plan`, request)
   }
 
+  // The transfer surface (the advance command): one person-bracketed
+  // boundary per invocation, state-resolved — answering 202 with the spawned
+  // run's resource (its questions land in that run's card).
+  async transfer(project: string, request: { resynthesize?: true } = {}): Promise<Record<string, unknown>> {
+    return this.call("POST", `/projects/${encodeURIComponent(project)}/transfer`, request)
+  }
+
   // init: the stateless full overwrite. The gate fields ride ONLY as the
   // two-step flow adds them (answerGate) — the first request carries the
   // config alone, so the daemon's gates ask in their own order.

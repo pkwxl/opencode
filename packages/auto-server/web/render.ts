@@ -359,9 +359,10 @@ export function buildPlanRequest(input: string, append: boolean): { input?: stri
 
 // The config form's field set — the constitutional keys init freezes and
 // amend revises, in their config-file spellings (the daemon's
-// CONFIG_REQUEST_KEYS). The two keys with no flag (acceptanceGate, build)
-// have no field, exactly as the daemon refuses them; nothing here can carry
-// a config key to a RUN (that form has none, the frozen-flag boundary).
+// CONFIG_REQUEST_KEYS). The keys with no flag (acceptanceGate, build and
+// the lanes table) have no field, exactly as the daemon refuses them;
+// nothing here can carry a config key to a RUN (that form has none, the
+// frozen-flag boundary).
 export type ConfigField =
   | { key: "mode"; kind: "string"; label: string; hint: string }
   | { key: "agent"; kind: "enum"; values: readonly string[]; label: string; hint: string }
@@ -369,8 +370,9 @@ export type ConfigField =
   | { key: "subtask"; kind: "enum"; values: readonly string[]; label: string; hint: string }
   | { key: "testByDriver" | "handoverTest" | "autoNumber" | "wrapup"; kind: "boolean"; label: string; hint: string }
   | { key: "phases"; kind: "string"; label: string; hint: string }
-  | { key: "parallel"; kind: "enum"; values: readonly string[]; label: string; hint: string }
-  | { key: "scanExempt"; kind: "list"; label: string; hint: string }
+  | { key: "parallel" | "treeLanes"; kind: "enum"; values: readonly string[]; label: string; hint: string }
+  | { key: "intent"; kind: "string"; label: string; hint: string }
+  | { key: "scanExempt" | "isolate"; kind: "list"; label: string; hint: string }
 
 export const CONFIG_FIELDS: readonly ConfigField[] = [
   { key: "mode", kind: "string", label: "mode", hint: "a registered mode name; defaults to migrate" },
@@ -385,7 +387,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
   { key: "wrapup", kind: "boolean", label: "wrapup", hint: "the closing wrap-up session after each task" },
   { key: "phases", kind: "string", label: "phases", hint: "a letter preset (e.g. m, amt, admtvk) or phase type ids (analysis,security-review,…)" },
   { key: "parallel", kind: "enum", values: ["", "none", "low", "medium", "high"], label: "parallel", hint: "none|low|medium|high; none drops the key (its default)" },
+  { key: "intent", kind: "string", label: "intent", hint: "the active intent pack's name (a materialized bundle's pack of the target); empty drops the key. Materializing a bundle is the CLI's init --intent" },
+  { key: "treeLanes", kind: "enum", values: ["", "off", "auto", "on"], label: "tree lanes", hint: "off|auto|on — the execution tier of concurrent runs; off drops the key (its default). The lanes.* knobs are hand-edited" },
   { key: "scanExempt", kind: "list", label: "scan exempt (globs)", hint: "path globs relative to the target, comma-separated; empty list drops the key" },
+  { key: "isolate", kind: "list", label: "isolate (nested repos)", hint: "nested-repository paths relative to the target, comma-separated (branch isolation); empty list drops the key" },
 ] as const
 
 // Normalizes the form's raw values into the init/amend request's config

@@ -143,7 +143,7 @@ describe("web write surface: the request builders speak the daemon's vocabulary"
     const keys = CONFIG_FIELDS.map((field) => field.key)
     for (const key of keys) expect(Object.keys(CONFIG_KEYS)).toContain(key)
     for (const key of HAND_EDITED_KEYS) expect(keys).not.toContain(key)
-    expect([...keys].sort()).toEqual(["agent", "autoNumber", "contextLimit", "handoverTest", "idleMax", "idleTime", "mode", "parallel", "phases", "scanExempt", "subtask", "testByDriver", "wrapup"])
+    expect([...keys].sort()).toEqual(["agent", "autoNumber", "contextLimit", "handoverTest", "idleMax", "idleTime", "intent", "isolate", "mode", "parallel", "phases", "scanExempt", "subtask", "testByDriver", "treeLanes", "wrapup"])
   })
 
   test("the config builder: absent means absent, values validate like the daemon's parse", () => {

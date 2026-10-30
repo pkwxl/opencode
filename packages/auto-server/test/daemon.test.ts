@@ -248,6 +248,24 @@ describe("daemon: the whitelist is absolute", () => {
         const carrier = await h.request("POST", "/runs", h.control, { project: dir, config: { mode: "migrate" } })
         expect(carrier.status).toBe(400)
         expect(((await carrier.json()) as { error: string }).error).toContain("a run request carries no config")
+        // The four keys the core gained under the package (plans/0160 D2:
+        // intent, treeLanes, lanes, isolate) get the same refusals — the
+        // frozen-key family for the three with flags, the hand-edited family
+        // for the lanes table — never the generic "not a run option".
+        for (const [options, fragment] of [
+          [{ intent: "cleanroom" }, "was frozen by init"],
+          [{ treeLanes: "on" }, "was frozen by init"],
+          [{ isolate: ["pkg"] }, "was frozen by init"],
+          [{ lanes: { treeBudgetMB: 512 } }, "hand-edited"],
+        ] as const) {
+          const answer = await h.request("POST", "/runs", h.control, { project: dir, options: options as unknown as Record<string, unknown> })
+          expect(answer.status).toBe(400)
+          expect(((await answer.json()) as { error: string }).error).toContain(fragment)
+        }
+        // The advance surface is the transfer operation, never a run field.
+        const smuggled = await h.request("POST", "/runs", h.control, { project: dir, transfer: {} })
+        expect(smuggled.status).toBe(400)
+        expect(((await smuggled.json()) as { error: string }).error).toContain('a run request carries no "transfer"')
         // The shared option vocabulary answers here too (a 400, not a run
         // that dies on arrival).
         const badOption = await h.request("POST", "/runs", h.control, { project: dir, options: { maxSessions: 2 } })

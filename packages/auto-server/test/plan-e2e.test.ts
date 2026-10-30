@@ -118,13 +118,40 @@ async function untilTerminal(h: Harness, id: string, timeoutMs = 180_000): Promi
 }
 
 describe("the plan unlock end to end over a real planning run", () => {
-  test("POST plan spawns the planning session: input persisted, the task lands in the phase index, the transport live, exit 0", async () => {
+  test("the phased planning flow — transfer constructs from the phase's plan-input, plan dispatches the formulation session: the task lands, the transport live, exit 0", async () => {
     const dir = await phasedEmptyProject("auto-server-plan-e2e-")
     try {
+      // The person's two documents of the phased flow (the current core's
+      // grammar, plans/0095/0101): the phase's planning input — the input's
+      // home is plan-input.md, never a plan field — and the round brief,
+      // which must leave its stub before plan dispatches.
+      const git = gitOf(dir)
+      await Bun.write(join(dir, "docs", "R-01", "P01-implement", "plan-input.md"), "plan the widget migration: one task, src only\n")
+      await Bun.write(join(dir, "docs", "R-01", "round.md"), "# Round R-01\n\n## Goal\n\n- migrate the widget.\n\n## Close\n\n- every decision restated into the target's own docs; none accepted as lost.\n")
+      await git("add", "-A")
+      await git("commit", "-qm", "the person fills the plan input and the round brief")
       await withFakeAgent(async () => {
         await withHarness(dir, async (h) => {
           const name = basename(dir)
-          const started = await h.call("POST", `/projects/${name}/plan`, h.control, { input: "plan the widget migration: one task, src only" })
+          // A plan field cannot smuggle the input past the construct-first
+          // rule: the refusal names transfer and the input's home.
+          const smuggled = await h.call("POST", `/projects/${name}/plan`, h.control, { input: "plan the widget migration" })
+          expect(smuggled.status).toBe(409)
+          expect(String(smuggled.body.error)).toContain("transfer constructs its plan task")
+          expect(String(smuggled.body.error)).toContain("plan-input.md")
+          // The construct: transfer builds the formulation todo from the
+          // phase's plan input and stops at the review seam (exit 0, no
+          // session).
+          const constructed = await h.call("POST", `/projects/${name}/transfer`, h.control)
+          expect(constructed.status).toBe(202)
+          const constructRun = await untilTerminal(h, String(constructed.body.id))
+          expect(constructRun.state, constructRun.tail).toBe("completed")
+          expect(constructRun.code).toBe(0)
+          expect(constructRun.tail).toContain("formulation task T-001 constructed")
+          expect(constructRun.tail).toContain("review stop")
+          // The dispatch: plan (no input) spawns the formulation session as
+          // a run — stopBefore === "execute", humanQuestions armed.
+          const started = await h.call("POST", `/projects/${name}/plan`, h.control, {})
           expect(started.status).toBe(202)
           const id = String(started.body.id)
           expect(id).toMatch(/^run-/)
@@ -158,12 +185,12 @@ describe("the plan unlock end to end over a real planning run", () => {
           const done = await untilTerminal(h, id)
           expect(done.state, done.tail).toBe("completed")
           expect(done.code).toBe(0)
-          expect(done.tail).toContain("⏸ planning run: the run stops once a planning step has succeeded")
-          expect(done.tail).toContain("✓ planned R-01.P01 implement: 1 task(s) in docs/R-01/P01-implement/tasks.md")
+          expect(done.tail).toContain("\u23f8 planning run: the run stops once a planning step has succeeded")
+          expect(done.tail).toContain("\u2713 planned R-01.P01 implement: 1 task(s) in docs/R-01/P01-implement/tasks.md")
 
           // The task landed through the core's planning step: the phase's
-          // index lists it, its document exists, and the planning input was
-          // persisted to the phase's plan-input.md.
+          // index lists it, its document exists, and the plan input the
+          // construction read is the phase's own document.
           const index = await Bun.file(join(dir, "docs", "R-01", "P01-implement", "tasks.md")).text()
           expect(index).toMatch(/- \[ \] T-\d{3} task T-\d{3}/)
           const input = await Bun.file(join(dir, "docs", "R-01", "P01-implement", "plan-input.md")).text()
@@ -175,3 +202,4 @@ describe("the plan unlock end to end over a real planning run", () => {
     }
   }, 300_000)
 })
+

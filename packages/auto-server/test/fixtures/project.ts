@@ -60,10 +60,14 @@ export const TASK_2 = "T-002"
 export const TASK_2_DOC = `# ${TASK_2}: the second widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the second widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
 
 // A committed one-task (or two-task) project in m mode. With no `config` the
-// core's defaults apply (exactly the values init would freeze); with one, the full
-// config is written through the core's own saver — the acceptance-gate
-// variant (acceptanceGate: ["implement"], no acceptance document) is how a
-// fixture run reaches the phase gate's exit 2. The agent contract is the one
+// core's defaults apply plus `subtask: "auto"` — the adaptive lead/split
+// flow these suites' scenarios ride (the streams' boundaries are the pause
+// and resume points the interactive e2e needs; the CLI e2e's own split
+// fixtures pin `--subtask auto` the same way; the core default flipped to
+// off on 2026-10-04, plans/0059 D1) — with one, the full config is written
+// through the core's own saver (the acceptance-gate variant
+// (acceptanceGate: ["implement"], no acceptance document) is how a fixture
+// run reaches the phase gate's exit 2). The agent contract is the one
 // artifact preflight hard-requires; the round setup and the task documents
 // ride the core's own writers (establishRound), committed as the clean
 // baseline the start gate demands.
@@ -87,7 +91,7 @@ export async function fixtureProject(prefix: string, config?: Partial<ProjectCon
   }
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
-  if (config) await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, ...config })
+  await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, subtask: "auto", ...config })
   // The ignore set init writes (tmp/, .auto/): without it the run's own
   // state files (its log, the lock, the stats segment) would reach the
   // start-clean gate as untracked dirt.

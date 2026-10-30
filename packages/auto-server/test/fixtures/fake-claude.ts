@@ -19,8 +19,10 @@
 // end to end with no provider credentials.
 //
 // This is the auto-server package's copy of packages/auto's fixture
-// (test/fixtures/fake-claude.ts there, byte-identical behavior), extended
-// with knobs of its own:
+// (test/fixtures/fake-claude.ts there, behavior-identical — refreshed at the
+// plans/0160 absorb: the reference had moved with the core through 0095's
+// formulation-line index rule, 0150's numbering-recovery retirement and the
+// lane family), extended with branches of its own:
 //   FAKE_CLAUDE_DELAY_MS (T-087, P1b) — sleep this many milliseconds before
 //     answering each turn, stretching the run so a test can observe a live
 //     run from the outside (the second-worker lock test spawns another
@@ -36,7 +38,7 @@
 //     declared artifacts, so a run interrupted mid-split — the graceful
 //     /exit pause over the WebSocket transport, exit 3 with progress
 //     persisted — resumes to completion.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 const say = (line: unknown) => console.log(JSON.stringify(line))
@@ -81,13 +83,6 @@ const taskDoc = (id: string, phase: string) =>
 // condition).
 function act(text: string): number {
   if (execute(text)) return text.includes(LEAD_MARK) ? Number(process.env.FAKE_CLAUDE_LEAD_CONTEXT ?? SMALL) : SMALL
-  // The numbering record is missing and auto-numbering is on: restore it with
-  // the deterministic floor the prompt carries.
-  if (text.includes("You are the recoverer of the task-numbering record")) {
-    const floor = /from T-(\d+) on/.exec(text)?.[1]
-    if (floor) writeFileSync(".auto/next-task", `${Number(floor)}\n`)
-    return SMALL
-  }
   // The appending session: append one new line after the existing ones and
   // write the new task's document, touching nothing else. Told apart from the
   // fresh planning prompts (which name the phase's task index too) by its own
@@ -111,7 +106,13 @@ function act(text: string): number {
   const start = /Task numbers increment continuously from T-(\d+)/.exec(text)?.[1]
   if (!index || !phase || !start) return SMALL
   const id = writeTask(phase, start)
-  writeFileSync(index, `# Tasks (${phase})\n\n- [ ] ${id} task ${id}\n`)
+  // plans/0095: the planning session runs as the phase's formulation task —
+  // the driver's construction already landed the formulation line as the
+  // index's first line, and the planned tasks append after it; the index
+  // itself is never rewritten (the core loop fixture's same rule — a rewrite
+  // here drops the formulation line and the post-session reload crashes).
+  const current = existsSync(index) ? readFileSync(index, "utf8") : `# Tasks (${phase})\n\n`
+  writeFileSync(index, `${current.endsWith("\n") ? current : `${current}\n`}- [ ] ${id} task ${id}\n`)
   return SMALL
 }
 
@@ -143,6 +144,18 @@ const write = (rel: string, text: string) => {
   writeFileSync(rel, text)
 }
 
+// The task this lane runs — read off the worktree's own progress record
+// (the one in-flight unit; both tasks of a round are pending in every lane's
+// snapshot, so "the pending one" would not distinguish them) — for content
+// that must differ per task; "task" when no record says.
+const pendingTask = (): string => {
+  try {
+    const progress = JSON.parse(readFileSync(".auto/progress.json", "utf8"))
+    if (typeof progress?.task === "string") return progress.task
+  } catch {}
+  return "task"
+}
+
 // The execution flow's turns under `run`; false = not one of them.
 function execute(text: string): boolean {
   // The lead: the foundation, then the split, in one turn.
@@ -161,11 +174,12 @@ function execute(text: string): boolean {
     for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(stream)}\n`)
     return true
   }
-  // A stream in a fresh session (T-094): an interruption restart lost the
-  // lead's session, so the stream does not fork — the generic subtask
-  // prompt carries the item's own line ("You are responsible for item N of
-  // that list only: - [ ] <item>"), the Artifacts declaration included.
-  // Write exactly those files; the stream's content names its unit.
+  // A stream in a fresh session (T-094, this package's branch): an
+  // interruption restart lost the lead's session, so the stream does not
+  // fork — the generic subtask prompt carries the item's own line ("You are
+  // responsible for item N of that list only: - [ ] <item>"), the Artifacts
+  // declaration included. Write exactly those files; the content names its
+  // unit.
   const freshItem = /You are responsible for (?:item [^\n]* of that list|this single subtask) only:\s*- \[ \] (.+)$/m.exec(text)?.[1]
   if (freshItem !== undefined && freshItem.includes("Artifacts:")) {
     const stream = /runs stream (T-\d+\.S\d+)/.exec(text)?.[1] ?? /(?:^|\s)(T-\d+\.S\d+)(?:\s|$)/.exec(text)?.[1] ?? "stream"
@@ -173,9 +187,10 @@ function execute(text: string): boolean {
     for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(stream)}\n`)
     return true
   }
-  // A stream re-prompted after a shape-check failure (T-094): the feedback
-  // names the subtask whose artifacts did not land; its checklist line
-  // declares them — read subtasks.md and write the declared files.
+  // A stream re-prompted after a shape-check failure (T-094, this package's
+  // branch): the feedback names the subtask whose artifacts did not land;
+  // its checklist line declares them — read subtasks.md and write the
+  // declared files.
   if (text.startsWith("You ended the session last time, but this subtask's")) {
     const [, task, sub] = /\((T-\d+)\.(S\d+)\)/.exec(text) ?? []
     if (task && sub) {
@@ -184,13 +199,35 @@ function execute(text: string): boolean {
       const line = checklist.split("\n").filter((l) => l.startsWith("- [ ] "))[at] ?? ""
       const paths = /Artifacts:\s*(.+)$/.exec(line)?.[1]?.split(/[\s,]+/).filter(Boolean) ?? []
       for (const rel of paths) write(rel, `export const ${rel.replace(/^.*\/|\..*$/g, "")} = ${JSON.stringify(`${task}.${sub}`)}\n`)
+      return true
     }
-    return true
   }
-  // The rejected lead's fork: the whole remaining work in this session.
+  // The rejected lead's fork: the whole remaining work in this session. The
+  // modules carry the task's own id (the one pending T-NNN of this tree), so
+  // two lanes of one round write distinguishable work — a real landing
+  // conflict needs sides that differ, and identical adds merge cleanly
+  // (auto-core plans/0068 S3's scheduler e2e).
   if (text.startsWith("[DRIVER] The split was not taken")) {
-    write("src/alpha.ts", 'export const alpha = "lead"\n')
-    write("src/beta.ts", 'export const beta = "lead"\n')
+    const task = pendingTask()
+    // FAKE_CLAUDE_FORK_MODULES (plans/0068 S4's scheduler e2e): the fork
+    // writes exactly one module named after its task — two lanes of one
+    // round then touch disjoint files, the shape a conflict-free landing
+    // needs; the default both-modules shape stays for the conflict cases.
+    if (process.env.FAKE_CLAUDE_FORK_MODULES) {
+      // FAKE_CLAUDE_NESTED (plans/0074 U-L3's e2e): `<task>:<dir>` — that one
+      // task's module lands inside the nested repository <dir>, the shape a
+      // branch-isolated round delivers: the driver's unified commit commits
+      // it in the nested repository, on whichever branch that repository has
+      // checked out (the round branch auto/R-NN). Every other write — the
+      // other tasks' modules, the lead's foundation, the wrap-up's report —
+      // stays where it always goes.
+      const nested = process.env.FAKE_CLAUDE_NESTED ?? ""
+      const rel = nested.startsWith(`${task}:`) ? `${nested.slice(task.length + 1)}/src/${task}.ts` : `src/${task}.ts`
+      write(rel, `export const module = ${JSON.stringify(task)}\n`)
+      return true
+    }
+    write("src/alpha.ts", `export const alpha = ${JSON.stringify(task)}\n`)
+    write("src/beta.ts", `export const beta = ${JSON.stringify(task)}\n`)
     return true
   }
   // The wrap-up: the task report with its result line.
@@ -308,11 +345,32 @@ const usage = (used: number) => ({ input_tokens: used, output_tokens: 10, cache_
 
 let turn = 0
 let booted = false
+
+// The lane kill e2e's gate (auto-core plans/0068 S2): with FAKE_CLAUDE_GATE
+// naming a file, the FIRST turn of this process waits before acting until
+// the file exists — a test parks the lane worker mid-session at a
+// deterministic point, then releases it. With FAKE_CLAUDE_GATE_DIE on, the
+// release makes the process exit without writing its artifacts or answering
+// (the killed worker's worktree must stay exactly as the kill left it). A
+// gate file that already exists (the re-dispatched run) passes straight
+// through.
+const gate = async (): Promise<void> => {
+  const file = process.env.FAKE_CLAUDE_GATE
+  if (!file || turn !== 1) return
+  if (await Bun.file(file).exists()) return
+  while (!(await Bun.file(file).exists())) await Bun.sleep(50)
+  if (process.env.FAKE_CLAUDE_GATE_DIE) process.exit(0)
+}
+
 for (;;) {
   const text = await nextText()
   if (text === undefined) break
   turn++
   record(text)
+  await gate()
+  // The T-087 per-turn delay: stretch the run so an outside observer (a
+  // second worker on the same directory, a test's live-run polling) lands
+  // inside the run's window.
   if (DELAY_MS > 0) await sleep(DELAY_MS)
   const used = act(text)
   // The turn's stream: init once per process, the replay acknowledgment,

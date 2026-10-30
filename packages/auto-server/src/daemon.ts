@@ -68,6 +68,7 @@
 // (src/store.ts) and, since P3c, the question journal
 // (src/question-journal.ts) — never under a target's `.auto/`.
 import { existsSync, readFileSync } from "node:fs"
+import { createHash, timingSafeEqual } from "node:crypto"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { createHub, freshRunSecret, interactiveHandlers, settleOpenQuestions, type InteractiveHub, type SocketData } from "./interactive-ws"
@@ -76,7 +77,8 @@ import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel }
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransportPayload } from "./request"
+import { applyServerProfile } from "./profile"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { PROTOCOL_VERSION } from "./ws-protocol"
 
 export const DEFAULT_PORT = 4770
@@ -179,7 +181,9 @@ export type DaemonHandle = {
 //     Bun's virtual $bunfs, where a script path cannot be spawned — but
 //     process.execPath already IS the server binary, whose argv goes
 //     straight to the command dispatch (`<binary> worker '<json>'`).
-async function deriveWorkerCommand(): Promise<{ command: string; prefix: string[] }> {
+// Exported for the entry's own `transfer` command — the same self-invocation
+// this daemon performs per run (one worker child per process).
+export async function deriveWorkerCommand(): Promise<{ command: string; prefix: string[] }> {
   if (!import.meta.dir.includes("$bunfs")) {
     const entry = join(import.meta.dir, "index.ts")
     if (existsSync(entry)) return { command: process.execPath, prefix: [entry] }
@@ -188,6 +192,12 @@ async function deriveWorkerCommand(): Promise<{ command: string; prefix: string[
 }
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
+  // The profile is set at daemon start too (idempotent): the CLI's serve
+  // entry sets it before this runs, but an in-process daemon (a test, an
+  // embedding host) is a shell entry of its own — every core text the
+  // daemon's in-process operations render (planPrelude's refusals,
+  // closeUnit's undo lines) names this shell's bin either way.
+  applyServerProfile()
   const store = new DaemonStore(options.dataDir)
   const worker = options.worker ?? (await deriveWorkerCommand())
   // The spawn cwd is arbitrary (the run target is the registry's absolute
@@ -381,10 +391,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // per-run secret) whenever the daemon is serving it: the worker entry
   // builds its Interactive implementation from it and injects it through
   // RunAllOpts.interactive (the P3a seam), so a question raised inside the
-  // run is answerable from outside the process.
-  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, plan?: PlanPayload): void => {
+  // run is answerable from outside the process. The plan payload (P3c) and
+  // the transfer payload (the plans/0101 absorb) name the command the
+  // worker performs: runAll under stopBefore "execute", or runTransfer.
+  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, plan?: PlanPayload, transfer?: TransferPayload): void => {
     const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
-    const proc = Bun.spawn([worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}) })], {
+    const proc = Bun.spawn([worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })], {
       cwd: spawnCwd,
       env,
       stdin: "ignore",
@@ -396,13 +408,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     watch(run)
   }
 
-  // Register and spawn one run — the tail POST /runs and the plan
-  // operation's unlocked loop route share (P3c): the registry entry, the
-  // interactive hub with its per-run secret (journal `opened` written
-  // before the worker can raise anything, so a restart mid-question
-  // reconstructs the run), the transport payload, the spawn. The caller
-  // owns the guards (the whitelist, the conflicts) and the response.
-  const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload): RunRecord => {
+  // Register and spawn one run — the tail POST /runs and the plan and
+  // transfer operations' spawned routes share (P3c; the plans/0101 absorb):
+  // the registry entry, the interactive hub with its per-run secret
+  // (journal `opened` written before the worker can raise anything, so a
+  // restart mid-question reconstructs the run), the transport payload, the
+  // spawn. The caller owns the guards (the whitelist, the conflicts) and
+  // the response.
+  const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload, transfer?: TransferPayload): RunRecord => {
     const id = `run-${String(++counter).padStart(6, "0")}`
     const run: RunRecord = {
       id,
@@ -434,7 +447,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // connects back on the loopback or whatever host the operator bound;
     // the spawn and the bridge are the same machine in v1).
     const transport: TransportPayload = { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker`, token: secret }
-    spawnWorker(project, run, runOptions, switches, transport, plan)
+    spawnWorker(project, run, runOptions, switches, transport, plan, transfer)
     return run
   }
 
@@ -530,6 +543,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // semantics — a run request cannot smuggle planning mode past that.
       if (key === "plan") {
         return json(400, { error: 'a run request carries no "plan": the planning surface is the plan operation (POST /projects/<project>/plan, taking "input" and "append"), which serves the no-agent routes first and spawns the planning session' })
+      }
+      // The advance surface is the transfer operation (the plans/0101
+      // absorb): one person-bracketed boundary per invocation, resolved by
+      // state — never a field a plain run carries.
+      if (key === "transfer") {
+        return json(400, { error: 'a run request carries no "transfer": the advance surface is the transfer operation (POST /projects/<project>/transfer, taking "resynthesize"), which spawns the advance as a run (one boundary per invocation)' })
       }
       if (key in CONFIG_KEYS) return json(400, { error: frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!) })
       if (HAND_EDITED_KEYS.has(key)) {
@@ -738,8 +757,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // client learns its fate without a handshake).
       const hub = hubs.get(run.id)!
       if (segments[2] === "worker") {
-        const presented = url.searchParams.get("token")
-        if (presented !== hub.secret) {
+        // The worker bridge's per-run secret, compared timing-safely over
+        // digests (the token store's own pattern, src/store.ts): the
+        // comparison stays off the raw secret and off byte-length
+        // short-circuits. The secret rides the query string — a WebSocket
+        // upgrade cannot carry headers — which is the documented v1
+        // loopback posture (single machine, 127.0.0.1 bind by default),
+        // noted here, not redesigned.
+        const presented = url.searchParams.get("token") ?? ""
+        const presentedDigest = createHash("sha256").update(presented).digest()
+        const secretDigest = createHash("sha256").update(hub.secret).digest()
+        if (!timingSafeEqual(presentedDigest, secretDigest)) {
           return json(401, { error: "unknown run secret: the worker bridge authenticates with the per-run secret the run's spawn payload carried" })
         }
       } else {
@@ -871,7 +899,37 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             },
           }
         }
-        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, probeWindow }))
+        // The transfer operation's spawned route (the plans/0101 absorb):
+        // the same startRun, carrying the transfer payload — the advance
+        // (runTransfer) runs in the worker, one boundary per invocation,
+        // its exit code the advance's own.
+        const spawnTransferRun = (transfer: TransferPayload): OpOutcome => {
+          const live = liveRunOn(project.directory)
+          if (live) {
+            return {
+              status: 409,
+              body: {
+                error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
+                run: { id: live.id, state: live.state },
+                retry: "retry once the active run reaches a terminal state (GET the run to observe it)",
+              },
+            }
+          }
+          const run = startRun(project, parseOptions(undefined), {}, server, undefined, transfer)
+          return {
+            status: 202,
+            body: {
+              ...view(run),
+              lines: [
+                `✓ transfer started as run ${run.id} (one person-bracketed advance, stopBefore: formulate — its questions ride the interactive transport${transfer.resynthesize ? "; resynthesize bypasses the standing plan task's digest-keep" : ""})`,
+                `next: observe the advance over GET /runs/${run.id} and the project's observability surface; its exit code is the advance's own (0 a review, round-open or roadmap-exhausted stop; 2 a gate held or nothing to advance; 1 a state error, m mode's refusal among them)`,
+              ],
+              note: "the transfer run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and answer its questions over the WebSocket endpoint /runs/<id>/interactive",
+              interactive: `/runs/${run.id}/interactive`,
+            },
+          }
+        }
+        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, spawnTransferRun, probeWindow }))
         if (opInFlight.has(project.directory)) {
           return json(409, {
             error: `an operation is already in flight on ${project.name}; retry once it finishes (one write operation holds a directory at a time — the run lock arbitrates processes, not requests of this one)`,
@@ -888,7 +946,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
         opInFlight.add(project.directory)
         try {
-          return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, probeWindow }))
+          return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, spawnTransferRun, probeWindow }))
         } finally {
           opInFlight.delete(project.directory)
         }

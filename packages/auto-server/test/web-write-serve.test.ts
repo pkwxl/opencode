@@ -33,7 +33,6 @@ import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
 import { CONFIG_DEFAULTS, CONFIG_FILE, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
-import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
@@ -102,7 +101,7 @@ async function phasedProject(prefix: string, phases: string, extra: Partial<Proj
   await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, phases, ...extra })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-  await Bun.write(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
+  // no brief: init writes none (plans/0133) and a missing brief is no finding
   await ensureInitGitignore(dir)
   await establishRound(dir, { phases })
   await ensurePointer(dir, { testByDriver: false })

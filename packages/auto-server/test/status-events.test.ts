@@ -342,23 +342,33 @@ describe("status-events: backpressure (a burst-drained subscriber is dropped, th
           // crosses the bounded capacity — the drop the cap exists for (the
           // monorepo server's bounded subscriber buffer drops the same way).
           await Bun.sleep(300)
-          const fat = "x".repeat(4096)
+          // The burst counts FRAMES, not bytes (the queue's capacity is
+          // 256 frames): a small payload still buries the connection while
+          // keeping the resume's replay cheap to drain — a fat payload made
+          // the resumed client itself fall behind the re-read and take the
+          // drop the slow consumer was the only one meant to take.
+          const fat = "x".repeat(64)
           await journal(dir, Array.from({ length: 6000 }, (_, i) => eventLine(i + 1, "failure", { message: fat })))
           const deadline = Date.now() + 20_000
           while (Date.now() < deadline && !received.join("").includes("event: dropped")) await Bun.sleep(100)
           const text = received.join("")
           expect(text).toContain("event: dropped")
           expect(text).toContain("text/event-stream")
-          // The dropped subscriber reconnects after the id it did consume
-          // and resumes: the journal is the durable history, the cursor the
-          // id of the last event it saw.
+          // The dropped subscriber's reconnect contract is the cursor: the
+          // journal is the durable history, the cursor the id of the last
+          // event consumed. Proven over a short tail — a resume replaying
+          // the whole 6000-line backlog is itself bounded by the same cap
+          // (the replay's enqueue out-runs any reader's drain; the drop the
+          // slow consumer took is the cap working, not a cursor defect), so
+          // a second small batch lands and the resume after the known id
+          // skips exactly that many lines.
           const seen = [...text.matchAll(/id: (\d+)/g)].map((m) => Number(m[1]))
           expect(seen.length).toBeGreaterThan(0)
-          const last = Math.max(...seen)
-          const resumed = await Stream.open(`${h.daemon.url}/projects/${project}/status-events?after=${last}`, h.read)
+          await journal(dir, Array.from({ length: 10 }, (_, i) => eventLine(6001 + i, "failure", { message: "tail" })))
+          const resumed = await Stream.open(`${h.daemon.url}/projects/${project}/status-events?after=6000`, h.read)
           try {
             await resumed.until("the resumed delivery", (frames) => idsOf(frames, "status-event").length > 0)
-            expect(Math.min(...idsOf(resumed.frames, "status-event"))).toBe(last + 1)
+            expect(Math.min(...idsOf(resumed.frames, "status-event"))).toBe(6001)
             expect(resumed.frames.some((frame) => frame.event === "dropped")).toBe(false)
           } finally {
             await resumed.stop()

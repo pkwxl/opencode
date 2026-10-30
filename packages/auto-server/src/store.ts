@@ -21,7 +21,7 @@
 // local) and every write is atomic (temp file + rename, the core's own
 // state-file pattern) — a token issued while the daemon serves is honored
 // by the very next request, with no restart and no lock protocol.
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 
@@ -97,7 +97,11 @@ export class DaemonStore {
   // identifies the project equally, so a name collision costs nothing
   // beyond typing the path.
   register(rawDir: string): RegisteredProject {
-    if (!existsSync(rawDir)) throw new StoreError(`cannot register ${rawDir}: not a directory on this machine`)
+    // The existence check names directories and means them: a regular file
+    // at the path is not a directory a worker can spawn into, and refusing
+    // it here keeps the error text truthful (the same wording realpath
+    // failures use below).
+    if (!existsSync(rawDir) || !statSync(rawDir).isDirectory()) throw new StoreError(`cannot register ${rawDir}: not a directory on this machine`)
     let directory: string
     try {
       directory = realpathSync(resolve(rawDir))

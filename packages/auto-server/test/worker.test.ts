@@ -16,6 +16,10 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CONFIG_DEFAULTS, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { loadModes } from "@opencode-ai/auto-core/mode"
+import { runOptions } from "../src/worker"
+import { runOptionDefaults } from "../src/request"
 import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
@@ -75,10 +79,13 @@ describe("worker: a fixture run is a fully-formed shell run, observable on disk"
       expect(text).toContain("OPENCODE_AUTO_AGENT=claude")
       // The run really ran: the task closed (the report with its result line,
       // the todo → done rename riding the run's commits) and the tree is left
-      // clean — the unified commit is the completion condition.
+      // clean — the unified commit is the completion condition. The fixture's
+      // subtask "auto" flow: the lead's split was not taken (no lead-context
+      // knob), so a fork of the lead finished the task — the reference e2e's
+      // own assertion shape (the fork's modules carry the task's id).
       expect(await Bun.file(join(dir, "docs", TASK, "done.md")).exists()).toBe(true)
       expect(await Bun.file(join(dir, "docs", TASK, "report.md")).text()).toContain("Result: PASS")
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toContain("lead")
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe(`export const alpha = "${TASK}"\n`)
       expect((await gitOf(dir)("status", "--porcelain")).trim()).toBe("")
     } finally {
       await agent.done()
@@ -127,6 +134,23 @@ describe("worker: the run request's usage vocabulary", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto amend <dir>")
       }
+      // The keys the core gained under this package (plans/0160 D2) keep the
+      // frozen-key family — never the generic unknown-field refusal.
+      for (const [options, hint] of [
+        [{ intent: "cleanroom" }, "--intent <value>"],
+        [{ treeLanes: "auto" }, "--tree-lanes <value>"],
+        [{ "tree-lanes": "on" }, "--tree-lanes <value>"],
+        [{ isolate: ["pkg"] }, "--isolate <value>"],
+      ] as const) {
+        const run = await runWorker({ directory: dir, options: options as unknown as Record<string, unknown> })
+        expect(run.code, JSON.stringify(options)).toBe(1)
+        expect(run.err).toContain("was frozen by init")
+        expect(run.err).toContain(hint)
+      }
+      const lanes = await runWorker({ directory: dir, options: { lanes: { treeBudgetMB: 512 } } })
+      expect(lanes.code).toBe(1)
+      expect(lanes.err).toContain("lanes")
+      expect(lanes.err).toContain("hand-edited")
       // The on/off pairs keep the CLI's paired revision hints
       const numbering = await runWorker({ directory: dir, options: { autoNumber: false } })
       expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
@@ -171,6 +195,21 @@ describe("worker: the run request's usage vocabulary", () => {
         ["plan input not text", { directory: dir, plan: { input: { text: "nested" } } }, /plan\.input takes the planning input text/],
         ["plan append without input", { directory: dir, plan: { append: true } }, /plan\.append rides a planning input/],
         ["plan append not a boolean", { directory: dir, plan: { input: "x", append: "yes" } }, /plan\.append takes true\|false/],
+        // The run-side widths the CLI's run gained (plans/0160 D4b):
+        // validated like the CLI's own parse* helpers.
+        ["repair out of range", { directory: dir, options: { repair: 11 } }, /options\.repair takes 0\.\.10/],
+        ["repair not an integer", { directory: dir, options: { repair: 1.5 } }, /options\.repair takes 0\.\.10/],
+        ["stopAfter not a task id", { directory: dir, options: { stopAfter: "T-1" } }, /options\.stopAfter takes a task id/],
+        ["boundary not the enum", { directory: dir, options: { boundary: "fast" } }, /options\.boundary takes stop or flow/],
+        // The transfer payload (the plans/0101 absorb, daemon- or
+        // transfer-command-written): its own vocabulary, exclusive with plan.
+        ["transfer not an object", { directory: dir, transfer: "go" }, /transfer must be an object/],
+        ["unknown transfer field", { directory: dir, transfer: { force: true } }, /transfer\.force is not a transfer field/],
+        ["resynthesize not a boolean", { directory: dir, transfer: { resynthesize: "yes" } }, /transfer\.resynthesize takes true\|false/],
+        ["plan and transfer together", { directory: dir, plan: { input: "x" }, transfer: {} }, /mutually exclusive/],
+        ["repair under a plan payload", { directory: dir, plan: { input: "x" }, options: { repair: 3 } }, /options\.repair is a plain run's option/],
+        ["stopAfter under a transfer payload", { directory: dir, transfer: {}, options: { stopAfter: "T-001" } }, /options\.stopAfter is a plain run's option/],
+        ["boundary under a transfer payload", { directory: dir, transfer: {}, options: { boundary: "flow" } }, /options\.boundary is a plain run's option/],
       ]
       for (const [name, request, pattern] of cases) {
         const run = await runWorker(request)
@@ -232,4 +271,65 @@ describe("worker: one driver per directory (the run lock arrives via runAll)", (
       await rm(dir, { recursive: true, force: true })
     }
   }, 180_000)
+})
+
+// The keys and run-side widths the core gained under this package
+// (plans/0160 D2/D4b): the CLI's runOptions threading is the reference the
+// worker mirrors — a dropped key is a silently different run (another intent
+// pack's prompts, another execution tier, a round without its branch
+// isolation), so the mapping is asserted directly (the pure function the
+// entry composes its runAll/runTransfer call from).
+describe("worker: the config and run options the core gained reach the run verbatim", () => {
+  test("runOptions threads intent/treeLanes/lanes/isolate and repair/stopAfter/boundary exactly as the CLI's does", async () => {
+    const config: ProjectConfig = {
+      ...CONFIG_DEFAULTS,
+      intent: "cleanroom",
+      treeLanes: "on",
+      lanes: { caches: [{ env: "CCACHE_DIR", shared: true }], treeBudgetMB: 512, sparseFloor: ["node_modules"] },
+      isolate: ["vendor/lib"],
+    }
+    const mode = loadModes().migrate!
+    const options = { ...runOptionDefaults(), repair: 3, stopAfter: "T-042", boundary: "flow" as const }
+    const threaded = runOptions(config, mode, options, undefined, undefined)
+    expect(threaded.intent).toBe("cleanroom")
+    expect(threaded.treeLanes).toBe("on")
+    expect(threaded.lanes).toEqual(config.lanes)
+    expect(threaded.isolate).toEqual(["vendor/lib"])
+    expect(threaded.repair).toBe(3)
+    expect(threaded.stopAfter).toBe("T-042")
+    expect(threaded.boundary).toBe("flow")
+    // The floor: absent values thread as the CLI's own absent shapes — the
+    // four keys undefined (the pack/tier/isolation machinery stays off),
+    // repair 0 (the core's absent), stopAfter and the boundary shape absent.
+    const bare = runOptions({ ...CONFIG_DEFAULTS }, mode, runOptionDefaults(), undefined, undefined)
+    expect(bare.intent).toBeUndefined()
+    expect(bare.treeLanes).toBeUndefined()
+    expect(bare.lanes).toBeUndefined()
+    expect(bare.isolate).toBeUndefined()
+    expect(bare.repair).toBe(0)
+    expect(bare.stopAfter).toBeUndefined()
+    expect(bare.boundary).toBeUndefined()
+    // The serialized defaults re-parse cleanly (the daemon's spawn payload
+    // round-trips through the worker's own validator).
+  })
+
+  test("a real run of a config carrying the new keys accepts the new run options and the banner names what it carries", async () => {
+    const dir = await fixtureProject("auto-server-keys-", { treeLanes: "on" })
+    const agent = await fakeAgent()
+    try {
+      const run = await runWorker(
+        { directory: dir, options: { repair: 2, boundary: "flow", stopAfter: TASK }, switches: { OPENCODE_AUTO_AGENT: "claude" } },
+        agent.env,
+      )
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      expect(run.out).toContain("⚙ project config (.opencode/auto/config.json)")
+      const logs = (await readdir(join(dir, ".auto", "logs"))).filter((name) => /^run-.*\.log$/.test(name))
+      const text = await Bun.file(join(dir, ".auto", "logs", logs[0]!)).text()
+      expect(text).toContain("· tree-lanes on")
+      expect(await Bun.file(join(dir, "docs", TASK, "done.md")).exists()).toBe(true)
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
 })

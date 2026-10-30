@@ -113,8 +113,10 @@ describe("the daemon's interactive endpoints: auth, scopes and the registry", ()
       const base = `${h.daemon.url.replace("http", "ws")}/runs/${h.runId}/interactive`
       const client = wsClient(`${base}?token=${h.answer}`)
       try {
-        await client.opened
-        const hello = client.frames[0]!
+        // The hello arrives as its own message event after the client-side
+        // handshake resolves — await the frame itself, never frames[0] at
+        // `opened` (the ws-protocol suite's same fix).
+        const hello = await client.nextOf((frame) => frame.type === "hello", "the client's hello")
         expect(hello).toMatchObject({ type: "hello", run: h.runId, state: "failed", worker: false })
         // A control frame with no bridge connected is refused, not lost —
         // from a client of the control tier (the answer-tier client would

@@ -116,11 +116,11 @@ export function buildOpsPanel(deps: OpsDeps): OpsPanel {
       pre.className = "box"
       outcome.append(pre)
     }
-    // The plan operation's spawned run: point at the interactive surface
-    // where its questions land (the centerpiece flow — the run is already
-    // selected by the caller).
+    // The plan and transfer operations' spawned runs: point at the
+    // interactive surface where their questions land (the centerpiece flow
+    // — the run is already selected by the caller).
     if (typeof body.id === "string" && body.id.startsWith("run-")) {
-      outcome.append(el("div", `the planning session runs as ${body.id}: its questions arrive in the run's pending-questions card — answering them is what lands the tasks`))
+      outcome.append(el("div", `the session runs as ${body.id}: its questions arrive in the run's pending-questions card — answering them is what lands the work`))
     }
     clear(flowHost)
     if (gate === undefined) {
@@ -235,7 +235,7 @@ export function buildOpsPanel(deps: OpsDeps): OpsPanel {
   })
 
   const planInput = document.createElement("textarea")
-  planInput.placeholder = "the planning input (the CLI's plan -p) — empty for the no-agent routes (round establishment, the round-close gate, the drift re-sync)"
+  planInput.placeholder = "the planning input (the CLI's plan -p) — empty for the no-agent routes (the round-close gate, the drift re-sync)"
   const planAppend = document.createElement("input")
   planAppend.type = "checkbox"
   const planErr = el("div", "")
@@ -264,6 +264,28 @@ export function buildOpsPanel(deps: OpsDeps): OpsPanel {
     }
   })
 
+  // transfer (the advance command): one person-bracketed boundary per
+  // invocation, state-resolved — no fields to fill, no gates to answer; the
+  // spawned run carries it and its questions land in that run's card.
+  const transferErr = el("div", "")
+  transferErr.className = "err"
+  const transferButton = el("button", "transfer (advance one boundary)")
+  transferButton.addEventListener("click", () => {
+    const project = deps.project()
+    if (!project) return
+    void (async () => {
+      try {
+        const body = await deps.api().transfer(project)
+        renderOutcome("transfer", 200, body)
+        if (typeof body.id === "string") deps.onRunStarted(body.id)
+        else deps.onWrite()
+      } catch (error) {
+        if (error instanceof ApiError) renderOutcome("transfer", error.status, error.body)
+        else renderOutcome("transfer", 0, { error: errOf(error) })
+      }
+    })()
+  })
+
   const forceCloseNote = el("div", "closing a unit to let the round advance (the CLI's plan --force-close)? close it above first, then plan — each half its own surface")
   forceCloseNote.className = "dim"
   const unitsBlock = el(
@@ -278,7 +300,9 @@ export function buildOpsPanel(deps: OpsDeps): OpsPanel {
     el("div", "add a task (the CLI's plan --new-task route: the document, the index line, the commit — no session)"),
     labeled("title", taskTitle),
     el("div", taskButton, taskErr),
-    el("div", "plan — the no-agent routes run in the daemon; a planning input starts the planning session as a run (stopBefore: execute, humanQuestions armed): its questions arrive in the run's pending-questions card, and answering them is what lands the tasks"),
+    el("div", "transfer — the advance command (the CLI's transfer): one person-bracketed boundary per invocation, resolved by state (the project start with its analysis, the phase boundary, the round close/open); the advance runs as a spawned run whose questions arrive in its pending-questions card"),
+    el("div", transferButton, transferErr),
+    el("div", "plan — dispatches the standing plan task or plans from an input (stopBefore: execute, humanQuestions armed): the session's questions arrive in the run's pending-questions card, and answering them is what lands the tasks"),
     planInput,
     el("div", labeled("append", planAppend, "append the tasks planned from the input to the current phase (rides an input)")),
     el("div", planButton, planErr),

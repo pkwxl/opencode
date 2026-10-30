@@ -15,8 +15,9 @@
 // @opencode-ai/sdk, the monorepo server package or any Effect infrastructure;
 // the server is self-contained on Bun.serve with zero added runtime
 // dependencies. test/isolation.test.ts holds that line as an assertion.
+import { resolve } from "node:path"
 import { applyServerProfile } from "./profile"
-import { DEFAULT_HOSTNAME, DEFAULT_PORT, startDaemon } from "./daemon"
+import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
 import { VERSION } from "./version"
 import { runWorker } from "./worker"
@@ -31,6 +32,7 @@ const USAGE = `usage:
   opencode-auto-server token issue --scopes <read,control,…> [--name <label>] [--data-dir <dir>]
   opencode-auto-server token list [--data-dir <dir>]
   opencode-auto-server token revoke <name> [--data-dir <dir>]
+  opencode-auto-server transfer <dir>
   opencode-auto-server worker '<run request JSON>'
 
 opencode-auto-server is the headless automation service shell of opencode-auto:
@@ -116,9 +118,10 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
   directory  (required) the target directory of the run
   options    per-run options (the run flags of opencode-auto run): verbose,
              waitAnswer, waitBetween, permission, newSession, dryrun,
-             maxSessions, server. The project's constitutional config keys
-             are frozen by init (.opencode/auto/config.json) and refused
-             here — revise them with opencode-auto amend, never on a run
+             maxSessions, server, repair, stopAfter, boundary. The project's
+             constitutional config keys are frozen by init
+             (.opencode/auto/config.json) and refused here — revise them
+             with opencode-auto amend, never on a run
   switches   per-run OPENCODE_AUTO_* experimental switch overrides, applied
              to the worker's environment before the run starts (each run is
              a fresh process, so the switch layer is safely per-run)
@@ -134,6 +137,25 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
              (humanQuestions armed — the sessions' questions wait for the
              human with no timeout over the transport), the planning input
              persisted by the planning step, --append's semantics
+  transfer   the transfer payload (daemon- or transfer-command-written):
+             { "resynthesize"?: true|false }. The run performs the CLI
+             transfer command's work: runTransfer, one person-bracketed
+             advance resolved by state (the project start, the phase
+             boundary, the round close/open), the loop under stopBefore
+             formulate inside it — mutually exclusive with plan
+
+transfer <dir> — the person's advance command, the CLI shell's transfer on
+  this binary (every core text naming "opencode-auto-server transfer <dir>"
+  — a phased run's boundary stop, the plan refusal over an unstarted
+  project — points here, and this is what makes it true). It self-spawns
+  one worker carrying the transfer payload above (one advance per process,
+  the topology's own unit) and exits with the advance's own code: 0 a
+  review, round-open or roadmap-exhausted stop; 1 a usage or state error
+  (m mode's refusal among them); 2 a gate held or nothing to advance.
+  Headless by construction: its questions degrade the hand-spawned worker's
+  way (a permission question blocks, exit 2) — answer questions over a
+  daemon's transfer operation instead (POST /projects/<project>/transfer),
+  which attaches the interactive transport
 
 the worker's stdin is closed: without a transport payload, questions degrade
 to the unanswered path (permission questions block the run with exit 2),
@@ -209,6 +231,35 @@ const command = args[0]
 // catch the fallthrough.)
 if (command === "worker") {
   await runWorker(args.slice(1))
+}
+
+// transfer <dir> (the plans/0101 absorb): the person's advance command on
+// this binary — the core's runTransfer (the project start, the phase
+// boundary, the round close/open; one advance per invocation, resolved by
+// state). AUTO-DECISION (self-spawn, not an in-process call): the advance
+// delegates to runAll inside the core (the handover distillation, the
+// formulation construction), and this package's process topology is one
+// worker child per run — the same rule the daemon's transfer operation
+// follows — so the command spawns itself as a worker carrying the transfer
+// payload and propagates the child's exit code verbatim. Output is
+// inherited (the advance's lines are the person's reading); stdin is closed
+// by construction (questions degrade the hand-spawned worker's way — the
+// daemon's transfer operation is the interactive surface).
+if (command === "transfer") {
+  const rest = args.slice(1)
+  if (rest.length > 1 || rest.some((arg) => arg.startsWith("--"))) {
+    refuse("transfer takes the target directory alone (an optional positional, the cwd when omitted): the advance is state-resolved, it has no flags — per-run switches ride a daemon run request, and questions ride a daemon's interactive transport (the transfer operation)")
+  }
+  const directory = resolve(rest[0] ?? process.cwd())
+  const self = await deriveWorkerCommand()
+  const proc = Bun.spawn([self.command, ...self.prefix, "worker", JSON.stringify({ directory, transfer: {} })], {
+    cwd: import.meta.dir.includes("$bunfs") ? process.cwd() : import.meta.dir,
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  })
+  process.exit(await proc.exited)
 }
 
 if (command === "register" || command === "unregister" || command === "projects") {
@@ -331,7 +382,7 @@ if (command === "serve") {
   console.log(`stopping the daemon (Ctrl+C) leaves live workers running to completion; their runs stay observable on disk and the run lock arbitrates any successor`)
 } else {
   // Nothing else exists: refuse with the usage text rather than pretending.
-  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token and worker`)
+  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer and worker`)
   console.error(USAGE)
   process.exit(1)
 }

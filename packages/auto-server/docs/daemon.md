@@ -62,7 +62,7 @@ scope gets **403**. Scopes (the authorization tiers of the assessment, §8 Q6):
 | scope    | surface                                                          | status |
 | -------- | ---------------------------------------------------------------- | ------ |
 | `read`   | run status, list, detail; the models operation; the observability surface — `status`, the `log` and `events` SSE tails, the `status-events` typed driver stream; the project list (`GET /projects`) | active |
-| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add` and `plan` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
+| `control`| run control: `POST /runs`, kill (`DELETE /runs/<id>`); the `close`, `task-add`, `plan` and `transfer` operations; the control channel of the interactive transport (`/exit`, `/failback` over `/runs/<id>/interactive`) | active |
 | `config` | the `init` / `amend` / `fix` / `reset` operations | active |
 | `answer` | the interactive transport's question channel: receiving questions and answering them over `/runs/<id>/interactive` — the persistent pending-question queue (P3c) | active |
 | `probe`  | the model probe alone (`POST /projects/<p>/models` — burns tokens by starting agents) | **opt-in, disabled by default**: carried by no default token set; beside the scope the probe takes an explicit `confirm` field and the per-daemon rate window (see the model probe below) |
@@ -95,10 +95,17 @@ opencode-auto-server token revoke <name>
 `POST /runs` takes `{ "project": <registered name or path>, "options"?: {…},
 "switches"?: {…} }`. `options` are the per-run fields of the CLI's `run`
 (`verbose`, `waitAnswer`, `waitBetween`, `permission`, `newSession`, `dryrun`,
-`maxSessions`, `server`) and `switches` are per-run `OPENCODE_AUTO_*` overrides
-— the same shared validator the worker enforces (`src/request.ts`); anything
-else, notably any constitutional config key, is refused with the frozen-flag
-message ("frozen by init … revise with amend") as a **400**.
+`maxSessions`, `server`, `repair`, `stopAfter`, `boundary`) and `switches`
+are per-run `OPENCODE_AUTO_*` overrides — the same shared validator the
+worker enforces (`src/request.ts`); anything else, notably any
+constitutional config key (`intent`, `treeLanes`, `isolate` and the
+hand-edited `lanes` table included), is refused with the frozen-flag
+message ("frozen by init … revise with amend") as a **400**. `maxSessions`
+is capped at 1 by design — concurrent execution is the shell owner's
+reserved call (auto-core plans/0069 §6 item 5; the core itself runs lanes
+since 0068, this surface does not yet) — and `repair`/`stopAfter`/`boundary`
+ride plain runs only: the plan and transfer payloads carry stop conditions,
+and the core allows no budget under one.
 
 ### The run resource and the exit-code vocabulary
 
@@ -176,13 +183,14 @@ CLI shell does and never touch `.auto/`, `docs/` unit state or an index tick
 
 | route                               | scope    | meaning |
 | ----------------------------------- | -------- | ------- |
-| `POST /projects/<p>/init`           | `config` | the stateless full overwrite (config.json, the brief stub, the contract, the AGENTS.md block, the ignore set) |
+| `POST /projects/<p>/init`           | `config` | the stateless full overwrite (config.json, the contract, the AGENTS.md block, the ignore set — no brief: the analysis flow owns the start, plans/0133) |
 | `POST /projects/<p>/amend`          | `config` | the per-key revision; writes only what renders from the config |
 | `POST /projects/<p>/fix`            | `config` | planFix / applyFix over the rule table; `"dryrun": true` is the read-only drift gate |
 | `POST /projects/<p>/reset`          | `config` | planReset / applyReset (keeps a filled brief, removes a stub one) |
 | `POST /projects/<p>/close`          | `control`| closeUnit over a ref — the explicit ref and reason are the confirmation |
 | `POST /projects/<p>/tasks`          | `control`| task-add: one task by title, no session (the CLI's `plan --new-task` route, over addTask) |
-| `POST /projects/<p>/plan`           | `control`| the plan surface: planPrelude's no-agent routes served in-process; the agent-planning routes spawned as runs (see below) |
+| `POST /projects/<p>/plan`           | `control`| the dispatch surface: the standing plan task's session spawned as a run; the no-agent routes served in-process (see below) |
+| `POST /projects/<p>/transfer`       | `control`| the advance command (the CLI's `transfer`): one person-bracketed boundary per invocation, spawned as a run (see below) |
 | `GET  /projects/<p>/models`         | `read`   | the model registry's effective table (describeModels / formatModels) |
 | `POST /projects/<p>/models`         | `probe`  | the model probe (the CLI's `models --probe`): one confirmed, rate-limited fire — see below |
 
@@ -213,14 +221,17 @@ worktree, `cleanTree` alone does not confirm the write. `amend` takes neither
 are the confirmation). `fix` accepts both beside `"dryrun"` (inert under a
 dryrun, like `-f` beside the CLI's `--dryrun`).
 
-### The plan surface (P3c: unlocked)
+### The plan surface (P3c: unlocked, re-scoped by plans/0101)
 
 `POST /projects/<p>/plan` serves both halves of the CLI's `plan`:
 
 - **The no-agent routes** (planPrelude's stop outcomes) run in the daemon
-  process exactly as P1d served them — round establishment (the round-start
-  gate), the round-close gate (opening the next round), the phase-index drift
-  re-sync, and the refusal stops — with their own lines and codes.
+  process exactly as P1d served them — the m-mode notices, the phase-index
+  drift re-sync, and the refusal stops — with their own lines and codes.
+  The boundary routes are transfer's since plans/0101 D4: a phased
+  unestablished project and a phased complete round both refuse naming
+  `opencode-auto-server transfer` (the core's own texts, made true by the
+  transfer operation and this binary's `transfer` subcommand).
 - **The agent-planning routes** (planPrelude → `{ type: "loop" }`) spawn the
   planning session as a run: **202** with the run resource and its
   interactive endpoint. The run performs the CLI `plan` command's work —
@@ -247,6 +258,38 @@ its own surface (the CLI holds one lock across both; the daemon's op
 releases its lock before the spawn, and the worker's own `runAll` takes it —
 the window between is the lock's own jurisdiction, whichever driver process
 takes it first wins, the same rule the CLI and the daemon already share).
+
+### The transfer surface (the advance command, plans/0101)
+
+`POST /projects/<p>/transfer` is the CLI's `transfer` — the single advance
+command, one person-bracketed boundary per invocation, resolved by state:
+the project start (the assisted analysis of plans/0084: the stub, the
+release gate, the approved brief's install, R-01's establishment under the
+roadmap's line), the phase boundary (the human gate first, then the
+handover, the phase close, the next phase's formulation todo constructed
+and stopped for review), the round close and the round open. The request
+takes one field: `"resynthesize": true|false` (the CLI's transfer-only
+flag, bypassing the digest-keep of a standing plan task).
+
+Unlike plan, the core's `runTransfer` has no prelude seam splitting the
+no-agent routes from the advance — the whole state resolution lives inside
+its one entry — so the **entire advance runs as a spawned worker run**
+(`src/worker.ts`: the worker calls `runTransfer`, one process per advance,
+the same one-run-per-process topology as every run), never an in-process
+session. The op validates the request shape and spawns; **202** carries the
+run resource, and the run's own exit vocabulary maps the outcome: 0 a
+review, round-open or roadmap-exhausted stop; 1 a state error (m mode's
+refusal among them); 2 a gate held or nothing to advance. The release
+teachings inside the run name `opencode-auto-server clarify` — a CLI-side
+command this daemon does not host; the manual path ("add the line and
+commit yourself") is the daemon's release act.
+
+This binary also ships the headless CLI form, `opencode-auto-server
+transfer <dir>` (self-spawning one worker with the transfer payload): every
+core text naming `${bin} transfer <dir>` — a phased run's boundary stop,
+the plan refusal over an unstarted project — points at a runnable command.
+It takes the target directory alone (no flags; per-run switches ride a
+daemon run request, questions ride a daemon's interactive transport).
 
 ### The model probe (P4b)
 
@@ -292,7 +335,7 @@ vocabulary through either shell:
 | status | meaning |
 | ------ | ------- |
 | 200 | served (`code: 0`) |
-| 202 | an operation that spawned a run (the plan operation's agent-planning route): the body is the run resource |
+| 202 | an operation that spawned a run (the plan operation's agent-planning route, the transfer operation's advance): the body is the run resource |
 | 400 | request-shape error (unknown fields, bad values) |
 | 404 | unregistered project / unknown route |
 | 409 | the target's state refuses — the CLI's exit-1/2 refusals (body carries `code` 1 or 2 and the `lines`); the clean-tree gate (`gate: "cleanTree"`); a live registry run or an in-flight operation on the directory (retryable) |
@@ -301,10 +344,13 @@ vocabulary through either shell:
 | 429 | the model probe's rate window (`gate: "probeRate"`, `retryAt` included) |
 | 501 | a routing fact this version does not serve (the task-add fallback guard; the models probe's P1 refusal ended with P4b) |
 
-`fix` with `"dryrun": true` is the scriptable config-drift gate: findings
-answer 409 with `code: 1` (the CLI's `fix --dryrun` exit 1), a consistent
-layer 200 — and it takes no lock, so it runs beside a live run (as does
-`models`).
+`fix` with `"dryrun": true` is the scriptable config-drift gate: fixable or
+manual findings answer 409 with `code: 1` (the CLI's `fix --dryrun` exit
+1), a consistent layer 200, and — since plans/0135 — informational notes
+alone also answer 200 (`code: 0`, the CLI's exit 0: an expected posture is
+not drift) — and it takes no lock, so it runs beside a live run (as does
+`models`). An apply with nothing fixable claims no repair (the honest
+"nothing to fix: the note(s) above are informational" result).
 
 ### Locks and concurrency for operations
 
@@ -312,7 +358,8 @@ Config operations (`init`, `amend`, `fix`, `reset`) refuse with **423** while
 `liveRunLock` returns a holder, exactly the CLI's refusal (`-f` never
 overrode it, and neither field here does). `close`, `task-add` and `plan`
 acquire the lock themselves around their writes (the CLI's `close`/`plan`
-command names). Beside a live run of this daemon the write operations answer
+command names; the transfer operation's lock lives inside its spawned
+worker, taken by the core's `runTransfer` itself). Beside a live run of this daemon the write operations answer
 **409** (retryable, the run id in the body) — the registry is ahead of the
 lock during a run's starting window — and one write operation holds a
 directory at a time (a second answers 409; the run lock arbitrates processes,
@@ -648,7 +695,10 @@ per-run `RunAllOpts` fields (verbose, waitAnswer, waitBetween, permission,
 newSession, dryrun, maxSessions, server) and the `OPENCODE_AUTO_*` switch
 layer only — no constitutional config key has a field to ride in, so runtime
 config mutation cannot be spelled in the UI (the daemon's `parseOptions`
-refusal is the second gate). Mid-run control (pause, failback) is control,
+refusal is the second gate). The config form carries the constitutional
+keys init freezes — `intent`, `treeLanes` and `isolate` included since the
+plans/0160 absorb; the hand-edited `acceptanceGate`, `build` and `lanes`
+have no field, exactly as the daemon refuses them. Mid-run control (pause, failback) is control,
 never config mutation, and stays within the `control` scope.
 
 **Scope-awareness**: the client asks `GET /session` once per token and gates
@@ -676,10 +726,12 @@ daemon → core function** (`closeUnit`, `addTask`, the config writers,
   is what lands the tasks — the verdict table re-renders from the commit
   verdicts when they do;
 - **units** (`control`) — close (the explicit ref and the one-line reason
-  are the confirmation; the undo is git revert) and task-add, plus the plan
-  surface: the planning input (the CLI's `-p`), `append`, and the no-agent
-  routes on an empty form; `plan --force-close` composes as close-then-plan,
-  each half its own form;
+  are the confirmation; the undo is git revert), task-add, the transfer
+  button (the advance command: one boundary per click, the spawned run's
+  questions landing in its card), and the plan surface: the planning input
+  (the CLI's `-p`) and `append` — the phased input's home is the phase's
+  `plan-input.md`, which transfer's construction reads; `plan
+  --force-close` composes as close-then-plan, each half its own form;
 - **the config ops** (`config`) — init / amend over the constitutional keys
   (the two hand-edited keys have no field), fix with `dryrun` as the
   pre-view of its findings, and reset. **Confirm and clean-tree are two
@@ -731,6 +783,19 @@ daemon → core function** (`closeUnit`, `addTask`, the config writers,
      opencode" while the caller asked for claude); the positive value now
      rides the merge like any explicit key. Found by this unit's cross-stack
      e2e, which drives init over the API with agent: "claude". -->
+
+## The honestly-absent surfaces
+
+The daemon serves the run, config, units, plan-dispatch, transfer and
+models surfaces documented above. These stay CLI-side (`opencode-auto`,
+the general shell), stated once and plainly: `clarify` (the one-command
+release act — the daemon's own stop texts teach the manual path, "add the
+line and commit yourself"), `sync` (the intent-bundle upgrade),
+`land` (branch isolation's return path), `fork`/`remove-fork` (the retry
+experiment environment) and `driver-helper` (the person-proxy brief).
+Materializing an intent bundle into a target (`init --intent <bundle>`) is
+CLI-side too — the API revises the `intent` key against packs the target
+already holds.
 
 ## Supervision and the daemon's lifetime
 

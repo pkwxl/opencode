@@ -12,9 +12,11 @@
 // disabled everywhere). The constitution of this
 // layer (plans/0067 §五, assessment §11 risk 1):
 //   - every state change reaches disk through the core (saveProjectConfig,
-//     renderAgentContract, renderProjectBrief, ensurePointer,
+//     renderAgentContract, ensurePointer,
 //     ensureInitGitignore, applyFix, applyReset, closeUnit, planPrelude →
-//     addTask/establishRound/syncPhaseIndex); the two template writes the
+//     addTask/establishRound/syncPhaseIndex); the transfer operation
+//     spawns its advance as a run (the core's runTransfer runs in the
+//     worker, never in this process); the two template writes the
 //     CLI shell also performs itself (opencode.json, the agent contract's
 //     file bytes) use the core's own renderer for the contract, and nothing
 //     here ever writes `.auto/`, `docs/` unit state or an index tick;
@@ -48,7 +50,6 @@
 // the interactive transport of P3; the models probe is not exposed).
 import { Readable, Writable } from "node:stream"
 import { join } from "node:path"
-import { renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm, type ConfirmIO } from "@opencode-ai/auto-core/confirm"
 import {
@@ -56,6 +57,7 @@ import {
   CONFIG_FILE,
   PARALLEL_LEVELS,
   formatProjectConfig,
+  isolateProblem,
   legacyModeFallback,
   loadOverwriteBaseline,
   loadProjectConfig,
@@ -92,7 +94,7 @@ import { SUBTASK_MODES } from "@opencode-ai/auto-core/opts"
 import { loadIntents } from "@opencode-ai/auto-core/intent/load"
 import { usePromptLibrary } from "@opencode-ai/auto-core/template"
 import type { RegisteredProject, Scope } from "./store"
-import { RequestError, type PlanPayload } from "./request"
+import { RequestError, type PlanPayload, type TransferPayload } from "./request"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // The canonical unit refs closeUnit takes (the CLI's CLOSE_REF): a round
@@ -115,6 +117,12 @@ export type OpRequest = {
   // armed, questions over the interactive transport). Only the daemon
   // provides it; an operation that never spawns ignores it.
   spawnPlanningRun: (plan: PlanPayload) => OpOutcome
+  // The daemon's transfer-run spawner (the plans/0101 absorb): the transfer
+  // operation calls it to start the advance as a run — the same startRun,
+  // carrying the transfer payload (runTransfer through the worker entry,
+  // the loop under stopBefore "formulate" inside it). Only the daemon
+  // provides it; an operation that never spawns ignores it.
+  spawnTransferRun: (transfer: TransferPayload) => OpOutcome
   // The daemon-wide model-probe rate window (P4b, assessment §8 Q7): claim
   // is called by the probe operation once a request passed its scope and
   // confirmation checks and a registry exists to probe — it records the
@@ -308,10 +316,11 @@ async function requireConfig(project: RegisteredProject, what: string): Promise<
 }
 
 // The constitutional keys an init/amend request may carry (the config-file
-// spellings of the CLI's CONFIG_FLAGS). acceptanceGate and build have no flag
-// (plans/0049 G9) and stay hand-edited; the retired flag spellings are not
-// accepted either — the API speaks the file's language, and its refusal
-// texts point the caller at the accepted set.
+// spellings of the CLI's CONFIG_FLAGS). acceptanceGate, build and the lanes
+// table have no flag (plans/0049 G9; plans/0096 D9) and stay hand-edited;
+// the retired flag spellings are not accepted either — the API speaks the
+// file's language, and its refusal texts point the caller at the accepted
+// set.
 const CONFIG_REQUEST_KEYS = [
   "mode",
   "agent",
@@ -325,14 +334,19 @@ const CONFIG_REQUEST_KEYS = [
   "wrapup",
   "phases",
   "parallel",
+  "intent",
+  "treeLanes",
+  "isolate",
   "scanExempt",
 ] as const
 
 // The parsed `config` object of an init/amend request: the CLI's
 // parseConfigFlags in JSON form — the explicitly given keys (`explicit`,
-// merged over the baseline), plus the three key droppers kept separate
-// (--agent opencode, --parallel none and an empty scan-exempt list drop
-// their key instead of setting it).
+// merged over the baseline), the mode/agent carriers, and the list keys
+// kept separate with their dropper semantics intact (undefined = the
+// request did not carry the key, [] = remove it, a non-empty list = set it;
+// --agent opencode, --parallel none and --tree-lanes off drop their key the
+// same way).
 // Throws RequestError for request-shape problems (mapped to 400); a throw of
 // any other Error is a target-state problem (a broken custom phase type file
 // under .opencode/auto/phases/), which the caller maps to 409.
@@ -341,21 +355,23 @@ export type ConfigKeys = {
   mode?: string
   agent?: "opencode" | "claude"
   parallel?: "none" | ParallelLevel
-  scanExempt: "none" | string[]
+  treeLanes?: "off" | "auto" | "on"
+  scanExempt?: string[]
+  isolate?: string[]
 }
 
 function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
   const fail = (message: string): never => {
     throw new RequestError(message)
   }
-  if (raw === undefined) return { explicit: {}, scanExempt: "none" }
+  if (raw === undefined) return { explicit: {} }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail(`config must be an object holding the constitutional keys init freezes (${CONFIG_REQUEST_KEYS.join(", ")})`)
   }
   const given = raw as Record<string, unknown>
   for (const key of Object.keys(given)) {
     if ((CONFIG_REQUEST_KEYS as readonly string[]).includes(key)) continue
-    if (key === "acceptanceGate" || key === "build") {
+    if (key === "acceptanceGate" || key === "build" || key === "lanes") {
       fail(`config.${key} is a config key with no flag (hand-edited in ${CONFIG_FILE}); the init and amend operations carry no such key`)
     }
     if (key.includes("-")) {
@@ -427,18 +443,67 @@ function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
       explicit.parallel = parallel
     } else if (value !== undefined) fail(`config.parallel takes none|${PARALLEL_LEVELS.join("|")}; defaults to none`)
   }
-  let scanExempt: "none" | string[] = "none"
+  {
+    // The active intent pack's name (plans/0079 §2): the plain config-key
+    // revision — the bundle materialization channel (`init --intent
+    // <bundle>` writing the pack into the target) is the CLI's alone; the
+    // pack-existence check runs on the merged value below, where the
+    // project's own .opencode/auto/intents/ files are in view.
+    const value = given.intent
+    if (typeof value === "string" && value.trim()) explicit.intent = value
+    else if (value !== undefined) fail("config.intent takes an intent pack name (a materialized bundle's pack, or a .opencode/auto/intents/<name>.md file of the target); defaults to the built-in default pack. Materializing a bundle into the target is the CLI's init --intent — the API revises the key only")
+  }
+  let treeLanes: "off" | "auto" | "on" | undefined
+  {
+    // --tree-lanes (plans/0096 D10): the execution tier, frozen like every
+    // project attribute; off = the key is absent from config.json (Tier 0,
+    // the default). The lanes.* knobs beside it (caches, treeBudgetMB,
+    // sparseFloor) are hand-edited like acceptanceGate/build — no request
+    // grammar for a table.
+    const value = given.treeLanes
+    if (value === "off") treeLanes = "off"
+    else if (value === "auto" || value === "on") {
+      treeLanes = value
+      explicit.treeLanes = value
+    } else if (value !== undefined) fail("config.treeLanes takes off|auto|on (the execution tier: off = process parallelism in one tree, the default; auto = the preflight probe picks sparse CoW worktree lanes when the filesystem and budget allow; on = the full worktree per lane); the lanes.* knobs beside it are hand-edited like acceptanceGate and build")
+  }
+  let scanExempt: string[] | undefined
   {
     const value = given.scanExempt
     if (Array.isArray(value) && value.every((item): item is string => typeof item === "string")) {
       const problems = value.flatMap((glob) => scanExemptProblem(glob) ?? [])
       if (problems.length) fail(`config.scanExempt: ${problems.join("; ")}`)
-      if (value.length) scanExempt = value
+      // The carried list rides whole — [] is the dropper (removes the key),
+      // never collapsed into absent (an amend's [] is a real revision).
+      scanExempt = value
     } else if (value !== undefined) {
       fail("config.scanExempt takes an array of path globs relative to the target directory ([] removes the key); defaults to none")
     }
   }
-  return { explicit, ...(mode !== undefined ? { mode } : {}), ...(agent !== undefined ? { agent } : {}), ...(parallel !== undefined ? { parallel } : {}), scanExempt }
+  let isolate: string[] | undefined
+  {
+    // --isolate (plans/0074 §5.4): branch isolation of nested repositories,
+    // by repository-relative path — the same per-path rule the CLI's flag
+    // applies (isolateProblem: relative, existing, holds a .git, never the
+    // root); [] removes the key like scanExempt's empty list.
+    const value = given.isolate
+    if (Array.isArray(value) && value.every((item): item is string => typeof item === "string")) {
+      const problems = value.flatMap((path) => isolateProblem(dir, path) ?? [])
+      if (problems.length) fail(`config.isolate: ${problems.join("; ")}`)
+      isolate = value
+    } else if (value !== undefined) {
+      fail("config.isolate takes an array of nested-repository paths relative to the target directory, one repository each ([] removes the key); defaults to none")
+    }
+  }
+  return {
+    explicit,
+    ...(mode !== undefined ? { mode } : {}),
+    ...(agent !== undefined ? { agent } : {}),
+    ...(parallel !== undefined ? { parallel } : {}),
+    ...(treeLanes !== undefined ? { treeLanes } : {}),
+    ...(scanExempt !== undefined ? { scanExempt } : {}),
+    ...(isolate !== undefined ? { isolate } : {}),
+  }
 }
 
 // The shared body of init and amend (the CLI's one shared block): every
@@ -475,7 +540,16 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     if (error instanceof RequestError) return bad(error.message)
     return refused(1, [textOf(error)])
   }
-  if (amend && !Object.keys(keys.explicit).length && keys.mode === undefined && keys.agent === undefined && keys.parallel === undefined && keys.scanExempt === "none") {
+  if (
+    amend &&
+    !Object.keys(keys.explicit).length &&
+    keys.mode === undefined &&
+    keys.agent === undefined &&
+    keys.parallel === undefined &&
+    keys.treeLanes === undefined &&
+    keys.scanExempt === undefined &&
+    keys.isolate === undefined
+  ) {
     return bad(
       `name at least one key to change in "config" (for example: {"config":{"phases":"amt"}}); to refresh the agent contract and the AGENTS.md block without changing a key, run the fix operation (${route(project, "fix")})`,
     )
@@ -548,11 +622,22 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
   // the parse kept it only for the dropper branch, so the frozen config
   // said "agent opencode" while the caller asked for claude. The close-out
   // e2e drives init over the API with agent: "claude"; the value now lands.
-  const config = mergeProjectConfig(base, { ...keys.explicit, mode: modeName, ...(keys.agent === "claude" ? { agent: keys.agent } : {}) })
+  // The carried list keys ride the merge whole when non-empty; the mode and
+  // the agent's positive value ride it the same way (the droppers below
+  // delete instead).
+  const config = mergeProjectConfig(base, {
+    ...keys.explicit,
+    mode: modeName,
+    ...(keys.agent === "claude" ? { agent: keys.agent } : {}),
+    ...(keys.scanExempt?.length ? { scanExempt: keys.scanExempt } : {}),
+    ...(keys.isolate?.length ? { isolate: keys.isolate } : {}),
+  })
   // The key droppers: an amend would otherwise keep the old value.
   if (keys.agent === "opencode") delete config.agent
   if (keys.parallel === "none") delete config.parallel
-  if (keys.scanExempt === "none") delete config.scanExempt
+  if (keys.treeLanes === "off") delete config.treeLanes
+  if (keys.scanExempt !== undefined && !keys.scanExempt.length) delete config.scanExempt
+  if (keys.isolate !== undefined && !keys.isolate.length) delete config.isolate
   // The read-only prefix guard, one per command (plans/0053 D31–D32):
   // plannedPhaseUnits is the sync's check half — a value that would drop a
   // completed phase or a directory holding work could never be re-synced, so
@@ -571,12 +656,22 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     }
   }
   // The prompt library and intent packs: init renders no prompts, but loading
-  // surfaces override problems at init time already (the CLI's own order).
+  // surfaces override problems at init time already (the CLI's own order) —
+  // and the loaded packs are the intent key's existence check (the CLI's own
+  // --intent check on the merged value; a name nothing loads is a key every
+  // run would silently ignore — exactly the drift the frozen-key design
+  // exists to prevent).
+  let packs: Record<string, unknown>
   try {
     usePromptLibrary(dir)
-    loadIntents(dir)
+    packs = loadIntents(dir)
   } catch (error) {
     return refused(1, [textOf(error)])
+  }
+  if (config.intent !== undefined && !packs[config.intent]) {
+    return refused(1, [
+      `config.intent must be a loaded intent pack (currently available: ${Object.keys(packs).sort().join(", ")}); defaults to the built-in default pack. Materializing an intent bundle into the target is the CLI's init --intent — the API revises the key only`,
+    ])
   }
   // Commit capability prerequisite (plain init only; amend touches an
   // already-working project): the unified commit is the completion
@@ -631,15 +726,12 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     await Bun.write(contractPath, contract)
     lines.push(current === undefined ? `created: ${CONTRACT_FILE}` : `replaced (differed from the template): ${CONTRACT_FILE}`)
   }
-  // The project brief stub (plans/0052 D9): written only when missing; a
-  // person's brief is never touched.
-  if (!amend) {
-    if (await Bun.file(join(dir, BRIEF_FILE)).exists()) lines.push(`already exists, skipped: ${BRIEF_FILE}`)
-    else {
-      await Bun.write(join(dir, BRIEF_FILE), renderProjectBrief())
-      lines.push(`created: ${BRIEF_FILE} (project brief stub: fill in the goal, the migration source and target, and constraints; every planning session reads it)`)
-    }
-  }
+  // The project brief is NOT written (plans/0133 D9 retired the seed
+  // channel): the analysis flow owns the start — the survey phase's closing
+  // task proposes a `## Project brief` section, the person's Clarified: yes
+  // approves it, and the driver installs that section verbatim. The CLI's
+  // init teaches the same story; a person's rare manual override is the
+  // CLI's `amend --brief`.
   // The AGENTS.md block, idempotently synced from the current config.
   const ensured = await ensurePointer(dir, { testByDriver: config.testByDriver })
   lines.push(
@@ -656,23 +748,34 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     if (appended.length) lines.push(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories)`)
   }
   if (amend) {
+    // Exactly the keys the request touched: the explicit positives, the
+    // mode/agent carriers, and every dropper spelling (a positive value
+    // that rode explicit is named by its own key — never both).
     const given = [
       ...Object.keys(keys.explicit),
       ...(keys.mode !== undefined ? ["mode"] : []),
       ...(keys.agent !== undefined ? ["agent"] : []),
-      ...(keys.parallel !== undefined ? ["parallel"] : []),
-      ...(keys.scanExempt !== "none" ? ["scanExempt"] : []),
+      ...(keys.parallel === "none" ? ["parallel"] : []),
+      ...(keys.treeLanes === "off" ? ["treeLanes"] : []),
+      ...(keys.scanExempt !== undefined ? ["scanExempt"] : []),
+      ...(keys.isolate !== undefined ? ["isolate"] : []),
     ]
     lines.push(`✓ amended (${given.join(", ")}); the other keys are unchanged. Review the change and commit it`)
     return ok(lines, { config: formatProjectConfig(config) })
   }
-  // init's closing line (plans/0053 D31): plan owns the rounds; the
-  // parenthetical is dropped over an established round (the CLI's own
-  // AUTO-RESOLVE — it would state a falsehood there).
+  // init's closing line (plans/0053 D31, re-keyed by plans/0101 D4): the
+  // rounds' opening command — transfer on a phased project (the dispatch
+  // half being plan's, every advance is transfer's), the plan operation in
+  // m mode (which transfer refuses) — and since plans/0084 the
+  // fresh-project pointer names the assisted analysis: the advancing
+  // command opens it, the person and their agent fill docs/analysis.md,
+  // and the round opens on its release (init writes no brief and nothing
+  // under docs/ — the analysis flow owns the start, plans/0133 D9).
+  const opener = config.phases === "m" ? `the plan operation (${route(project, "plan")})` : `the transfer operation (${route(project, "transfer")})`
   lines.push(
     phaseState
-      ? `next: the plan operation continues the established round (${route(project, "plan")})`
-      : `next: the plan operation establishes round ${roundDirName(liveRound)} and stops at the round-start gate (${route(project, "plan")})`,
+      ? `next: ${opener}`
+      : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(liveRound)} opens on its release — never a project brief: the analysis flow owns the start)`,
   )
   return ok(lines, { config: formatProjectConfig(config) })
 }
@@ -705,7 +808,12 @@ async function runFix(request: OpRequest): Promise<OpOutcome> {
   }
   const fixable = plan.findings.filter((finding) => finding.class === "fixable")
   const manual = plan.findings.filter((finding) => finding.class === "manual")
-  const head = [`config-layer findings in ${dir}:`, formatFixPlan(plan)]
+  // Info notes alone are not findings against the layer (plans/0135): an
+  // expected posture recorded against "cleaning up" what the design keeps —
+  // the header says notes, and no gate fails over them (the CLI's own
+  // header wording and exit semantics, fix --dryrun exiting 0 when only
+  // informational notes remain).
+  const head = [`${fixable.length + manual.length ? "config-layer findings" : "config-layer notes"} in ${dir}:`, formatFixPlan(plan)]
   const extras = () => ({ findings: plan.findings, ...(plan.skipped ? { skipped: plan.skipped } : {}) })
   if (dryrun) {
     const lines = [...head]
@@ -713,11 +821,14 @@ async function runFix(request: OpRequest): Promise<OpOutcome> {
     lines.push(
       fixable.length
         ? `dryrun: nothing was changed; apply the ${fixable.length} fixable finding(s) with the fix operation and "confirm": true (${route(project, "fix")})`
-        : "dryrun: nothing was changed; the finding(s) above need a person",
+        : manual.length
+          ? "dryrun: nothing was changed; the finding(s) above need a person"
+          : "dryrun: nothing was changed; the note(s) above are informational — nothing to repair",
     )
-    // The CLI's dryrun exit 1: the drift gate's stable semantics — findings
-    // answer 409 with code 1, a clean layer 200.
-    return refused(1, lines, extras())
+    // The CLI's dryrun exit semantics: fixable or manual findings answer 409
+    // with code 1 (the drift gate's stable exit), informational notes alone
+    // the success shape (200) — an expected posture is not drift.
+    return fixable.length + manual.length ? refused(1, lines, extras()) : ok(lines, extras())
   }
   const lines = [...head]
   if (fixable.length) {
@@ -735,6 +846,12 @@ async function runFix(request: OpRequest): Promise<OpOutcome> {
   if (manual.length) {
     lines.push(`${manual.length} finding(s) need a person (listed as manual above): edit the file by hand, then re-run the fix operation (${route(project, "fix")})`)
     return refused(1, lines, { ...extras(), applied: fixable.map((finding) => `${finding.path}: ${finding.change}`) })
+  }
+  // Nothing was applicable: informational notes alone never claim a repair
+  // (there is nothing to apply, so no gate was asked and no commit-worthy
+  // change exists) — the honest result, the CLI's own closing line.
+  if (!fixable.length) {
+    return ok([...lines, "✓ nothing to fix: the note(s) above are informational — nothing to repair"], extras())
   }
   lines.push("✓ config layer repaired; review the change and commit it")
   return ok(lines, extras())
@@ -872,8 +989,10 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
       phases: loaded.config.phases,
       build: loaded.config.build,
       scanExempt: loaded.config.scanExempt,
+      isolate: loaded.config.isolate,
       newTask: title,
       autoNumber: loaded.config.autoNumber,
+      testByDriver: loaded.config.testByDriver,
     })
   } finally {
     lock.release()
@@ -946,7 +1065,9 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
       phases: loaded.config.phases,
       build: loaded.config.build,
       scanExempt: loaded.config.scanExempt,
+      isolate: loaded.config.isolate,
       autoNumber: loaded.config.autoNumber,
+      testByDriver: loaded.config.testByDriver,
       ...(typeof input === "string" && input.trim() ? { input: { text: input } } : {}),
       ...(append === true ? { append: true } : {}),
     })
@@ -960,6 +1081,44 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
   // vocabulary mapping its outcome (0 planned, 1 usage/environment, 2
   // blocked for a human, 3 the graceful /exit pause).
   return request.spawnPlanningRun({ ...(typeof input === "string" && input.trim() ? { input } : {}), append: append === true })
+}
+
+// transfer (auto-core plans/0101 D2): the single advance command — the
+// person-bracketed boundaries, one advance per invocation, resolved by
+// state (the project start, the phase boundary, the round close/open). The
+// API's shape follows the plan unlock's precedent with one difference the
+// core's own design forces: planPrelude is a prelude seam (the no-agent
+// routes return as stops; only the loop routes need the session), while
+// runTransfer has no such split — the whole state resolution, m mode's
+// refusal included, lives inside the core's one entry. Re-implementing the
+// split here would be the constitution-erosion risk this file's header
+// names, so the WHOLE advance runs as a spawned worker run carrying the
+// transfer payload (src/worker.ts: the worker calls runTransfer — one
+// process per advance, the topology's own unit), and the run's own exit
+// vocabulary maps the outcome (0 a review, round-open or roadmap-exhausted
+// stop; 2 a gate held or nothing to advance; 1 usage/state, m mode's own
+// refusal among them). The op itself validates the request shape only; it
+// takes no lock (runTransfer takes its own inside the worker, "transfer").
+// `resynthesize` is the CLI's transfer-only flag (plans/0101 D3): bypass
+// the digest-keep of a standing plan task so the reconstruct lands the new
+// todo for review.
+async function runTransferOp(request: OpRequest): Promise<OpOutcome> {
+  const { project, body } = request
+  for (const key of Object.keys(body ?? {})) {
+    if (key === "resynthesize") continue
+    return bad(`unknown transfer field "${key}" (the transfer request takes "resynthesize" — true|false, bypassing the digest-keep of a standing plan task so the reconstruct lands the new todo for review; every other surface is state-resolved, never requested)`)
+  }
+  if ("resynthesize" in (body ?? {}) && typeof body!.resynthesize !== "boolean") {
+    return bad("resynthesize takes true|false (bypass the digest-keep of a standing plan task: the synthesis pipeline re-voices the sources and the reconstruct lands the new todo for review)")
+  }
+  const dir = project.directory
+  const legacy = await legacyLayoutProblem(dir)
+  if (legacy) return refused(1, [legacy])
+  const unconfigured = await requireConfig(project, "transfer")
+  if (unconfigured) return unconfigured
+  const loaded = await strictConfig(project)
+  if (!("config" in loaded)) return loaded
+  return request.spawnTransferRun({ ...(body?.resynthesize === true ? { resynthesize: true } : {}) })
 }
 
 // models (shell-contract §9): the registry's effective table, read-only —
@@ -1098,6 +1257,7 @@ export const OP_DEFINITIONS: readonly OpDefinition[] = [
   { method: "POST", segment: "close", what: "the close operation", scope: "control", write: () => true, run: runClose },
   { method: "POST", segment: "tasks", what: "the task-add operation", scope: "control", write: () => true, run: runTaskAdd },
   { method: "POST", segment: "plan", what: "the plan operation", scope: "control", write: () => true, run: runPlan },
+  { method: "POST", segment: "transfer", what: "the transfer operation", scope: "control", write: () => true, run: runTransferOp },
   { method: "GET", segment: "models", what: "the models operation", scope: "read", write: () => false, run: runModels },
   { method: "POST", segment: "models", what: "the model probe", scope: "probe", write: () => false, run: runProbe },
 ]

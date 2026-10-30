@@ -226,7 +226,13 @@ export function compactJournal(dataDir: string, events: readonly JournalEvent[],
     }
     if (event.event === "raised") {
       // Keep only the raises whose id is still open (the last one wins the
-      // fold; the earlier duplicates of a re-raise add nothing).
+      // fold; the earlier duplicates of a re-raise add nothing). Among the
+      // kept raises of one id, the FIRST survives compaction (deliberate,
+      // unlike foldJournal's last-wins on text/minutes): a re-raise restates
+      // the same ask — the original wording is the record — while the fold's
+      // last-wins keeps the freshest timer state for a live restart; the
+      // compacted journal is the restart's replay source, and the first
+      // raise replays the ask exactly as it was made.
       const open = restored.get(event.run)!.questions.some((question) => question.id === event.id)
       if (!open) continue
       const raised = seen.get(event.run) ?? new Set<string>()

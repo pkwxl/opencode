@@ -49,7 +49,7 @@ the Web client.
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health`; `GET /runs`, `POST /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`, `GET /session`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan` (control), `models` (GET the table; POST the probe — its own `probe` scope) |
+| REST  | `GET /health`; `GET /runs`, `POST /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`, `GET /session`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan` (the dispatch surface: the standing plan task's session spawned as a run), `transfer` (the advance command: one person-bracketed boundary per invocation, spawned as a run) (control), `models` (GET the table; POST the probe — its own `probe` scope) |
 | SSE   | `GET /projects/<p>/status` (the polled read model: the core's rendered status tree, commit-verdict completions, per-worktree git cleanliness, the lock), `/log` and `/events` (whole-line tails of the run log and the engine journal), `/status-events` (the typed driver-events stream with event-id cursoring) |
 | WS    | `GET /runs/<id>/interactive` — the question channel and the control channel (`/exit`, `/failback`) multiplexed on one typed versioned protocol; the run's own bridge connects back to `GET /runs/<id>/worker` with a per-run secret |
 | Web   | `GET /` — the client (plain TypeScript, no framework, no dependency), served from the package's embedded bundle; scope-aware over `GET /session` |
@@ -78,11 +78,25 @@ into prompts — one-click runs on arbitrary directories would amplify both.
 `POST /runs` takes `{ "project", "options"?, "switches"? }`. `options` are
 the per-run `RunAllOpts` fields of the CLI's `run` (`verbose`, `waitAnswer`,
 `waitBetween`, `permission`, `newSession`, `dryrun`, `maxSessions`,
-`server`); `switches` are per-run `OPENCODE_AUTO_*` overrides applied to the
-worker's fresh process. **Never config keys**: the constitutional keys are
-frozen by `init` (`.opencode/auto/config.json`) and a request carrying one
-is refused with the frozen-flag message — revise them with the `amend`
-operation, never on a run.
+`server`, `repair`, `stopAfter`, `boundary`); `switches` are per-run
+`OPENCODE_AUTO_*` overrides applied to the worker's fresh process. **Never
+config keys**: the constitutional keys — `intent`, `treeLanes`, `isolate`
+and the hand-edited `lanes` table included — are frozen by `init`
+(`.opencode/auto/config.json`) and a request carrying one is refused with
+the frozen-flag message — revise them with the `amend` operation, never on
+a run. `maxSessions` is capped at 1 by design: concurrent execution is the
+shell owner's reserved call (auto-core plans/0069 §6 item 5 — the core
+itself runs lanes since 0068; this surface does not, yet), and
+`repair`/`stopAfter`/`boundary` ride plain runs only (the stop conditions
+of the plan and transfer payloads carry no budget).
+
+The rounds' opening and advance commands: a phased project starts through
+the **transfer operation** (the assisted analysis — the person and their
+agent fill `docs/analysis.md`, its release opens R-01 — then the
+formulation construction, the phase boundaries and the round close/open);
+`plan` dispatches the standing plan task. In m mode the shapes are `plan`
+and `run` (transfer refuses). Init points at the right one and writes no
+brief — the analysis flow owns the start.
 
 ## The exit-code vocabulary
 
@@ -124,6 +138,21 @@ detection is same-host only: a run lock recorded on another host counts as
 live forever, because its pid cannot be probed from here. **Cross-host
 recovery is: delete `<project>/.auto/run.lock` by hand** and re-run. No
 automatic cross-host arbitration exists or is planned for v1.
+
+## The honestly-absent surfaces
+
+The daemon serves the run, config, units, plan-dispatch, transfer and
+models surfaces above. These stay CLI-side (`opencode-auto`, the general
+shell), stated plainly: `clarify` (the one-command release act — the
+daemon's texts teach the manual path, "add the line and commit yourself"),
+`sync` (the intent-bundle upgrade), `land` (branch isolation's return
+path), `fork`/`remove-fork` (the retry experiment environment) and
+`driver-helper` (the person-proxy brief). The `transfer` subcommand of this
+binary exists (`opencode-auto-server transfer <dir>`) — every core text
+naming it points at a runnable command — but it is the headless form: its
+questions degrade the hand-spawned worker's way (a permission question
+blocks, exit 2); answer questions over the daemon's transfer operation
+instead, which attaches the interactive transport.
 
 ## Verification
 

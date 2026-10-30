@@ -180,39 +180,111 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
 
           // —— the init operation (the config scope): the constitutional
           // config frozen over the API — a phased project on the claude
-          // agent, exactly the knobs the flow needs.
+          // agent, exactly the knobs the flow needs. init writes no brief
+          // and no rounds (plans/0133 D9: the analysis flow owns the start),
+          // and its closing pointer names the advance command.
           const initialized = await h.request("POST", `/projects/${h.name}/init`, h.config, { config: { phases: "implement", agent: "claude" } })
           expect(initialized.status).toBe(200)
           const initBody = (await initialized.json()) as { code: number; lines: string[]; config: string }
           expect(initBody.code).toBe(0)
-          expect(initBody.config).toContain("phases implement")
           expect(initBody.config).toContain("agent claude")
+          expect(JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text()).phases).toBe("implement")
+          expect(initBody.lines.join("\n")).toContain("opens the assisted project analysis")
+          expect(initBody.lines.join("\n")).toContain(`/projects/${h.name}/transfer`)
           expect(await Bun.file(join(dir, CONFIG_FILE)).exists()).toBe(true)
           expect(await Bun.file(join(dir, ".opencode", "agent", "auto.md")).exists()).toBe(true)
-          expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).exists()).toBe(true)
+          expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).exists()).toBe(false)
           // The person's review-and-commit of what init wrote (the same act
           // the CLI flow asks for; the API wrote, the person commits).
           await git("add", "-A")
           await git("commit", "-qm", "init over the API")
 
-          // —— plan without input: the no-agent route that establishes the
-          // round, stopping at the round-start gate for the review.
-          const established = await h.request("POST", `/projects/${h.name}/plan`, h.control, {})
-          expect(established.status).toBe(200)
-          const establishedBody = (await established.json()) as { code: number; lines: string[] }
-          expect(establishedBody.code).toBe(0)
-          expect(establishedBody.lines.join("\n")).toContain("✓ round R-01 established: P01-implement")
-          expect(establishedBody.lines.join("\n")).toContain("next (round-start gate): review the round setup")
-          expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(true)
-          expect(await Bun.file(join(dir, "docs", "R-01", "P01-implement", "todo.md")).exists()).toBe(true)
-          await git("add", "-A")
-          await git("commit", "-qm", "round R-01 established over the API")
+          // —— the headless phased start (plans/0101/0160): plan refuses the
+          // unstarted project naming transfer — the API's own answer points
+          // at the advance surface this flow then drives.
+          const unstarted = await h.request("POST", `/projects/${h.name}/plan`, h.control, {})
+          expect(unstarted.status).toBe(409)
+          const unstartedBody = (await unstarted.json()) as { code: number; lines: string[] }
+          expect(unstartedBody.code).toBe(1)
+          expect(unstartedBody.lines.join("\n")).toContain("is transfer's")
+          expect(unstartedBody.lines.join("\n")).toContain("opencode-auto-server transfer")
 
-          // —— plan with input: the agent-planning route spawns the planning
-          // session as a run; its interactive channel is live (the session
-          // frame over the bridge — the channel a plan question takes), and
-          // the run ends 0 with the task landed by the core's planning step.
-          const planned = await h.request("POST", `/projects/${h.name}/plan`, h.control, { input: "plan the widget migration: one task, src only" })
+          // —— transfer #1: the advance opens the assisted analysis (a
+          // spawned run, exit 0, the stub written for the person).
+          const opened = await h.request("POST", `/projects/${h.name}/transfer`, h.control, {})
+          expect(opened.status).toBe(202)
+          const openedRun = await untilTerminal(h, ((await opened.json()) as RunView).id)
+          expect(openedRun.state, openedRun.tail).toBe("completed")
+          expect(openedRun.code).toBe(0)
+          expect(openedRun.tail).toContain("the project analysis is open: docs/analysis.md written")
+          expect(await Bun.file(join(dir, "docs", "analysis.md")).exists()).toBe(true)
+
+          // —— the person fills and releases the analysis (their document,
+          // their commit): every section real, one roadmap line, the brief
+          // proposal, the release mark.
+          await Bun.write(
+            join(dir, "docs", "analysis.md"),
+            [
+              "# Project analysis",
+              "",
+              "## Analysis",
+              "",
+              "- one widget to migrate; the tree is small and self-contained.",
+              "",
+              "## Goals",
+              "",
+              "- migrate the widget to the new stack, one round.",
+              "",
+              "## Project brief",
+              "",
+              "- goal: the widget migrated; the deliverable stands alone in src/.",
+              "",
+              "## Roadmap",
+              "",
+              "- R-01 implement — migrate the widget",
+              "",
+              "Clarified: yes",
+              "",
+            ].join("\n"),
+          )
+          await git("add", "-A")
+          await git("commit", "-qm", "the person releases the analysis")
+
+          // —— transfer #2: the release installs the approved brief and
+          // establishes R-01 under the roadmap's line, stopping at the
+          // round-start gate (the person's review of the uncommitted setup).
+          const established = await h.request("POST", `/projects/${h.name}/transfer`, h.control, {})
+          expect(established.status).toBe(202)
+          const establishedRun = await untilTerminal(h, ((await established.json()) as RunView).id)
+          expect(establishedRun.state, establishedRun.tail).toBe("completed")
+          expect(establishedRun.code).toBe(0)
+          expect(establishedRun.tail).toContain("\u2713 round R-01 established: P01-implement")
+          expect(establishedRun.tail).toContain("round-start gate")
+          expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(true)
+          expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).text()).toContain("the widget migrated")
+          // The person's round review: commit the setup, fill the round
+          // brief off its stub (plan refuses to dispatch while it stays
+          // one) and write the phase's planning input — the input's home.
+          await Bun.write(join(dir, "docs", "R-01", "round.md"), "# Round R-01\n\n## Goal\n\n- migrate the widget.\n\n## Close\n\n- every decision restated into the target's own docs; none accepted as lost.\n")
+          await Bun.write(join(dir, "docs", "R-01", "P01-implement", "plan-input.md"), "plan the widget migration: one task, src only\n")
+          await git("add", "-A")
+          await git("commit", "-qm", "round R-01 established over the API; the person fills the brief and the plan input")
+
+          // —— transfer #3: the construct — the formulation todo built from
+          // the phase's plan input, stopping at the review seam.
+          const constructed = await h.request("POST", `/projects/${h.name}/transfer`, h.control, {})
+          expect(constructed.status).toBe(202)
+          const constructedRun = await untilTerminal(h, ((await constructed.json()) as RunView).id)
+          expect(constructedRun.state, constructedRun.tail).toBe("completed")
+          expect(constructedRun.code).toBe(0)
+          expect(constructedRun.tail).toContain("formulation task T-001 constructed")
+          expect(constructedRun.tail).toContain("review stop")
+
+          // —— plan dispatches the formulation session as a run; its
+          // interactive channel is live (the session frame over the bridge
+          // — the channel a plan question takes), and the run ends 0 with
+          // the task landed by the core's planning step.
+          const planned = await h.request("POST", `/projects/${h.name}/plan`, h.control, {})
           expect(planned.status).toBe(202)
           const planningRun = (await planned.json()) as RunView & { interactive: string }
           const planningId = planningRun.id
@@ -227,9 +299,12 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
           const planned0 = await untilTerminal(h, planningId)
           expect(planned0.state, planned0.tail).toBe("completed")
           expect(planned0.code).toBe(0)
-          expect(planned0.tail).toContain("✓ planned R-01.P01 implement: 1 task(s) in docs/R-01/P01-implement/tasks.md")
+          expect(planned0.tail).toContain("\u2713 planned R-01.P01 implement: 1 task(s) in docs/R-01/P01-implement/tasks.md")
           const index = await Bun.file(join(dir, "docs", "R-01", "P01-implement", "tasks.md")).text()
-          expect(index).toMatch(/- \[ \] T-001 task T-001/)
+          // T-001 is the formulation task (ticked by its dispatch); the
+          // planned executable task appends after it (plans/0095).
+          expect(index).toMatch(/- \[x\] T-001 Formulate the Implementation tasks/)
+          expect(index).toMatch(/- \[ \] T-002 task T-002/)
           expect(await Bun.file(join(dir, "docs", "R-01", "P01-implement", "plan-input.md")).text()).toContain("plan the widget migration")
 
           // —— task-add (the control scope): two more tasks, one to run, one
@@ -243,13 +318,13 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
           // —— close a unit: the explicit ref and the one-line reason are the
           // confirmation; the Closed: field, the rename and the close commit
           // are the core's own (never a daemon-side write).
-          const closed = await h.request("POST", `/projects/${h.name}/close`, h.control, { ref: "T-003", reason: "delivered out of band" })
+          const closed = await h.request("POST", `/projects/${h.name}/close`, h.control, { ref: "T-004", reason: "delivered out of band" })
           expect(closed.status).toBe(200)
           const closedBody = (await closed.json()) as { code: number; lines: string[] }
           expect(closedBody.code).toBe(0)
-          const third = await Bun.file(join(dir, "docs", "T-003", "done.md")).text()
+          const third = await Bun.file(join(dir, "docs", "T-004", "done.md")).text()
           expect(third).toContain("Closed: delivered out of band")
-          expect(await git("log", "--format=%s", "-3")).toContain("T-003 closed: delivered out of band")
+          expect(await git("log", "--format=%s", "-3")).toContain("T-004 closed: delivered out of band")
 
           // —— the vocabulary's blocked: a stray file trips the execution
           // unit's startup clean gate — exit 2, nothing written by the
@@ -312,7 +387,7 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
             const replayed = await answerer.nextOf((frame) => frame.type === "question", "the pending question redelivered to the connecting client", 30_000)
             expect(replayed).toMatchObject({
               type: "question",
-              text: "⏸ pause between tasks: press Enter to start T-002 now, or wait 1m to auto-continue: ",
+              text: "⏸ pause between tasks: press Enter to start T-003 now, or wait 1m to auto-continue: ",
               minutes: 1,
             })
             if (replayed.type !== "question") throw new Error("unreachable")
@@ -324,9 +399,12 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
           const done = await untilTerminal(h, resumedId, 240_000)
           expect(done.state, done.tail).toBe("completed")
           expect(done.code).toBe(0)
-          expect(done.tail).toContain("→ confirmed, continuing T-002")
+          expect(done.tail).toContain("→ confirmed, continuing T-003")
+          // T-001 (the formulation task) closed at its dispatch; the
+          // executed widget tasks are T-002 and T-003.
           expect(await Bun.file(join(dir, "docs", "T-001", "done.md")).exists()).toBe(true)
           expect(await Bun.file(join(dir, "docs", "T-002", "done.md")).exists()).toBe(true)
+          expect(await Bun.file(join(dir, "docs", "T-003", "done.md")).exists()).toBe(true)
 
           // —— the whole vocabulary, observed from the API: every code of
           // 0/1/2/3/130 sits in the daemon's run list as its mapped state.
@@ -335,6 +413,21 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
           for (const pair of ["completed/0", "failed/1", "blocked/2", "paused/3", "killed/130"]) {
             expect(pairs.has(pair), `the run list must show ${pair} (has: ${[...pairs].join(", ")})`).toBe(true)
           }
+
+          // —— the phase boundary (plans/0101): the run's own boundary stop
+          // names transfer as the advance command, and this is it — the
+          // handover distillation session, the phase close and the round
+          // close, stopping at the person's moment with the round.
+          const advanced = await h.request("POST", `/projects/${h.name}/transfer`, h.control, {})
+          expect(advanced.status).toBe(202)
+          const advancedRun = await untilTerminal(h, ((await advanced.json()) as RunView).id, 240_000)
+          expect(advancedRun.state, advancedRun.tail).toBe("completed")
+          expect(advancedRun.code).toBe(0)
+          expect(advancedRun.tail).toContain("handover distillation session")
+          expect(advancedRun.tail).toContain("phase P01-implement Implementation closed")
+          expect(advancedRun.tail).toContain("\u2713 round close checks passed")
+          expect(advancedRun.tail).toContain("open the next round with: opencode-auto-server transfer")
+          expect(await Bun.file(join(dir, "docs", "R-01", "P01-implement", "handover.md")).exists()).toBe(true)
 
           // —— the status tree (the read scope): the core's own renderer over
           // the API, the closed unit marked, the verdicts from the commits.
@@ -347,10 +440,11 @@ describe("the service end to end: one project, one daemon, the whole vocabulary"
           const tree = status.status.join("\n")
           expect(tree).toContain("R-01 (1/1 phases done)")
           expect(tree).toContain("[✓] P01-implement")
-          expect(tree).toContain("[✓] T-001 task T-001")
-          expect(tree).toContain("[✓] T-002 the second widget")
-          expect(tree).toContain("[⊘] T-003 the third widget")
-          const thirdVerdict = status.verdicts.tasks.find((task) => task.id === "T-003")
+          expect(tree).toContain("[✓] T-001 Formulate the Implementation tasks")
+          expect(tree).toContain("[✓] T-002 task T-002")
+          expect(tree).toContain("[✓] T-003 the second widget")
+          expect(tree).toContain("[⊘] T-004 the third widget")
+          const thirdVerdict = status.verdicts.tasks.find((task) => task.id === "T-004")
           expect(thirdVerdict).toMatchObject({ done: true, closed: "delivered out of band" })
           expect(status.git.clean).toBe(true)
           expect(status.verdicts.worktree).toBe("clean")

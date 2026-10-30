@@ -35,7 +35,6 @@ import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
 import { CONFIG_DEFAULTS, CONFIG_FILE, saveProjectConfig } from "@opencode-ai/auto-core/config"
 import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
-import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
@@ -109,7 +108,8 @@ async function phasedProject(prefix: string, phases: string, config: Partial<imp
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-  await Bun.write(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
+  // No brief: init never writes one (plans/0133 D9 retired the seed), and a
+  // missing brief is no finding — the analysis flow owns the start.
   await ensureInitGitignore(dir)
   await establishRound(dir, { phases })
   await ensurePointer(dir, { testByDriver: false })
@@ -162,6 +162,23 @@ async function plantLiveLock(dir: string): Promise<() => Promise<void>> {
 const linesOf = (body: Body): string[] => (body.lines as string[]) ?? []
 const has = (body: Body, text: string): boolean => linesOf(body).some((line) => line.includes(text))
 
+// Polls a spawned operation run to its terminal state (the plan unlock
+// test's inline loop, named for the transfer suite's reuse).
+async function untilRunSettles(h: Harness, id: string, timeoutMs = 120_000): Promise<{ state: string; code: number | null; tail: string }> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const run = (await (await fetch(`${h.daemon.url}/runs/${id}`, { headers: { authorization: `Bearer ${h.read}` } })).json()) as {
+      state: string
+      code: number | null
+      tail: string
+      live: boolean
+    }
+    if (!run.live) return run
+    if (Date.now() > deadline) throw new Error(`run ${id} never settled: ${JSON.stringify(run)}`)
+    await Bun.sleep(200)
+  }
+}
+
 describe("the lifecycle operations (P1d)", () => {
   test("the whitelist and scopes gate the operations: 404 unregistered, 401 without a token, 403 naming the scope, read serving models", async () => {
     await withOps(async (h) => {
@@ -187,7 +204,7 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("init freezes the config layer over the core's writers: config.json, the brief stub, the contract, the AGENTS.md block, opencode.json, the ignore set", async () => {
+  test("init freezes the config layer over the core's writers: config.json, the contract, the AGENTS.md block, opencode.json, the ignore set — and no brief (the analysis flow owns the start)", async () => {
     await withOps(async (h) => {
       const dir = await gitBlank("auto-ops-init-")
       const name = h.register(dir)
@@ -197,16 +214,21 @@ describe("the lifecycle operations (P1d)", () => {
       expect(has(answer.body, "created: opencode.json")).toBe(true)
       expect(has(answer.body, `created: ${join(".opencode", "agent", "auto.md")}`)).toBe(true)
       expect(has(answer.body, "appended: AGENTS.md opencode-auto block")).toBe(true)
-      expect(has(answer.body, "establishes round R-01")).toBe(true)
+      // The closing pointer is the rounds' opening command (plans/0101 D4):
+      // transfer on a phased project, naming the assisted analysis — and
+      // since plans/0133 init writes no brief at all.
+      expect(has(answer.body, "opens the assisted project analysis")).toBe(true)
+      expect(has(answer.body, `/projects/${name}/transfer`)).toBe(true)
+      expect(has(answer.body, "never a project brief")).toBe(true)
       const stored = JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text())
       expect(stored.phases).toBe("am")
       expect(stored.contextLimit).toBe(32)
       expect(stored.mode).toBe("migrate")
-      expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(true)
       expect((await Bun.file(join(dir, "AGENTS.md")).text()).includes("<!-- opencode-auto:start -->")).toBe(true)
       expect(await Bun.file(join(dir, ".gitignore")).text()).toContain(".auto/")
-      // init writes no rounds: docs/ is untouched (plan establishes rounds)
+      // init writes no rounds: docs/ is untouched (transfer establishes rounds)
       expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(false)
       expect(answer.body.project).toBe(name)
       expect(String(answer.body.directory)).toBe(realpathSync(dir))
@@ -381,7 +403,7 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("reset: the plan is answered before the gates apply it; a filled brief is kept, a stub removed, and docs/ is never touched", async () => {
+  test("reset: the plan is answered before the gates apply it; a filled brief is kept, and docs/ is never touched", async () => {
     await withOps(async (h) => {
       const dir = await phasedProject("auto-ops-reset-", "am")
       const name = h.register(dir)
@@ -395,7 +417,10 @@ describe("the lifecycle operations (P1d)", () => {
       const entries = unconfirmed.body.plan as { path: string; action: string; reason?: string }[]
       const brief = entries.find((entry) => entry.path === join(".opencode", "auto", "brief.md"))
       expect(brief?.action).toBe("keep")
-      expect(brief?.reason).toContain("filled in")
+      // The stub-remove rule retired with the stub model (plans/0133): a
+      // brief on disk is an installed proposal or the person's amend write —
+      // the core's own keep reason names both and leaves removal to the hand.
+      expect(brief?.reason).toContain("installed approved proposal")
       expect(await Bun.file(join(dir, CONFIG_FILE)).exists()).toBe(true)
       const applied = await h.call("POST", `/projects/${name}/reset`, h.config, { confirm: true })
       expect(applied.status).toBe(200)
@@ -492,26 +517,38 @@ describe("the lifecycle operations (P1d)", () => {
       const unName = h.register(unestablished)
       const refused = await h.call("POST", `/projects/${unName}/tasks`, h.control, { title: "too early" })
       expect(refused.status).toBe(409)
-      expect(String(refused.body.error)).toContain("round R-01 is not established yet")
+      // The m-mode pre-round guard is the analysis flow's (plans/0084): the
+      // core's own refusal names it and the opening command.
+      expect(String(refused.body.error)).toContain("no round exists yet: the project analysis comes first")
       await rm(dir, { recursive: true, force: true })
       await rm(unestablished, { recursive: true, force: true })
     })
   })
 
-  test("the planPrelude boundary matrix — the no-agent routes are served with their lines and codes", async () => {
+  test("the planPrelude boundary matrix — the surviving no-agent routes are served, the boundary routes refuse naming transfer", async () => {
     await withOps(async (h) => {
-      // round establishment (row 1): a phased project init never configured rounds for
+      // The project start (row 0, plans/0101 D4): a phased project with no
+      // round established refuses — the analysis, the establishment and the
+      // first plan task's construction are transfer's, and the core's own
+      // refusal names this shell's transfer command (made true by the
+      // transfer operation + the CLI subcommand of this binary).
       const dir = await phasedProject("auto-ops-establish-", "am")
       await rm(join(dir, "docs"), { recursive: true, force: true })
       await gitOf(dir)("add", "-A")
       await gitOf(dir)("commit", "-qm", "drop the round")
       const name = h.register(dir)
-      const established = await h.call("POST", `/projects/${name}/plan`, h.control)
-      expect(established.status).toBe(200)
-      expect(established.body.code).toBe(0)
-      expect(has(established.body, "✓ round R-01 established: P01-analysis, P02-implement")).toBe(true)
-      expect(has(established.body, "round-start gate")).toBe(true)
-      expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(true)
+      const refusedStart = await h.call("POST", `/projects/${name}/plan`, h.control)
+      expect(refusedStart.status).toBe(409)
+      expect(refusedStart.body.code).toBe(1)
+      expect(has(refusedStart.body, "is transfer's")).toBe(true)
+      expect(has(refusedStart.body, "run: opencode-auto-server transfer")).toBe(true)
+      expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(false)
+      // Re-establish through the core (the fixture's own writer — the
+      // daemon-side establishment flow is the transfer operation's, below),
+      // committed as the clean baseline the drift case needs.
+      await establishRound(dir, { phases: "am" })
+      await gitOf(dir)("add", "-A")
+      await gitOf(dir)("commit", "-qm", "re-establish the round")
       // the m-mode notices (rows 8 and 9) are served, not refused
       const manual = await fixtureProject("auto-ops-mplan-", {})
       const manualName = h.register(manual)
@@ -533,22 +570,19 @@ describe("the lifecycle operations (P1d)", () => {
       expect(index).toContain("P03 implement")
       expect(await Bun.file(join(dir, "docs", "R-01", "P03-implement", "todo.md")).exists()).toBe(true)
       expect(await Bun.file(join(dir, "docs", "R-01", "P02-implement", "todo.md")).exists()).toBe(false)
-      // the round-close gate (row 2): a failing check is the stop-2 refusal, a passing one opens the next round
+      // row 2 (plans/0101 D4): a phased COMPLETE round is transfer's too —
+      // the round close and the next round's opening refuse here naming the
+      // advance command (the round-close gate itself runs inside transfer).
       const closing = await phasedProject("auto-ops-roundclose-", "am")
       const closingName = h.register(closing)
       await phaseDone(closing, "P01-analysis")
       await phaseDone(closing, "P02-implement")
-      const failed = await h.call("POST", `/projects/${closingName}/plan`, h.control)
-      expect(failed.status).toBe(409)
-      expect(failed.body.code).toBe(2)
-      expect(has(failed.body, "does not pass its round-close checks")).toBe(true)
-      expect(has(failed.body, "round R-02 cannot open yet")).toBe(true)
-      await closeListed(closing)
-      const passed = await h.call("POST", `/projects/${closingName}/plan`, h.control)
-      expect(passed.status).toBe(200)
-      expect(has(passed.body, "✓ round close checks passed")).toBe(true)
-      expect(has(passed.body, "✓ round R-02 established")).toBe(true)
-      expect(await Bun.file(join(closing, "docs", "R-02", "phases.md")).exists()).toBe(true)
+      const complete = await h.call("POST", `/projects/${closingName}/plan`, h.control)
+      expect(complete.status).toBe(409)
+      expect(complete.body.code).toBe(1)
+      expect(has(complete.body, "complete and no plan task awaits dispatch")).toBe(true)
+      expect(has(complete.body, "run: opencode-auto-server transfer")).toBe(true)
+      expect(await Bun.file(join(closing, "docs", "R-02", "phases.md")).exists()).toBe(false)
       // an unconfigured directory refuses outright (the CLI's own rule)
       const blank = await gitBlank("auto-ops-planblank-")
       const blankName = h.register(blank)
@@ -629,6 +663,225 @@ describe("the lifecycle operations (P1d)", () => {
     })
   }, 180_000)
 
+  // The keys the core gained under this package (plans/0160 D2): the
+  // init/amend vocabulary accepts intent/treeLanes/isolate (the dropper
+  // spellings included), refuses the hand-edited lanes table, and checks the
+  // intent name against the loaded packs — a key every run would silently
+  // ignore is the drift the frozen-key design exists to prevent.
+  test("init/amend accept intent/treeLanes/isolate with the CLI's own rules; lanes stays hand-edited; an unknown intent pack is refused", async () => {
+    await withOps(async (h) => {
+      const dir = await phasedProject("auto-ops-newkeys-", "am")
+      // a project-local intent pack the key can name (the bundle
+      // materialization channel is the CLI's init --intent, not the API's)
+      await Bun.write(join(dir, ".opencode", "auto", "intents", "mytest.md"), "# mytest\n\n## quality\n\n### decompose\n\n- one item per aspect.\n")
+      const git = gitOf(dir)
+      await git("add", "-A")
+      await git("commit", "-qm", "the project-local pack")
+      const name = h.register(dir)
+      const amended = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { intent: "mytest", treeLanes: "on" } })
+      expect(amended.status).toBe(200)
+      expect(has(amended.body, "\u2713 amended (intent, treeLanes)")).toBe(true)
+      const stored = JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text())
+      expect(stored.intent).toBe("mytest")
+      expect(stored.treeLanes).toBe("on")
+      // the droppers: treeLanes "off" removes the key; an empty isolate list too
+      expect((await h.call("POST", `/projects/${name}/amend`, h.config, { config: { treeLanes: "off" } })).status).toBe(200)
+      expect(JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text()).treeLanes).toBeUndefined()
+      // the intent existence check on the merged value (the CLI's own rule)
+      const unknown = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { intent: "nope" } })
+      expect(unknown.status).toBe(409)
+      expect(String(unknown.body.error)).toContain("must be a loaded intent pack")
+      expect(String(unknown.body.error)).toContain("mytest")
+      // bad values refuse with the rule
+      for (const [config, fragment] of [
+        [{ treeLanes: "sometimes" }, "config.treeLanes takes off|auto|on"],
+        [{ intent: "" }, "config.intent takes an intent pack name"],
+        [{ isolate: ["/abs"] }, "config.isolate:"],
+        [{ isolate: ["missing-repo"] }, "does not exist"],
+        [{ lanes: { treeBudgetMB: 512 } }, "no flag"],
+      ] as const) {
+        const answer = await h.call("POST", `/projects/${name}/amend`, h.config, { config: config as unknown as Record<string, unknown> })
+        expect(answer.status).toBe(400)
+        expect(String(answer.body.error)).toContain(fragment)
+      }
+      // isolate over the init operation: a real nested repository, frozen
+      // with the per-path rule the CLI's flag applies
+      const nested = await gitBlank("auto-ops-nested-")
+      await Bun.write(join(nested, "widget.txt"), "the nested deliverable\n")
+      const nestedGit = gitOf(nested)
+      await nestedGit("add", "-A")
+      await nestedGit("commit", "-qm", "the nested repository")
+      const target = await phasedProject("auto-ops-isolate-", "am")
+      await rm(join(target, "docs"), { recursive: true, force: true })
+      const targetGit = gitOf(target)
+      await targetGit("add", "-A")
+      await targetGit("commit", "-qm", "drop the round")
+      // move the nested repository in (git init'ed, .git included)
+      const { rename } = await import("node:fs/promises")
+      await rename(nested, join(target, "pkg"))
+      await targetGit("add", "-A")
+      await targetGit("commit", "-qm", "the nested repository lands")
+      const targetName = h.register(target)
+      const isolated = await h.call("POST", `/projects/${targetName}/init`, h.config, { config: { phases: "am", isolate: ["pkg"] }, confirm: true, cleanTree: true })
+      expect(isolated.status).toBe(200)
+      expect(JSON.parse(await Bun.file(join(target, CONFIG_FILE)).text()).isolate).toEqual(["pkg"])
+      // an empty list drops the key (the amend dropper)
+      expect((await h.call("POST", `/projects/${targetName}/amend`, h.config, { config: { isolate: [] } })).status).toBe(200)
+      expect(JSON.parse(await Bun.file(join(target, CONFIG_FILE)).text()).isolate).toBeUndefined()
+      await rm(target, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    })
+  })
+
+  // The 0135 info class through the API (plans/0160 D3): informational notes
+  // are the recorded state, never drift — the dryrun answers the success
+  // shape (the CLI's exit 0), and an apply with nothing fixable claims no
+  // repair.
+  test("fix: informational notes never gate — the dryrun is the success shape, the apply claims no repair", async () => {
+    await withOps(async (h) => {
+      const dir = await phasedProject("auto-ops-info-", "am")
+      const name = h.register(dir)
+      // A released roadmap whose R-01 line establishes a phases value that
+      // diverges from the config key: the supersession note (info) is then
+      // the layer's only finding.
+      await Bun.write(
+        join(dir, "docs", "analysis.md"),
+        ["# Project analysis", "", "## Analysis", "", "- one widget.", "", "## Goals", "", "- migrate it.", "", "## Project brief", "", "- goal: migrated.", "", "## Roadmap", "", "- R-01 adm — migrate the widget", "", "Clarified: yes", ""].join("\n"),
+      )
+      const git = gitOf(dir)
+      await git("add", "-A")
+      await git("commit", "-qm", "the released roadmap diverges from the config key")
+      const dry = await h.call("POST", `/projects/${name}/fix`, h.config, { dryrun: true })
+      expect(dry.status).toBe(200)
+      expect(dry.body.code).toBe(0)
+      expect(has(dry.body, "config-layer notes")).toBe(true)
+      expect(has(dry.body, "nothing to repair")).toBe(true)
+      expect(((dry.body.findings as { class: string }[]) ?? []).every((finding) => finding.class === "info")).toBe(true)
+      // the apply: no fixable finding, so no gate is asked and no repair
+      // claimed — the honest result over an unchanged file
+      const applied = await h.call("POST", `/projects/${name}/fix`, h.config, {})
+      expect(applied.status).toBe(200)
+      expect(has(applied.body, "\u2713 nothing to fix: the note(s) above are informational")).toBe(true)
+      expect(has(applied.body, "repaired")).toBe(false)
+      expect(JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text()).phases).toBe("am")
+      await rm(dir, { recursive: true, force: true })
+    })
+  })
+
+  // The transfer operation (the plans/0101 absorb): the advance command as a
+  // spawned run — the whole state resolution inside the core's runTransfer
+  // (no prelude seam to split), the run's own exit vocabulary mapping the
+  // outcome. The project-start flow here is the headless phased start the
+  // plan refusal unblocks: the analysis stub, the person's release, R-01's
+  // establishment at the round-start gate.
+  test("the transfer operation — the request shape, m mode's refusal, the nothing-to-advance stop, and the headless phased start through the analysis release", async () => {
+    await withOps(async (h) => {
+      // The person's analysis fill (the release-ready document): every
+      // section carrying real content and one parsing roadmap line — the
+      // release gate's own grammar (comments never count as content).
+      const releasedAnalysis = [
+        "# Project analysis",
+        "",
+        "## Analysis",
+        "",
+        "- one widget to migrate; the tree is small and self-contained.",
+        "",
+        "## Goals",
+        "",
+        "- migrate the widget to the new stack.",
+        "",
+        "## Project brief",
+        "",
+        "- goal: the widget migrated; the deliverable stands alone.",
+        "",
+        "## Roadmap",
+        "",
+        "- R-01 am — migrate the widget",
+        "",
+        "Clarified: yes",
+        "",
+      ].join("\n")
+      // The field vocabulary first (no spawn): resynthesize is the one
+      // field, everything else state-resolved.
+      const dir = await phasedProject("auto-ops-xfer-", "am")
+      const name = h.register(dir)
+      for (const [body, fragment] of [
+        [{ bogus: 1 }, "unknown transfer field"],
+        [{ resynthesize: "yes" }, "resynthesize takes true|false"],
+      ] as const) {
+        const answer = await h.call("POST", `/projects/${name}/transfer`, h.control, body)
+        expect(answer.status).toBe(400)
+        expect(String(answer.body.error)).toContain(fragment)
+      }
+      // an unconfigured directory has nothing to advance
+      const blank = await gitBlank("auto-ops-xferblank-")
+      const blankName = h.register(blank)
+      const nothing = await h.call("POST", `/projects/${blankName}/transfer`, h.control)
+      expect(nothing.status).toBe(409)
+      expect(String(nothing.body.error)).toContain("nothing to transfer")
+      // m mode: the advance refuses — the spawned run ends failed/1 with the
+      // core's own line (no session: the refusal precedes everything)
+      const manual = await fixtureProject("auto-ops-xferm-", {})
+      const manualName = h.register(manual)
+      const mStarted = await h.call("POST", `/projects/${manualName}/transfer`, h.control)
+      expect(mStarted.status).toBe(202)
+      expect(String(mStarted.body.id)).toMatch(/^run-/)
+      expect(has(mStarted.body, "transfer started as run"))
+      expect(String(mStarted.body.interactive)).toBe(`/runs/${mStarted.body.id}/interactive`)
+      const mRun = await untilRunSettles(h, String(mStarted.body.id))
+      expect(mRun.state, mRun.tail).toBe("failed")
+      expect(mRun.code).toBe(1)
+      expect(mRun.tail).toContain("transfer applies to phased projects")
+      // the fixture's established round with an empty task index: the
+      // advance CONSTRUCTS the phase's formulation todo and stops at the
+      // review seam — the exit-0 shape between construction and dispatch
+      // (no session: the construction is the driver's own; the texts name
+      // this shell's bin)
+      const pending = await h.call("POST", `/projects/${name}/transfer`, h.control)
+      expect(pending.status).toBe(202)
+      const pendingRun = await untilRunSettles(h, String(pending.body.id))
+      expect(pendingRun.state, pendingRun.tail).toBe("completed")
+      expect(pendingRun.code).toBe(0)
+      expect(pendingRun.tail).toContain("formulation task T-001 constructed")
+      expect(pendingRun.tail).toContain("review stop")
+      expect(pendingRun.tail).toContain("dispatch it with opencode-auto-server plan")
+      // the headless phased start: drop the round, transfer opens the
+      // analysis (run 0, the stub written uncommitted for the person)
+      const start = await phasedProject("auto-ops-xferstart-", "am")
+      await rm(join(start, "docs"), { recursive: true, force: true })
+      await gitOf(start)("add", "-A")
+      await gitOf(start)("commit", "-qm", "drop the round")
+      const startName = h.register(start)
+      const opened = await h.call("POST", `/projects/${startName}/transfer`, h.control)
+      expect(opened.status).toBe(202)
+      const openedRun = await untilRunSettles(h, String(opened.body.id))
+      expect(openedRun.state, openedRun.tail).toBe("completed")
+      expect(openedRun.code).toBe(0)
+      expect(openedRun.tail).toContain("the project analysis is open: docs/analysis.md written")
+      // the release teaching names the manual path (the daemon hosts no
+      // clarify command — the documented CLI-side surface)
+      expect(openedRun.tail).toContain("add the line and commit yourself")
+      expect(await Bun.file(join(start, "docs", "analysis.md")).exists()).toBe(true)
+      // the person fills and releases (their document, their commit)
+      await Bun.write(join(start, "docs", "analysis.md"), releasedAnalysis)
+      const git = gitOf(start)
+      await git("add", "-A")
+      await git("commit", "-qm", "the person releases the analysis")
+      const established = await h.call("POST", `/projects/${startName}/transfer`, h.control)
+      expect(established.status).toBe(202)
+      const establishedRun = await untilRunSettles(h, String(established.body.id))
+      expect(establishedRun.state, establishedRun.tail).toBe("completed")
+      expect(establishedRun.code).toBe(0)
+      expect(establishedRun.tail).toContain("\u2713 round R-01 established: P01-analysis, P02-implement")
+      expect(establishedRun.tail).toContain("round-start gate")
+      expect(await Bun.file(join(start, "docs", "R-01", "phases.md")).exists()).toBe(true)
+      // the approved brief proposal installed verbatim (the analysis flow
+      // owns the brief — init never writes one)
+      expect(await Bun.file(join(start, ".opencode", "auto", "brief.md")).text()).toContain("the widget migrated")
+      for (const d of [dir, manual, blank, start]) await rm(d, { recursive: true, force: true })
+    })
+  }, 240_000)
+
   test("models: read-only, no lock, the table's own exit vocabulary; the probe is the POST route (P4b)", async () => {
     await withOps(async (h) => {
       const dir = await fixtureProject("auto-ops-models-", {})
@@ -664,9 +917,9 @@ describe("the lifecycle operations (P1d)", () => {
     await withOps(async (h) => {
       const dir = await fixtureProject("auto-ops-locked-", {})
       // complete the config layer the way init does (the ignore set's local-only
-      // entries included), so the drift gate is clean
+      // entries included), so the drift gate is clean; no brief — init writes
+      // none (plans/0133), and a missing brief is no finding
       await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-      await Bun.write(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
       await ensurePointer(dir, { testByDriver: false })
       await ensureInitGitignore(dir)
       const git = gitOf(dir)
@@ -715,9 +968,9 @@ describe("the lifecycle operations (P1d)", () => {
       let dir: string | undefined
       try {
         dir = await fixtureProject("auto-ops-liverun-", {})
-        // complete the config layer the way init does, so the drift gate is clean
+        // complete the config layer the way init does, so the drift gate is
+        // clean; no brief — init writes none (plans/0133)
         await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-        await Bun.write(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
         await ensurePointer(dir, { testByDriver: false })
         await ensureInitGitignore(dir)
         const git = gitOf(dir)

@@ -107,8 +107,10 @@ async function untilBridgeConnected(daemon: DaemonHandle, token: string, timeout
   for (;;) {
     const probe = wsClient(clientUrl(daemon, token))
     try {
-      await probe.opened
-      const hello = probe.frames[0]!
+      // The hello arrives as its own message event after the client-side
+      // handshake resolves — await the frame itself, never frames[0] at
+      // `opened` (the ws-protocol suite's same fix).
+      const hello = await probe.nextOf((frame) => frame.type === "hello", "the probe's hello", timeoutMs)
       if (hello.type === "hello" && hello.worker) return
     } finally {
       await probe.close().catch(() => {})

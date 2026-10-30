@@ -49,8 +49,9 @@ import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
+import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parsePlan, parseSwitches, parseTransport, type PlanPayload, type RunOptions, type TransportPayload } from "./request"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parsePlan, parseSwitches, parseTransfer, parseTransport, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -80,6 +81,15 @@ import { wsInteractive } from "./worker-interactive"
 //              the planning input persisted by the planning step). The
 //              daemon already served planPrelude's no-agent routes; the
 //              worker never re-runs the prelude.
+//   transfer   the transfer payload (the plans/0101 absorb, daemon- or
+//              CLI-written): the run performs the CLI `transfer` command's
+//              work — runTransfer, one person-bracketed advance resolved by
+//              state (the project start, the phase boundary, the round
+//              close/open), the loop under stopBefore "formulate" inside it
+//              (humanQuestions armed the same way). Mutually exclusive with
+//              `plan`; the run-side widths repair/stopAfter/boundary ride
+//              neither payload (the core carries no budget under a stop
+//              condition).
 // The vocabulary itself — the option keys, the frozen-key table, the switch
 // registry — lives in src/request.ts, the one module the daemon (P1c) and
 // this entry share: the daemon pre-validates a POST /runs body with it, so
@@ -92,6 +102,7 @@ export type RunRequest = {
   switches?: Record<string, string>
   transport?: TransportPayload
   plan?: PlanPayload
+  transfer?: TransferPayload
 }
 
 // Usage refusal: exit 1 with the message on stderr (the CLI convention —
@@ -129,7 +140,7 @@ function applySwitches(switches: Record<string, string>): void {
 // changes — parse/validate/run stay put.
 export async function runWorker(argv: string[]): Promise<void> {
   if (argv.length !== 1 || !argv[0]) {
-    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … } })`)
+    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … }, "transfer": { … } })`)
   }
   let document: unknown
   try {
@@ -138,11 +149,11 @@ export async function runWorker(argv: string[]): Promise<void> {
     refuse(`the run request is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … } }")
+    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … }, \"transfer\"?: { … } }")
   }
   const request = document as Record<string, unknown>
   for (const key of Object.keys(request)) {
-    if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan") continue
+    if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan" || key === "transfer") continue
     // A dedicated config carrier gets the same answer as a config key in
     // options: there is no per-run config surface, by constitution.
     if (key === "config") {
@@ -150,7 +161,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     }
     if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
-    refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport and plan)`)
+    refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport, plan and transfer)`)
   }
   if (typeof request.directory !== "string" || !request.directory.trim()) {
     refuse(`the run request requires "directory": the target directory of the run (resolved against the worker's working directory)`)
@@ -163,13 +174,30 @@ export async function runWorker(argv: string[]): Promise<void> {
   let switches: Record<string, string>
   let transport: TransportPayload | undefined
   let plan: PlanPayload | undefined
+  let transfer: TransferPayload | undefined
   try {
     options = parseOptions(request.options)
     switches = parseSwitches(request.switches)
     transport = "transport" in request ? parseTransport(request.transport) : undefined
     plan = "plan" in request ? parsePlan(request.plan) : undefined
+    transfer = "transfer" in request ? parseTransfer(request.transfer) : undefined
   } catch (error) {
     refuseRequest(error)
+  }
+  // The two command payloads are exclusive (one process, one command shape),
+  // and the run-side widths ride neither: the core carries no repair budget
+  // and no stop-after under a stop condition (plan and transfer), and the
+  // boundary shape is plain run's alone — the CLI refuses the same pairs on
+  // its flags.
+  if (plan !== undefined && transfer !== undefined) {
+    refuse(`the plan and transfer payloads are mutually exclusive: a worker performs one command's work — plan dispatches the planning session (stopBefore: execute), transfer advances one person-bracketed boundary (stopBefore: formulate)`)
+  }
+  if ((plan !== undefined || transfer !== undefined) && (options.repair > 0 || options.stopAfter !== undefined || options.boundary === "flow")) {
+    const field = options.repair > 0 ? "repair" : options.stopAfter !== undefined ? "stopAfter" : "boundary"
+    refuse(
+      `options.${field} is a plain run's option; ${plan !== undefined ? "a planning run (the plan payload)" : "a transfer run (the transfer payload)"} does not accept it — ` +
+        `the stop conditions carry no budget and no boundary shape (send it on a run request with neither payload)`,
+    )
   }
   applySwitches(switches)
 
@@ -205,6 +233,16 @@ export async function runWorker(argv: string[]): Promise<void> {
   if (plan) {
     log(
       `⏸ planning run: the run stops once a planning step has succeeded (stopBefore: execute; humanQuestions armed${plan.input ? ", planning from the request's input" : ""}${plan.append ? ", appending to the current phase" : ""}) — its questions wait for the human over the interactive transport with no timeout`,
+    )
+  }
+  // The transfer payload's own banner (the plans/0101 absorb): one advance,
+  // resolved by state, stopping at the review seam inside the construction —
+  // never dispatching a task session. humanQuestions is armed by the
+  // stopBefore the core's runTransfer threads, exactly the plan payload's
+  // shape.
+  if (transfer) {
+    log(
+      `⇄ transfer run: one person-bracketed advance resolved by state (the project start, the phase boundary, the round close/open), stopping at the review seam (stopBefore: formulate${transfer.resynthesize ? "; resynthesize bypasses the standing plan task's digest-keep" : ""}) — its questions wait for the human over the interactive transport with no timeout`,
     )
   }
 
@@ -254,26 +292,42 @@ export async function runWorker(argv: string[]): Promise<void> {
   // The run itself, under its own lock (acquire is runAll's — a refusal is
   // runAll's refusal, holder lines and exit 1, never worked around here),
   // and the run's exit code propagates verbatim: 0 all complete (or, under
-  // the plan payload, a planning step succeeded), 1 usage/environment, 2
-  // blocked for a human, 3 a graceful /exit pause with progress persisted
-  // (reachable over the daemon's control channel when the transport is
-  // attached, 130 force-terminated).
-  const code = await runAll(directory, runOptions(config, mode, options, interactive, plan))
+  // the plan payload, a planning step succeeded; under the transfer payload,
+  // a review, round-open or roadmap-exhausted stop), 1 usage/environment, 2
+  // blocked for a human (a gate held, nothing to advance), 3 a graceful
+  // /exit pause with progress persisted (reachable over the daemon's control
+  // channel when the transport is attached, 130 force-terminated). The
+  // transfer payload swaps runAll for runTransfer — the core's own entry,
+  // which takes the same lock itself ("transfer", re-entered by the runAll
+  // the advance delegates to) and returns the advance's own exit code.
+  const code = transfer
+    ? await runTransfer(directory, { ...runOptions(config, mode, options, interactive, plan), ...(transfer.resynthesize ? { resynthesize: true } : {}) })
+    : await runAll(directory, runOptions(config, mode, options, interactive, plan))
   process.exit(code)
 }
 
 // The runAll options, the CLI's runOptions for this request: the config
 // init froze (loaded strictly above) plus the request's per-run options.
 // Config values never come from the request — that is the frozen-flag
-// refusal's whole point. The interactive channel is the transport's
-// implementation when the daemon attached one (the P3a seam's injected
-// shape); the request's options never carry it (parseOptions refuses
-// options.interactive — the terminal sideband has no terminal here). The
-// plan payload maps onto the CLI `plan` command's three additions:
-// stopBefore "execute" (which arms humanQuestions inside the core,
-// auto-core src/opts.ts:346), the planning input (persisted by the
-// planning step) and the append flag.
-function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined, plan: PlanPayload | undefined): RunAllOpts {
+// refusal's whole point. Every config key the CLI's runOptions threads is
+// threaded here too (the plans/0100-era keys intent/treeLanes/lanes/isolate
+// included — the CLI's threading is the reference this mirrors; a dropped
+// key is a silently different run: another intent pack's prompts, another
+// execution tier, a round without its branch isolation). The interactive
+// channel is the transport's implementation when the daemon attached one
+// (the P3a seam's injected shape); the request's options never carry it
+// (parseOptions refuses options.interactive — the terminal sideband has no
+// terminal here). The plan payload maps onto the CLI `plan` command's three
+// additions: stopBefore "execute" (which arms humanQuestions inside the
+// core, auto-core src/opts.ts:346), the planning input (persisted by the
+// planning step) and the append flag. The run-side widths repair/stopAfter/
+// boundary ride plain runs only (the CLI's own shapes: repair always — 0 is
+// the core's absent, stopAfter when given, boundary only as "flow", stop
+// being the reading of absent).
+// Exported for the worker test's direct assertions (the pure mapping, never
+// the run): this module stays a process entry — importing it is fine, the
+// entry function is the only thing that must not be called in-process.
+export function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined, plan: PlanPayload | undefined): RunAllOpts {
   return {
     agent: config.agent,
     server: options.server,
@@ -286,6 +340,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, 
     idleMs: config.idleTime * 60_000,
     maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
     mode,
+    intent: config.intent,
     phases: config.phases,
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
@@ -294,10 +349,16 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, 
     acceptanceGate: config.acceptanceGate,
     build: config.build,
     parallel: config.parallel,
+    treeLanes: config.treeLanes,
+    lanes: config.lanes,
     scanExempt: config.scanExempt,
+    isolate: config.isolate,
     newSession: options.newSession,
     dryrun: options.dryrun,
     maxSessions: options.maxSessions,
+    repair: options.repair,
+    ...(options.stopAfter !== undefined ? { stopAfter: options.stopAfter } : {}),
+    ...(options.boundary === "flow" ? { boundary: "flow" as const } : {}),
     ...(interactive ? { interactive } : {}),
     ...(plan ? { stopBefore: "execute" as const, ...(plan.input !== undefined ? { planInput: { text: plan.input } } : {}), append: plan.append } : {}),
   }
