@@ -68,7 +68,21 @@ exactly this order — the same writes and commits the driver itself makes (comp
 2. The completion writes: rename `<phase dir>/todo.md` → `done.md`; tick the phase's line in the round's
    phase index `docs/R-NN/phases.md` (`- [ ] <phase id>` → `- [x] <phase id>`) — when the index exists; the
    no-phase mode has none, skip the tick.
-3. The transition commit: `git add -A` + one `git commit` per repository that changed (nested repositories
+3. The approved brief — only when this phase's type declares the human gate: the phase type document
+   `.opencode/auto/phases/<type>.md` carries `Gate: human` (the master control launched you only past
+   the gate, the person's release in the survey). Read `<phase dir>/survey.md`; when its content carries
+   a `## Project brief` section, that section's body — the section's own text, its document punctuation
+   (the terminator line) never part of it — installs verbatim as the entire content of
+   `.opencode/auto/brief.md`, the newest approval replacing every earlier one. A brief already equal
+   writes nothing; a survey without the section installs nothing. When the text changed, its own commit,
+   message:
+
+        PLAN brief install the approved project brief (from <phase dir>/survey.md)
+
+        Auto-Task: PLAN
+        Auto-Stage: brief-install
+
+4. The transition commit: `git add -A` + one `git commit` per repository that changed (nested repositories
    first, then the enclosing one), message:
 
         PLAN transition <phase id> <phase name> → <next target>
@@ -81,8 +95,9 @@ tasks.md, nothing under `.auto/`.
 
 ## Constraints
 
-1. The only file you author is `<phase dir>/handover.md`; the close-out's writes are exactly the rename and
-   the index tick above — every other file, and every task-level state file, is outside your write scope.
+1. The only file you author is `<phase dir>/handover.md`; the close-out's writes are exactly the rename,
+   the index tick and the approved-brief install above — every other file, and every task-level state
+   file, is outside your write scope.
 2. You write no implementation code and fix nothing: a gap you notice belongs in the handover document (an
    OPEN decision or a pitfall), never in a repair.
 3. Survive the harness as the task session does: run any long command as a background process writing to a

@@ -432,6 +432,89 @@ describe("manual-driver prompt ratchet", () => {
     }
   })
 
+  test("the phase-close holds: the regression lanes and the sealed reference wall (plans/0098; 0121; 0132)", () => {
+    // 0098's driver mechanism ("the suite can adopt the two-level
+    // vocabulary when a person-driven round needs it") and 0132's wall ("a
+    // suite copy waits for its consumer") were both deferred until a real
+    // manual consumer arrived — the cleanroom rounds are it, and the suite
+    // now carries both halves at the phase close, before the handover child
+    // runs. The regression hold: every `Cost: regression` row of the pack's
+    // `### test-lanes` table green at exactly the tree about to close (the
+    // receipt's `Heads:` line against the HEADs read now; a stale lane runs
+    // at the close, one at a time, receipted under docs/R-NN/regression/
+    // and landed as the driver's PLAN regression commit; red holds the
+    // phase, the receipt and its log the person's input) — 0121's
+    // divergence lane rides this generic rule, its driver-side moments the
+    // phase closes. The wall: a `Wall:` field on a phase type document
+    // declares it; post-wall the record (the `Auto-Stage: wall` commit) has
+    // its `Wall-door:` doors absent and its `Wall-sealed:` paths frozen (a
+    // driver commit touching them a violation, a person commit the one
+    // recorded exception), the lane hold the close's admission; pre-wall at
+    // or after the sealing phase the wall is open and NEVER closed by the
+    // suite — the person's advance seals it (the driver's transfer), the
+    // open wall named in the report. The task side holds the split: a
+    // regression row is never a task session's lane.
+    const run = text("run.md")
+    const task = text("run-task.md")
+    for (const literal of [
+      "`Cost: regression`",
+      "`.opencode/auto/intents/<intent>.md`",
+      "`docs/R-NN/regression/`",
+      "`Heads:`",
+      "`Verdict: green`",
+      "`Verdict: red`",
+      "PLAN regression R-NN",
+      "Auto-Stage: regression",
+      "`Wall:`",
+      "`Auto-Stage: wall`",
+      "`Wall-door: <name> -> <target>`",
+      "`Wall-sealed:`",
+      "green-at-the-current-tree",
+    ]) {
+      expect(run, "run.md").toContain(literal)
+    }
+    // The wall is never closed by the suite — the person's advance act.
+    expect(run, "run.md").toContain("this suite never closes it")
+    expect(run, "run.md").toContain("the driver's `transfer`")
+    // The task/master split: regression rows are the driver's alone.
+    expect(task, "run-task.md").toContain("A `Cost: regression` row is never one of your lanes")
+    // The P16 line: the holds speak the field/lane grammar alone, never an
+    // intent family's vocabulary.
+    expect(run, "run.md").not.toContain("cleanroom")
+    expect(task, "run-task.md").not.toContain("cleanroom")
+    expect(run, "run.md").not.toContain("divergence")
+  })
+
+  test("the approved brief installs at the handover close-out (plans/0081 D15.2)", () => {
+    // The suite once declined the release's other half ("this suite does
+    // not replicate that write") — with the survey's brief now the carrier
+    // of the settled constants every later phase plans from (the cleanroom
+    // methodology rides it), a manual run that never installed it would
+    // plan each later phase against the stale seed. The handover child —
+    // the driver's completion role — installs the released survey's
+    // `## Project brief` section verbatim (an equal brief writes nothing; a
+    // survey without the section installs nothing) as its own commit
+    // between the completion writes and the transition, the driver's own
+    // installApprovedBrief grammar, and the master control's outcome check
+    // accepts the third commit.
+    const handover = text("run-handover.md")
+    for (const literal of [
+      "`Gate: human`",
+      "`## Project brief`",
+      "`.opencode/auto/brief.md`",
+      "PLAN brief install the approved project brief (from <phase dir>/survey.md)",
+      "Auto-Stage: brief-install",
+      "installs nothing",
+    ]) {
+      expect(handover, "run-handover.md").toContain(literal)
+    }
+    const run = text("run.md")
+    expect(run, "run.md").toContain("the approved brief's install")
+    expect(run, "run.md").toContain("PLAN brief install the approved project brief")
+    // The retired non-replication stance must not return.
+    expect(run, "run.md").not.toContain("this suite does not replicate that write")
+  })
+
   test("the gap channel is gaps.md; the handover channel is the driver's own handoff.md", () => {
     // The verification gap list lives in `docs/T-NNN/gaps.md` — the driver's
     // own verification loop uses the same path since plans/0083 (D3), and the

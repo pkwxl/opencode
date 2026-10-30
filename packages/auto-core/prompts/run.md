@@ -204,7 +204,7 @@ State lives on disk, never in the conversation: re-read the index and the state 
 iteration.
 
 0. Confirm the current phase is planned: its directory holds a `tasks.md`. Without one the phase is
-   established but unplanned → run the planning child on it (the Phase transfer section's step 5), then
+   established but unplanned → run the planning child on it (the Phase transfer section's step 6), then
    re-read the index here.
 1. Take the first ready task `T-NNN` in index order (rules above). Nothing ready → either every task of the
    phase is done — go to the Phase transfer section — or tasks remain pending but none is ready, an
@@ -449,7 +449,9 @@ The loop under `single`, the deltas:
   instead, and name the loss honestly there: the verifications ran in the session that did the work, no
   fresh pair of eyes among them; the person's review is the independent check this mode does not have,
   and the default phase-boundary stop is where it lands.
-- The Phase transfer's children become your own roles the same way: the handover document written under
+- The Phase transfer's children become your own roles the same way: the phase-close holds (step 3) are
+  the master control's own checks in every mode — a stale lane runs as your background process, the wall
+  record read through your own git — made before the handover role begins; the handover document written under
   run-handover.md's four sections, then its close-out commits; an unplanned phase formulated through the
   PLAN formulate construction and carried out under run-plan.md's rules — its share and its
   self-verified close-out through the same task flow above.
@@ -474,7 +476,7 @@ State lives on disk as everywhere else: re-read `phases.md` and the phase direct
 no-phase mode (`phases: "m"`) the round is this one implicit phase: the same handover and close-out, no
 `phases.md` tick (there is no index), `<next target>` is `flow complete`, and the round is done. The
 boundary is a stop: this section ends with the phase closed and landed, and the session stops there (the
-step 4 report) unless the hand-over line named `phases: all` — the phrase that carries the loop on to the
+step 5 report) unless the hand-over line named `phases: all` — the phrase that carries the loop on to the
 next phase and every phase after it without the stops.
 
 1. Confirm the phase complete: every line of its `tasks.md` ticked and every task's `done.md` present (the
@@ -483,28 +485,75 @@ next phase and every phase after it without the stops.
    never a silent pass (stop and report) — and it holds for the person only when it records at least one
    `Fork:` line: then it holds until the person's whole-line `Clarified: yes` (every fork line answered or
    taking its `Recommend:` default; a held fork without its `Recommend:` clause is the same problem).
-   Held → stop and report: the person's clarification releases the phase (the driver's `transfer` installs
-   the approved brief — this suite does not replicate that write). Zero `Fork:` lines — the `Forks: none`
+   Held → stop and report: the person's clarification releases the phase — their whole-line
+   `Clarified: yes` written by hand or through the driver's `clarify` command — and the release's other
+   half, the approved brief's install, rides the handover child's close-out below (the driver's own
+   install shape, step 4). Zero `Fork:` lines — the `Forks: none`
    small posture — completes the phase like an ungated one: no `Clarified:` line is needed, hand over
    normally. Other phase types pass.
-3. Launch the handover child session: `run-handover.md` with `<phase id>`, `<phase name>`, `<phase dir>` and
+3. The phase-close holds — the driver-side checks every phase close passes before its handover child
+   runs (the driver's own handover order: the regression hold, then the wall boundary, then the
+   close-out). A hold leaves the phase un-handed — nothing ticked, nothing renamed, the work stays
+   landed — and a re-run re-derives it from the receipts and the git record on disk:
+   - The regression lanes. The intent pack's `### test-lanes` table (`.opencode/auto/intents/<intent>.md`,
+     the config's `intent` key naming it; no table, or no row of cost `Cost: regression`, → this hold is
+     empty) declares the round's regression-cost lanes — never a task session's lanes (run-task.md's lane
+     plans exclude them); they are the driver's alone, and the phase close is their moment. For each row,
+     its newest green receipt under `docs/R-NN/regression/` (the round's receipts home) must vouch for
+     exactly the tree about to close: the receipt's `Heads:` line — this repository as `.=<sha>`, each
+     nested repository as `<path>=<sha>` — equal to the HEADs you read now. A lane without such a receipt
+     runs now, one lane at a time: launch the row's command as a background process writing a log under
+     `/tmp/opencode/` (append the exit code), poll in short sleep steps reading `date`, take the verdict
+     from the log tail, and write the receipt `docs/R-NN/regression/<seq>-<lane id>.md` (`<seq>` one past
+     the round's highest receipt number) — the `Lane:` line, `Heads:`, `Start:`, `End:`, `Verdict: green`
+     or `Verdict: red`, `Log:` the log path, and for a red lane the bounded failure region from the log
+     tail, the terminator its last body line — then land the receipts as their own commit (the same add +
+     commit pass, the receipts alone staged), message:
+
+        PLAN regression R-NN <receipt file names>
+
+        Auto-Task: PLAN
+        Auto-Stage: regression
+
+     A green receipt at the current tree passes the lane; a red lane holds the phase — stop and report:
+     the receipt and its log are the person's input, the remediation theirs to direct (rework the
+     findings, commit, hand this file over again — the hold re-checks at the close).
+   - The sealed reference wall. A phase type document (`.opencode/auto/phases/<type>.md`) carrying a
+     `Wall:` field declares the wall; no phase type carries the field → this hold never runs. Find the
+     wall record — the newest commit whose message carries the `Auto-Stage: wall` trailer (`git log
+     --grep`, newest first). With a record (the wall is closed): every `Wall-door: <name> -> <target>`
+     line of the record names a door that must be absent on disk — a door present again is a reopen,
+     stop and report; the record's `Wall-sealed:` paths are frozen — `git log <wall commit>..HEAD --
+     <sealed paths>` must show no commit carrying an `Auto-Stage:` trailer (a person's own commit is the
+     one recorded exception — name it in your report for review, never a block); and the lane hold above
+     is this close's admission, the same green-at-the-current-tree rule. Without a record (pre-wall):
+     when the closing phase sits at or after the sealing phase — the first `Wall:`-carrying phase of this
+     round's order at or before it, or a `Wall:`-carrying phase of any earlier round — the wall is open,
+     and this suite never closes it: the close is the person's advance act (the driver's `transfer` —
+     its three steps the admission scan over the regression lanes, the door removal with the wall commit
+     recording the resolved targets and the sealed channel, the transition — or the person's own hand).
+     Name the open wall in the report — the boundary Finish, or the run's Finish under `phases: all`: the
+     wall's later phases are built to run behind it, and it seals only by the person.
+4. Launch the handover child session: `run-handover.md` with `<phase id>`, `<phase name>`, `<phase dir>` and
    `<next target>` filled — the next phase's "<id> <name>" from the line after this one in `phases.md`, or
    `flow complete` when this is the round's last. Then check its outcome mechanically: `<phase
    dir>/handover.md` exists and holds the four section headings (`## Key decisions`, `## Constraints and
    pitfalls`, `## Required reading for the next phase`, `## Artifact index` — a grep, not a read);
    `<phase dir>/done.md` exists (no `todo.md`); the phase's `phases.md` line is ticked; HEAD advanced by
    exactly its two commits — `PLAN handover <phase id> <phase name>`, then `PLAN transition <phase id>
-   <phase name> → <next target>`; `git status --porcelain` lists nothing (this repository and every nested
+   <phase name> → <next target>` — or three when the approved brief installed (step 2's human gate, the
+   survey released: the install commit between them, `PLAN brief install the approved project brief
+   (from <phase dir>/survey.md)`); `git status --porcelain` lists nothing (this repository and every nested
    one). Anything missing → relaunch the handover child session once with the specific deficiency as
    feedback; still failing → stop and report.
-4. Stop at the phase boundary — the default: Finish, with the report naming the phase handed over (its
+5. Stop at the phase boundary — the default: Finish, with the report naming the phase handed over (its
    handover and transition commits) and the review it waits for — the phase's handover document, its OPEN
    decisions above all, and its task reports; when this was the round's last phase, say the round is
    complete and its close (the round report, the review) is the person's. The person continues by handing
    this file over again: the restart re-reads `phases.md`, takes the next unticked phase exactly as
-   step 5 does, and the loop's step 0 plans a phase whose directory holds no `tasks.md`. Nothing but the
+   step 6 does, and the loop's step 0 plans a phase whose directory holds no `tasks.md`. Nothing but the
    phrase below keeps this session going past the boundary.
-5. The next phase — only under `phases: all`: re-read `phases.md`. No uncompleted line remains → the round
+6. The next phase — only under `phases: all`: re-read `phases.md`. No uncompleted line remains → the round
    is complete: Finish — the round's close (the round report, the person's review) is not this suite's
    business. Otherwise, for the next unticked phase:
    - Its directory already holds a `tasks.md` → it was planned ahead: back to the loop's step 1 on it.
@@ -619,7 +668,8 @@ relaunching it (the Single-session runs section's restart rule).
   sanctioned writer of the state writes and the `units.json` record removal — none of it is yours.
 - You make no edits and no state writes of your own: everything on disk was written by child sessions; your
   writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
-  unified commit after a session) and the phase-plan commit (the Phase transfer section) — the task
+  unified commit after a session), the phase-close lane receipts with their commit (the Phase transfer
+  section's holds), and the phase-plan commit (the Phase transfer section) — the task
   close-out is the verification child's and the phase close-out the handover child's, not yours. (Under
   `mode: single` the same writes happen with you in every role: each write named a child's here is yours
   exactly while you hold that role — the role boundary and the grammar are the discipline, not a second
@@ -641,7 +691,8 @@ relaunching it (the Single-session runs section's restart rule).
 Report: every task executed with its commit subjects, each verification's verdict and fix rounds spent, the
 wrap-up verdicts, the phases handed over and planned (their transition and plan commits), and what the
 person should review (the reports, the commit list, the `AUTO-RESOLVE`/
-`AUTO-DECISION` markers; the verifications inspected the work but did not re-run the acceptance's executable
+`AUTO-DECISION` markers, an open reference wall the round leaves — the phase-close holds name it, the
+person's `transfer` seals it; the verifications inspected the work but did not re-run the acceptance's executable
 checks — a final test pass before accepting the phase is the person's call; when the round completed, its
 close — the round report, the review — remains the person's too). When you stopped at a phase boundary, say
 so and name both continuations — handing this file over again (the next phase is planned from the restart),

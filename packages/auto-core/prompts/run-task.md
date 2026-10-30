@@ -38,7 +38,9 @@ already did.
      own runner (the plan derives from the project's actual suites — nothing hardcoded), its log path
      under `/tmp/opencode/`, the verdict line its log carries, the code surfaces it exercises, and its cost
      class — the minutes-scale cheap lanes (lint, format, env canary) versus the one expensive anchor (a
-     full gate). Re-use, don't re-run: a lane already green in `docs/T-NNN/testhands/` whose surfaces no
+     full gate). A `Cost: regression` row is never one of your lanes: the regression-cost rows of the
+     pack's `### test-lanes` table are the driver's alone, run by the master control at a phase close —
+     your testplan holds the cheap and anchor rows alone. Re-use, don't re-run: a lane already green in `docs/T-NNN/testhands/` whose surfaces no
      later fix touched carries its verdict forward.
    - Cheap-first: launch the cheap lanes together, and launch an anchor only once they are green — an
      anchor started beside a cheap lane that vetoes it is a doomed long run, pure waste.
