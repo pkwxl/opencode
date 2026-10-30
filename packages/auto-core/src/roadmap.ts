@@ -26,12 +26,20 @@ import { resolvePhases } from "./phases/registry"
 // before releasing, and so does the driver).
 const ROADMAP_LINE = /^\s*[-*]\s*R-(\d+)\s+([a-z][a-z0-9,() -]*?)\s+(?:—|--)\s*(.+)$/
 
+// CRLF normalized once at entry (the phase-type file's precedent,
+// src/phases/custom.ts): `.` never matches a `\r`, so a CRLF line split on
+// `\n` would fail the line grammar without any near-miss to see. Exported so
+// the release gate's near-miss scan (analysis.ts) reads the same normalized
+// view the reader parses — one grammar, never two verdicts for the same
+// bytes (P13).
+export const normalizeNewlines = (text: string): string => text.replace(/\r\n/g, "\n")
+
 export type RoadmapRound = { round: number; phases: string; goal: string }
 
 // Every roadmap round line in the document, in order (whole-document scan).
 export function roadmapRounds(text: string): RoadmapRound[] {
   const rounds: RoadmapRound[] = []
-  for (const line of text.split("\n")) {
+  for (const line of normalizeNewlines(text).split("\n")) {
     const match = ROADMAP_LINE.exec(line)
     if (match) rounds.push({ round: Number(match[1]!), phases: match[2]!.replace(/\s+/g, ""), goal: match[3]!.trim() })
   }

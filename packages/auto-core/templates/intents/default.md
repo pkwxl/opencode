@@ -121,8 +121,9 @@ Constraints and environment facts (missing tools, quotas, layout):
 Priorities and the trade-offs that are the person's call:
 <which way to lean when scope, cost or risk pull apart>
 
-Corrections to provisionally-defaulted questions the last round's report flagged:
-<the person's answers to the needs-attention items of docs/R-NN/report-for-user.md>
+Corrections to provisionally-defaulted questions the last round recorded:
+<the person's answers to the round's AUTO-RESOLVE records — the task reports' "Proxy-answered
+questions" sections; `driver-helper` renders the standing list>
 
 What would convince you it is done:
 <the observable outcome that makes this step finished>

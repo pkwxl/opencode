@@ -69,6 +69,13 @@ describe("project brief (plans/0052 D9; the stub retired by plans/0081 D11)", ()
     // installed brief the field case.
     const last = ["# Survey", "", "## Project brief", "", "The constants.", "", "Clarified: yes", "", "<!-- auto: eof -->", ""].join("\n")
     expect(briefProposal(last)).toBe("The constants.")
+    // Plans/0158: comments strip ahead of the extraction — the round-brief
+    // extractor's discipline exactly, the two proposal channels one rule (an
+    // editorial comment inside the proposal installs without the comment).
+    const commented = ["# Survey", "", "## Project brief", "", "The constants.", "", "<!-- an editorial note, never installed -->", "", "<!-- auto: eof -->", ""].join("\n")
+    expect(briefProposal(commented)).toBe("The constants.")
+    const hinted = "# Survey\n\n## Project brief\n\n<!-- the stub's hint -->\n\n## Environment\n\ngap.\n"
+    expect(briefProposal(hinted)).toBeUndefined()
   })
 
   test("appendToSection: end of the section, before the next heading; heading added when absent", () => {

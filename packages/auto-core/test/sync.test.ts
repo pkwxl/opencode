@@ -85,6 +85,13 @@ describe("planSync / applySync: the stamped fast-forward (plans/0100 D4)", () =>
       const entry = plan.entries.find((item) => item.path === MODE_PATH)
       expect(entry).toMatchObject({ action: "edited" })
       expect(plan.writes.map((write) => write.path)).not.toContain(MODE_PATH)
+      // Plans/0158: a report-only plan over a stamped project is no write at
+      // all — the stamp re-renders byte-identically (edited paths keep their
+      // original entries, current paths re-derive the same ones), so the
+      // dryrun's exit gate counts nothing. The pre-0158 gate said
+      // "something would change" for exactly this shape.
+      expect(plan.stampText).toBeUndefined()
+      expect(syncWritesAnything(plan)).toBe(false)
       await applySync(dir, plan)
       expect(readFileSync(join(dir, MODE_PATH), "utf8")).toBe(edited)
       // The stamp's entry for the edited path is unchanged (the tool's bytes,
@@ -133,6 +140,10 @@ describe("planSync / applySync: the stamped fast-forward (plans/0100 D4)", () =>
       const entry = plan.entries.find((item) => item.path === ".opencode/auto/modes/sync-fixture.md")
       expect(entry).toMatchObject({ action: "retired" })
       expect(plan.writes.map((write) => write.path)).not.toContain(".opencode/auto/modes/sync-fixture.md")
+      // The managed set shrinks, so the sidecar rewrite is a real write even
+      // with no file write (plans/0158's byte-honest stampText keeps it).
+      expect(plan.stampText).toBeDefined()
+      expect(syncWritesAnything(plan)).toBe(true)
       await applySync(dir, plan)
       expect(readFileSync(join(dir, ".opencode/auto/modes/sync-fixture.md"), "utf8")).toContain("Fixture mode.")
       // Out of the managed set: the retirement stops being a finding.

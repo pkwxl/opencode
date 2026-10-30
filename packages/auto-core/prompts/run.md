@@ -503,7 +503,7 @@ next phase and every phase after it without the stops.
      exactly the tree about to close: the receipt's `Heads:` line — this repository as `.=<sha>`, each
      nested repository as `<path>=<sha>` — equal to the HEADs you read now. A lane without such a receipt
      runs now, one lane at a time: launch the row's command as a background process writing a log under
-     `/tmp/opencode/` (append the exit code), poll in short sleep steps reading `date`, take the verdict
+     the lane-log dir (/tmp/opencode/ by default) (append the exit code), poll in short sleep steps reading `date`, take the verdict
      from the log tail, and write the receipt `docs/R-NN/regression/<seq>-<lane id>.md` (`<seq>` one past
      the round's highest receipt number) — the `Lane:` line, `Heads:`, `Start:`, `End:`, `Verdict: green`
      or `Verdict: red`, `Log:` the log path, and for a red lane the bounded failure region from the log

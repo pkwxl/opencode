@@ -36,7 +36,8 @@ already did.
    never a child session per suite:
    - Plan the lanes first into `docs/T-NNN/testplan.md`: per suite its exact command through the project's
      own runner (the plan derives from the project's actual suites — nothing hardcoded), its log path
-     under `/tmp/opencode/`, the verdict line its log carries, the code surfaces it exercises, and its cost
+     under the lane-log dir (/tmp/opencode/ by default), the verdict line its log carries, the code surfaces it
+     exercises, and its cost
      class — the minutes-scale cheap lanes (lint, format, env canary) versus the one expensive anchor (a
      full gate). A `Cost: regression` row is never one of your lanes: the regression-cost rows of the
      pack's `### test-lanes` table are the driver's alone, run by the master control at a phase close —

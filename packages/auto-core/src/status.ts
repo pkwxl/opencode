@@ -91,7 +91,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
     )
   }
   const current = currentPhase(state)
-  lines.push(`R-${String(round).padStart(2, "0")} (${state.done.size}/${state.phases.length} phases done)`)
+  lines.push(`${roundDirName(round)} (${state.done.size}/${state.phases.length} phases done)`)
   for (const phase of state.phases) {
     // Closed before done, as in formatPhases: the two views agree.
     const mark = state.closed.has(phase.id) ? "⊘" : state.done.has(phase.id) ? "✓" : phase === current ? "▶" : " "

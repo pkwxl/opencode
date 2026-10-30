@@ -102,6 +102,36 @@ describe("protect", () => {
     expect(await Bun.file(path).text()).toBe("# AGENTS.md\n\nProject notes.\n")
   })
 
+  // Plans/0158 D2: the newline collapse inside ensurePointer is the legacy
+  // removal's own cleanup, never a normalization pass — the person's prose
+  // (deliberate wide spacing included) is never rewritten while the driver
+  // block is unchanged.
+  test("an unchanged block never rewrites the person's prose — deliberate 3+ blank lines stand (plans/0158 D2)", async () => {
+    expect((await ensurePointer(dir)).block).toBe("inserted")
+    const text = await Bun.file(path).text()
+    const withProse = `# AGENTS.md\n\nIntro paragraph.\n\n\n\nWide spacing the person chose.\n\n${text.slice(text.indexOf(AGENTS_BLOCK_START))}`
+    await Bun.write(path, withProse)
+    expect((await ensurePointer(dir)).block).toBe("unchanged")
+    // No rewrite at all: the pre-0158 unconditional collapse would have
+    // flattened the spacing while reporting "unchanged" — a write outside
+    // the driver's own block.
+    expect(await Bun.file(path).text()).toBe(withProse)
+  })
+
+  test("a legacy named block is removed and the spacing it opened collapsed — the removal's cleanup (plans/0158 D2)", async () => {
+    const legacy = "<!-- opencode-auto:rules:start -->\nold rules\n<!-- opencode-auto:rules:end -->\n"
+    await Bun.write(path, `# AGENTS.md\n\nIntro.\n\n\n\n${legacy}\n\n\n\nOutro.\n`)
+    const result = await ensurePointer(dir)
+    expect(result).toEqual({ block: "inserted", legacyRemoved: 1 })
+    const text = await Bun.file(path).text()
+    expect(text).not.toContain("opencode-auto:rules")
+    // The collapse is gated on the removal, and it cleans what the removal
+    // opened: no 3+ consecutive newlines remain.
+    expect(text).not.toMatch(/\n{3,}/)
+    expect(text).toContain("Intro.\n\n")
+    expect(text).toContain("Outro.")
+  })
+
   // plans/0132 D4: the sealed reference wall's declared set — the vetted
   // channel frozen at the wall commit, passed in by the run's preflight
   // (this module derives nothing from git) and extended mid-run by the

@@ -404,6 +404,11 @@ describe("rounds (M section + the per-round directory scheme): currentRound / ne
       expect(await currentRound(dir)).toBe(4)
       mkdirSync(join(dir, "docs/R-07"), { recursive: true })
       expect(await currentRound(dir)).toBe(7)
+      // A regular file named like a round is not a round (plans/0158's
+      // hygiene: the readdir carries withFileTypes for exactly this check,
+      // the sibling rule of legacyLayoutProblem's scan).
+      writeFileSync(join(dir, "docs/R-09"), "a stray export, not a round\n")
+      expect(await currentRound(dir)).toBe(7)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

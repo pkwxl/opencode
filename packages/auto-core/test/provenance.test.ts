@@ -188,6 +188,33 @@ describe("the three-state comparison (plans/0100 D2)", () => {
     }
   })
 
+  // Plans/0158: the notice's aggregate advice must match the divergence it
+  // names — a file the running bundle no longer ships is a divergence in
+  // either direction (a newer binary may have retired it deliberately), so
+  // it never draws the "upgrade the tool" teaching; a file the bundle still
+  // ships without the stamped sections keeps it.
+  test("the notice over a no-longer-shipped file names the divergence, never prescribes an upgrade (plans/0158)", async () => {
+    const { dir } = await materialized()
+    try {
+      const stamp = readStamp(dir)
+      const disk = diskOf(dir, stamp.files)
+      const dropped = await binaryFiles((files) => {
+        delete files["modes/faithful.md"]
+      })
+      const line = provenanceNoticeLine(compareProvenance(stamp, disk, bundleFileMap(parseIntentBundle(dropped))))!
+      expect(line).toContain("no longer shipped by the running bundle")
+      expect(line).toContain("sync")
+      expect(line).not.toContain("upgrade the tool")
+      const older = await binaryFiles((files) => {
+        files["intents/faithful.md"] = files["intents/faithful.md"]!.replace("### verify-plan-test\n\n", "")
+      })
+      const olderLine = provenanceNoticeLine(compareProvenance(stamp, diskOf(dir, stamp.files), bundleFileMap(parseIntentBundle(older))))!
+      expect(olderLine).toContain("a stale binary disables sections just as silently — upgrade the tool")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a touched on-disk file: person-edited, the person's own edit and the binary's offer both named", async () => {
     const { dir } = await materialized()
     try {

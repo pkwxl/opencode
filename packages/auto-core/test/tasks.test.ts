@@ -27,6 +27,7 @@ import {
   setForkBase,
   setLane,
   subtasks,
+  syncChecklistTicks,
   takenTaskIds,
   taskBody,
   taskStatePaths,
@@ -94,6 +95,24 @@ describe("loadPlan", () => {
     await Bun.write(join(dir, "docs/T-003/S01/todo.md"), "scope\n")
     await Bun.write(join(dir, "docs/T-003/S02/done.md"), "scope\n")
     expect((await readChecklist(dir, "T-003")).map((item) => item.done)).toEqual([false, true])
+  })
+
+  test("a CRLF subtasks.md yields the real checklist, never a silent empty one (plans/0158 D1)", async () => {
+    // A Windows-line-ended checklist: splitting on \n leaves a \r at each
+    // line's end that `.` never matches — the pre-0158 parser returned []
+    // and the pipeline silently routed the decomposed task down the
+    // whole-task path with no error anywhere.
+    const crlf = "- [x] routing\r\n- [ ] auth\r\n"
+    expect(subtasks(crlf).map((item) => item.done)).toEqual([true, false])
+    expect(subtasks(crlf).map((item) => item.text)).toEqual(["routing", "auth"])
+    // readChecklist composes over the S<nn> state files as with LF.
+    await seedUnits(dir, SAMPLE)
+    await Bun.write(join(dir, "docs/T-003/subtasks.md"), crlf)
+    await mkdir(join(dir, "docs/T-003/S02"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-003/S02/done.md"), "scope\n")
+    const items = await readChecklist(dir, "T-003")
+    expect(items.map((item) => item.text)).toEqual(["routing", "auth"])
+    expect(items.map((item) => item.done)).toEqual([true, true])
   })
 
   test("a missing index is an empty plan", async () => {
@@ -470,6 +489,30 @@ describe("driver completion", () => {
     await tickSubtask(dir, "T-003", 2)
     await tickSubtask(dir, "T-003", 2)
     expect(subtasks(await Bun.file(join(dir, "docs/T-003/subtasks.md")).text()).map((item) => item.done)).toEqual([true, true])
+  })
+
+  // Plans/0158: the lanes tick re-derivation (lanes.ts calls it at landing
+  // over adjacent ticks no textual merge survives) gets its first direct
+  // home — the fixture drives the parser, the state scan and the writer the
+  // lane landing composes.
+  test("syncChecklistTicks re-derives every tick from the S<nn> state files over a stale checklist", async () => {
+    await seedUnits(dir, SAMPLE)
+    await mkdir(join(dir, "docs/T-003/S01"), { recursive: true })
+    await mkdir(join(dir, "docs/T-003/S02"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-003/S01/done.md"), "scope\n")
+    await Bun.write(join(dir, "docs/T-003/S02/todo.md"), "scope\n")
+    // Two lanes ticked adjacently and landed without a textual merge: the
+    // checklist ticks are the stale view (both flipped), the state files
+    // the progress fact (S01 done, S02 open).
+    await Bun.write(join(dir, "docs/T-003/subtasks.md"), "- [ ] routing\n- [x] auth\n")
+    expect(await syncChecklistTicks(dir, "T-003")).toEqual(["S01", "S02"])
+    const text = await Bun.file(join(dir, "docs/T-003/subtasks.md")).text()
+    expect(text).toBe("- [x] routing\n- [ ] auth\n")
+    expect(subtasks(text).map((item) => item.done)).toEqual([true, false])
+    // Idempotent: a second pass over the re-derived truth changes nothing.
+    expect(await syncChecklistTicks(dir, "T-003")).toEqual([])
+    // A task without a checklist (or without state files) changes nothing.
+    expect(await syncChecklistTicks(dir, "T-001")).toEqual([])
   })
 })
 

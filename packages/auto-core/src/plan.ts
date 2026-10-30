@@ -18,7 +18,7 @@ import { join } from "node:path"
 import { mkdir } from "node:fs/promises"
 import { ensurePointer } from "./agents-block"
 import { ACCEPTED_MARK } from "./document/roles"
-import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases, type RoundPhasesResolution } from "./analysis"
+import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases, roundBriefNearMissNote, type RoundPhasesResolution } from "./analysis"
 import { releasedRoadmapRound } from "./roadmap"
 import { briefProposal, BRIEF_FILE, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
@@ -1177,6 +1177,12 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
       const done = await installRoundBrief(dir, round, ANALYSIS_DOC, proposal, commitTree)
       before = [...before, ...done.lines]
       proposalNext = `next: the round brief is your released proposal, installed and committed — plan the round with: ${bin} plan ${dir} -p <text> | --file <path>`
+    } else {
+      // A released near-miss heading naming this round (plans/0158 D3): the
+      // drafted-looking subsection never installs, so the round-start gate
+      // below is what the round opens on — the line names why.
+      const miss = await roundBriefNearMissNote(dir, round)
+      if (miss) before = [...before, miss]
     }
   }
   // m mode only (the phased establishment is transfer's, above): the

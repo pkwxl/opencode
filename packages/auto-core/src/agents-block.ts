@@ -260,8 +260,15 @@ export async function ensurePointer(
     legacyRemoved++
     return ""
   })
-  text = text.replace(/\n{3,}/g, "\n\n")
-  if (legacyRemoved) text = text.replace(/\n{2,}$/, "\n")
+  // The collapse is a removal cleanup, never a normalization pass: gated on
+  // the legacy blocks actually removed, the person's own prose is never
+  // touched when the driver block is unchanged (plans/0158 D2 — deliberate
+  // 3+ blank lines in the person's prose are theirs to keep, and rewriting
+  // them would be a write outside the driver's block reported "unchanged").
+  if (legacyRemoved) {
+    text = text.replace(/\n{3,}/g, "\n\n")
+    text = text.replace(/\n{2,}$/, "\n")
+  }
 
   const rendered = renderAgentsBlock(opts)
   const match = CANONICAL_BLOCK.exec(text)

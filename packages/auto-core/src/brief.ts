@@ -32,7 +32,7 @@
 import { join } from "node:path"
 import { allowWrite, reprotect } from "./protect"
 import { CLARIFIED_MARK } from "./document/roles"
-import { stubbedText } from "./round-brief"
+import { stripComments, stubbedText } from "./round-brief"
 
 export const BRIEF_FILE = join(".opencode", "auto", "brief.md")
 
@@ -55,17 +55,20 @@ export async function projectBriefText(dir: string): Promise<string | undefined>
 // Document-level punctuation is never brief content (plans/0133 D8, the
 // aster-mig baseline's installed brief the field case): a survey whose
 // `## Project brief` section is the document's last carries the person's
-// release mark and the eof terminator inside the section body — the
-// round-brief extractor's discipline (analysis.ts roundBriefProposals)
-// extended to the project brief.
-const BRIEF_DOC_PUNCTUATION = new Set([CLARIFIED_MARK, "<!-- auto: eof -->"])
+// release mark inside the section body. The eof terminator and any other
+// HTML comment are stripped ahead of the extraction — the round-brief
+// extractor's discipline (analysis.ts roundBriefProposals) exactly, the two
+// proposal channels one rule since plans/0158: comments are hints, never
+// installed content.
+const BRIEF_DOC_PUNCTUATION = new Set([CLARIFIED_MARK])
 
 // The `## Project brief` proposal inside a survey (plans/0081 D15.1): the
-// section body between the heading and the next level-1/2 heading, or
-// undefined when the survey carries none or the body is empty. Pure, so the
-// install step (loop-phase.ts) and the tests share one extraction.
+// section body between the heading and the next level-1/2 heading, comments
+// stripped, or undefined when the survey carries none or the body is empty.
+// Pure, so the install step (loop-phase.ts) and the tests share one
+// extraction.
 export function briefProposal(surveyText: string): string | undefined {
-  const lines = surveyText.split("\n")
+  const lines = stripComments(surveyText).split("\n")
   const start = lines.findIndex((line) => line.trim() === BRIEF_PROPOSAL_HEADING)
   if (start === -1) return undefined
   let end = lines.findIndex((line, i) => i > start && /^#{1,2}\s/.test(line.trim()))

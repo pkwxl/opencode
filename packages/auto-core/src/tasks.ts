@@ -161,11 +161,19 @@ export const taskStatePaths = (id: string) => unitStatePaths(taskRef(id))
 // —— Checklists (subtasks.md) ——
 
 // "- [ ]" / "- [x]" checklist items of a text (subtasks.md, or any checklist).
+// CRLF is normalized once at entry (the phase-type file's precedent,
+// src/phases/custom.ts): `.` never matches a `\r`, so a CRLF file split on
+// `\n` would otherwise parse as an empty checklist — the protocol inactive,
+// the pipeline routing a decomposed task down the whole-task path with no
+// error anywhere (a silent clean verdict, P12).
 export function subtasks(text: string): ChecklistItem[] {
-  return text.split("\n").flatMap((line) => {
-    const match = /^\s*- \[( |x|X)\]\s*(.*)$/.exec(line)
-    return match ? [{ text: match[2]!.trim(), done: match[1]!.toLowerCase() === "x" }] : []
-  })
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*- \[( |x|X)\]\s*(.*)$/.exec(line)
+      return match ? [{ text: match[2]!.trim(), done: match[1]!.toLowerCase() === "x" }] : []
+    })
 }
 
 // Field markers inside a checklist line: the protocol strings `Depends:` and

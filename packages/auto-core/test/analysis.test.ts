@@ -13,6 +13,7 @@ import {
   releasedRoundBriefProposal,
   resolveRoundPhases,
   roundBriefNearMisses,
+  roundBriefNearMissNote,
   roundBriefProposals,
 } from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
@@ -101,6 +102,21 @@ describe("the project analysis document (plans/0084)", () => {
     const decorated = ["- **R-01 adm — port the retry ladder with tests**", "- **R-02 (import; gated) — hash utils**: adopt the closed crates."].join("\n")
     expect(roadmapRounds(decorated)).toEqual([])
     expect(roadmapPhases(decorated, 1)).toBeUndefined()
+  })
+
+  test("a CRLF roadmap parses and the release scan stays quiet — one grammar, one view (plans/0158 D1)", () => {
+    // A Windows-line-ended document: splitting on \n leaves a \r at each
+    // line's end that `.` never matches — the pre-0158 reader found no
+    // rounds while the near-miss scan flagged every well-formed line. Both
+    // readers now share the CRLF-normalized view: the rounds parse and the
+    // release holds nothing.
+    const crlf = RELEASED.replaceAll("\n", "\r\n")
+    expect(roadmapRounds(crlf)).toEqual([
+      { round: 1, phases: "adm", goal: "port the core and its tests" },
+      { round: 2, phases: "mtv", goal: "acceptance pass and knowledge" },
+    ])
+    expect(analysisProblems(crlf, BUILTIN_PHASE_TYPES)).toEqual([])
+    expect(clarifiedMark(crlf)).toBe(true)
   })
 
   test("the plans-no-round problem names the document's own non-parsing bullets (the incident)", () => {
@@ -277,6 +293,58 @@ describe("the round-brief proposals (plans/0115)", () => {
       const empty = WITH_BRIEFS.replace("The acceptance pass and the knowledge distillation.\n", "") + "\nClarified: yes\n"
       await Bun.write(join(dir, "docs/analysis.md"), empty)
       expect(await releasedRoundBriefProposal(dir, 2)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plans/0158 D3: the living-governance shape — a valid subsection released
+  // long ago, a near-miss heading drafted into the released document later.
+  // The release-time near-miss scan never re-runs, so the extractor alone
+  // holds the line: the near-miss heading terminates the subsection it
+  // follows, its body never riding verbatim into that round's installed
+  // brief.
+  test("a near-miss heading after a released subsection terminates it — its body never rides into the earlier round's brief (plans/0158 D3)", async () => {
+    const doc = `${WITH_BRIEFS}#### R-03 notes\n\nDrafted later; reads as a brief for R-03.\n`
+    const briefs = roundBriefProposals(doc)
+    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    expect(briefs.has(3)).toBe(false)
+    expect(roundBriefNearMisses(doc)).toEqual(["#### R-03 notes"])
+    // The release-time scan still names it where it runs (the project start).
+    expect(analysisProblems(doc, BUILTIN_PHASE_TYPES).some((problem) => problem.includes("#### R-03 notes"))).toBe(true)
+    // The install path composes: released, R-02's proposal carries no trace
+    // of the near-miss body, R-03 installs nothing.
+    const dir = mkdtempSync(join(tmpdir(), "analysis-nearmiss-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, "docs/analysis.md"), `${doc}\nClarified: yes\n`)
+      const r02 = await releasedRoundBriefProposal(dir, 2)
+      expect(r02).toContain("acceptance pass")
+      expect(r02).not.toContain("Drafted later")
+      expect(await releasedRoundBriefProposal(dir, 3)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("roundBriefNearMissNote names a released near-miss heading at the round it would have opened (plans/0158 D3)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "analysis-note-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      const doc = `${WITH_BRIEFS}#### R-03 notes\n\nDrafted later.\n`
+      // Unreleased: never the person's decision yet, no note.
+      await Bun.write(join(dir, "docs/analysis.md"), doc)
+      expect(await roundBriefNearMissNote(dir, 3)).toBeUndefined()
+      await Bun.write(join(dir, "docs/analysis.md"), `${doc}\nClarified: yes\n`)
+      const note = await roundBriefNearMissNote(dir, 3)
+      expect(note).toContain("#### R-03 notes")
+      expect(note).toContain("R-03")
+      expect(note).toContain("`### R-NN`")
+      // A round the near-miss headings do not name stays quiet (their own
+      // opens would name them), and no document at all is the floor.
+      expect(await roundBriefNearMissNote(dir, 1)).toBeUndefined()
+      rmSync(join(dir, "docs/analysis.md"))
+      expect(await roundBriefNearMissNote(dir, 3)).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

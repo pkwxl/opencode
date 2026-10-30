@@ -251,11 +251,23 @@ export function provenanceFindings(comparison: ProvenanceComparison): { path: st
 export function provenanceNoticeLine(comparison: ProvenanceComparison): string | undefined {
   const stale = Object.entries(comparison.files).filter(([, state]) => state.state === "stale")
   if (!stale.length) return undefined
-  const older = stale.some(([, state]) => state.state === "stale" && state.direction === "binary-older")
+  // The aggregate clause's advice must match the divergence it names: only a
+  // file the running bundle still ships without the stamped sections says
+  // the binary is older than the pack ("upgrade the tool"). A file the
+  // bundle no longer ships is a divergence in either direction — a newer
+  // binary may have retired it deliberately — so that shape names the gap
+  // and leaves the direction to the per-file part (plans/0158).
+  const predates = stale.some(([, state]) => state.state === "stale" && state.inBinary && state.direction === "binary-older")
+  const retired = stale.some(([, state]) => state.state === "stale" && !state.inBinary)
   const parts = stale.map(([path, state]) => {
     if (state.state !== "stale") return ""
     const delta = deltaText(state.added, state.removed)
     return `${path}: ${!state.inBinary ? "no longer shipped by the running bundle" : state.direction === "binary-older" ? "your pack predates it, the running bundle lacks sections you have" : delta ? `the running bundle ${delta}` : "the running bundle differs"}`
   })
-  return `⚠ intent bundle ${comparison.bundle}: ${stale.length} materialized file(s) ${older ? "differ from the running binary's bundle (a stale binary disables sections just as silently — upgrade the tool)" : "can fast-forward to the running binary's bundle (sync)"} — ${parts.join("; ")}`
+  const aggregate = predates
+    ? "differ from the running binary's bundle (a stale binary disables sections just as silently — upgrade the tool)"
+    : retired
+      ? "differ from the running binary's bundle (a file it no longer ships is a divergence in either direction — sync names each; remove a retired file by hand if the retirement is intended)"
+      : "can fast-forward to the running binary's bundle (sync)"
+  return `⚠ intent bundle ${comparison.bundle}: ${stale.length} materialized file(s) ${aggregate} — ${parts.join("; ")}`
 }

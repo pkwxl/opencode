@@ -473,6 +473,9 @@ describe("manual-driver prompt ratchet", () => {
     ]) {
       expect(run, "run.md").toContain(literal)
     }
+    // 0158 D5: the manual master's regression lanes name the lane-log dir
+    // seam too — the same 0151 wording, both files of the manual twin.
+    expect(run, "run.md").toContain("the lane-log dir (/tmp/opencode/ by default)")
     // The wall is never closed by the suite — the person's advance act.
     expect(run, "run.md").toContain("this suite never closes it")
     expect(run, "run.md").toContain("the driver's `transfer`")
@@ -603,6 +606,12 @@ describe("manual-driver prompt ratchet", () => {
       expect(doc).toContain("`docs/T-NNN/testhands/`")
     }
     expect(run).toContain("parallel lanes are processes, not child sessions")
+    // 0158 D5 — the 0151 lockstep completion: the manual twin names the
+    // lane-log dir as the seam it is (/tmp/opencode/ the default; manual
+    // children inherit the person's environment, so the
+    // OPENCODE_AUTO_LANE_LOG_DIR redirect must stay prescribable), the
+    // driver channel's (_partials.md) exact wording.
+    expect(task).toContain("under the lane-log dir (/tmp/opencode/ by default)")
     // D2: the park grammar — the worker's status line (pinned again in the
     // widened status-grammar check above) and the master control's widened
     // missing-status feedback.

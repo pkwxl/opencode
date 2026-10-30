@@ -241,9 +241,11 @@ export function acceptanceSection(body: string): string {
 // one exists; anything else (no name and zero or several anchor-cost rows, or
 // more than one name) is no pre-gate — an ambiguous anchor never gates
 // mechanically, the verify session judges the receipts by inspection.
-// Regression-cost rows never resolve (plans/0098 D1): anchoring is the
-// per-task pre-gate, exactly the critical path the class exists to leave —
-// a task naming one simply has no mechanical anchor, like any ambiguity.
+// Regression-cost rows never resolve and never gate (plans/0098 D1):
+// anchoring is the per-task pre-gate, exactly the critical path the class
+// exists to leave — a task naming one falls to the none-named fallback above
+// (it may still receive the table's single anchor-cost row, never the
+// regression row itself).
 export function anchorLaneOf(acceptance: string, lanes: readonly TestLane[]): TestLane | undefined {
   const rows = lanes.filter((lane) => lane.cost !== "regression")
   const named = rows.filter((lane) => new RegExp(`(^|[^a-z0-9-])${escapeRe(lane.name)}($|[^a-z0-9-])`).test(acceptance))

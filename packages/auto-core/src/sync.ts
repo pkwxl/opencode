@@ -172,7 +172,17 @@ export async function planSync(dir: string, opts: SyncOpts = {}): Promise<SyncPl
   for (const extra of await extrasOf(dir, new Set([...Object.keys(binary), ...Object.keys(stamp?.files ?? {})]))) {
     entries.push({ action: "extra", path: extra })
   }
-  const stampText2 = writes.length > 0 || Object.keys(nextFiles).length > 0 ? renderProvenanceStamp(provenanceStampOfEntries(bundleName, nextFiles)) : undefined
+  // The next stamp: the tool's last-written bytes per managed path. The
+  // sidecar rewrite rides only when its rendered bytes differ from the
+  // sidecar on disk (plans/0158): a stamped plan whose actionable entries
+  // are none — person-edited paths keep their original stamp entries,
+  // current paths re-derive the same ones — renders the byte-identical
+  // stamp, and the dryrun's exit gate (syncWritesAnything) must not count
+  // that non-write as "something would change". A real change (a
+  // fast-forward's new digest, an add, a retirement shrinking the managed
+  // set, the bootstrap's first sidecar) always differs and always rides.
+  const nextStamp = writes.length > 0 || Object.keys(nextFiles).length > 0 ? renderProvenanceStamp(provenanceStampOfEntries(bundleName, nextFiles)) : undefined
+  const stampText2 = nextStamp !== undefined && nextStamp !== stampText ? nextStamp : undefined
   const openRound = await openRoundWarning(dir)
   return { bundle: bundleName, entries, writes, ...(stampText2 !== undefined ? { stampText: stampText2 } : {}), ...(openRound !== undefined ? { openRound } : {}) }
 }
@@ -287,6 +297,9 @@ export function formatSyncPlan(plan: SyncPlan): string {
 
 // Whether the plan would change anything on disk (files or stamp): the
 // dryrun exit-code gate — report-only entries inform but do not move it.
+// stampText is byte-honest by construction (plans/0158: set only when the
+// rendered stamp differs from the sidecar on disk), so a report-only plan
+// over a stamped project counts nothing.
 export function syncWritesAnything(plan: SyncPlan): boolean {
   return plan.writes.length > 0 || plan.stampText !== undefined
 }

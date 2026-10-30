@@ -514,11 +514,15 @@ const PHASE_DIR_RE = /^P\d{2,}-[a-z][a-z0-9-]*$/
 
 // Current round (derived, no persisted state): round directories are created
 // at round start, so the current round is the highest R-NN (no +1); a
-// brand-new project is round 1.
+// brand-new project is round 1. Only directories count (the readdir carries
+// withFileTypes; a regular file named like a round — a stray export, a
+// person's notes — is not a round, the sibling check of
+// legacyLayoutProblem below).
 export async function currentRound(dir: string): Promise<number> {
   const entries = await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])
   let max = 0
   for (const entry of entries) {
+    if (!entry.isDirectory()) continue
     const round = ROUND_DIR_RE.exec(entry.name)
     if (round) max = Math.max(max, Number(round[1]))
   }

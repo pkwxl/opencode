@@ -40,7 +40,7 @@
 // state — establishment deliberately does not, its G1 stop is the point).
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
-import { releasedRoundBriefProposal } from "./analysis"
+import { releasedRoundBriefProposal, roundBriefNearMissNote } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { commitTree } from "./git"
@@ -349,8 +349,14 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
         `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`
       : "",
   )
+  // A released near-miss heading naming this round (plans/0158 D3): the
+  // drafted-looking subsection never installs, so the gate above is what the
+  // round opens on — the line names why, while the brief is still the
+  // untouched stub the proposal would have filled.
+  const miss = ok && (await roundBriefText(directory, round)) === undefined ? await roundBriefNearMissNote(directory, round) : undefined
   for (const line of before) log(line)
   for (const line of lines.lines) log(line)
+  if (miss) log(miss)
   return lines.code
 }
 

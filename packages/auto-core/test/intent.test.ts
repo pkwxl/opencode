@@ -123,6 +123,17 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(packSubsection(pack, "parallelism", "none")).toBeUndefined()
   })
 
+  // Plans/0158 D4 — the 0109 lockstep completion: the default pack's
+  // planning-input scaffold answers from the standing surfaces (the round's
+  // AUTO-RESOLVE records, driver-helper's list), the three bundles' wording
+  // — never the retired round user report.
+  test("the default pack's planning-input scaffold answers from the standing surfaces (plans/0158 D4)", () => {
+    const scaffold = planningInputScaffold(loadIntents(), DEFAULT_INTENT)!
+    const flat = scaffold.replace(/\s+/g, " ")
+    expect(flat).toContain("the round's AUTO-RESOLVE records — the task reports' \"Proxy-answered questions\" sections; `driver-helper` renders the standing list")
+    expect(scaffold).not.toContain("report-for-user")
+  })
+
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
