@@ -8,7 +8,7 @@
 // predates 0083 and stays in auto-doc-shape.test.ts. The driver-run lane
 // gate (plans/0096 D5) rides the same loop: its anchor pre-gate decides
 // whether the verify session dispatches at all.
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { EOF_MARK } from "../src/doccheck"
@@ -922,6 +922,45 @@ describe("the unservable test request (0142 D1/D2)", () => {
       const result = await runWrapup(client, plan, plan.tasks[0]!, designOpts(dir), chain, { solo: false, label: "wrap-up session" })
       expect(result).toBeUndefined()
       expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the verify session's own PASS consumes its marker (plans/0156 D8): surfaced at THIS task's close, never the next one's", async () => {
+    // The T-058 shape: the verify session reads the task's gap list or
+    // document naming tmp/test.sh and re-runs the request the dead channel
+    // can never serve — the wrap-up template forbids it, but the marker is
+    // on disk all the same. Without the PASS-site consumption it would
+    // linger until the NEXT task's wrap-up entry, whose log would
+    // misattribute it to that task's id.
+    const dir = await seedRepo(0)
+    try {
+      const { client } = scriptedClient([
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+          mkdirSync(join(dir, "tmp"), { recursive: true })
+          await Bun.write(join(dir, "tmp/test.sh"), "bash test/spike.sh\n")
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "))
+      })
+      let result: Awaited<ReturnType<typeof runWrapup>>
+      try {
+        result = await runWrapup(client, plan, plan.tasks[0]!, designOpts(dir), chain, { solo: false, label: "wrap-up session" })
+      } finally {
+        printed.mockRestore()
+      }
+      expect(result).toBeUndefined()
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+      // The consumption line names THIS task (the attribution the next
+      // task's entry would have gotten wrong).
+      expect(lines.some((line) => line.includes("T-001 left tmp/test.sh") && line.includes("the phase (design) is not a code-work phase"))).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

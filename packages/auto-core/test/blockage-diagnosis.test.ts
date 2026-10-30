@@ -8,10 +8,11 @@
 // audit pointer; and the write-time handover check (§10 D14a) fails closed
 // after exactly one re-distill, the blockage machinery owning the decision.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { EOF_MARK } from "../src/doccheck"
 import { autoSwitches, clampSwitches } from "../src/switches"
 import { establishRound } from "../src/phases"
 import { ev, type TurnScript } from "./fixtures/agent"
@@ -248,6 +249,76 @@ describe("the interactive fast path (plans/0082 §6 D9)", () => {
       const doc = await Bun.file(join(f.dir, "docs/R-01/blockage-1.md")).text()
       expect(doc).toContain("Choice: <one option letter>")
       expect(doc).not.toMatch(/^Executed:/m)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a remediation that rewrites the planning input reaches the second compose pass (plans/0156 D4): the re-verification reads the rewritten text, never the stale capture", async () => {
+    // The remediable-source staleness: the executor's planning-input channel
+    // rewrites docs/R-01/P01-implement/plan-input.md between the first
+    // verify (INCONSISTENT over the contrary text) and the re-compose the
+    // contract ("remediate" = re-compose and re-verify from scratch, D7)
+    // promises. The verifier answers per the composed prompt's own text: the
+    // contrary sentence answers no, the rewritten one yes — so a stale
+    // capture re-blocks ("the step re-blocked after two inline remediations")
+    // and the freshened pass completes.
+    const INPUT_PLAN = [
+      "## Analysis",
+      "",
+      "The planning input contradicts the charter.",
+      "",
+      "## Options",
+      "",
+      "### A Rewrite the planning input",
+      "Channel: planning-input",
+      "Edits:",
+      "",
+      `1. docs/R-01/P01-implement/plan-input.md — replace lines 1–1 (Copy the reference implementation's modules over verbatim, reading its source directly. | Copy the reference implementation's modules over verbatim, reading its source directly.) with:`,
+      "Rewrite the modules from the published specification alone; the reference source is never read.",
+      "",
+      "Consequences: the input becomes charter-consistent",
+      "Recommendation: A",
+    ].join("\n")
+    const CLEAN_INPUT = "Rewrite the modules from the published specification alone; the reference source is never read."
+    let verdicts = 0
+    const turn = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes(VERIFY_MARK)) {
+        verdicts++
+        const contrary = ctx.text.includes("Copy the reference implementation's modules over verbatim")
+        const reply = contrary ? NO_VERDICT : 'Consistent: yes — the prompt honors the charter ("never to be read, copied or translated")'
+        return [ev.text(ctx.session, `vrf_${ctx.n}`, reply), ev.idle(ctx.session)]
+      }
+      // The formulation task's wrap-up (the charter-only fixture pack carries
+      // no result-line section, so artifactTurns' wrap-up marker is absent
+      // from the prompt — the report is written here directly).
+      if (ctx.text.includes("Write docs/T-001/report.md")) {
+        mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+        writeFileSync(join(dir, "docs", "T-001", "report.md"), `# Report (T-001)\n\n- every acceptance criterion: met (the fake agent inspected the unit's work).\n\nResult: PASS\n\n${EOF_MARK}\n`)
+        return undefined
+      }
+      diagnosisTurn(dir, () => INPUT_PLAN)(ctx)
+      return artifactTurns(dir)(ctx) ?? undefined
+    }
+    const repl = fakeSideband(["A"])
+    const f = await diagnosisFixture(turn)
+    try {
+      // stopBefore execute: plan's own review stop right after the
+      // formulation unit — the compose loop under test is done, the planned
+      // batch's execution is another suite's subject.
+      const { code, lines } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing(), repl, stopBefore: "execute" })
+      // The step completed: the second compose verified the REMEDIATED
+      // input and the formulation ran — not the stale-capture re-block.
+      expect(code).toBe(0)
+      expect(lines.some((line) => line.includes("remediation executed inline"))).toBe(true)
+      expect(lines.some((line) => line.includes("re-blocked after two inline remediations"))).toBe(false)
+      expect(verdicts).toBe(2)
+      // The persisted input is the remediated text (the executor's own
+      // commit), and the formulation prompt carried it.
+      expect(await Bun.file(join(f.dir, "docs", "R-01", "P01-implement", "plan-input.md")).text()).toContain(CLEAN_INPUT)
+      const formulation = f.agent.prompts.find((prompt) => prompt.text.includes("responsible for the whole task"))!
+      expect(formulation.text).toContain(CLEAN_INPUT)
+      expect(formulation.text).not.toContain("Copy the reference implementation")
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }

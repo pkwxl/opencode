@@ -1004,6 +1004,10 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       log(`▶ ${serial.id} cannot be isolated (its declared Touches reach a nested repository); running it serially in the main tree after the lanes drained (D15)`)
       const code = await runSerialUnit(ctx, phase, plan, serial)
       if (code !== 0) return code
+      // The background regression boundary (plans/0098 D4) — every other
+      // unit-completing arm of this loop runs it at its landing; the degrade
+      // arm owed it the same (plans/0156's hygiene).
+      await regressionBoundary(ctx, ctx.opts, phase)
       continue
     }
     // Await any lane's exit (raced; the relay's drain is already running).

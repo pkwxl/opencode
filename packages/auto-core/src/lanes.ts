@@ -1146,17 +1146,6 @@ export async function landLane(
   // state files.
   await syncIndexTicks(dir, phase)
   await syncChecklistTicks(dir, owner)
-  const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${shortTitle(task.title)}` })
-  if (!settled.ok) {
-    // The merge itself is in and the unit's files are the fact; the ticks are
-    // cosmetic (D7 step ③'s own note). Finish the landing (④⑤ below keep the
-    // park clean) and hand the uncommitted sync to the human.
-    await clearLane(dir, task.id)
-    await book()
-    await teardownLane(gitOps, dir, task.id)
-    landedEvent("blocked", { detail: "the landing-sync commit failed" })
-    return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
-  }
   // S5 (§6.8): the lead's split record travels by the report and is
   // parent-persisted at landing — the lane worktree's own .auto/ dies at the
   // teardown below, and the main tree's registry is where the scheduler (the
@@ -1167,11 +1156,28 @@ export async function landLane(
   // (plans/0096 D7): the parked record the lane's park commit wrote is
   // re-persisted here, so the readiness composition of the next pass sees
   // the unit as done-for-successors and not selectable.
+  // Both writes are plain registry writes into the main tree's units.json
+  // (gitignored, no worktree dependency), and they run BEFORE the
+  // landing-sync commit (plans/0156 D6): the commit's failure branch tears
+  // the worktree down, and these records' only other home dies with it — a
+  // lead losing its split would degrade its streams to serial, a landed
+  // parked unit without its record can be re-dispatched.
   if (report.split !== undefined) {
     await setSplit(dir, task.id, reRootSplit(report.split.baseline, worktree, dir))
   }
   if (report.parked !== undefined) {
     await setParked(dir, task.id, report.parked)
+  }
+  const settled = await gitOps.commitTree(dir, task, { stage: "landing-sync", subject: `${task.id} landing-sync ${shortTitle(task.title)}` })
+  if (!settled.ok) {
+    // The merge itself is in and the unit's files are the fact; the ticks are
+    // cosmetic (D7 step ③'s own note). Finish the landing (④⑤ below keep the
+    // park clean) and hand the uncommitted sync to the human.
+    await clearLane(dir, task.id)
+    await book()
+    await teardownLane(gitOps, dir, task.id)
+    landedEvent("blocked", { detail: "the landing-sync commit failed" })
+    return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
   }
   // ④ the runtime fields and the report's usage.
   await clearLane(dir, task.id)

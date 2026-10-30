@@ -212,6 +212,35 @@ describe("runSubtask stream handover (the fork retry policy)", () => {
     }
   })
 
+  test("a lane stream's handover-due retry names its OWN per-stream file (plans/0156 D5): the feedback, never the task-level path an obedient session would wrongly write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      const agent = fakeAgent({
+        turn: (ctx) =>
+          ctx.n === 1
+            ? [ev.message(ctx.session, "m_big", 90_000), ev.text(ctx.session, "t1", "still working"), ev.idle(ctx.session)]
+            : undefined,
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const text = "runs stream T-001.S01"
+      // laneStream = true: the side-by-side stream-lane shape — the steer,
+      // the reads and the verdict's own document are all the per-stream file
+      // (plans/0068 S5); the serial in-lane stream above keeps the
+      // task-level one.
+      const result = await runSubtask(agent.client, plan, plan.tasks[0]!, text, 1, { dir, git: noCommitGit() }, chain, undefined, false, [], true)
+      expect(result).toBeUndefined()
+      expect(agent.prompts).toHaveLength(2)
+      // The retry's demand names the per-stream document — the file an
+      // obedient session must write for this subtask.
+      expect(agent.prompts[1]!.text).toStartWith("The last time you ended the session a handover was due, but no valid docs/T-001/S01/handoff.md was written")
+      expect(agent.prompts[1]!.text).toContain("for this subtask")
+      expect(agent.prompts[1]!.text).not.toContain("docs/T-001/handoff.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("without a split there is no steer and no handover protocol at all: a plain subtask session runs once and ends naturally", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
     try {

@@ -329,7 +329,7 @@ export async function cleanTestHandoffs(dir: string, task: Task): Promise<void> 
 // condition negated, dryrun excluded (the floor — nothing runs, nothing
 // consumes). Covers both dead worlds: the config flag off outright, and the
 // flag on over a phase whose type is not code work.
-export function testChannelOffFor(opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">): boolean {
+function testChannelOffFor(opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">): boolean {
   if (opts.dryrun) return false
   return !(opts.testByDriver && codeWork(opts.phase?.entry))
 }

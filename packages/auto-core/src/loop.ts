@@ -13,7 +13,7 @@ import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
 import { headSha } from "./git"
 import { commitsSince } from "./git-worktree"
-import { writeLaneReport, type LaneReport } from "./lanes"
+import { streamUnitOf, writeLaneReport, type LaneReport } from "./lanes"
 import { currentRound, phaseFlowBlockedLine, phaseFlowBlockedText, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { anyCodeWork, resolvePhases } from "./phases/registry"
 import { loadPhaseTypes } from "./phases/custom"
@@ -158,10 +158,11 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     const liveRound = await currentRound(directory)
     const authority = await resolveRoundPhases(directory, liveRound, phases)
     if (!opts.dryrun && !opts.lane) {
-      const pre = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases })
-      if (pre.type === "blocked") {
-        log(phaseFlowBlockedLine(pre.reason))
-        emitStatus({ type: "failure", message: phaseFlowBlockedText(pre.reason) })
+      // Named route here: `pre` is the preflight holder parameter above.
+      const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases })
+      if (route.type === "blocked") {
+        log(phaseFlowBlockedLine(route.reason))
+        emitStatus({ type: "failure", message: phaseFlowBlockedText(route.reason) })
         return 1
       }
       // A phase-index drift (plans/0053 D34): the phases value in force (the
@@ -455,7 +456,9 @@ export async function runLaneWorker(directory: string, opts: RunAllOpts & { lane
 // its taken split (§6.8): the stream count and the split point this
 // worktree's own registry records — the record the parent re-persists at
 // landing (the worktree's .auto/ dies with the teardown).
-async function laneReportOf(
+// Exported for the lane-recovery composition test (plans/0156 D3): the
+// stream-unit phase read is observable only through the report itself.
+export async function laneReportOf(
   directory: string,
   opts: RunAllOpts,
   unit: string,
@@ -468,7 +471,15 @@ async function laneReportOf(
   const usage = bucket?.usage
   const tokens = usage ? usage.input + usage.output + usage.reasoning + usage.cacheRead + usage.cacheWrite : 0
   const progress = await peekProgress(directory).catch(() => undefined)
-  const paths = taskStatePaths(unit)
+  // A stream unit's own state files carry no `Phase:` field — the phase
+  // grammar belongs to the task document — so the report reads the OWNING
+  // task's state paths for the phase the landing recovery resolves (the
+  // worktree holds the lead's landed todo/done either way); a plain task
+  // unit reads its own. Reading `docs/T-NNN.S<nn>/` instead (taskStatePaths
+  // over a stream id) never exists, and the report carried phase "" — the
+  // recovered stream lane could never land (plans/0156 D3).
+  const stream = streamUnitOf(unit)
+  const paths = taskStatePaths(stream ? stream.task : unit)
   const doc = await Bun.file(join(directory, paths.complete)).text().catch(() => Bun.file(join(directory, paths.pending)).text().catch(() => ""))
   const split = await runtimeSplit(directory, unit)
   const items = split ? await readChecklist(directory, unit) : []

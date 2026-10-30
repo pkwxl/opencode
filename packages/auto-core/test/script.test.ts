@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir } from "../src/script"
+import { DEFAULT_KILL_GRACE_MS, DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir } from "../src/script"
 
 describe("scriptTmpDir", () => {
   test("the path is the tmp/ subdirectory under the target directory", () => {
@@ -160,4 +160,53 @@ describe("runScript", () => {
   test("the default watchdog poll interval is 5 seconds", () => {
     expect(DEFAULT_SCRIPT_POLL_MS).toBe(5_000)
   })
+
+  test("the default kill grace is 10 seconds", () => {
+    expect(DEFAULT_KILL_GRACE_MS).toBe(10_000)
+  })
+
+  test("a child that ignores SIGTERM is escalated to SIGKILL after the grace (plans/0156 D7): bounded, one line logged", async () => {
+    // The wrapper execs the script, so the child IS the script; one that
+    // traps TERM and sleeps would pin the old watchdog's await forever (the
+    // run hanging until double-Ctrl+C). Millisecond grace: the whole scene
+    // resolves in well under a second.
+    const script = join(dir, "trap.sh")
+    await Bun.write(script, "trap '' TERM\necho trapped\nsleep 30\n")
+    await chmod(script, 0o755)
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    let run: Awaited<ReturnType<typeof runScript>>
+    try {
+      run = await runScript(dir, script, { out: outOf(), idleMs: 100, pollMs: 20, killGraceMs: 150 })
+    } finally {
+      printed.mockRestore()
+    }
+    expect(run.timedOut).toBe(true)
+    expect(run.code).toBe(124)
+    // Bounded: the SIGKILL landed, not the 30s sleep.
+    expect(run.ms).toBeLessThan(5_000)
+    expect(lines.some((line) => line.includes("ignored SIGTERM for 150ms; escalating to SIGKILL"))).toBe(true)
+  }, 8_000)
+
+  test("a child that honors SIGTERM is byte-identical: no escalation line, the grace never fires", async () => {
+    const script = join(dir, "term.sh")
+    await Bun.write(script, "#!/usr/bin/env bash\nsleep 10\n")
+    await chmod(script, 0o755)
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    let run: Awaited<ReturnType<typeof runScript>>
+    try {
+      run = await runScript(dir, script, { out: outOf(), idleMs: 100, pollMs: 20, killGraceMs: 5_000 })
+    } finally {
+      printed.mockRestore()
+    }
+    expect(run.timedOut).toBe(true)
+    expect(run.code).toBe(124)
+    expect(run.ms).toBeLessThan(5_000)
+    expect(lines.some((line) => line.includes("escalating to SIGKILL"))).toBe(false)
+  }, 8_000)
 })

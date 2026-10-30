@@ -306,9 +306,18 @@ export async function runTask(
     }
     // A stream lane's handover document is its own per-stream file (S5) —
     // the task-level file belongs to the lead's stage (and a taken split
-    // removed it anyway).
+    // removed it anyway). The read is gated on the steer key executeWhole
+    // gates its status parse on (plans/0130 D1: the context-handover
+    // protocol stands for every whole-task session, mode `off` included —
+    // steer on = the document takes precedence over session reuse; steer
+    // off = the protocol does not exist and the read stays skipped, 0130's
+    // floor). The decompose mode is no longer a gate here: under it the old
+    // read silently outranked the ladder's reuse answer for the default
+    // configuration (mode off + steer on), dispatching the continuation
+    // into the context-spent session the mode gate had just declined to
+    // hand over.
     const handoffRaw =
-      mode !== "off"
+      switches.steer
         ? await Bun.file(join(dir, opts.stream !== undefined ? subtaskDoc(task.id, opts.stream, "handoff") : taskDoc(task.id, "handoff"))).text().catch(() => undefined)
         : undefined
     const handedOff =

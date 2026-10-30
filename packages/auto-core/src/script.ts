@@ -25,17 +25,24 @@ export function scriptTmpDir(dir: string): string {
 // script keeps printing, its run time is unbounded.
 export const DEFAULT_SCRIPT_IDLE_MS = 10 * 60 * 1000
 
-// Default watchdog poll interval. All watchdog timings (idleMs, maxMs, pollMs)
-// are options so tests run the watchdog on millisecond values over short
-// scripts instead of waiting on wall time.
-// AUTO-RESOLVE: the consolidation plan's seam list for this module named two
-// intervals to make options, "(poll, kill grace)" — the code has the poll
-// interval already seamed (pollMs, now with its default named here, value
-// unchanged) and no kill grace to seam (nothing runs between the timeout kill
-// and awaiting the child's exit), so no grace option was added: a
-// SIGTERM→SIGKILL escalation would change behaviour at the default option
-// values, which the unit rules out of scope, and no test needs it.
+// Default watchdog poll interval. All watchdog timings (idleMs, maxMs, pollMs,
+// killGraceMs) are options so tests run the watchdog on millisecond values
+// over short scripts instead of waiting on wall time.
 export const DEFAULT_SCRIPT_POLL_MS = 5_000
+
+// The escalation grace after a timeout kill (plans/0156 D7): the SIGTERM the
+// watchdog sends is advice a well-behaved child takes at once, and a child
+// that traps or ignores it (the wrapper execs the script, so the child IS
+// the script) must not pin the run until double-Ctrl+C — after this window
+// the watchdog escalates to SIGKILL. The grace exists only on the
+// already-timed-out path: a child that exits on TERM never reaches it
+// (the timer is cleared at the exit), so the normal and previously-broken
+// timeout paths are byte-identical until a kill is actually ignored.
+// AUTO-RESOLVE: the consolidation plan's seam list named "(poll, kill grace)"
+// as the two intervals to seam; the poll interval was seamed then (pollMs)
+// and the grace joins it now as killGraceMs — the earlier note's
+// byte-identity ruling concerned the normal path, which stays untouched.
+export const DEFAULT_KILL_GRACE_MS = 10_000
 
 type ScriptRunResult = {
   code: number
@@ -70,11 +77,12 @@ type ScriptRunResult = {
 export async function runScript(
   dir: string,
   script: string,
-  opts: { out: string; idleMs?: number; maxMs?: number; pollMs?: number },
+  opts: { out: string; idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number },
 ): Promise<ScriptRunResult> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
   const pollMs = opts.pollMs ?? DEFAULT_SCRIPT_POLL_MS
+  const killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
   await mkdir(scriptTmpDir(dir), { recursive: true })
   const outPath = opts.out
   await Bun.write(outPath, "")
@@ -99,7 +107,7 @@ export async function runScript(
     stdout: "ignore",
     stderr: "ignore",
   })
-  const { timedOut, timeoutReason } = await watchProcess({ proc, logPath: outPath, start, maxMs, idleMs, pollMs })
+  const { timedOut, timeoutReason } = await watchProcess({ proc, logPath: outPath, start, maxMs, idleMs, pollMs, killGraceMs })
   const out = await Bun.file(outPath).text()
   const violation = await scriptGuardCheck(dir, guard)
   if (violation) logGuardViolation("a driver-run script", violation)
@@ -123,6 +131,7 @@ export async function watchProcess({
   maxMs,
   idleMs,
   pollMs,
+  killGraceMs = DEFAULT_KILL_GRACE_MS,
 }: {
   proc: ReturnType<typeof Bun.spawn>
   logPath: string
@@ -130,11 +139,26 @@ export async function watchProcess({
   maxMs: number
   idleMs: number
   pollMs: number
+  killGraceMs?: number
 }): Promise<{ timedOut: boolean; timeoutReason?: "idle" | "max" }> {
   let timedOut = false
   let timeoutReason: "idle" | "max" | undefined
   let outSize = 0
   let lastProgress = start
+  // The bounded escalation (plans/0156 D7): once timed out, the kill grace
+  // arms beside the SIGTERM; a child still alive when it elapses gets the
+  // SIGKILL and one log line naming the escalation. Cleared at the exit, so
+  // a child that honors TERM is untouched by any of it.
+  let grace: ReturnType<typeof setTimeout> | undefined
+  const timeoutKill = (reason: "idle" | "max"): void => {
+    timedOut = true
+    timeoutReason = reason
+    proc.kill()
+    grace = setTimeout(() => {
+      log(`⚠ the timed-out child ignored SIGTERM for ${killGraceMs}ms; escalating to SIGKILL`)
+      proc.kill("SIGKILL")
+    }, killGraceMs)
+  }
   const timer = setInterval(() => {
     const out = sizeOf(logPath)
     if (out > outSize) {
@@ -144,19 +168,16 @@ export async function watchProcess({
     if (timedOut) return
     const now = Date.now()
     if (maxMs > 0 && now - start >= maxMs) {
-      timedOut = true
-      timeoutReason = "max"
-      proc.kill()
+      timeoutKill("max")
       return
     }
     if (now - lastProgress >= idleMs) {
-      timedOut = true
-      timeoutReason = "idle"
-      proc.kill()
+      timeoutKill("idle")
     }
   }, pollMs)
   await proc.exited
   clearInterval(timer)
+  if (grace !== undefined) clearTimeout(grace)
   return { timedOut, timeoutReason }
 }
 
@@ -276,11 +297,12 @@ export async function runTestLanes(
   dir: string,
   taskId: string,
   lanes: readonly TestLane[],
-  opts: { idleMs?: number; maxMs?: number; pollMs?: number; logDir?: string } = {},
+  opts: { idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number; logDir?: string } = {},
 ): Promise<LaneSetResult> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
   const pollMs = opts.pollMs ?? DEFAULT_SCRIPT_POLL_MS
+  const killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
   const logDir = opts.logDir ?? laneLogDir()
   await mkdir(logDir, { recursive: true })
   // The set-level guard's one snapshot (taken before anything launches; the
@@ -288,7 +310,7 @@ export async function runTestLanes(
   // tree HEADs — the tree every verdict of this set vouches for.
   const guard = await scriptGuardSnapshot(dir)
   const heads = guard.map((shot) => ({ root: relative(dir, shot.root) || ".", sha: shot.head }))
-  const timing = { idleMs, maxMs, pollMs, logDir }
+  const timing = { idleMs, maxMs, pollMs, killGraceMs, logDir }
   const rows = lanes.filter((lane) => lane.cost !== "regression")
   const runs: LaneRun[] = []
   const pending: TestLane[] = []
@@ -366,15 +388,17 @@ async function runLaneBatch(
   dir: string,
   taskId: string,
   batch: readonly TestLane[],
-  opts: { idleMs: number; maxMs: number; pollMs: number; logDir: string },
+  opts: { idleMs: number; maxMs: number; pollMs: number; killGraceMs: number; logDir: string },
 ): Promise<LaneRun[]> {
   type Live = {
     run: { lane: TestLane; log: string; start: number; outSize: number; lastProgress: number; timedOut: boolean; timeoutReason?: "idle" | "max" }
     proc: ReturnType<typeof Bun.spawn>
+    grace?: ReturnType<typeof setTimeout>
   }
   const live: Live[] = []
   const timer = setInterval(() => {
-    for (const { run, proc } of live) {
+    for (const entry of live) {
+      const { run, proc } = entry
       const size = sizeOf(run.log)
       if (size > run.outSize) {
         run.outSize = size
@@ -382,16 +406,24 @@ async function runLaneBatch(
       }
       if (run.timedOut) continue
       const now = Date.now()
-      if (opts.maxMs > 0 && now - run.start >= opts.maxMs) {
+      const timeoutKill = (reason: "idle" | "max"): void => {
         run.timedOut = true
-        run.timeoutReason = "max"
+        run.timeoutReason = reason
         proc.kill()
+        // The bounded escalation (plans/0156 D7), the single watchdog's own:
+        // cleared at this child's exit, so a lane that honors TERM never
+        // reaches it.
+        entry.grace = setTimeout(() => {
+          log(`  ⚠ ${taskId} lane ${run.lane.name} ignored the timeout SIGTERM for ${opts.killGraceMs}ms; escalating to SIGKILL`)
+          proc.kill("SIGKILL")
+        }, opts.killGraceMs)
+      }
+      if (opts.maxMs > 0 && now - run.start >= opts.maxMs) {
+        timeoutKill("max")
         continue
       }
       if (now - run.lastProgress >= opts.idleMs) {
-        run.timedOut = true
-        run.timeoutReason = "idle"
-        proc.kill()
+        timeoutKill("idle")
       }
     }
   }, opts.pollMs)
@@ -412,8 +444,10 @@ async function runLaneBatch(
           stderr: "ignore",
         })
         const run = { lane, log: logPath, start: Date.now(), outSize: 0, lastProgress: Date.now(), timedOut: false }
-        live.push({ run, proc })
+        const entry: Live = { run, proc }
+        live.push(entry)
         await proc.exited
+        if (entry.grace !== undefined) clearTimeout(entry.grace)
       }),
     )
   } finally {

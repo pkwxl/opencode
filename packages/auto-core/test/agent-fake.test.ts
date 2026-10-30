@@ -17,6 +17,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentError, AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
 import { renderConstitutionPreamble } from "../src/agents-block"
+import { renderAgentContract } from "../src/config-fix"
+import { preflight } from "../src/loop-preflight"
+import { unprotect } from "../src/protect"
 import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
@@ -3919,6 +3922,66 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     expect(await git(repo, "stash", "list")).toContain("auto-rollback")
     expect(existsSync(join(repo, "docs", "T-001", "done.md"))).toBe(true)
     expect(existsSync(join(repo, "docs", "T-002", "done.md"))).toBe(true)
+  })
+
+  test("the composed path (plans/0156 D1): preflight keeps the doc scheduler's leftovers for the flatten — the killed-run scene survives run start, the rollback refusal fires while siblings remain", async () => {
+    // The two direct-call tests above manufacture the scene by writing
+    // units.json by hand and entering the doc loop directly — bypassing
+    // preflight, whose unconditional resetInProgress erased every cross-run
+    // leftover before the loop was entered, silently disarming the flatten's
+    // designed protections. This one drives the real composition: the killed
+    // run's scene (both units in_progress, both scopes dirty, one active
+    // record) goes through preflight first, exactly as `run` would.
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    // What preflight needs beyond the fixture: the agent contract (the run's
+    // own integrity check), and the killed run's leftovers.
+    await mkdir(join(repo, ".opencode", "agent"), { recursive: true })
+    await Bun.write(join(repo, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
+    await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-001": { status: "in_progress" }, "T-002": { status: "in_progress" } } }, null, 2)}\n`)
+    await Bun.write(join(repo, "docs", "T-001", "notes.md"), "half-written by the killed run\n")
+    await Bun.write(join(repo, "docs", "T-002", "notes.md"), "half-written by the killed run\n")
+    const sha = (await git(repo, "rev-parse", "--short", "HEAD")).trim()
+    await saveProgress(repo, { task: "T-001", session: "ses_dead", at: Date.now(), active: true, phase: { kind: "whole" }, baseline: [{ root: repo, sha }] })
+    // Preflight, the ambient switch layer scrubbed as runDocLoop does.
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    setSwitchModelRegistry(undefined)
+    try {
+      const result = await preflight(repo, { maxSessions: 2, subtask: "off" })
+      expect(!("exit" in result)).toBe(true)
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      // The keep-set held: both doc-eligible marks survived run start (a
+      // serial run would have reset them), with the teaching line.
+      const units = JSON.parse(await Bun.file(join(repo, ".auto", "units.json")).text())
+      expect(units.tasks["T-001"].status).toBe("in_progress")
+      expect(units.tasks["T-002"].status).toBe("in_progress")
+      expect(lines.some((line) => line.includes("kept in_progress for the doc loop's recovery flatten"))).toBe(true)
+      // The killed batch stayed uncommitted (the 0149 exemption held through
+      // the housekeeping skip).
+      expect(await git(repo, "status", "--porcelain")).toContain("?? docs/T-002/notes.md")
+    } finally {
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      setSwitchModelRegistry(undefined)
+      await unprotect(repo)
+    }
+    // The doc loop over the kept marks: the flatten sees the leftovers, the
+    // active-record leftover is driven, and the strict-resume rollback
+    // verdict is REFUSED while the record-less sibling's state remains —
+    // the tree-wide stash never sweeps it.
+    const agent = make({ turn: docTurns(repo) })
+    const code = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(code).toBe(2)
+    const refusal = lines.find((line) => line.includes("a rollback is tree-wide and would sweep it"))
+    expect(refusal).toBeDefined()
+    expect(refusal).toContain("docs/T-002/")
+    expect(await git(repo, "stash", "list")).toBe("")
+    expect(await Bun.file(join(repo, "docs", "T-002", "notes.md")).text()).toBe("half-written by the killed run\n")
   })
 
   test("the D2 floors: the switch off and a phase with no doc-eligible units are the serial loop's own stream", async () => {

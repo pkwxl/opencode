@@ -684,12 +684,17 @@ export async function bookAttempt(dir: string, id: string): Promise<void> {
 
 // Crash recovery at run start: an interrupted run (kill, crash) leaves tasks
 // in_progress although no session runs. Reset them to pending; the loop
-// resumes them through next() either way, attempts survive.
-export async function resetInProgress(dir: string): Promise<string[]> {
+// resumes them through next() either way, attempts survive. The keep-set
+// (plans/0156 D1) exempts the doc scheduler's own leftovers: the doc-lane
+// recovery flatten (plans/0099 D10) reads the marks itself — a kept id stays
+// in_progress and emits no transition event (the flatten's input, not a
+// stale mark).
+export async function resetInProgress(dir: string, except?: ReadonlySet<string>): Promise<string[]> {
   const stale: string[] = []
   await updateUnits(dir, (units) => {
     for (const [id, entry] of Object.entries(units.tasks)) {
       if (entry.status !== "in_progress") continue
+      if (except?.has(id)) continue
       stale.push(id)
       delete entry.status
     }

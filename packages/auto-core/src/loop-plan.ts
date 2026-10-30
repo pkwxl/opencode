@@ -246,10 +246,10 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       await admissionWarn(ctx, phase, text, `formulation ${phaseKey(phase).id}`)
     }
   }
-  const input = (await readPlanInput(directory, phase))?.trim() || undefined
+  let input = (await readPlanInput(directory, phase))?.trim() || undefined
   if (input) log(`ℹ planning against the persisted input ${planInputPath(phase)}`)
   // The project brief (plans/0052 D9), comments stripped: an untouched stub injects nothing.
-  const brief = await projectBriefText(directory)
+  let brief = await projectBriefText(directory)
   const taskIndex = taskIndexPath(phase)
   const phaseId = qualifiedPhase(phase)
   // The phase's composition state (plans/0097 D3): the phased gathering —
@@ -257,7 +257,24 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // first-planning-session digest block, the round brief, the approved
   // analysis, the final-phase report duty — read once; both the floor and
   // the synthesis compose from the same parts. m mode has none of it.
+  // (formulationParts stays an entry-time read: its digest half BOOKS the
+  // planning session's sizes — statsDigest counts one booking per call — so
+  // a per-pass re-read would double-book; a remediated handover re-voices at
+  // the step's next entry, the residual plans/0156 D4 names.)
   const parts = ctx.manual ? undefined : await formulationParts(ctx, phase)
+  // The remediable sources re-read before every compose pass (plans/0156
+  // D4): the remediation executor can rewrite exactly the planning input
+  // (its planning-input channel, src/blockage-execute.ts) and the brief
+  // (its protect-passing write), and the design contract — "remediate" =
+  // the step re-composes and re-verifies from scratch (D7) — makes the
+  // second pass verify what landed, never the text the first pass read.
+  // Everything else the loop reads is machinery no remediation rewrites
+  // and stays captured (the task index path, the phase, the entry-held
+  // standing predicate below).
+  const freshen = async (): Promise<void> => {
+    input = (await readPlanInput(directory, phase))?.trim() || undefined
+    brief = await projectBriefText(directory)
+  }
   // Whether a formulation todo already stands (plans/0101 D4): the dispatch
   // discipline below keys on it — a standing todo whose floor moved is
   // transfer's reconstruct, never plan's rewrite — read ahead of the compose
@@ -283,6 +300,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const compose = async (): Promise<
     { todo: { goal: string; scope: string; acceptance: string }; document: string; blocks: BlockMapEntry[]; audit: string[]; digest: string; landed: boolean; id?: string }
   > => {
+    await freshen()
     const charter = formulationAcceptance(planFacts(ctx), charterPhaseEntry(ctx, phase))
     const n = await formulationNumber(directory, phase)
     const facts = planFacts(ctx)
@@ -959,7 +977,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       await admissionWarn(ctx, phase, text, `phase-append ${phaseKey(phase).id}`)
     }
   }
-  const input = (await readPlanInput(directory, phase))?.trim() || undefined
+  let input = (await readPlanInput(directory, phase))?.trim() || undefined
   if (input && !restart) log(`ℹ appending against the persisted input ${planInputPath(phase)}`)
   // The append builds on an index that lists tasks; a re-entered step whose
   // index has gone missing (deleted by hand between runs) is an anomaly to
@@ -987,13 +1005,24 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   const listed = Math.max(0, ...[...before].map((id) => taskNumber(id) ?? 0)) + 1
   const promptStart = numberStart ?? listed
   // The project brief, comments stripped: an untouched stub injects nothing.
-  const brief = await projectBriefText(directory)
+  let brief = await projectBriefText(directory)
   const phaseId = qualifiedPhase(phase)
   // The compose-and-verify loop (the append side of plans/0082 §5 D7 / §6
   // D9): an append plans against a human input too — plan --append or a
   // repair round's evidence — so its composed prompt is verified the same
   // way before its session runs; "remediate" re-composes and re-verifies.
+  // The remediable sources re-read before every compose pass (plans/0156
+  // D4, planPhase's freshen): the remediation executor can rewrite the
+  // planning input and the brief between two passes, and the re-verification
+  // must judge what landed. The handover sources phaseAppendPrompt gathers
+  // are already read fresh inside each call; the task snapshot (D24) is
+  // entry state no remediation rewrites.
+  const freshen = async (): Promise<void> => {
+    input = (await readPlanInput(directory, phase))?.trim() || undefined
+    brief = await projectBriefText(directory)
+  }
   const compose = async (): Promise<{ prompt: string; blocks: BlockMapEntry[] }> => {
+    await freshen()
     const prompt = ctx.manual
       ? renderPhaseAppend(planFacts(ctx), {
           phaseId,

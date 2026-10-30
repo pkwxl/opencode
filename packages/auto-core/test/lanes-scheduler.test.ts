@@ -45,8 +45,9 @@ import {
 } from "../src/lanes"
 import { RUN_STATUS_FILE, startRunStatus, stopRunStatus } from "../src/run-status"
 import type { RunStatusEvent } from "../src/run-status-schema"
-import { changedFiles, commitTree, unitBaseline } from "../src/git"
+import { changedFiles, commitTree, headSha, unitBaseline, type GitOps } from "../src/git"
 import { createGitOps } from "../src/git-ops"
+import { laneReportOf } from "../src/loop"
 import { setShellProfile, type LaneWorker } from "../src/shell"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import { begin, clearLane, laneRecords, loadPlan, markDone, next, readChecklist, renderTaskIndex, setLane, setSplit, tickSubtask, UNITS_FILE, unitAttempts, type Plan, type Task } from "../src/tasks"
@@ -588,6 +589,46 @@ describe("landLane (D7's five steps)", () => {
     if (landed.type === "blocked") expect(landed.error).toContain("non-driver commit")
     expect(await changedFiles(dir)).toEqual([])
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
+  })
+
+  test("a landing-sync commit failure keeps the split and parked records (plans/0156 D6): persisted before the commit, so the failure path's teardown cannot destroy them", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const lane = await dispatchLane(createGitOps(), dir, task)
+    if (lane.type !== "spawned") throw new Error(lane.error)
+    // The lane completed its unit the real way, and its report carries a
+    // lead's taken split and a parked record — both of which the parent
+    // re-persists at landing, and whose only other home is the worktree's
+    // .auto/ that the failure branch tears down.
+    await markDone({ dir: lane.worktree, index: join(phase.dir, "tasks.md") }, "T-001")
+    await mkdir(join(lane.worktree, "src"), { recursive: true })
+    await Bun.write(join(lane.worktree, "src", "widget.ts"), "export const widget = 1\n")
+    const settled = await commitTree(lane.worktree, task, { stage: "done", subject: "T-001 done the widget" })
+    expect(settled.ok).toBe(true)
+    const report = reportOf("T-001", {
+      split: { items: 2, baseline: [{ root: lane.worktree, sha: "abc1234" }] },
+      parked: "T-009",
+    })
+    // The seam double: every commit works except the landing-sync one.
+    const base = createGitOps()
+    const failing: GitOps = {
+      ...base,
+      commitTree: async (d, t, info, paths) =>
+        info.stage === "landing-sync" ? { ok: false, failures: [{ rel: ".git/index", error: "simulated landing-sync failure" }] } : base.commitTree(d, t, info, paths),
+    }
+
+    const landed = await landLane(failing, dir, phase, task, report)
+    expect(landed.type).toBe("blocked")
+    if (landed.type === "blocked") expect(landed.error).toContain("the landing-sync commit of T-001 failed")
+    // The worktree died in the failure branch's teardown — the split record
+    // survived it in the MAIN tree's registry, its baseline roots re-rooted
+    // off the main directory (the worktree path is gone), and the parked
+    // record with it: a re-run re-expands the streams and never re-selects
+    // the parked unit.
+    expect(await dirExists(join(dir, lanePark("T-001")))).toBe(false)
+    const units = JSON.parse(await unitsText(dir))
+    expect(units.tasks["T-001"].split).toEqual([{ root: dir, sha: "abc1234" }])
+    expect(units.tasks["T-001"].parked).toBe("T-009")
   })
 })
 
@@ -1323,7 +1364,7 @@ describe("recoverOrphanLanes (D14)", () => {
     await setLane(dir, "T-001", { worktree: lanePark("T-001"), pid: await deadPid() })
     const lines: string[] = []
     const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map((arg) => String(arg)).join(" "))
+      lines.push(args.map(String).join(" "))
     })
     let code: number | undefined
     try {
@@ -1333,6 +1374,48 @@ describe("recoverOrphanLanes (D14)", () => {
     }
     expect(code).toBe(2)
     expect(lines.some((line) => line.includes("no longer exists"))).toBe(true)
+  })
+
+  test("a stream lane's report names its owning task's phase (plans/0156 D3): the recovered stream lane lands, no exit 2", async () => {
+    // The orphan scene of a split's stream: the parent's T-001 todo (the
+    // only document carrying the `Phase:` field — a stream's own S<nn>/
+    // files never do) sits at HEAD, the worktree's lane finished the stream
+    // and wrote its report through the real writer. The old report read the
+    // never-existing docs/T-001.S01/ path, carried phase "", and the
+    // recovery blocked at the landing ("names phase (none)") even over a
+    // PASS report — the D14 cattle property broke at the landing step.
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    const unit = "T-001.S01"
+    const park = join(dir, lanePark(unit))
+    const added = await createGitOps().addWorktree(dir, park, laneBranch(unit, dir))
+    if (!added.ok) throw new Error(added.error)
+    await writeScaffolding(park)
+    // The stream's completion, the real lane shape: its own state file
+    // renamed done plus the work, one done commit.
+    await mkdir(join(park, "docs", "T-001", "S01"), { recursive: true })
+    await Bun.write(join(park, "docs", "T-001", "S01", "todo.md"), "Touches: src/widget.ts\n\n## Scope\n\nsrc only.\n")
+    await renameTodoToDone(park, "T-001", 1)
+    await mkdir(join(park, "src"), { recursive: true })
+    await Bun.write(join(park, "src", "widget.ts"), "export const done = \"T-001.S01\"\n")
+    const settled = await commitTree(park, { id: unit, title: "the widget" }, { stage: "done", subject: `${unit} done stream 1 of the widget` })
+    expect(settled.ok).toBe(true)
+    // The report through the real writer — the phase must name the owning
+    // task's phase, read from docs/T-001/{todo,done}.md.
+    const report = await laneReportOf(park, {}, unit, 0, (await headSha(park)) ?? "", Date.now())
+    expect(report.phase).toBe("R-01.P01")
+    await writeLaneReport(park, report)
+    await begin(dir, unit)
+    await setLane(dir, unit, { worktree: lanePark(unit), pid: await deadPid() })
+
+    const code = await recoverOrphanLanes(createGitOps(), dir)
+    // The recovery landed the finished stream instead of blocking: the
+    // stream's done file and its work are in the main tree, the scene
+    // cleaned, the run continues (undefined = no exit).
+    expect(code).toBeUndefined()
+    expect(await Bun.file(join(dir, "docs", "T-001", "S01", "done.md")).exists()).toBe(true)
+    expect(await Bun.file(join(dir, "src", "widget.ts")).text()).toContain("T-001.S01")
+    expect(await parkEntries()).toEqual([])
+    expect(await changedFiles(dir)).toEqual([])
   })
 
   test("park stragglers with no registry entry are pruned; one holding a live run lock is left alone", async () => {

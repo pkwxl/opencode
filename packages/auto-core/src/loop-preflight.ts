@@ -25,6 +25,7 @@ import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
 import {
   dispatchLane,
+  docEligible,
   docScheduler,
   laneBranch,
   laneExit,
@@ -49,7 +50,7 @@ import { releasedRoundBriefProposal, resolveRoundPhases } from "./analysis"
 import { checkModelReferences, loadModels } from "./models"
 import type { ModelRegistry } from "./models-schema"
 import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
-import { phaseKey, readPhases, currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
+import { phaseKey, readPhases, currentPhase, currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { roundBriefText } from "./round-brief"
 import { loadPhaseTypes } from "./phases/custom"
@@ -202,16 +203,19 @@ export type RunAllOpts = {
   // or a held verdict gate may drive before blocking for the human, modeled
   // on the bounded-recovery precedents (/exit, failover). Absent/0 = today's
   // behavior: the first FAIL blocks (exit 2). Run-side width, never a config
-  // key; not in force under lanes or under a stop condition — the serial run
-  // path alone (plan and transfer carry no budget, and since plans/0101 D1
-  // the verdict gates they meet sit past run's boundary stop).
+  // key; in force on the serial path and the doc lanes at tier 0 (plans/0099
+  // D3 carries the repair round into the doc loop's finishBlocked), never
+  // under worktree lanes or branch isolation (a repair round appends into
+  // the index the lanes schedule from) and never under a stop condition —
+  // plan and transfer carry no budget, and since plans/0101 D1 the verdict
+  // gates they meet sit past run's boundary stop.
   repair?: number
   // --stop-after (plans/0128): the task id whose completion ends this run —
   // the retry's guardrail in a fork environment, usable anywhere the serial
   // loop runs. Run-side width, never a config key, never persisted; refused
   // under the lane scheduler and the doc lanes (a stop mid-flight would
-  // strand in-flight work) — the serial path alone, like --repair's
-  // confinement.
+  // strand in-flight work) — the serial path alone, a tighter confinement
+  // than --repair's (the doc loop repairs but cannot stop mid-drain).
   stopAfter?: string
   // plan's stop condition (plans/0053 D6): the run stops once a planning step
   // has succeeded, or where an execute route would start, and prints what to
@@ -649,7 +653,11 @@ export async function preflight(
   // orphaned unit for the serial loop without touching the scene.
   if (!opts.dryrun && !opts.lane && worktreeScheduler(opts.maxSessions, treeTier)) {
     const recovered = await recoverOrphanLanes(run.git, directory)
-    if (recovered !== undefined) return { exit: recovered }
+    if (recovered !== undefined) {
+      progress.close()
+      watcher?.close()
+      return { exit: recovered }
+    }
   }
   // The regression lane's orphan (plans/0098 D4): a background copy or its
   // in-flight marker the previous parent run left behind. Unlike the lane
@@ -666,9 +674,30 @@ export async function preflight(
   // (.auto/progress.json) makes runTask reuse the original session and
   // continue. The marks are runtime state (.auto/units.json, not in git,
   // M3.4) and produce no commit. dryrun changes no state file.
+  // The doc scheduler's own leftovers are kept (plans/0156 D1): preflight
+  // once reset every mark before the loop was entered, so the doc-lane
+  // recovery flatten (plans/0099 D10) never saw a real cross-run leftover —
+  // its designed protections (sibling scopes for the start gates, the
+  // rollback refusal) were silently disarmed. The keep-set is exactly the
+  // marks the flatten reads — the current phase's doc-eligible in_progress
+  // units — computed only when this run dispatches the doc scheduler (the
+  // branch's own predicate; a lane worker never runs the doc loop, a
+  // serial run has no flatten to feed). If the run stops before the doc
+  // loop is reached, the kept marks persist to the next run — the same
+  // recovery shape, one run later.
+  const docKeep = new Set<string>()
+  if (!opts.dryrun && !opts.lane && autoSwitches().docLanes && !autoSwitches().laneIsolation && docScheduler(opts.maxSessions, treeTier)) {
+    const state = await readPhases(directory).catch(() => undefined)
+    const phase = state ? currentPhase(state) : undefined
+    if (phase) {
+      const plan = await loadPlan(directory, phase).catch(() => undefined)
+      if (plan) for (const unit of plan.tasks) if (unit.status === "in_progress" && docEligible(unit)) docKeep.add(unit.id)
+    }
+  }
   if (!opts.dryrun) {
-    const stale = await resetInProgress(directory)
+    const stale = await resetInProgress(directory, docKeep)
     if (stale.length) log(`↻ resuming interrupted state: ${stale.join(", ")} reset from in_progress to pending`)
+    if (docKeep.size) log(`↻ doc-lane recovery: ${[...docKeep].join(", ")} kept in_progress for the doc loop's recovery flatten (plans/0099 D10)`)
   }
   // before the first session, ensure AGENTS.md's opencode-auto block matches
   // the current config rendering (append when missing, replace the whole block
@@ -702,6 +731,8 @@ export async function preflight(
     })
     if (!settled.ok) {
       log(`⏸ pre-run baseline close-out commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle git manually and re-run`)
+      progress.close()
+      watcher?.close()
       return { exit: 2 }
     }
   }

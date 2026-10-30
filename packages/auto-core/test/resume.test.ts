@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { requireArtifact } from "../src/artifact"
 import { noCommitGit } from "../src/git-ops"
 import { runTask } from "../src/runner"
+import { setSwitchModelRegistry } from "../src/switches"
 import { closeStep, forgetProgress, openStep, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
 import { fakeAgent } from "./fixtures/agent"
 import { pastMessage } from "./fixtures/loop"
@@ -296,6 +297,74 @@ describe("recovery through the shared ladder: the task caller (runTask)", () => 
       printed.mockRestore()
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  // plans/0156 D2: the handover-precedence read is gated on the steer key
+  // executeWhole gates its status parse on (plans/0130 D1 — the protocol
+  // stands for every whole-task session, mode `off` included), never on the
+  // decompose mode. The old mode gate made the default configuration's
+  // (mode off + steer on) continuation dispatch go into the context-spent
+  // session the ladder had just declined to hand over.
+  describe("the handover document's precedence over session reuse (plans/0156 D2)", () => {
+    const setupHandoff = async () => {
+      const dir = await mkdtemp(join(tmpdir(), "auto-task-resume-"))
+      const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+      await saveProgress(dir, { task: "T-001", session: "ses_old", at: 1, active: true, phase: { kind: "whole" } })
+      // The interrupted session handed itself over before the kill: the
+      // document carries the progress, the old session's context is spent.
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await Bun.write(join(dir, "docs", "T-001", "handoff.md"), "Half done; next: the rest.\n\nStatus: continue\n")
+      const agent = fakeAgent({ history: { ses_old: [pastMessage("ses_old", 5000)] } })
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "))
+      })
+      return { dir, plan, agent, lines, printed }
+    }
+
+    test("mode off + steer on (the default): the document outranks reuse — a fresh session continues from it, the old one never re-entered", async () => {
+      const { dir, plan, agent, lines, printed } = await setupHandoff()
+      try {
+        const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false, git: noCommitGit() })
+        expect(outcome).toEqual({ type: "completed" })
+        // The takeover never happened: the first prompt goes to a NEW session,
+        // not the interrupted ses_old (whose context the document says is spent).
+        expect(agent.prompts[0]!.session).not.toBe("ses_old")
+        expect(agent.prompts[0]!.text).toContain("Part of the work may already be done.")
+        const line = lines.find((value) => value.includes("resume after interruption"))
+        expect(line).toContain("a handover document was written before the interruption and carries the progress")
+        // executeWhole's own half read the same document: the continuation
+        // seeds from it.
+        expect(agent.prompts[0]!.text).toContain("docs/T-001/handoff.md")
+      } finally {
+        printed.mockRestore()
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+
+    test("steer off (0130's floor): the read stays skipped, the live session is reused — the mode carries no gate of its own", async () => {
+      const { dir, plan, agent, printed } = await setupHandoff()
+      const savedSteer = process.env.OPENCODE_AUTO_STEER
+      process.env.OPENCODE_AUTO_STEER = "off"
+      setSwitchModelRegistry(undefined)
+      try {
+        const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false, git: noCommitGit() })
+        expect(outcome).toEqual({ type: "completed" })
+        // With the switch off the protocol does not exist: no precedence,
+        // the ladder reuses the recorded session as before, and the prompt
+        // is the plain whole-task one — never the continuation seeding from
+        // the document (the park teaching naming the file is unrelated).
+        expect(agent.prompts).toHaveLength(1)
+        expect(agent.prompts[0]!.session).toBe("ses_old")
+        expect(agent.prompts[0]!.text).not.toContain("First read docs/T-001/handoff.md")
+      } finally {
+        if (savedSteer === undefined) delete process.env.OPENCODE_AUTO_STEER
+        else process.env.OPENCODE_AUTO_STEER = savedSteer
+        setSwitchModelRegistry(undefined)
+        printed.mockRestore()
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
   })
 })
 

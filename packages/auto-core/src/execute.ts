@@ -123,14 +123,22 @@ type HandoverVerdict =
 //   in the stash).
 //   AUTO-DECISION: the redo bodies stay in the callers, only their spending shared (the whole scope resets its split state, the subtask re-seeds its fork — scope recovery, not handover policy; merging the bodies would take before/after reset callbacks that recreate the duplication as plumbing)
 // - subject, the chain's session subject (the fork policy's fork names it).
-export type HandoverScope = {
+// The handover scope descriptor (unexported — the callers build it inline;
+// the run-status vocabulary restates it structurally).
+type HandoverScope = {
   retry: "fresh" | "fork"
   subtask?: number
   fix?: boolean
   rollbackRedo: () => Promise<UnitStop | "done" | undefined>
   subject: string
+  // The handover document this scope is judged by (plans/0156 D5): the
+  // task-level file by default; a lane stream's own per-stream file
+  // (docs/T-NNN/S<nn>/handoff.md, plans/0068 S5) when the caller passes it —
+  // the retry feedback, the log lines and the blocked message all name the
+  // document an obedient session must write, and a serial in-lane stream
+  // keeps the task-level one its steer names.
+  handoff?: string
 }
-
 // The one post-session handover decision (plans/0056): a session that ended
 // under a live steer is judged by its handover document — due by the figure
 // (the hard-wall hint in watch + the usage figure) or by a fresh document the
@@ -154,7 +162,7 @@ export async function handoverVerdict(
 ): Promise<HandoverVerdict> {
   if (steer === undefined) return { type: "natural" }
   const who = scope.subtask !== undefined ? `${task.id} subtask ${scope.subtask}` : scope.fix ? `${task.id} fix` : task.id
-  const file = handoffFile(task)
+  const file = scope.handoff ?? handoffFile(task)
   const doc = await readHandoff()
   const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
   const fresh = doc !== "" && doc !== state.consumed
@@ -949,10 +957,10 @@ export async function runSubtask(
   if (stateDone) {
     log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
   } else if (prior === "done") {
-    log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks the subtask complete; checking it off directly`)
+    log(`↻ ${task.id} resume after interruption: handover document ${streamHandoff} marks the subtask complete; checking it off directly`)
   } else {
     let continuation = prior === "continue"
-    if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues the subtask from the handover document`)
+    if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${streamHandoff} before the interruption; the new session continues the subtask from the handover document`)
     // The session the interruption recovery reuses (it holds a resume note):
     // seedForkSession keeps it instead of forking.
     const resumed = chain.id !== undefined && chain.note !== undefined
@@ -1085,7 +1093,7 @@ export async function runSubtask(
       // the shape check below (a subtask's completion is judged by it, never
       // by agent self-report). The planned pipeline's subtasks build no steer
       // and end naturally here.
-      const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fork", subtask: index, subject, rollbackRedo }, readHandoff, result.lastText)
+      const decision = await handoverVerdict(client, task, chain, steer, handover, { retry: "fork", subtask: index, subject, rollbackRedo, ...(laneStream ? { handoff: streamHandoff } : {}) }, readHandoff, result.lastText)
       if (decision.type === "continue") {
         // The same /exit boundary as executeWhole's (plans/0143): the
         // stream's open work is the interruption seeding the resume path

@@ -646,7 +646,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         )
       } else {
         log(
-          `⚠ unclosed phase-step resume point (${open.step} ${open.unit ?? "unrecorded phase"}) is inconsistent with the current route phase (${phaseTitle(route.phase)}); ` +
+          `⚠ unclosed phase-step resume point (${open.step} ${open.unit}) is inconsistent with the current route phase (${phaseTitle(route.phase)}); ` +
             `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
         )
       }

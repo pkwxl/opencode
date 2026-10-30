@@ -100,7 +100,7 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
 // heading per gap — the countable grammar the wrap-up template teaches, the
 // fix session reads, and the driver's own lane-gap writer emits. The
 // progress rule keys on this count alone, never on the entries' content.
-export function countGaps(text: string): number {
+function countGaps(text: string): number {
   let n = 0
   for (const line of text.split("\n")) if (/^### Gap\b/.test(line)) n += 1
   return n
@@ -233,6 +233,15 @@ async function verifySession(
       await rm(join(dir, gapsRel), { force: true })
       const committed = await git.afterSession(dir, opts, task, { stage: "wrapup", subject })
       if (committed.type === "failed") return { kind: "stop", stop: commitBlocked(`${task.id} ${input.label}`, committed) }
+      // The verify session's own unservable request (plans/0142, widened by
+      // plans/0156 D8): a PASS that leaves tmp/test.sh behind is consumed at
+      // this task's close — the wrap-up template forbids re-running checks,
+      // so the marker here is the T-058 shape (the session read the task's
+      // gap list or document naming it), and without this consumption it
+      // would linger until the NEXT task's wrap-up entry, whose log would
+      // misattribute it to that task. The FAIL path needs nothing: its fix
+      // round's close consumes and blocks on it already.
+      await consumeDeadTestMarker(dir, opts, task.id)
       return { kind: "pass" }
     }
     const rel = verdict.kind === "fail" ? gapsRel : taskDoc(task.id, "report")
