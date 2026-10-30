@@ -349,3 +349,29 @@ describe("the stamp ordering under the boundary (plans/0147 D1/D2)", () => {
     expect(Object.keys((JSON.parse(stamped0122) as any).permission.external_directory)).toEqual(["/corpus/**", "/person/**"])
   })
 })
+
+describe("the 0155 pins: the boundary pair under a person catch-all, the seal's standing deny", () => {
+  test("stampKnowledgeBoundary places the missing pair after a person-set /** key — the /tmp allowance wins its tie against that catch-all (D3)", () => {
+    // The exact quiet break: a person-set "/**": "deny" with /tmp missing —
+    // the old front insert left "/tmp/**" before the deny and last-match-wins
+    // silently disabled the receipts convention.
+    const personCatchAll = JSON.stringify({ permission: { external_directory: { "/**": "deny", "/person/**": "ask" } } }) + "\n"
+    expect(knowledgeBoundaryMissing(personCatchAll)).toBe(true)
+    const stamped = stampKnowledgeBoundary(personCatchAll)!
+    expect(Object.keys((JSON.parse(stamped) as any).permission.external_directory)).toEqual(["/**", "/tmp/**", "/person/**"])
+    // The same placement under a person catch-all of another action (never
+    // inserted over): /tmp still wins its tie.
+    const askWall = JSON.stringify({ permission: { external_directory: { "/**": "ask" } } }) + "\n"
+    const stamped2 = stampKnowledgeBoundary(askWall)!
+    expect(Object.keys((JSON.parse(stamped2) as any).permission.external_directory)).toEqual(["/**", "/tmp/**"])
+    expect((JSON.parse(stamped2) as any).permission.external_directory["/**"]).toBe("ask")
+  })
+
+  test("stampWallClosure: a person ask on a stamp key is overridden by the seal's standing deny; every other person key keeps its action and order (D3)", () => {
+    const personAsk = JSON.stringify({ permission: { external_directory: { [stampKey("/corpus")]: "ask", "/person/**": "allow" } } }) + "\n"
+    const closed = stampWallClosure(personAsk, ["/corpus"])!
+    const external = (JSON.parse(closed) as any).permission.external_directory
+    expect(external).toEqual({ [stampKey("/corpus")]: "deny", "/person/**": "allow" })
+    expect(Object.keys(external)).toEqual([stampKey("/corpus"), "/person/**"])
+  })
+})

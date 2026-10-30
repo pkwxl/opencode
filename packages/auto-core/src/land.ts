@@ -48,7 +48,7 @@
 import { join } from "node:path"
 import { roundDirName } from "./docpaths"
 import { CONFIG_FILE } from "./config"
-import { foreignCommits, statusEntries } from "./git"
+import { foreignCommits, statusEntriesRead } from "./git"
 import { currentBranch, deleteBranch } from "./git-worktree"
 import {
   branchCommits,
@@ -111,10 +111,18 @@ export async function landUnit(dir: string, opts: LandOptions): Promise<LandOutc
 
   // —— Pass 1: every refusal, before any repository's git state is touched ——
   // A dirty repository blocks like the establishment gate does (uncommitted
-  // changes would ride into the landing or block the checkout).
+  // changes would ride into the landing or block the checkout); an unreadable
+  // status blocks the same way (plans/0155 D1: the clean question cannot be
+  // answered — never a quiet pass).
   const dirty: { rel: string; files: string[] }[] = []
   for (const rel of opts.isolate) {
-    const files = (await statusEntries(dir, join(dir, rel))).map((entry) => entry.rel)
+    const read = await statusEntriesRead(dir, join(dir, rel))
+    if (read === undefined) {
+      return blocked([
+        `⏸ landing requires readable repositories: git status failed over ${rel}, so its cleanliness cannot be judged; investigate the repository state and re-run`,
+      ])
+    }
+    const files = read.map((entry) => entry.rel)
     if (files.length) dirty.push({ rel, files })
   }
   if (dirty.length) {
@@ -143,7 +151,17 @@ export async function landUnit(dir: string, opts: LandOptions): Promise<LandOutc
       continue
     }
     const original = candidates[0]!
-    const base = (await mergeBaseFull(root, original, branch))!
+    const base = await mergeBaseFull(root, original, branch)
+    if (base === undefined) {
+      // No merge base: the two branches share no history (the round branch
+      // re-created from an orphan after history surgery, a re-imported
+      // tree). Every refusal below measures from the isolation point and
+      // there is none — a refusal, never an automated merge resolution.
+      problems.push(
+        `${rel}: ${original} and ${branch} share no merge base (an unrelated history); landing measures everything from the isolation point and has none — merge by hand or re-create the isolation point`,
+      )
+      continue
+    }
     if (opts.abandon) {
       pending.push({ rel, root, original, base, count: 0 })
       continue

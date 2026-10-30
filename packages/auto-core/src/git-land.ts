@@ -12,12 +12,11 @@
 import { join } from "node:path"
 import {
   abortToLandResult,
-  changedFiles,
   firstLine,
   git,
   identityArgs,
   isConflict,
-  statusEntries,
+  statusEntriesRead,
   type LandResult,
   type WorktreeResult,
 } from "./git"
@@ -62,7 +61,14 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
     // The designated path is a repository root (the config validated a .git
     // entry), so its own status — the same porcelain pass changedFiles runs
     // per repoRoot — covers it whole; paths relative to the target directory.
-    const files = (await statusEntries(dir, join(dir, rel))).map((entry) => entry.rel)
+    // An unreadable status reads as dirty with the named line (plans/0155
+    // D1): the clean precondition cannot be judged, never a quiet pass.
+    const read = await statusEntriesRead(dir, join(dir, rel))
+    if (read === undefined) {
+      dirty.push({ rel, files: [`${rel}: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state`] })
+      continue
+    }
+    const files = read.map((entry) => entry.rel)
     if (files.length) dirty.push({ rel, files })
     else clean.push(rel)
   }
@@ -208,8 +214,12 @@ export async function mergeNoFf(root: string, branch: string, subject: string): 
 async function squashFailure(root: string, failed: { code: number; out: string; err: string }, what: string): Promise<LandResult> {
   if (isConflict(failed.out, failed.err)) {
     const reset = await git(root, ["reset", "--hard", "HEAD"])
-    if (reset.code === 0 && !(await changedFiles(root)).length) return { type: "conflict", detail: firstLine(failed.err || failed.out) }
-    return { type: "failed", error: `resetting the conflicted squash failed (git reset --hard exit code ${reset.code}: ${firstLine(reset.err || reset.out)}); the repository must be handled manually` }
+    // Judged over the merged repository alone (plans/0155): a dirty or
+    // unreadable nested repository elsewhere under it is not the reset's
+    // work; an unreadable status reads as failed, never clean (P12).
+    const entries = reset.code === 0 ? await statusEntriesRead(root, root) : undefined
+    if (entries !== undefined && !entries.length) return { type: "conflict", detail: firstLine(failed.err || failed.out) }
+    return { type: "failed", error: `resetting the conflicted squash failed (${entries === undefined ? "git status unreadable over the repository" : `git reset --hard exit code ${reset.code}: ${firstLine(reset.err || reset.out)}`}); the repository must be handled manually` }
   }
   return { type: "failed", error: `${firstLine(failed.err || failed.out) || `${what} exit code ${failed.code}`}` }
 }

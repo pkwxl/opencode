@@ -16,7 +16,7 @@ import { commitTree } from "../src/git"
 import { establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { loadPhaseTypes, parsePhaseTypeFile } from "../src/phases/custom"
 import { renderTaskIndex } from "../src/tasks"
-import { findWallCommit, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
+import { findWallCommit, sealedChannelCheck, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
 import { taskDoc } from "./fixtures/loop"
@@ -217,6 +217,44 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect((await opencode(dir)).permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
   })
 
+  test("the multi-door close (plans/0155 D2): a hand-removed door beside a surviving declared door — its stamped allow is recovered and retired, the seal complete", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject("true", "linux, vendor")
+    // The second declared door, standing beside the first: its corpus
+    // outside /tmp, its symlink tracked, its driver-stamped allow live.
+    const vendor = mkdtempSync(join(homedir(), "auto-wall-vendor-"))
+    made.push(vendor)
+    writeFileSync(join(vendor, "vend.c"), "void vend(void) {}\n")
+    symlinkSync(vendor, join(dir, "vendor"))
+    const config = await opencode(dir)
+    config.permission.external_directory[`${vendor}/**`] = "allow"
+    await Bun.write(join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "both doors standing")
+    // The person removes the vendor door by hand (a tracked removal); its
+    // stamped allow stays in the untracked opencode.json. The all-or-nothing
+    // recovery gate would have skipped the derivation (a declared door
+    // survives), orphaned the allow — neither the person-entry split nor the
+    // retirement would ever name vendor's target.
+    rmSync(join(dir, "vendor"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "person removes the vendor door, its stamp standing")
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    // Both targets recorded — the surviving door by name, the removed one
+    // recovered under the placeholder — and both stamps retired to denies.
+    const record = (await findWallCommit(dir))!
+    expect(record.doors).toEqual([
+      { name: "linux", target: corpus },
+      { name: "(removed)", target: vendor },
+    ])
+    expect((await opencode(dir)).permission.external_directory).toEqual({ [`${corpus}/**`]: "deny", [`${vendor}/**`]: "deny" })
+    // The wall commit's tracked diff is the surviving door's removal alone.
+    const show = await git(dir, "show", "--name-status", "--format=", record.sha)
+    expect(show.trim()).toBe("D\tlinux")
+    // Post-wall the boundary re-derives closed: no orphaned allow, the
+    // placeholder door never read as re-created.
+    expect(await wallPrecheckFindings(dir)).toEqual([])
+  })
+
   test("the interrupted retirement finishes at the boundary: a re-added exact stamp allow is withdrawn, the deny re-asserted", async () => {
     const { dir, corpus, phase, ctx } = await wallProject()
     expect(await wallBoundary(ctx, phase)).toEqual([])
@@ -364,5 +402,20 @@ describe("the sealed channel (D4): one diff check, the person's amendment the on
     const record = await findWallCommit(ctx.directory)
     expect(record!.sealed).toContain(join(phase.dir, "spec-notes.md"))
     expect(loadPhaseTypes(ctx.directory).find((entry) => entry.type === "spec-read")!.wall).toEqual({ doors: ["linux"] })
+  })
+
+  test("an unreadable history is a blocking finding, never a green freeze (plans/0155 D1: a scan failure is a red lane)", async () => {
+    const { dir, phase, ctx } = await wallProject()
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    const record = (await findWallCommit(dir))!
+    expect(record.sealed.length).toBeGreaterThan(0)
+    // The one diff check cannot run (the wall commit's sha no longer
+    // resolves — history surgery): the failure is the finding, never an
+    // empty answer read as green.
+    const problems = await sealedChannelCheck(dir, { ...record, sha: "0".repeat(40) })
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain("sealed-channel check failed")
+    expect(problems[0]).toContain("cannot be asserted")
+    expect(problems[0]).toContain("investigate the repository state")
   })
 })

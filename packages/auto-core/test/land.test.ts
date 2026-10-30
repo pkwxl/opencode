@@ -209,6 +209,30 @@ describe("landUnit (plans/0074 §2.3, U-L2: the landing command core)", () => {
   )
 
   test(
+    "refusal: the original branch and auto/R-NN share no merge base (an unrelated history) — a blocked refusal, never a crashed one (plans/0155 D4)",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir)
+      const original = await branchOf(pkg)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      // History surgery re-created the round branch from an orphan root:
+      // the two branches share no merge base at all.
+      const orphan = (await git(pkg, "commit-tree", `${original}^{tree}`, "-m", "orphan history")).trim()
+      await git(pkg, "checkout", "-q", original)
+      await git(pkg, "branch", "-f", "auto/R-01", orphan)
+      const blocked = await landUnit(dir, { isolate: ["pkg"] })
+      expect(blocked.type).toBe("blocked")
+      expect(blocked.lines).toHaveLength(3)
+      expect(blocked.lines[0]).toBe("⏸ round R-01 cannot land yet:")
+      expect(blocked.lines[1]).toMatch(/^  pkg: \S+ and auto\/R-01 share no merge base \(an unrelated history\); /)
+      expect(blocked.lines[1]).toContain("merge by hand or re-create the isolation point")
+      // Nothing landed: the original branch untouched, the round branch kept.
+      expect(await commitCount(pkg, original)).toBe(1)
+      expect(await hasBranch(pkg, "auto/R-01")).toBe(true)
+    }),
+  )
+
+  test(
     "refusal: foreign commits mixed into auto/R-NN's range — never landed automatically",
     withDir(async (dir) => {
       const pkg = await nestedRepo(dir)

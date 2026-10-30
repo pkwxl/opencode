@@ -50,7 +50,7 @@ import { rm, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { taskDir } from "./docpaths"
 import { allowBase, boundaryAllowedTargets, coveringAllowKeys, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
-import { git, scriptGuardSnapshot, type GitOps } from "./git"
+import { firstLine, git, scriptGuardSnapshot, type GitOps } from "./git"
 import { allowWrite, protectAdditional, reprotect } from "./protect"
 import { loadPhaseTypes } from "./phases/custom"
 import { phaseArtifacts, phaseTitle, readPhases, type PhaseUnit } from "./phases"
@@ -315,10 +315,19 @@ async function sealedPathsOf(dir: string, sealing: PhaseUnit): Promise<string[]>
 // direct write, rename-and-replace, git surgery — the diff sees them all);
 // a person commit is the monitor-mediated amendment, the one recorded
 // exception, noted for review and never blocked here.
-async function sealedChannelCheck(dir: string, record: WallRecord): Promise<string[]> {
+// Exported for the boundary family's tests beside the other readers.
+export async function sealedChannelCheck(dir: string, record: WallRecord): Promise<string[]> {
   if (!record.sealed.length) return []
   const got = await git(dir, ["log", "--format=%H%x1f%B%x1e", `${record.sha}..HEAD`, "--", ...record.sealed])
-  if (got.code !== 0) return []
+  if (got.code !== 0) {
+    // The freeze assertion never reads as green on an unreadable history
+    // (plans/0155 D1): the module's own rule — a scan failure is a red lane
+    // (0121 D5 inherited) — a failed `git log` is a blocking finding, never
+    // an empty answer.
+    return [
+      `⏸ sealed-channel check failed: git log over ${record.sha.slice(0, 7)}..HEAD could not be read (${firstLine(got.err || got.out) || `exit code ${got.code}`}) — the frozen channel cannot be asserted on an unreadable history; investigate the repository state and re-run`,
+    ]
+  }
   const problems: string[] = []
   const amendments: string[] = []
   for (const entry of got.out.split("\x1e")) {
@@ -407,13 +416,21 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
   // A doorless driver-stamped allow (its base exists on disk but no current
   // root symlink resolves there — the person's hand-removal, or an
   // interrupted close after the removal) carries the target alone: "door
-  // absent with a covering allow means finish the retirement".
+  // absent with a covering allow means finish the retirement". With several
+  // declared doors the recovery derivation runs whenever ANY of them is
+  // missing (plans/0155 D2): an all-or-nothing gate would let the surviving
+  // doors close the wall while a hand-removed door's stamped allow stayed
+  // live — orphaned by neither the person-entry split (it operates on the
+  // recorded targets) nor the retirement, the seal silently incomplete. The
+  // no-fill shape keeps its own all-or-nothing reading (no declared door
+  // means the only missing signal is no door at all).
   const declared = sealing.entry.wall!.doors
   const external = await rootSymlinkDoors(dir)
   const present = declared.length ? external.filter((door) => declared.includes(door.name)) : external
   const text = await opencodeText(dir)
   const recovered: WallDoor[] = []
-  if (!present.length && text !== undefined) {
+  const anyMissing = declared.length ? present.length < declared.length : !present.length
+  if (anyMissing && text !== undefined) {
     const current = new Set(external.map((door) => door.target))
     const live = externalDirectoryLive(text)
     if (live !== undefined) {

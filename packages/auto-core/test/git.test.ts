@@ -21,6 +21,9 @@ import {
   repoRoots,
   restoreFile,
   rollbackUnit,
+  statusEntries,
+  statusEntriesRead,
+  stashTree,
   suffixedTitle,
   taskChangedPaths,
   unitBaseline,
@@ -39,6 +42,7 @@ import {
   WORKTREE_TEARDOWN,
 } from "../src/git-worktree"
 import { noCommitGit } from "../src/git-ops"
+import { captureRun } from "./fixtures/capture"
 import { git } from "./fixtures/runner"
 
 describe("shortTitle (the commit-subject title form, plans/0148 D2)", () => {
@@ -1059,6 +1063,196 @@ describe("landBranch (D7's landing merge)", () => {
       expect(landed.type).toBe("failed")
       if (landed.type === "failed") expect(landed.error).toBeTruthy()
       expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a modify/delete conflict over an own file never resolves onto the lane's side: the failing resolution step aborts the merge as a real conflict (plans/0155 D4)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, ".gitignore"), ".auto/\n")
+      await writeFile(join(dir, "base.txt"), "base\n")
+      await writeFile(join(dir, "tasks.md"), "v1\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: baseline" })
+      const park = join(dir, ".auto", "worktrees", task.id)
+      const branch = `auto-lane/${task.id}`
+      const added = await addWorktree(dir, park, branch)
+      if (!added.ok) throw new Error(added.error)
+      // The lane ticks the parent-owned index; the main tree has deleted it
+      // by the landing — a modify/delete conflict on exactly an own file:
+      // `checkout --ours` has no ours-version to restore ("path ... does not
+      // have our version"), and staging the surviving lane content would
+      // conclude the merge with the parent's deletion silently reverted.
+      await writeFile(join(park, "tasks.md"), "lane ticked\n")
+      await commitTree(park, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      await rm(join(dir, "tasks.md"))
+      await commitTree(dir, task, { stage: "housekeeping", subject: "PLAN housekeeping removed the phase index" })
+      const landed = await landBranch(dir, branch, task, ["tasks.md"])
+      expect(landed.type).toBe("conflict")
+      // The parent's deletion stands and the main tree is clean again; the
+      // lane's work survives for the conflict protocol.
+      expect(await Bun.file(join(dir, "tasks.md")).exists()).toBe(false)
+      expect(await changedFiles(dir)).toEqual([])
+      expect(await Bun.file(join(park, "tasks.md")).text()).toBe("lane ticked\n")
+      expect((await git(dir, "branch", "--list", branch)).trim()).toContain(branch)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the aborted merge is judged over the merged repository alone: a dirty nested repository elsewhere never misreports the abort (plans/0155)", async () => {
+    const { dir, park, branch } = await laneScene()
+    try {
+      await writeFile(join(park, "base.txt"), "lane side\n")
+      await commitTree(park, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      await writeFile(join(dir, "base.txt"), "main side\n")
+      await commitTree(dir, task, { stage: "housekeeping", subject: "PLAN housekeeping sibling move" })
+      // A nested repository under the main tree, dirty: not the abort's
+      // work, but a whole-tree walk would count it as a failed abort.
+      await mkdir(join(dir, "nested"), { recursive: true })
+      await git(join(dir, "nested"), "init", "-q")
+      await writeFile(join(dir, "nested", "dirty.txt"), "person dirt\n")
+      const landed = await landBranch(dir, branch, task)
+      expect(landed.type).toBe("conflict")
+      expect(await Bun.file(join(dir, "base.txt")).text()).toBe("main side\n")
+      expect(await changedFiles(join(dir, "nested"))).toEqual(["dirty.txt"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- The git seam's failure direction (plans/0155 D1) ----
+//
+// The founding P12 class the change closes: a git read that exits nonzero
+// over a discovered repository root (a corrupt index stands in for every
+// anomaly shape) used to swallow into a clean verdict — a skipped commit, a
+// passed gate, an unexamined close-out. The spawn-throw floor (git
+// unavailable) keeps the quiet direction; the nonzero exit resolves toward
+// dirty/loud at every seam below.
+
+async function corruptIndex(root: string) {
+  await Bun.write(join(root, ".git", "index"), "not an index\n")
+}
+
+describe("the git seam's failure direction (plans/0155 D1: a nonzero read is never a clean verdict)", () => {
+  test("statusEntries surfaces the unreadable read (the ⚠ line) and answers empty; statusEntriesRead is the strict distinguishable read", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await corruptIndex(dir)
+      const out = await captureRun(async () => {
+        expect(await statusEntries(dir, dir)).toEqual([])
+        expect(await statusEntriesRead(dir, dir)).toBeUndefined()
+        // The toplevel probe's failure (a path that is not a repository)
+        // reads undefined the same way.
+        expect(await statusEntriesRead(dir, join(dir, "nowhere"))).toBeUndefined()
+        return 0
+      })
+      expect(out.lines.filter((line) => line.includes("git status unreadable"))).toHaveLength(3)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("commitTree refuses over an unreadable status (the skip decision cannot be made): a failure line, nothing committed", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await corruptIndex(dir)
+      await writeFile(join(dir, "b.txt"), "b\n")
+      const settled = await commitTree(dir, task, { stage: "execute", subject: "T-001: exec" })
+      expect(settled.ok).toBe(false)
+      expect(settled.failures).toHaveLength(1)
+      expect(settled.failures[0]).toEqual({ rel: ".", error: "git status unreadable (repo missing or index corrupt); cannot judge what to commit" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("stashTree refuses over an unreadable status: a failure the caller can act on, no stash attempted", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await corruptIndex(dir)
+      const stashed = await stashTree(dir, "person close")
+      expect(stashed.stashes).toEqual([])
+      expect(stashed.failures).toHaveLength(1)
+      expect(stashed.failures[0]!.rel).toBe(".")
+      expect(stashed.failures[0]!.error).toContain("cannot judge what to stash")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("rollbackUnit leaves an unreadable repository untouched with a failure line (the scene cannot be judged, never half-rolled-back)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "done.txt"), "committed mid-flight work\n")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
+      const before = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await corruptIndex(dir)
+      const result = await rollbackUnit(dir, baseline, { task: "T-001", unit: "subtask 1" })
+      expect(result.ok).toBe(false)
+      expect(result.stashes).toBe(0)
+      expect(result.resets).toEqual([])
+      expect(result.failures).toHaveLength(1)
+      expect(result.failures[0]!.error).toContain("this repo is not rolled back, please handle manually")
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(before)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("pendingChanges counts an unreadable root as pending (a caller that skips on pending must not proceed)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      expect(await pendingChanges(dir)).toBe(false)
+      await corruptIndex(dir)
+      expect(await pendingChanges(dir)).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("unitViolations: a baseline on record but an unreadable HEAD fails the close-out; the empty-baseline floor stands", async () => {
+    const dir = await fresh()
+    try {
+      const problems = await unitViolations(dir, [{ root: join(dir, "missing"), sha: "abc1234" }])
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toContain("HEAD unreadable")
+      expect(problems[0]).toContain("close-out check failed")
+      // An empty baseline sha is the empty-repository floor (no commits when
+      // the unit started, still none readable now): never a violation.
+      expect(await unitViolations(dir, [{ root: join(dir, "missing"), sha: "" }])).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("beginUnit blocks on an unreadable status: the gate returns dirty naming the root and the anomaly", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await corruptIndex(dir)
+      let gate: Awaited<ReturnType<typeof beginUnit>> | undefined
+      const out = await captureRun(async () => {
+        gate = await beginUnit(dir, {}, task)
+        return 0
+      })
+      expect(gate).toEqual({ type: "dirty", files: [".: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state"] })
+      expect(out.lines.some((line) => line.includes("git status unreadable"))).toBe(true)
+      expect(out.lines.some((line) => line.includes("index file"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

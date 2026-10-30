@@ -165,6 +165,16 @@ export async function commitTree(
     const spec = root === dir ? paths : undefined
     try {
       const changes = await hasChanges(root, spec)
+      if (changes === undefined) {
+        // The skip decision cannot be made over an unreadable status
+        // (plans/0155 D1), and a blind add+commit would sweep a tree whose
+        // dirt nobody judged — the failure line blocks; P4's halt owns the
+        // stop.
+        const error = "git status unreadable (repo missing or index corrupt); cannot judge what to commit"
+        log(`  ⚠ git commit failed (${rel}): ${error}`)
+        failures.push({ rel, error })
+        continue
+      }
       if (!changes && !(root === dir && info.allowEmpty === true)) continue
       let added = { code: 0, out: "", err: "" }
       if (changes) {
@@ -240,7 +250,10 @@ async function nestedHeads(dir: string, roots: string[]): Promise<{ rel: string;
 // to the user: they will be swept into the driver's next commit).
 export async function pendingChanges(dir: string): Promise<boolean> {
   for (const root of await repoRoots(dir)) {
-    if (await hasChanges(root)) return true
+    const read = await hasChanges(root)
+    // Unreadable counts as pending (plans/0155 D1): a caller that skips on
+    // pending changes must not proceed over a tree it could not read (P12).
+    if (read === undefined || read) return true
   }
   return false
 }
@@ -266,7 +279,17 @@ export async function stashTree(
   const failures: { rel: string; error: string }[] = []
   const stashes: { rel: string; line: string }[] = []
   for (const root of await repoRoots(dir)) {
-    if (!(await hasChanges(root))) continue
+    const read = await hasChanges(root)
+    if (read === undefined) {
+      // The stash refuses over an unreadable status (plans/0155 D1): whether
+      // this root holds anything to stash cannot be judged, and the caller
+      // must refuse before writing anything.
+      const error = "git status unreadable (repo missing or index corrupt); cannot judge what to stash"
+      log(`  ⚠ git stash refused (${relative(dir, root) || "."}): ${error}`)
+      failures.push({ rel: relative(dir, root) || ".", error })
+      continue
+    }
+    if (!read) continue
     const pushed = await git(root, ["stash", "push", "--include-untracked", "-m", message])
     if (pushed.code !== 0) {
       const error = firstLine(pushed.err || pushed.out) || `git stash exit code ${pushed.code}`
@@ -460,8 +483,19 @@ export async function unitViolations(dir: string, baseline: UnitBaseline, exclud
     problems.push(`worktree still has uncommitted changes: ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ` … (${dirty.length} files total)` : ""}`)
   }
   for (const { root, sha } of baseline) {
-    const head = (await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim()
-    if (head === undefined || head === sha) continue
+    const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
+    const head = got?.code === 0 ? got.out.trim() : ""
+    if (!head) {
+      // HEAD unreadable: an empty baseline too (no commits when the unit
+      // started, still none now) is the empty-repository floor; anything
+      // else is an anomaly the close-out cannot certify over (plans/0155
+      // D1, baselineIntact's own shape — a failed read is never a silent
+      // pass, P12).
+      if (!sha) continue
+      problems.push(`${relative(dir, root) || "."}: HEAD unreadable (repo missing or history corrupt), close-out check failed`)
+      continue
+    }
+    if (head === sha) continue
     const foreign = await foreignCommits(root, sha)
     if (foreign) {
       problems.push(`${relative(dir, root) || "."}: ${foreign} non-driver commit(s) detected (no Auto-Stage trailer); external commits occurred during the unit`)
@@ -761,8 +795,15 @@ export async function rollbackUnit(
       }
       // ① stash preserves the scene (the pathspec confines it to this
       // directory's subtree — the target directory may sit inside a larger
-      // repository).
-      if (await hasChanges(root)) {
+      // repository). An unreadable status refuses the whole repository
+      // (plans/0155 D1): the scene cannot be judged, so it is left for the
+      // human beside a failure line, never half-rolled-back blind.
+      const scene = await hasChanges(root)
+      if (scene === undefined) {
+        result.failures.push({ rel, error: "git status unreadable (repo missing or index corrupt); this repo is not rolled back, please handle manually" })
+        continue
+      }
+      if (scene) {
         const stashed = await git(root, ["stash", "push", "-u", "-m", message, "--", "."])
         if (stashed.code !== 0) {
           result.failures.push({ rel, error: `git stash exit code ${stashed.code} (${firstLine(stashed.err || stashed.out)})` })
@@ -794,7 +835,12 @@ export async function rollbackUnit(
         continue
       }
       result.resets.push(rel)
-      if (await hasChanges(root)) {
+      const reclaim = await hasChanges(root)
+      if (reclaim === undefined) {
+        result.failures.push({ rel, error: "git status unreadable (repo missing or index corrupt); this repo is not rolled back, please handle manually" })
+        continue
+      }
+      if (reclaim) {
         const stashed = await git(root, ["stash", "push", "-u", "-m", `${message} (reset)`, "--", "."])
         if (stashed.code !== 0) {
           result.failures.push({ rel, error: `git stash (reset reclaim) exit code ${stashed.code} (${firstLine(stashed.err || stashed.out)})` })
@@ -825,6 +871,20 @@ export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { ty
 // authority over git state stays with the human).
 export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate> {
   if (opts.dryrun) return { type: "ok", baseline: undefined }
+  // An unreadable status over any repository root blocks the gate (plans/
+  // 0155 D1): the clean question cannot be answered, and a gate that passed
+  // would hand the unit a tree whose close-out commit is already doomed —
+  // the block line names the root (P12: the uncertain read resolves toward
+  // dirty). One extra status pass per unit start buys the gate its own
+  // strictness; the reads below keep their shapes.
+  for (const root of await repoRoots(dir)) {
+    if ((await statusEntriesRead(dir, root)) === undefined) {
+      return {
+        type: "dirty",
+        files: [`${relative(dir, root) || "."}: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state`],
+      }
+    }
+  }
   // The gate judges the person's tree, and the driver workdir is not part of
   // it (plans/0141 D1): an untracked .auto/ or tmp/ file is the driver's own
   // runtime state (the run lock, the stats heartbeat) — invisible to git once
@@ -914,8 +974,18 @@ export function isConflict(out: string, err: string): boolean {
 // the conflict detail); `whose` names who must handle the dirty case.
 export async function abortToLandResult(root: string, merged: { code: number; out: string; err: string }, whose: string): Promise<LandResult> {
   const aborted = await git(root, ["merge", "--abort"])
-  if (aborted.code === 0 && !(await changedFiles(root)).length) {
+  // The abort is judged over the merged repository alone (plans/0155): a
+  // dirty or unreadable nested repository elsewhere under it is not the
+  // abort's work and must not misreport the abort as failed. Unreadable
+  // (a nonzero status over the root) reads as failed, never clean (P12).
+  const entries = aborted.code === 0 ? await statusEntriesRead(root, root) : undefined
+  if (entries !== undefined && !entries.length) {
     return { type: "conflict", detail: firstLine(merged.err || merged.out) }
+  }
+  if (aborted.code === 0) {
+    return entries === undefined
+      ? { type: "failed", error: `verifying the aborted merge failed (git status unreadable over the repository); ${whose} must be handled manually` }
+      : { type: "failed", error: `git merge --abort left the repository dirty; ${whose} must be handled manually` }
   }
   return { type: "failed", error: `git merge --abort exit code ${aborted.code} (${firstLine(aborted.err || aborted.out)}); ${whose} must be handled manually` }
 }
@@ -1091,42 +1161,77 @@ export async function untrackedFiles(dir: string): Promise<Set<string>> {
 // "?? dir/" are nested repository directories (their inner files are listed
 // separately by that repository's own status), skipped to avoid duplication.
 // The XY status code is kept with each entry (the untracked criterion and the
-// listing share one parsing pass). Exported since plans/0074: `land`'s dirty
-// gate lists one designated repository's uncommitted paths the same way
-// isolateRound's does.
-export async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
+// listing share one parsing pass).
+//
+// undefined = the read itself failed: the toplevel probe or the status
+// exited nonzero over a root the caller or repoRoots discovered (a corrupt
+// index, a half-deleted .git — an anomaly, never a verdict; plans/0155 D1:
+// the dirt question cannot be answered, and the strict gates block on it,
+// P12 — a nonzero exit is never swallowed into a clean reading). A spawn
+// throw (git unavailable) reads undefined too: the non-git environments
+// never reach a root to ask, so the floor needs no shape of its own.
+export async function statusEntriesRead(dir: string, root: string): Promise<{ rel: string; status: string }[] | undefined> {
   const phys = await physicalDir(dir)
   const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
   })
   const toplevel = (await new Response(top.stdout).text()).trim()
-  if ((await top.exited) !== 0 || !toplevel) return []
+  const topErr = (await new Response(top.stderr).text()).trim()
+  const topCode = await top.exited
+  if (topCode !== 0 || !toplevel) {
+    log(`  ⚠ git status unreadable (${relative(dir, root) || "."}): ${firstLine(topErr) || `git rev-parse exit code ${topCode}`} — the dirt question cannot be judged; investigate the repository state`)
+    return undefined
+  }
   const proc = Bun.spawn(
     ["git", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."],
     // The same GIT_OPTIONAL_LOCKS=0 the spawn helper sets (plans/0099 D4):
     // this status runs outside the doc-lane commit queue (beginUnit's dirty
     // check, the close-out checks), and the env form covers the one site
     // that does not route through the helper.
-    { stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
+    { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
   )
   const output = await new Response(proc.stdout).text()
-  if ((await proc.exited) !== 0) return []
+  const err = (await new Response(proc.stderr).text()).trim()
+  const code = await proc.exited
+  if (code !== 0) {
+    log(`  ⚠ git status unreadable (${relative(dir, root) || "."}): ${firstLine(err) || `git status exit code ${code}`} — the dirt question cannot be judged; investigate the repository state`)
+    return undefined
+  }
   return output
     .split("\0")
     .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
     .map((entry) => ({ rel: relative(phys, join(toplevel, entry.slice(3))), status: entry.slice(0, 2) }))
 }
 
+// The legacy-typed front of the same read (plans/0155 D1 keeps the signature
+// its many callers compile against): an unreadable status is surfaced by the
+// ⚠ line above — never a silent clean verdict — and reads as empty for the
+// callers that cannot carry a problem line; the strict gates (beginUnit,
+// land's and isolateRound's clean gates) ask statusEntriesRead and block.
+// Exported since plans/0074: `land`'s dirty gate lists one designated
+// repository's uncommitted paths the same way isolateRound's does.
+export async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
+  return (await statusEntriesRead(dir, root)) ?? []
+}
+
 // Whether the repository has uncommitted changes (confined to this
 // directory's subtree; a collapsed directory entry can only be a nested
-// repository, handled separately by its own commit). When git is unavailable
-// (spawn throws), treat as no changes. paths narrows the check the way the
-// commit's add step is narrowed (plans/0099 D4): absent = the whole subtree
-// (today's question, byte-identical).
-async function hasChanges(root: string, paths?: readonly string[]): Promise<boolean> {
-  const status = await git(root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", ...(paths ?? ["."])]).catch(() => undefined)
-  if (!status || status.code !== 0) return false
+// repository, handled separately by its own commit). undefined = the status
+// read itself failed over the discovered root (plans/0155 D1: a nonzero git
+// exit is an anomaly the callers resolve toward dirty/loud, P12 — never a
+// quiet no-changes verdict); the spawn-throw (git unavailable) keeps the old
+// quiet no-changes floor. paths narrows the check the way the commit's add
+// step is narrowed (plans/0099 D4): absent = the whole subtree (today's
+// question, byte-identical).
+async function hasChanges(root: string, paths?: readonly string[]): Promise<boolean | undefined> {
+  let status: Awaited<ReturnType<typeof git>> | undefined
+  try {
+    status = await git(root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", ...(paths ?? ["."])])
+  } catch {
+    return false // git unavailable (spawn throws): nothing git-side can be judged
+  }
+  if (status.code !== 0) return undefined
   return status.out.split("\0").some((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
 }
 

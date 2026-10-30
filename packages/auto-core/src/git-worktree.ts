@@ -262,9 +262,17 @@ export async function landBranch(dir: string, branch: string, task: { id: string
     // Only the actually-conflicted subset: an `own` entry a lane never
     // touched (a task without a checklist, an index line moved) matches no
     // pathspec and would leave the merge unmerged (S5's checklist entry
-    // exposed the shape).
-    for (const path of conflicted) await git(dir, ["checkout", "--ours", "--", path])
-    await git(dir, ["add", "--", ...conflicted])
+    // exposed the shape). Every resolution step is checked (plans/0155 D4):
+    // a `checkout --ours` that fails (a modify/delete conflict whose main
+    // side deleted the file — no ours-version exists) must never leave the
+    // surviving lane content staged as the resolution — the merge stays a
+    // real conflict and aborts like any other.
+    for (const path of conflicted) {
+      const took = await git(dir, ["checkout", "--ours", "--", path])
+      if (took.code !== 0) return abortToLandResult(dir, merged, "the main tree")
+    }
+    const staged = await git(dir, ["add", "--", ...conflicted])
+    if (staged.code !== 0) return abortToLandResult(dir, merged, "the main tree")
     const concluded = await git(dir, [...(await identityArgs(dir)), "commit", "-m", subject])
     if (concluded.code === 0) return { type: "ok" }
     const aborted = await git(dir, ["merge", "--abort"])

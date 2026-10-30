@@ -157,11 +157,13 @@ function objectWithInserted<T>(existing: Record<string, unknown>, inserted: Reco
   return out
 }
 
-// Rebuild external_directory with the missing allow entries placed after its
+// Rebuild external_directory with the missing entries placed after its
 // `"/**"` key when present (the boundary's catch-all deny — whoever set it —
 // so the allows function beneath it), else at the front (0122's own
-// ordering, the file without a boundary).
-function externalWithAllows(existing: Record<string, unknown>, inserted: Record<string, "allow">): Record<string, unknown> {
+// ordering, the file without a boundary). Shared by the symlink-allow stamp
+// and the boundary pair (plans/0155 D3: the /tmp allowance must win its tie
+// against a person-set `"/**"` the same way a corpus allow does).
+function externalWithAllows(existing: Record<string, unknown>, inserted: Record<string, unknown>): Record<string, unknown> {
   const keys = Object.keys(existing)
   const cut = keys.indexOf("/**") + 1
   const out: Record<string, unknown> = {}
@@ -294,7 +296,11 @@ export async function applyExternalAllows(dir: string): Promise<boolean> {
 // working directory denied) then `"/tmp/**": "allow"` (the receipts
 // convention) — a later key beats the deny, so the person widens by appending
 // their own keys, and existing symlink allows (0122's front-inserted stamps)
-// land after the deny by this very insertion and keep functioning.
+// land after the deny by this very insertion and keep functioning. A file
+// that already carries a `"/**"` key (the person's own catch-all, to any
+// action — never inserted over) takes the missing pair right after it
+// (plans/0155 D3): a front insert there would leave the /tmp allowance
+// before the person's deny and silently disable the receipts convention.
 
 // The boundary keys in their canonical order (the deny first — anything
 // inserted after it wins the tie against it).
@@ -315,11 +321,14 @@ export function knowledgeBoundaryMissing(text: string): boolean | undefined {
   return Object.keys(KNOWLEDGE_BOUNDARY).some((key) => !(key in external))
 }
 
-// The boundary's stamp: insert the missing boundary keys at the front of
-// permission.external_directory in canonical order (creating the section when
-// absent), every existing key kept in its order — existing allows and person
-// rules end up after the deny and therefore win their ties. Returns the text
-// unchanged when the boundary is present, undefined on the malformed shapes.
+// The boundary's stamp: insert the missing boundary keys in canonical order
+// (creating the section when absent) — at the front, or right after an
+// existing `"/**"` key when the file carries one (externalWithAllows'
+// placement, plans/0155 D3), every existing key kept in its order — existing
+// allows and person rules end up after the deny and therefore win their
+// ties, and the /tmp allowance wins its tie against a person-set catch-all
+// too. Returns the text unchanged when the boundary is present, undefined on
+// the malformed shapes.
 export function stampKnowledgeBoundary(text: string): string | undefined {
   const value = parseConfig(text)
   if (value === undefined) return undefined
@@ -330,7 +339,7 @@ export function stampKnowledgeBoundary(text: string): string | undefined {
   const inserted: Record<string, "deny" | "allow"> = {}
   for (const [key, action] of Object.entries(KNOWLEDGE_BOUNDARY)) if (!(key in personExternal)) inserted[key] = action
   const { external_directory: _replaced, ...personPermission } = permission
-  const next = { ...value, permission: { external_directory: { ...inserted, ...personExternal }, ...personPermission } }
+  const next = { ...value, permission: { external_directory: externalWithAllows(personExternal, inserted), ...personPermission } }
   return JSON.stringify(next, null, 2) + "\n"
 }
 
@@ -432,10 +441,14 @@ export const stampKey = (target: string): string => `${target}/**`
 // stamps — remove exactly the stamp keys of the targets — and stamp a
 // standing deny on each, additively (no 0122 exception invoked: the deny is
 // a new key, the retired stamp the driver withdrawing its own). Person keys
-// and their order are kept; the deny lands at the front of
-// external_directory beside the stamp's own ordering discipline (a person's
-// later rules keep winning the tie). Returns the next text (the input
-// unchanged when nothing moves), or undefined when the text is malformed.
+// and their order are kept — except at the retiring stamp keys, where the
+// wall's deny always stands (plans/0155 D3: the person's action at that slot
+// is overridden by the seal they invoked at transfer; an allow there is the
+// stamp itself, retired, and a weaker action must not erase the deny the
+// close records); the deny lands at the front of external_directory beside
+// the stamp's own ordering discipline (a person's later rules keep winning
+// the tie). Returns the next text (the input unchanged when nothing moves),
+// or undefined when the text is malformed.
 export function stampWallClosure(text: string, targets: readonly string[]): string | undefined {
   const value = parseConfig(text)
   if (value === undefined) return undefined
@@ -444,14 +457,12 @@ export function stampWallClosure(text: string, targets: readonly string[]): stri
   const retiring = new Set(targets.map(stampKey))
   const denies: Record<string, unknown> = {}
   for (const target of [...new Set(targets)].sort()) denies[stampKey(target)] = "deny"
-  // Keep every person key in its order (a deny the person already set on the
-  // exact key keeps its action only when it is the wall's own deny — an
-  // allow on a stamp key is the stamp itself, retired; a person deny stays a
-  // deny, the same bytes the wall would write).
+  // Keep every person key in its order; a retiring key contributes nothing
+  // of the person's — the wall's deny in `denies` is the entry that stands.
   const person: Record<string, unknown> = {}
   for (const [key, action] of Object.entries(external)) {
-    if (retiring.has(key) && action === "allow") continue
-    person[key] = denies[key] !== undefined && action === "allow" ? "deny" : action
+    if (retiring.has(key)) continue
+    person[key] = action
   }
   const { external_directory: _replaced, ...personPermission } = permission
   const next = { ...value, permission: { external_directory: { ...denies, ...person }, ...personPermission } }
