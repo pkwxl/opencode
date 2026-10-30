@@ -6,8 +6,12 @@
 // waits of ask (--wait-answer) and the between-tasks pause (--wait-between)
 // are received through this input line too (prompt text, timeout and fallback
 // semantics unchanged); after ask ends the input line returns to send-message
-// mode. No existing handling logic changes: without --wait-answer questions
-// are still auto-answered, permissions still block.
+// mode. Concurrent asks (doc lanes run several lanes' sessions through this
+// one channel, plans/0099) queue FIFO: each ask gets its own window, its
+// timer armed when it dequeues — a "timeout" is only ever an ask's own timer
+// expiring, never the channel being busy (plans/0157 D1). No existing
+// handling logic changes: without --wait-answer questions are still
+// auto-answered, permissions still block.
 import { createInterface } from "node:readline/promises"
 import type { AgentClient } from "./agent/types"
 import type { Interactive } from "./control-types"
@@ -95,16 +99,47 @@ export function startInteractive(
   // With a pending, the input line resolves the ask/pause; otherwise it is
   // sent as a session message.
   let pending: { resolve: (answer: string | undefined) => void; timer?: ReturnType<typeof setTimeout> } | undefined
+  // Asks that arrived while one was already pending (doc lanes: several
+  // lanes' sessions share this one channel, plans/0099). FIFO, each entry
+  // granted the input line when the previous ask settles — its own timer
+  // armed at that moment, so a settlement records the ask's own wait, never
+  // the queue's length (plans/0157 D1: the second ask used to resolve
+  // undefined at once and journal a "timeout" that was none).
+  let queue: { promptText: string; minutes: number | undefined; resolve: (answer: string | undefined) => void }[] = []
+
+  // Puts one ask on the input line: the prompt is shown and the window's
+  // timer armed here (a queued ask reaches this only at dequeue).
+  function beginAsk(promptText: string, minutes: number | undefined, resolve: (answer: string | undefined) => void): void {
+    log(promptText)
+    rl.setPrompt(ASK_PROMPT)
+    rl.prompt()
+    pending = {
+      resolve,
+      // minutes omitted = hard wait with no timeout (step-mode pause); the
+      // timer is armed only when a value is explicitly given.
+      timer: minutes === undefined ? undefined : setTimeout(() => settle(undefined), minutes * 60_000),
+    }
+  }
 
   function settle(answer: string | undefined) {
     const current = pending
     pending = undefined
     if (current?.timer) clearTimeout(current.timer)
-    if (!dead) {
-      rl.setPrompt(PROMPT)
-      rl.prompt()
-    }
     current?.resolve(answer)
+    if (closed || dead) {
+      // close()'s drain (and stdin's close beside it): every ask still
+      // waiting resolves undefined — the caller treats it as no answer.
+      for (const queued of queue) queued.resolve(undefined)
+      queue = []
+      return
+    }
+    const next = queue.shift()
+    if (next !== undefined) {
+      beginAsk(next.promptText, next.minutes, next.resolve)
+      return
+    }
+    rl.setPrompt(PROMPT)
+    rl.prompt()
   }
 
   rl.on("line", (line) => {
@@ -221,16 +256,20 @@ export function startInteractive(
       sessionAgent = agent
     },
     question(promptText, minutes) {
-      // When already closed or re-entered (never happens in the normal flow),
-      // fall back immediately; the caller treats it as no answer.
-      if (closed || pending) return Promise.resolve(undefined)
-      log(promptText)
-      rl.setPrompt(ASK_PROMPT)
-      rl.prompt()
+      // A closed channel answers at once (no answer); a second ask while one
+      // pends joins the FIFO — it gets its own window when the current ask
+      // settles, its timer armed then, so its timeout (if it fires) is its
+      // own. A queued ask behind a hard wait (minutes omitted, the step-mode
+      // pause) waits until that hard wait settles by input or close — the
+      // honest composition: the line is one resource and the order is kept.
+      if (closed) return Promise.resolve(undefined)
+      if (pending !== undefined) {
+        return new Promise((resolve) => {
+          queue.push({ promptText, minutes, resolve })
+        })
+      }
       return new Promise((resolve) => {
-        // minutes omitted = hard wait with no timeout (step-mode pause); the
-        // timer is armed only when a value is explicitly given.
-        pending = { resolve, timer: minutes === undefined ? undefined : setTimeout(() => settle(undefined), minutes * 60_000) }
+        beginAsk(promptText, minutes, resolve)
       })
     },
     close() {

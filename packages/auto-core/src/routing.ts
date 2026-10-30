@@ -263,7 +263,7 @@ export function dispatchAgentProfiles(
   })
 }
 
-// The run-start routing block (§6.5): each tier's list with every model's// agent, window state now and key-ring state (the live position by
+// The run-start routing block (§6.5): each tier's list with every model's agent, window state now and key-ring state (the live position by
 // reference name while the rings are active, the declared size otherwise),
 // the routes in force, the agent filter, the project-layer marks and the
 // unused-model notes — and the R6 note when no tier uses the default agent.

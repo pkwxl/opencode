@@ -342,8 +342,20 @@ export async function runTurn(args: {
   }
 
   // The held settle of a synthetic input, and the trip that preempts the
-  // wrapper's wait. Emissions past the wrapper's finish are dropped —
-  // today's consuming/probeActive guards.
+  // wrapper's wait. Emissions past the wrapper's finish are dropped — at
+  // accept time (the check below) and at execution time (the check inside
+  // the chain): an emission accepted just before the finish can still have
+  // its serialized slot run during the wrapper's own cleanup await or the
+  // finalize procedure, past the moment `settledBy()` read the outcome — a
+  // settle landing there was silently dropped while its row's side effects
+  // (slice writes, journal inputs) still ran (plans/0157 D6). Dropping the
+  // row whole is sound for the one settle that owes an effect — the
+  // classifier answer's raise owes its abort to the finalize — because every
+  // settle a raise can land beside either already made that effect or
+  // precludes the raise: an error settle aborted inline in its handler, an
+  // interrupted one in the liveness finalize, a blocked one in the questions
+  // handler, and a natural one implies model output (the failure slice is no
+  // longer retrying, the raise's own condition).
   let held: Settle | undefined
   let finished = false
   let trip!: () => void
@@ -355,6 +367,7 @@ export async function runTurn(args: {
     // An audit throw here rejects the chain — an unhandled rejection, as
     // loud as the programming error it is.
     emissions = emissions.then(async () => {
+      if (finished) return
       const outcome = await runRow(input, "synthetic")
       if (outcome !== undefined && outcome !== "consumed" && held === undefined) {
         held = outcome

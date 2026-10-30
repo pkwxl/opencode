@@ -11,6 +11,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { checkAgentBins, probeModels, singleHost, startPool } from "../src/agent-pool"
+import type { AgentHost } from "../src/agent/types"
 import type { SessionChain } from "../src/chain"
 import { loadModels } from "../src/models"
 import type { ModelRegistry } from "../src/models-schema"
@@ -155,7 +156,9 @@ describe("the agent pool: lazy hosts per profile (§8.1)", () => {
       expect(pool.startedAgents()).toEqual(["b"])
       expect(b.prompts[0]!.model).toBe("other/b")
     } finally {
-      pool.close()
+      // The drain is async (starts in flight are awaited); the closed-count
+      // assertions below read a drained pool.
+      await pool.close()
     }
     expect(hosts.b.closed()).toBe(1)
     expect(hosts.a.closed()).toBe(0)
@@ -186,6 +189,55 @@ describe("the agent pool: lazy hosts per profile (§8.1)", () => {
       process.env.PATH = path
       if (savedAgent !== undefined) process.env.OPENCODE_AUTO_AGENT = savedAgent
     }
+  })
+
+  // plans/0157 D2: the shutdown drain. A lazy start still in flight when
+  // close() runs used to register its host into the freshly cleared map and
+  // nothing ever closed it — a leaked server child. The start's own
+  // post-factory guard closes a host that resolves past close, and a start
+  // attempted after close fails loudly instead of spawning one.
+  test("close() drains an in-flight lazy start: the late host is closed, never registered-and-leaked; a start after close fails loudly", async () => {
+    const dir = await temp("auto-agent-pool-close-")
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let starts = 0
+    let closed = 0
+    const agent = fakeAgent({ limits: { "prov/a": 100_000 } })
+    const factory = async (): Promise<AgentHost> => {
+      starts += 1
+      await gate
+      return {
+        client: agent.client,
+        syncContext: async () => {},
+        restart: async () => true,
+        close: () => {
+          closed += 1
+        },
+      }
+    }
+    registerAgentAdapter("slow-a", { host: factory, capabilities: FULL_CAPABILITIES })
+    const file = join(dir, "models.json")
+    await writeFile(file, JSON.stringify({ agents: { s: { adapter: "slow-a" } }, models: { s1: { agent: "s", model: "prov/a" } }, tiers: { deep: ["s1"], simple: ["s1"] } }))
+    const registry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    const started = await startPool(dir, { registry })
+    const pool = started.pool!
+    // The first selection starts the host lazily; the factory is held at the
+    // gate when close() runs, and resolves only after it.
+    const dispatch = pool.client("s")
+    const closing = pool.close()
+    release!()
+    await closing
+    expect(starts).toBe(1)
+    // The late host was closed by the in-flight guard — not registered into
+    // the drained pool.
+    expect(closed).toBe(1)
+    expect(pool.startedAgents()).toEqual([])
+    await expect(dispatch).rejects.toThrow("the agent pool closed while the host of s was starting")
+    // A start past the close fails loudly: no fresh server nothing will
+    // close.
+    await expect(pool.client("s")).rejects.toThrow("the agent pool is closed")
   })
 })
 
@@ -438,6 +490,56 @@ describe("preflight's bin check (§8.7)", () => {
     await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a" } }, models: { a1: { agent: "a", model: "prov/a" } }, tiers: { deep: ["a1"], simple: ["a1"] } }))
     const bare = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file }, adapters: ["fake-a"] }))!
     expect(await checkAgentBins(bare, undefined)).toEqual([])
+  })
+
+  // plans/0157 D3: the connect-only floor — a profile that only ever connects
+  // (its own `server`, or the run-wide --server override over opencode
+  // profiles) never spawns, so a machine without the CLI must not fail
+  // preflight as though it would.
+  test("a connect-only profile demands no local binary: its own server field, and the --server override over opencode profiles, skip the check", async () => {
+    const dir = await temp("auto-agent-pool-bin-")
+    const absent = join(dir, "no-such-bin")
+    const file = join(dir, "models.json")
+    await writeFile(
+      file,
+      JSON.stringify({
+        agents: { connect: { adapter: "opencode", bin: absent, server: "http://127.0.0.1:4096" }, spawn: { adapter: "opencode", bin: absent } },
+        models: { c1: { agent: "connect", model: "prov/c" }, s1: { agent: "spawn", model: "prov/s" } },
+        tiers: { deep: ["c1", "s1"], simple: ["c1"] },
+      }),
+    )
+    const loaded = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    // The spawning profile's missing bin is still a problem; the profile that
+    // connects to its declared server is not.
+    const problems = await checkAgentBins(loaded, undefined)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain(`agent profile spawn (adapter opencode): \`${absent} --version\``)
+    // The run-wide override reaches every opencode profile (the same
+    // combination startPool reads): nothing spawns, nothing is checked.
+    expect(await checkAgentBins(loaded, undefined, { server: "http://127.0.0.1:1" })).toEqual([])
+  })
+
+  // plans/0157 D4: the version-check child is the agent's own executable, so
+  // it runs under the same X1 scrub its spawns follow (plans/0059 X1) — the
+  // driver's variables never reach it, and the profile overlay still lands.
+  test("the version-check child runs scrubbed of the driver's OPENCODE_AUTO_* variables, the profile overlay on top", async () => {
+    const dir = await temp("auto-agent-pool-bin-")
+    const probe = join(dir, "env-probe")
+    await writeFile(probe, "#!/bin/sh\nif env | grep -q '^OPENCODE_AUTO_STEER='; then exit 7; fi\ntest \"$AUTO_TEST_SET\" = \"kept\" || exit 8\nexit 0\n")
+    await chmod(probe, 0o755)
+    const file = join(dir, "models.json")
+    await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a", bin: probe, env: { AUTO_TEST_SET: "kept" } } }, models: { a1: { agent: "a", model: "prov/a" } }, tiers: { deep: ["a1"], simple: ["a1"] } }))
+    const loaded = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file }, adapters: ["fake-a"] }))!
+    const saved = process.env.OPENCODE_AUTO_STEER
+    process.env.OPENCODE_AUTO_STEER = "on"
+    try {
+      // Exit 0 = the child saw neither the driver variable (7) nor a lost
+      // overlay (8).
+      expect(await checkAgentBins(loaded, undefined, { timeoutMs: 3000 })).toEqual([])
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_AUTO_STEER
+      else process.env.OPENCODE_AUTO_STEER = saved
+    }
   })
 })
 

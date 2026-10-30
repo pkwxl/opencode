@@ -41,9 +41,11 @@ export function formatTokens(n: number): string {
 // aborted on timeout, etc.) is an Error instance, and JSON.stringify only
 // yields "{}"; taking its message is what lets wording like "request timed
 // out" into the blocked-problem text; everything else (the server's structured
-// error body) is serialized as before.
+// error body) is serialized as before. JSON.stringify itself answers
+// undefined for the unserializable (undefined, functions) — String() keeps
+// the string contract honest on that edge.
 export function formatClientError(error: unknown): string {
-  return error instanceof Error ? error.message : JSON.stringify(error)
+  return error instanceof Error ? error.message : (JSON.stringify(error) ?? String(error))
 }
 
 // During a permission wait these answers (leading/trailing whitespace and case

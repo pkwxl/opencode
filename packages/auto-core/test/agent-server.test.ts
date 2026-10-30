@@ -144,6 +144,11 @@ async function fakeOpencode(): Promise<{ dir: string; record(n: number): Promise
     "opencode-exits": [...recording, 'echo "config error: bad provider" >&2', "exit 3"],
     "opencode-silent": [...recording, "exec sleep 30"],
     "opencode-garbled": [...recording, 'echo "opencode server listening nowhere"', "exec sleep 30"],
+    // The adversarial exit: a detached grandchild keeps the output pipes
+    // open past the child's exit, so the exit notification arrives while
+    // "both streams closed" can never win — the grace bound is the only way
+    // the rejection lands (plans/0157 D5).
+    "opencode-detached": [...recording, 'echo "config error: detached grandchild" >&2', "sleep 5 &", "exit 3"],
   }
   for (const [name, lines] of Object.entries(scripts)) {
     await writeFile(join(dir, name), `${lines.join("\n")}\n`)
@@ -275,6 +280,17 @@ describe("spawnOpencodeServer: the driver's own opencode serve", () => {
     await expect(started({ bin: "opencode-silent", port: 0, timeout: 200 })).rejects.toThrow("Timeout waiting for server to start after 200ms")
     await expect(started({ bin: "opencode-garbled", port: 0 })).rejects.toThrow("Failed to parse server url from output: opencode server listening nowhere")
     await expect(started({ bin: join(fake.dir, "no-such-opencode"), port: 0 })).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  // plans/0157 D5: the exit close-out's bound. The grace timer is unref'd
+  // and cleared when the streams win; here the streams can never close (a
+  // detached grandchild holds the pipes), so the grace is the whole bound —
+  // the rejection still lands with the output collected, well inside the
+  // grandchild's lifetime, instead of hanging on the held pipe.
+  test("an exit whose output pipes stay held by a detached grandchild: the rejection is grace-bounded and still carries the output", async () => {
+    const at = Date.now()
+    await expect(started({ bin: "opencode-detached", port: 0 })).rejects.toThrow("Server exited with code 3\nServer output: config error: detached grandchild\n")
+    expect(Date.now() - at).toBeLessThan(2000)
   })
 
   test("manage: restart re-spawns with the current content; setConfig replaces it for the next spawn", async () => {

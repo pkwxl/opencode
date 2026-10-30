@@ -3,7 +3,7 @@
 // failure, or slightly adjusted parameters with a byte-identical error — and cannot
 // get out of it by themselves. The driver observes every tool call's final state, and
 // on recognizing this kind of repetition proactively injects a hint into the session
-// via steer (the watch hook point in src/runner.ts, wording in
+// via steer (the watch hook point in src/engine/concerns/stuck.ts, wording in
 // templates/prompts/stuck-hint.md), so the model tries a different approach instead of
 // spinning. Design: plans/0016-stuck-loop-design.md.
 //

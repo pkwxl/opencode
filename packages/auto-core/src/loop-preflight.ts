@@ -365,10 +365,12 @@ export async function preflight(
     const coverage = facts !== undefined ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded, authority.phases)) : []
     // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
     // references runs `<bin> --version` under its env, 10 s timeout. The
-    // driver never logs in or reads credentials — an expired login surfaces
-    // at runtime as an `auth`-class error. A caller-supplied host (`managed`)
-    // brings its own agent; no bin of ours is checked.
-    const bins = facts !== undefined && !opts.managed ? await checkAgentBins(registry!, facts.agentFilter) : []
+    // driver never logs in and never reads credentials — an expired login
+    // surfaces at runtime as an `auth`-class error. A caller-supplied host (`managed`)
+    // brings its own agent; no bin of ours is checked. A profile that only
+    // ever connects (its own `server`, or the run-wide --server override over
+    // opencode profiles) demands no local binary (plans/0157 D3).
+    const bins = facts !== undefined && !opts.managed ? await checkAgentBins(registry!, facts.agentFilter, { server: opts.server }) : []
     const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage, ...bins]
     if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {

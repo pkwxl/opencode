@@ -155,7 +155,7 @@ const CLASSIFIED: Record<string, Domain> = {
   capability: "driver",
   chain: "driver",
   // The named SessionChain transitions (plans/0061 §4.8): the one home for
-  // the chain's pure computations (forkSources, modelOfChain) and, as the
+  // the chain's pure computations (forkSources) and, as the
   // consolidation proceeds, its mutations — the write ratchet of
   // test/chain-writes.test.ts empties every other writer. Ranked below
   // watch: every session-driving layer (and the commit boundary's resume

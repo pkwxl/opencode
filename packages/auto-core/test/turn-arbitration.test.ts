@@ -11,7 +11,7 @@
 // — everything a turn needs arrives as runTurn's arguments.
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
-import type { Advice, Concern, SliceKey, TurnContext, TurnFx, TurnState } from "../src/engine/contract"
+import type { Advice, Concern, SliceKey, TurnContext, TurnFx, TurnInput, TurnState } from "../src/engine/contract"
 import { makeLivenessConcern } from "../src/engine/concerns/liveness"
 import { makeRecoveryConcern } from "../src/engine/concerns/recovery"
 import { makeStepUpConcern } from "../src/engine/concerns/step-up"
@@ -285,6 +285,101 @@ describe("the queue discipline's terminal settles", () => {
     // The idle was consumed, so no natural settle; the stream then
     // exhausted without another idle: interrupted.
     expect(outcome.settle).toEqual({ kind: "interrupted" })
+  })
+})
+
+// plans/0157 D6: the emission boundary. An emission accepted just before the
+// wrapper finishes can still have its serialized slot run during the
+// wrapper's cleanup await or the finalize procedure — past the moment
+// settledBy() fixed the settle, where a landing raise was silently dropped
+// while its row's side effects ran. The execution-time guard drops such an
+// emission whole; a raise that lands before the boundary still wins.
+describe("the emission boundary (plans/0157 D6)", () => {
+  test("a raise landing before the boundary still wins over the natural finish (the unchanged half)", async () => {
+    let answerRan = false
+    const concerns = roster({
+      recovery: async (input) => {
+        if (input.kind !== "answer") return "pass"
+        answerRan = true
+        return { settle: { kind: "error", cls: "quota", classified: true } }
+      },
+    })
+    const attach: TurnSources = (emit) => {
+      emit({ kind: "answer", answer: undefined })
+    }
+    const outcome = await turn(concerns, { attach })
+    // The emission's slot ran during the first stream pull — before the
+    // boundary — so its held settle preempts: the turn never dispatched the
+    // idle, and the raise is the settle.
+    expect(answerRan).toBe(true)
+    expect(outcome.settle).toEqual({ kind: "error", cls: "quota", classified: true })
+  })
+
+  test("an emission whose slot runs past the finish (the finalize window) is dropped at execution time: its row never runs, the turn keeps its own settle", async () => {
+    let releaseHold: (() => void) | undefined
+    const hold = new Promise<void>((resolve) => {
+      releaseHold = resolve
+    })
+    let answerRan = false
+    let holdReleased = false
+    let emit: ((input: TurnInput) => void) | undefined
+    const concerns: ConcernRoster = {
+      ...roster(),
+      // The probe emission occupies the serialized emission chain, held
+      // until the finalize window releases it — the deterministic way to
+      // place a queued emission's slot past settledBy().
+      liveness: {
+        name: "liveness",
+        initial: () => ({ probeFailures: 0, halfOpen: false, lengthContinued: 0 }),
+        handle: async (input) => {
+          if (input.kind === "probe") {
+            await hold
+            return "consumed"
+          }
+          return "pass"
+        },
+        finalize: async () => {
+          holdReleased = true
+          releaseHold?.()
+        },
+      },
+      recovery: {
+        name: "recovery",
+        initial: () => ({}),
+        handle: async (input) => {
+          if (input.kind !== "answer") return "pass"
+          answerRan = true
+          return { settle: { kind: "error", cls: "quota", classified: true } }
+        },
+      },
+      guard: {
+        name: "guard",
+        initial: () => ({ idleHandled: false }),
+        handle: async (input) => {
+          // The answer emission is accepted while the idle's row runs —
+          // before the wrapper's finish — but its slot queues behind the
+          // held probe.
+          if (isIdle(input)) emit?.({ kind: "answer", answer: undefined })
+          return "pass"
+        },
+      },
+    }
+    const attach: TurnSources = (theEmit) => {
+      emit = theEmit
+      theEmit({ kind: "probe", ok: true, at: 0 })
+    }
+    const outcome = await turn(concerns, { attach })
+    // The release happened inside liveness's finalize, after settledBy()
+    // had already fixed the settle…
+    expect(holdReleased).toBe(true)
+    // …and the queued answer was dropped at execution time: its row never
+    // ran (no slice write, no journal input, no raise landing past the
+    // boundary), and the turn keeps its natural settle.
+    expect(answerRan).toBe(false)
+    expect(outcome.settle).toEqual({ kind: "natural" })
+    // Nothing lands late either.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(answerRan).toBe(false)
   })
 })
 

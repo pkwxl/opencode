@@ -20,7 +20,7 @@
 // Sits below the session layer and above the agent domain (§12): it may name
 // the host factories, never the loop or a session-driving module.
 import type { AgentCapabilities, AgentClient, AgentEnv, AgentHost, AgentHostFactory } from "./agent/types"
-import { opencodeHost, OPENCODE_CAPABILITIES } from "./agent/opencode/server"
+import { opencodeHost, OPENCODE_CAPABILITIES, scrubDriverEnv } from "./agent/opencode/server"
 import { claudeHost, CLAUDE_CAPABILITIES } from "./agent/claude/host"
 import { agentProfileFor, chooseAgent } from "./agent-choice"
 import { profileLine, resolveProfileEnv } from "./agent-env"
@@ -83,7 +83,12 @@ type StartPoolOpts = {
 }
 
 // The pool surface plus what tests read: which agent profiles' hosts started
-// (in start order, the closed ones included).
+// (in start order, the closed ones included). The registry pool's close()
+// answers a promise (it drains: it awaits starts still in flight, and a start
+// resolving past close closes itself — hostOf above), so a caller may hold
+// `await pool.close()`; the ServerControl seam keeps its void signature, and
+// fire-and-forget callers stay correct the same way — the guard, not the
+// await, is the leak's fix.
 export type AgentPool = ServerControl & { startedAgents(): string[] }
 
 // leadSplit false = the fleet cannot fork, so auto's lead runs without its
@@ -202,7 +207,14 @@ function poolOf(
   const envs = new Map(preludeEnvs)
   const starting = new Map<string, Promise<AgentHost>>()
   const started: string[] = []
+  // Set by close(): a lazy start past this point is refused, and one that was
+  // already in flight closes its own host when the factory resolves — a late
+  // registration into the drained map would never be closed (a leaked
+  // `opencode serve` child, plans/0157 D2).
+  let closed = false
   const hostOf = (name: string): Promise<AgentHost> => {
+    if (closed)
+      return Promise.reject(new AgentStartError(`the agent pool is closed; no agent host starts for ${name} after the run's close`))
     const existing = hosts.get(name)
     if (existing !== undefined) return Promise.resolve(existing)
     const inflight = starting.get(name)
@@ -236,26 +248,33 @@ function poolOf(
       let config: Record<string, unknown> | undefined
       if (adapter === "opencode" && !opts.server && !process.env[SWITCH_ENV.server] && profile?.server === undefined)
         config = services().router.spawnKeyConfig()
-      const host = await (async () => {
-        try {
-          return await factory(directory, {
-            server: opts.server,
-            permission: permissionPreset(opts.permission, opts.dryrun),
-            log,
-            ...(profile?.bin !== undefined ? { bin: profile.bin } : {}),
-            ...(envs.has(name) ? { env: envs.get(name)! } : {}),
-            ...(profile?.server !== undefined ? { server: opts.server || process.env[SWITCH_ENV.server] || profile.server } : {}),
-            ...(config !== undefined ? { config } : {}),
-          })
-        } catch (error) {
-          // A host that cannot start stops the run, exactly as the eager
-          // start of the one-agent era did (its factory throw crashed the
-          // run start): the retry ladder must not turn a dead server or a
-          // missing CLI into hours of retries. The adapter's own message
-          // travels unchanged.
-          throw new AgentStartError(error instanceof Error ? error.message : String(error))
-        }
-      })()
+      let host: AgentHost
+      try {
+        host = await factory(directory, {
+          server: opts.server,
+          permission: permissionPreset(opts.permission, opts.dryrun),
+          log,
+          ...(profile?.bin !== undefined ? { bin: profile.bin } : {}),
+          ...(envs.has(name) ? { env: envs.get(name)! } : {}),
+          ...(profile?.server !== undefined ? { server: opts.server || process.env[SWITCH_ENV.server] || profile.server } : {}),
+          ...(config !== undefined ? { config } : {}),
+        })
+      } catch (error) {
+        // A host that cannot start stops the run, exactly as the eager
+        // start of the one-agent era did (its factory throw crashed the
+        // run start): the retry ladder must not turn a dead server or a
+        // missing CLI into hours of retries. The adapter's own message
+        // travels unchanged.
+        throw new AgentStartError(error instanceof Error ? error.message : String(error))
+      }
+      // The pool closed while this start was in flight: the host would
+      // register into a drained map and nothing would ever close it —
+      // close it here and fail the start, the leak's one deterministic
+      // guard point, whether or not anyone awaits close().
+      if (closed) {
+        host.close()
+        throw new AgentStartError(`the agent pool closed while the host of ${name} was starting; the host was shut down`)
+      }
       hosts.set(name, host)
       started.push(name)
       // Step validation (§4.5, §10 item 13) runs per host, once it is up:
@@ -294,9 +313,20 @@ function poolOf(
       for (const host of hosts.values()) for (const [model, limit] of await host.client.contextLimits()) merged.set(model, limit)
       return merged
     },
-    close() {
-      for (const name of started) hosts.get(name)?.close()
+    // Drains the pool: a start still in flight is awaited (its own guard
+    // above closes a host that resolves past this point), then every
+    // registered host is closed and both maps dropped. Returns a promise so
+    // an awaiting caller knows every host this pool started is closed;
+    // fire-and-forget callers are safe the same way — the guard, not the
+    // await, is the leak's fix.
+    async close() {
+      if (closed) return
+      closed = true
+      await Promise.allSettled([...starting.values()])
+      const live = [...hosts.values()]
       hosts.clear()
+      starting.clear()
+      for (const host of live) host.close()
     },
     startedAgents: () => [...started],
   }
@@ -355,15 +385,21 @@ const BIN_CHECK_TIMEOUT_MS = 10_000
 // A profile without `bin` runs the adapter's default executable; a
 // shell-registered adapter that declares none is skipped (nothing names what
 // to run — the adapter's first host start reports the same gap a missing CLI
-// would).
+// would). A profile that only ever connects skips the check too (plans/0157
+// D3): a profile-declared `server`, and the run-wide --server /
+// OPENCODE_AUTO_SERVER override over opencode profiles, means the adapter
+// connects to an existing instance and never spawns — no local binary
+// demanded, the connect-only floor.
 // AUTO-DECISION: only failure to run and exit 0 is checked, not the printed version (`--version` is the one flag every coding CLI answers uniformly, and agreeing on a version scheme is the operator's, not the driver's, business)
 export async function checkAgentBins(
   registry: ModelRegistry,
   agentFilter: string | undefined,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; server?: string } = {},
 ): Promise<string[]> {
   const problems: string[] = []
+  const external = Boolean(opts.server || process.env[SWITCH_ENV.server])
   for (const { profile } of dispatchAgentProfiles(registry, agentFilter)) {
+    if (profile.server !== undefined || (external && profile.adapter === "opencode")) continue
     const bin = profile.bin ?? defaultBin(profile.adapter)
     if (bin === undefined) continue
     const env = await resolveProfileEnv(profile)
@@ -386,7 +422,7 @@ function runVersionCheck(bin: string, overlay: AgentEnv, timeoutMs: number): Pro
         stdout: "pipe",
         stderr: "pipe",
         stdin: "ignore",
-        ...(Object.keys(overlay).length ? { env: childEnv(overlay) } : {}),
+        env: childEnv(overlay),
       })
     } catch (error) {
       resolve(error instanceof Error ? error.message : String(error))
@@ -409,13 +445,15 @@ function runVersionCheck(bin: string, overlay: AgentEnv, timeoutMs: number): Pro
   })
 }
 
-// The driver's environment overlaid by a resolved profile env (null removes
-// an inherited variable) — the environment the profile's processes run
-// under. The opencode spawn builds the same shape itself (serverEnv,
-// src/agent/opencode/server.ts); claude's manager does the same with its
-// session-variable removal on top.
+// The driver's environment — the driver's own OPENCODE_AUTO_* variables
+// scrubbed first (plans/0059 X1: the child is the agent's own executable, the
+// same letter its spawns follow; scrubDriverEnv, src/agent/env.ts) —
+// overlaid by a resolved profile env (null removes an inherited variable):
+// the environment the profile's processes run under. The opencode spawn
+// builds the same shape itself (serverEnv, src/agent/opencode/server.ts);
+// claude's manager does the same with its session-variable removal on top.
 function childEnv(overlay: AgentEnv): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env }
+  const env: Record<string, string | undefined> = scrubDriverEnv()
   for (const [name, value] of Object.entries(overlay)) {
     if (value === null) delete env[name]
     else env[name] = value
@@ -477,7 +515,7 @@ export async function probeModels(
     for (const entry of entries) results.push(await probeOne(pool.pool, entry, opts.timeoutMs ?? PROBE_TIMEOUT_MS))
     return results
   } finally {
-    pool.pool.close()
+    await pool.pool.close()
   }
 }
 

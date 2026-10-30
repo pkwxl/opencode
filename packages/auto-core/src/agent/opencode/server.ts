@@ -23,7 +23,13 @@ import { opencodeAgent } from "./client"
 // the agent pool can degrade over the capability intersection before any host
 // starts (plans/0055 §8.5: lazy start means capabilities are known without
 // spawning; the record is the same constant the started client reports).
+// The X1 env scrub rides the same entry (plans/0157 D4): the pool's
+// `<bin> --version` child is the agent's own executable and scrubs the
+// driver's variables through the same predicate the adapters' env builders
+// use (../env.ts) — re-exported here because the pool (driver domain) crosses
+// into this domain only via its entry modules (D8).
 export { OPENCODE_CAPABILITIES } from "./client"
+export { scrubDriverEnv } from "../env"
 
 // The external-server override's env name, restated from the driver's switch
 // registry (src/switches.ts SWITCH_ENV.server) the way src/agent/env.ts
@@ -285,19 +291,30 @@ export async function spawnOpencodeServer(
     })
     proc.on("exit", (code) => {
       clearTimeout(id)
+      // A started server's later exit — the normal close() at run end — arms
+      // nothing: the promise is settled, and a fresh grace timer here would
+      // only pin the event loop for its 100 ms (plans/0157 D5).
+      if (resolved) return
       // The exit event can land before the pipe delivers the process's last
       // chunks (an early-exiting server's error lines arrive just ahead of
       // EOF, and under load the exit notification wins the race): hold the
       // rejection back until both output streams have closed, so the message
       // carries the whole output the contract names — bounded by a short
       // grace, as a detached grandchild holding the pipe must never hang the
-      // error path.
+      // error path. The grace's handle is kept: cleared when the streams'
+      // close wins the race, and unref'd so even the losing branch never
+      // pins the process for its duration.
       const closed = (stream: ChildProcess["stdout"]) =>
         !stream || stream.destroyed || stream.readableEnded
           ? Promise.resolve()
           : new Promise<void>((resolve) => stream.once("close", resolve))
-      const grace = new Promise<void>((resolve) => setTimeout(resolve, 100))
+      let graceTimer: ReturnType<typeof setTimeout> | undefined
+      const grace = new Promise<void>((resolve) => {
+        graceTimer = setTimeout(resolve, 100)
+        graceTimer.unref?.()
+      })
       void Promise.race([Promise.all([closed(proc.stdout), closed(proc.stderr)]), grace]).then(() => {
+        if (graceTimer !== undefined) clearTimeout(graceTimer)
         let msg = `Server exited with code ${code}`
         if (output.trim()) msg += `\nServer output: ${output}`
         reject(new Error(msg))

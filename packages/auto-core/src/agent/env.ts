@@ -7,12 +7,19 @@
 // claude processes (claude/client.ts claudeEnv) and the managed opencode
 // server (opencode/server.ts serverEnv), whose tools and shells inherit its
 // environment. A profile's env overlay is applied after the scrub, so a
-// profile that sets one of them explicitly still gets it.
+// profile that sets one of them explicitly still gets it. The one
+// driver-domain child that is the agent's own executable — the pool's
+// `<bin> --version` preflight check (plans/0157 D4) — scrubs through the same
+// predicate (scrubDriverEnv below), so the X1 letter holds over every process
+// the agent's binary is.
 //
-// Part of the agent domain, imported by the adapters only: the driver's switch
-// registry (src/switches.ts) sits in the driver domain, which this domain may
-// not import, so the prefix is restated here. test/agent-env.test.ts checks
-// that every variable the registry names matches it.
+// Part of the agent domain, imported by the adapters — and reached by the
+// agent pool (the driver domain) through the opencode entry's re-export of
+// scrubDriverEnv, the domain's one D8-legal crossing point for it: the
+// driver's switch registry (src/switches.ts) sits in the driver domain, which
+// this domain may not import, so the prefix is restated
+// here. test/agent-env.test.ts checks that every variable the registry names
+// matches it.
 
 const DRIVER_ENV_PREFIX = "OPENCODE_AUTO_"
 
@@ -27,4 +34,16 @@ const AGENT_FLAGS: ReadonlySet<string> = new Set(["OPENCODE_AUTO_SHARE", "OPENCO
 // environment.
 export function driverVariable(name: string): boolean {
   return name.startsWith(DRIVER_ENV_PREFIX) && !AGENT_FLAGS.has(name)
+}
+
+// The base with the driver's own variables scrubbed: the environment shape
+// every child that runs the agent's own executable starts from (the adapters
+// apply the same predicate inline over their bases with their extra rules —
+// the config-reference retention of serverEnv, the session-variable removal
+// of claudeEnv — so they keep their builders; this is the plain scrub for the
+// pool's version-check child, applied before the profile overlay).
+export function scrubDriverEnv(base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {}
+  for (const [name, value] of Object.entries(base)) if (!driverVariable(name)) env[name] = value
+  return env
 }

@@ -194,6 +194,59 @@ describe("interactive", () => {
     // symmetric cleanup, and this assertion is the observable difference.)
     expect(ctx.chunks.join("")).not.toContain("💬")
   })
+
+  // Concurrent asks (plans/0157 D1): doc lanes run several lanes' sessions
+  // through this one channel (plans/0099), so a second ask can arrive while
+  // one pends. The old fallback — resolve undefined at once — proxy-answered a
+  // question the human never saw and journaled a "timeout" that was none; the
+  // queue gives every ask its own window, its timer armed at dequeue.
+  test("a second ask while one pends joins a FIFO: each ask gets its own window, in order", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const first = ctx.repl.question("first question", 1)
+    const second = ctx.repl.question("second question", 1)
+    ctx.input.write("first answer\n")
+    expect(await first).toBe("first answer")
+    ctx.input.write("second answer\n")
+    expect(await second).toBe("second answer")
+  })
+
+  test("a queued ask's timeout is its own: the timer is armed at dequeue, never by the queue's length", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const first = ctx.repl.question("first question", 1)
+    // 0.005 minutes = 300 ms: the queued ask's own window, short enough to
+    // observe; the first ask's minute never fires inside the test.
+    const second = ctx.repl.question("second question", 0.005)
+    ctx.input.write("first answer\n")
+    expect(await first).toBe("first answer")
+    // The second ask's window started when it dequeued: it expires on its own
+    // timer, a settlement of "timeout" that is one.
+    expect(await second).toBeUndefined()
+  })
+
+  test("a queued ask behind a hard wait (minutes omitted, the step-mode pause) waits for it, then gets its own window", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const first = ctx.repl.question("hard wait", undefined)
+    const second = ctx.repl.question("after the pause", 1)
+    ctx.input.write("done waiting\n")
+    expect(await first).toBe("done waiting")
+    ctx.input.write("queued answer\n")
+    expect(await second).toBe("queued answer")
+  })
+
+  test("close() settles the pending ask, drains the queue, and later asks answer at once", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const first = ctx.repl.question("first question", 1)
+    const second = ctx.repl.question("second question", 1)
+    ctx.repl.close()
+    repl = undefined
+    expect(await first).toBeUndefined()
+    expect(await second).toBeUndefined()
+    expect(await ctx.repl.question("past the close", 1)).toBeUndefined()
+  })
 })
 
 // interactiveChannel — the RunAllOpts.interactive seam's resolver (P3a): the

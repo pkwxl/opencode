@@ -312,6 +312,15 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
   return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
 }
 
+// The fallback branch's serializer: without the sideband each ask opens its
+// own readline over the process stdin, and doc lanes (plans/0099) can put two
+// asks in the field at once — two interfaces over one stdin would both take
+// the same typed line. Serialized FIFO, exactly like the sideband's queue
+// (src/interactive.ts, plans/0157 D1): the second ask's readline is created
+// only when the first settles, so each ask gets its own window. The chain is
+// never poisoned — an ask's failure still travels to its own caller only.
+let stdinAskChain: Promise<unknown> = Promise.resolve()
+
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
 // autoAnswer() (questions) or the --permission fallback (permission requests).
@@ -319,7 +328,8 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
 // waits for the human's answer indefinitely, never falling back); undefined
 // then means only that the input channel closed.
 // Under --interactive the resident input line takes the answer instead (prompt
-// text, timeout and fallback semantics unchanged).
+// text, timeout and fallback semantics unchanged) — and queues concurrent
+// asks FIFO; the fallback branch serializes the same way.
 // When dir is passed, the waiting interval (the interactive.question path
 // included) is deducted from the session time and the AI time via
 // statsWaitBegin/End and recorded separately as waitMs (STATS_PLAN §2/§3: AI
@@ -338,27 +348,35 @@ export async function askHuman(
   await statsWaitBegin(dir, "askHuman")
   try {
     if (interactive) return (await interactive.question(promptText, minutes)) || undefined
-    const rl = createInterface({ input: process.stdin, output: process.stdout })
-    // In raw mode ^C does not raise the process-level SIGINT; readline
-    // intercepts it. Forward to the process-level handler so two consecutive
-    // Ctrl+C still force-quit while waiting for a human answer.
-    rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      const answer =
-        minutes === undefined
-          ? await rl.question(promptText)
-          : await Promise.race([
-              rl.question(promptText),
-              new Promise<undefined>((resolve) => {
-                timer = setTimeout(() => resolve(undefined), minutes * 60_000)
-              }),
-            ])
-      return answer?.trim() || undefined
-    } finally {
-      clearTimeout(timer)
-      rl.close()
+    const stdinAsk = async (): Promise<string | undefined> => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout })
+      // In raw mode ^C does not raise the process-level SIGINT; readline
+      // intercepts it. Forward it to the process-level handler so two consecutive
+      // Ctrl+C still force-quit while waiting for a human answer.
+      rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const answer =
+          minutes === undefined
+            ? await rl.question(promptText)
+            : await Promise.race([
+                rl.question(promptText),
+                new Promise<undefined>((resolve) => {
+                  timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+                }),
+              ])
+        return answer?.trim() || undefined
+      } finally {
+        clearTimeout(timer)
+        rl.close()
+      }
     }
+    const gated = stdinAskChain.then(stdinAsk, stdinAsk)
+    stdinAskChain = gated.then(
+      () => {},
+      () => {},
+    )
+    return await gated
   } finally {
     await statsWaitEnd(dir)
   }
