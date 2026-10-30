@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { homedir, hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -2147,7 +2147,7 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
     }
   })
 
-  test("close-family and lane flags are refused on run and transfer; init refuses every foreign option outright (nothing written)", async () => {
+  test("close-family and lane flags are refused on run, plan and transfer; --from-bundle points at sync on every other command; init refuses every foreign option outright (nothing written)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       // init's whitelist (the amend pattern): run's, close's and _lane's
@@ -2167,10 +2167,22 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
       expect(lane.code).toBe(1)
       expect(lane.err).toContain("--unit is _lane's value flag")
       expect(await readdir(dir)).toEqual([])
-      // run/transfer: the close-family flags point at close / plan
+      // init's --from-bundle pointer names the consumer and the
+      // materialization channel (owned-flag refusal, 0159 — before it the
+      // flag passed init's whitelist but run/plan/transfer never refused it).
+      const initBundle = await runCli(["init", dir, "--from-bundle"])
+      expect(initBundle.code).toBe(1)
+      expect(initBundle.err).toContain("--from-bundle is a sync option")
+      expect(initBundle.err).toContain("opencode-auto sync <dir> --from-bundle")
+      expect(initBundle.err).toContain("materialized by init --intent alone")
+      expect(await readdir(dir)).toEqual([])
+      // run/plan/transfer: the close-family flags point at close / plan
       // --force-close; the lane value flags name the hidden _lane entry
       // (each swallows the next token as its value, so the directory would
-      // be eaten — the refusal keeps the token meaningless instead).
+      // be eaten — the refusal keeps the token meaningless instead). plan
+      // shared run and transfer's option machinery but not the lane
+      // refusal until 0159: `plan <dir> --unit T-001` used to dispatch a
+      // real planning session with the flag silently dropped.
       const runReason = await runCli(["run", dir, "--reason", "x"])
       expect(runReason.code).toBe(1)
       expect(runReason.err).toContain("--reason is a close option: run closes nothing")
@@ -2188,6 +2200,24 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
       const transferUnit = await runCli(["transfer", dir, "--unit", "T-001"])
       expect(transferUnit.code).toBe(1)
       expect(transferUnit.err).toContain("transfer takes no --unit")
+      const planUnit = await runCli(["plan", dir, "--unit", "T-001"])
+      expect(planUnit.code).toBe(1)
+      expect(planUnit.err).toContain("hidden _lane entry")
+      expect(planUnit.err).toContain("plan takes no --unit")
+      const planMerge = await runCli(["plan", dir, "--merge", "auto-lane/T-005"])
+      expect(planMerge.code).toBe(1)
+      expect(planMerge.err).toContain("plan takes no --merge")
+      // --from-bundle on the three session commands: same pointer, exit 1
+      // (before 0159 `run <dir> --from-bundle` started a full run with the
+      // flag silently ignored — the owned-flag row answers every command
+      // but sync now).
+      for (const command of ["run", "plan", "transfer"] as const) {
+        const refused = await runCli([command, dir, "--from-bundle"])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(`--from-bundle is a sync option`)
+        expect(refused.err).toContain(`${command} does not accept it`)
+        expect(refused.err).toContain("opencode-auto sync <dir> --from-bundle")
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2855,6 +2885,257 @@ describe("CLI: help and unknown commands", () => {
     expect(refused.code).toBe(1)
     expect(refused.err).toContain("unknown option --frobnicate")
     expect(refused.err).toContain("run 'opencode-auto run --help' to see this command's usage")
+  })
+})
+
+// The option policy's enumeration guard (0159): the CLI's own invariant —
+// "every flag outside its command's policy below is an error with exit 1, so
+// a typo is never silently ignored" — had no test that enumerated the whole
+// vocabulary, which is exactly how two holes landed silently (plan never
+// refused the lane value flags; --from-bundle passed the global whitelist for
+// every command while only sync consumed it). The vocabulary is derived from
+// the parser's own constants in src/index.ts — read from source, never
+// hand-copied, so a flag added there joins this enumeration without anyone
+// remembering it — and each of run/plan/transfer must either CONSUME the flag
+// (the consumed sets below are the commands' public option policy, changed
+// only in the same change as the parser) or refuse it with exit 1 naming it.
+// The refusals fire in argument policy, before any directory work or run
+// start, so the cases share one empty directory and never write.
+describe("CLI: the option policy's enumeration guard (0159)", () => {
+  // The parser constants, extracted from the source the binary runs: the
+  // flag tokens of VALUE_FLAGS and BOOLEAN_FLAGS (comments stripped first —
+  // their prose never carries quoted tokens), the RETIRED_FLAGS keys (the
+  // record's own two-space-indented key lines) and the literal extras of the
+  // KNOWN_FLAGS line, unioned exactly the way the parser unions them.
+  const source = readFileSync(join(import.meta.dir, "..", "src", "index.ts"), "utf8")
+  const blockOf = (name: string, endMark: string): string => {
+    const start = source.indexOf(`const ${name}`)
+    if (start < 0) throw new Error(`${name} not found in src/index.ts — the test reads the parser's constants`)
+    const end = source.indexOf(endMark, start)
+    return source.slice(start, end)
+  }
+  const noComments = (text: string): string => text.replace(/^[ \t]*\/\/.*$/gm, "")
+  const VALUE_FLAGS = new Set([...noComments(blockOf("VALUE_FLAGS", "// Repeatable value flags")).matchAll(/"([^"]+)"/g)].map(([, token]) => token))
+  const BOOLEAN_FLAGS = new Set([...blockOf("BOOLEAN_FLAGS", "\nfor (let i = 1").matchAll(/"([^"]+)"/g)].map(([, token]) => token))
+  const RETIRED_KEYS = new Set([...blockOf("RETIRED_FLAGS", "const KNOWN_FLAGS").matchAll(/^ {2}(?:"([A-Za-z0-9-]+)"|([A-Za-z0-9-]+)):/gm)].map(([, quoted, bare]) => quoted ?? bare))
+  const KNOWN_FLAGS = new Set<string>([
+    ...VALUE_FLAGS,
+    ...BOOLEAN_FLAGS,
+    ...RETIRED_KEYS,
+    // The whitelist's literal extras, read off its own line (they have no
+    // constant of their own): "continue", "commit-subtask", "verify-idle",
+    // "verify-max".
+    ...[...([...source.matchAll(/const KNOWN_FLAGS = new Set\(\[.*\]\)/g)][0]![0].matchAll(/"([^"]+)"/g) as unknown as RegExpMatchArray[])].map((match) => match[1]!),
+  ])
+
+  test("the parser constants parse: the vocabulary is non-empty and carries the load-bearing members", () => {
+    expect(KNOWN_FLAGS.size).toBeGreaterThan(50)
+    for (const loadBearing of ["unit", "merge", "from-bundle", "probe", "continue", "commit-subtask", "verify-idle", "verify-max", "reason", "resynthesize"]) {
+      expect(KNOWN_FLAGS.has(loadBearing), `--${loadBearing} missing from the derived vocabulary`).toBe(true)
+    }
+  })
+
+  // What each command consumes — the public option policy (only a conscious
+  // policy change edits these rows; everything else in the vocabulary must be
+  // refused). run: the session flags and run's own execution shaping; plan:
+  // the same session flags plus its routes and the close family under
+  // --force-close; transfer: the session flags and --resynthesize alone.
+  const CONSUMED: Record<"run" | "plan" | "transfer", ReadonlySet<string>> = {
+    run: new Set(["server", "verbose", "interactive", "wait-answer", "permission", "new-session", "dryrun", "wait-between", "max-sessions", "boundary", "repair", "stop-after"]),
+    plan: new Set([
+      "server",
+      "verbose",
+      "interactive",
+      "wait-answer",
+      "permission",
+      "new-session",
+      "prompt",
+      "file",
+      "append",
+      "force-close",
+      "reason",
+      "cascade",
+      "commit-changes",
+      "stash-changes",
+      "new-task",
+      "scaffold",
+      "export",
+      "adopt",
+      "round",
+      "phase",
+    ]),
+    transfer: new Set(["server", "verbose", "interactive", "wait-answer", "permission", "new-session", "resynthesize"]),
+  }
+
+  test("every known flag is consumed or refused with exit 1 naming it — run, plan and transfer each", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-enum-"))
+    try {
+      for (const command of ["run", "plan", "transfer"] as const) {
+        const refusedFlags = [...KNOWN_FLAGS].filter((flag) => !CONSUMED[command].has(flag))
+        // The refusals exit in argument policy, before any run starts, so
+        // the cases are independent and run concurrently in small batches.
+        const failures: string[] = []
+        for (let index = 0; index < refusedFlags.length; index += 12) {
+          await Promise.all(
+            refusedFlags.slice(index, index + 12).map(async (flag) => {
+              const args = [command, dir, `--${flag}`, ...(VALUE_FLAGS.has(flag) ? ["zzz"] : [])]
+              const result = await runCli(args)
+              if (result.code !== 1 || !result.err.includes(`--${flag}`)) {
+                failures.push(`${command} ${args.slice(2).join(" ")}: exit ${result.code}, stderr: ${result.err.trim().split("\n")[0]}`)
+              }
+            }),
+          )
+        }
+        expect(failures, `${command}: every flag outside its policy refuses with exit 1 naming it`).toEqual([])
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  // The help table's own integrity: renderCommandHelp does OPTION_TEXT.get(key)!
+  // non-null-asserted, so an `options` key that is neither "frozen" nor an
+  // OPTION_HELP row would print a literal "undefined" paragraph in that
+  // command's --help — a static check over the same source, no subprocess.
+  test("every COMMANDS options key exists in OPTION_HELP (a typo'd key would render a literal undefined line)", () => {
+    const optionHelpBlock = blockOf("OPTION_HELP", "// The exit-codes line")
+    // The table's two row shapes: the wrapped multi-line rows (the bracket
+    // alone on its line) and the single-line rows (["mode", "…"], the short
+    // entries).
+    const optionHelpKeys = new Set(
+      [...optionHelpBlock.matchAll(/^ {2}\[\n {4}"([a-z0-9-]+)",|^ {2}\["([a-z0-9-]+)",/gm)].map(([, wrapped, single]) => wrapped ?? single),
+    )
+    expect(optionHelpKeys.size).toBeGreaterThan(30)
+    const commandsBlock = blockOf("COMMANDS", "const OPTION_TEXT")
+    const optionLists = [...commandsBlock.matchAll(/options: \[([^\]]*)\]/g)].map(([, inner]) => [...inner.matchAll(/"([^"]+)"/g)].map(([, key]) => key))
+    expect(optionLists.length).toBeGreaterThanOrEqual(18)
+    for (const keys of optionLists) {
+      for (const key of keys) {
+        expect(key === "frozen" || optionHelpKeys.has(key), `the ${key} options row has no OPTION_HELP paragraph`).toBe(true)
+      }
+    }
+  })
+})
+
+// The three public commands the shell suite had never driven (0159's
+// coverage finding): clarify's whole exit mapping through the shell row (the
+// core's clarifyGate — released 0 / held 2 / error 1) beside its flagless,
+// missing-config and live-lock refusals; driver-helper's unloadable-config
+// refusal; install-prompts's uninitialized refusal and its happy path (the
+// never-delete-extra invariant included).
+describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 0116/0105/0093)", () => {
+  test("clarify maps the gate's results — released 0, held 2, error 1 — and refuses options, a missing config and a live lock", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-clarify-"))
+    try {
+      // Uninitialized: close's "nothing to clarify" shape, before the gate.
+      const bare = await runCli(["clarify", dir])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain(`nothing to clarify: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir} first`)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      // The flagless refusal (the status family): a directory argument only.
+      const flagged = await runCli(["clarify", dir, "--dryrun"])
+      expect(flagged.code).toBe(1)
+      expect(flagged.err).toContain("unknown option --dryrun: clarify only accepts a directory argument, no options")
+      // Beside a live run: the config-command refusal, never a lock of its
+      // own (a planted live lock naming this process — alive, so held).
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-10-30T10:00:00.000Z" }))
+      const locked = await runCli(["clarify", dir])
+      expect(locked.code).toBe(1)
+      expect(locked.err).toContain(`another opencode-auto process holds the run lock of ${dir}`)
+      await rm(join(dir, ".auto"), { recursive: true, force: true })
+      // Held (exit 2): no analysis and no round — the neither-gate refusal.
+      await commitFixture(dir)
+      const nothing = await runCli(["clarify", dir])
+      expect(nothing.code).toBe(2)
+      expect(nothing.err).toContain("nothing awaits your clarification right now")
+      expect(nothing.err).toContain("no project analysis docs/analysis.md exists")
+      // Held (exit 2): an analysis whose problems hold the release.
+      await Bun.write(
+        join(dir, "docs/analysis.md"),
+        ["# Project analysis", "", "## Analysis", "", "A CLI tool of three modules.", "", "## Goals", "", "Ship the port.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 mm — the decorated nope", ""].join("\n"),
+      )
+      const problems = await runCli(["clarify", dir])
+      expect(problems.code).toBe(2)
+      expect(problems.err).toContain("docs/analysis.md has problems that hold its release")
+      // Released (exit 0): a valid analysis — the review lines first, the
+      // mark written and its commit made (the person's uncommitted fill
+      // folds into the release commit).
+      await Bun.write(
+        join(dir, "docs/analysis.md"),
+        ["# Project analysis", "", "## Analysis", "", "A CLI tool of three modules.", "", "## Goals", "", "Ship the port.", "", "## Project brief", "", "A faithful port of the core.", "", "## Roadmap", "", "- R-01 m — port the core", ""].join("\n"),
+      )
+      const released = await runCli(["clarify", dir])
+      expect(released.code).toBe(0)
+      expect(released.out).toContain("the release of docs/analysis.md puts in force, as written:")
+      expect(released.out).toContain("- R-01 m — port the core")
+      expect(released.out).toContain("✓ `Clarified: yes` written to docs/analysis.md")
+      expect(released.out).toContain("committed: PLAN clarify the analysis release (docs/analysis.md)")
+      expect(await Bun.file(join(dir, "docs/analysis.md")).text()).toContain("Clarified: yes")
+      // Held (exit 2) again: already released — the neither-gate refusal
+      // names the released analysis.
+      const again = await runCli(["clarify", dir])
+      expect(again.code).toBe(2)
+      expect(again.err).toContain("nothing awaits your clarification right now")
+      expect(again.err).toContain("the project analysis docs/analysis.md is released")
+      // Error (exit 1): an unreadable phase index — the environment half of
+      // the mapping (a P-dir beside the index keeps the layout live).
+      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "# Phases (R-01)\n")
+      const broken = await runCli(["clarify", dir])
+      expect(broken.code).toBe(1)
+      expect(broken.err).toContain("phase flow blocked: phase index")
+      expect(broken.err).toContain("no phases listed")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("driver-helper renders the person-proxy brief; an unloadable config refuses (the map is keyed on it)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-helper-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
+      const brief = await runCli(["driver-helper", dir])
+      expect(brief.code).toBe(0)
+      for (const block of ["## ROLE — the person's pen, never the driver", "## PRIMER — how the driver works", "## STATE", "## CHANNELS", "## POLICY", "## RECOVERY"]) {
+        expect(brief.out).toContain(block)
+      }
+      // An unloadable config refuses: renderHelperBrief is keyed on the
+      // config's shape (phases/build), so a config that cannot load
+      // strictly is an environment error, exit 1.
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verify: true }))
+      const refused = await runCli(["driver-helper", dir])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("verify")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("install-prompts resyncs the suite (extras never deleted) and refuses an uninitialized directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-prompts-"))
+    try {
+      const bare = await runCli(["install-prompts", dir])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain(`nothing to install: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir} first`)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
+      const installed = await runCli(["install-prompts", dir])
+      expect(installed.code).toBe(0)
+      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 10 files`)
+      expect(installed.out).toContain("rewritten: charter.md, plan-append.md, resume-subtasks.md")
+      // The never-delete invariant: a person's own file under prompts/ is
+      // reported and left alone; an already-current suite re-reports it.
+      await Bun.write(join(dir, "prompts/my-own.md"), "# Mine\n\nLocal additions are the person's own.\n")
+      const again = await runCli(["install-prompts", dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 10 files`)
+      expect(again.out).toContain("left alone (not in the suite): my-own.md")
+      expect(await Bun.file(join(dir, "prompts/my-own.md")).text()).toContain("Mine")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -3638,6 +3919,34 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
       const probe = await runCli(["models", dir, "--probe"])
       expect(probe.code).toBe(0)
       expect(probe.out).toContain("probe: no model registry, nothing to probe")
+      // --probe is a real boolean (0159): the explicit =false opt-out runs
+      // no probe at all — before, the bare-presence read started it against
+      // the person's explicit "false", and a token-spending opt-out is never
+      // silently ignored.
+      const optOut = await runCli(["models", dir, "--probe=false"])
+      expect(optOut.code).toBe(0)
+      expect(optOut.out).not.toContain("probe:")
+      const spaceForm = await runCli(["models", dir, "--probe", "false"])
+      expect(spaceForm.code).toBe(0)
+      expect(spaceForm.out).not.toContain("probe:")
+      // `--probe true <dir>`: the boolean swallows the true/false token, so
+      // the directory after it still resolves — before probe joined
+      // BOOLEAN_FLAGS the "true" stayed positional[0], the command ran on
+      // ./true and the intended directory's registry was silently ignored.
+      // The dir-dependent signal: a project layer git would commit is a
+      // problem naming the layer's path (exit 1) only when <dir> parsed.
+      const layered = await mkdtemp(join(tmpdir(), "auto-cli-models-"))
+      await mkdir(join(layered, ".opencode", "auto"), { recursive: true })
+      await Bun.write(
+        join(layered, ".opencode", "auto", "models.json"),
+        JSON.stringify({ models: { probe: { agent: "opencode", model: "x" } } }),
+      )
+      const git = gitOf(layered)
+      await git("init")
+      const swallowed = await runCli(["models", "--probe", "true", layered])
+      expect(swallowed.code).toBe(1)
+      expect(swallowed.out).toContain("project layer .opencode/auto/models.json: git does not ignore it")
+      await rm(layered, { recursive: true, force: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

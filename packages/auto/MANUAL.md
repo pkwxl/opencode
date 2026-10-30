@@ -40,9 +40,11 @@ opencode-auto init <dir> --phases "adm" --test-by-driver    # keys not given fal
 - **What it writes**: `.opencode/auto/config.json` (the constitution: `phases`, `mode`, `subtask`,
   `contextLimit`, `parallel`, `treeLanes`, `testByDriver`, `idleTime`/`idleMax`, `scanExempt`, `isolate`, …),
   `.opencode/agent/auto.md` (the session contract), `opencode.json`, `.gitignore` entries,
-  `.auto/` + `tmp/` workdirs, the `AGENTS.md` marker block, and the project brief stub
-  `.opencode/auto/brief.md` (sections `## Goal` / `## Source` / `## Target` / `## Constraints`).
-  **Fill in the brief** — every planning session reads it; `init` starts no AI sessions.
+  `.auto/` + `tmp/` workdirs, and the `AGENTS.md` marker block — no project brief and nothing under
+  `docs/`: the first `transfer` (or `plan` in m mode) opens the assisted project analysis
+  `docs/analysis.md`, whose approved `## Project brief` proposal installs `.opencode/auto/brief.md` on
+  release (a later manual override: `amend --brief`). Work on the analysis with your agent and release it
+  with `opencode-auto clarify <dir>`; `init` starts no AI sessions.
 - **Config semantics**: `init` is a stateless full overwrite (keys not given revert to defaults).
   Change a few keys with `opencode-auto amend <dir> --<key> <value>`; repair drift with `fix`;
   remove the layer with `reset`; `init`/`amend`/`fix` never touch round directories.
@@ -91,11 +93,10 @@ opencode-auto transfer <dir>
 - In `m` mode `transfer` refuses (exit 1): `plan` establishes the single phase as before.
 - **Reshaping the round**: at a phase boundary (or with no phase in progress) the round's
   **unstarted** phase tail is reshaping state, and the next `transfer` re-derives it before
-  constructing. The channel is the round's authority: a round the released roadmap covers is
-  reshaped by moving its `- R-NN <phases> — <goal>` line in `docs/analysis.md` (`amend --phases`
-  refuses there — the config value never applies to a covered round; `status` names the key
-  superseded), a config-governed round by `amend --phases` (mid-phase it refuses, naming the
-  boundary). Started or completed phases are never reshaped.
+  constructing. The channel is the roadmap line alone: reshape a round by moving or adding its
+  `- R-NN <phases> — <goal>` line in `docs/analysis.md` — an uncovered round becomes covered the
+  moment its line exists, and `amend --phases` refuses outright (plans/0137: the config `phases`
+  key is init-stamped machinery, chosen at birth). Started or completed phases are never reshaped.
 
 ## 3. Cross a phase boundary — transfer → review → plan → run
 
@@ -223,7 +224,7 @@ driver's unified commit is the completion condition.
 | Command | Purpose |
 | --- | --- |
 | `init [dir] [keys]` | open a project: write the config layer (full overwrite) |
-| `amend [dir] --<key> <value>` | rewrite only the given config keys (`--phases` at a boundary reshapes the round's unstarted tail) |
+| `amend [dir] --<key> <value>` | rewrite only the given config keys (`--brief <text>` revises the project brief; the `phases` key excepted — a round reshapes by its roadmap line, `amend --phases` refuses) |
 | `fix [dir] [-f] [--dryrun]` | repair the config layer by rule |
 | `sync [dir] [-f] [--dryrun] [--from-bundle]` | upgrade a materialized intent bundle to the running binary's (never writes person-edited files, never deletes extras; `--from-bundle` overwrites differing unstamped files) |
 | `release [dir]` | the release gate: certify a destination repository (nested git repository) stands alone — the task-id/out-of-root/process-path findings the rounds recorded now block, beside a clean-tree check (read-only; fix with your agent, commit, re-run) |

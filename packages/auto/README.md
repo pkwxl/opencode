@@ -53,7 +53,7 @@ opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | 
 opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
 opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment environment in a new worktree — at the state before a task first started (T-NNN, the parent of its oldest Auto-Task commit of the current corpus; a number re-issued after a restart never forks before the restart, plans/0140) or at an exact commit — to retry it in isolation; nested repositories reconstructed alongside, aligned at the recorded state; the main tree, its branches and its history never touched; takes no run lock, runs beside a live run, see "The retry fork (fork, remove-fork)"
 opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: every worktree of the fork removed and its auto-fork/* branch deleted per repository (uncommitted work blocks naming the files — `--force` discards it explicitly), freeing the path and the branch name to fork again; the tips stay recoverable via git reflog; see "The retry fork (fork, remove-fork)"
-opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — a seed or the analysis phase's generated brief; delete it by hand if you mean to)
+opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — an installed approved proposal or a person's `amend --brief` write; delete it by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
 opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (runbooks for a coding-agent session acting as the driver) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual-driver prompt suite (install-prompts)"
@@ -288,7 +288,7 @@ Compatibility and migration:
 | Existing config containing `source` / `destDir` | `run` / `amend` / `init` fail strictly (`status` prints a ⚠ line); the message names the original value and the fix (copy into brief.md, then delete the key) and points at `fix` — `fix` migrates the value into brief.md's `## Source` / `## Target` sections and deletes the key; a no-argument `init` drops them, prints the original values, and overwrites as usual |
 | Retired options `init -p` / `--prompt` (init takes no prompt and no brief; the planning input is `plan -p`), `init --brief` / `--brief-file` (init writes no brief — the project analysis's approved `## Project brief` proposal installs it; a later manual override: `amend --brief`), `amend --phases` (plans/0137: the config `phases` key is init-stamped machinery — a round reshapes by its `- R-NN <phases> — <goal>` line in `docs/analysis.md`, the next `transfer` re-deriving the unstarted tail) and `--amend` | Appearing: exit code 1 + retirement notice (the first points at the analysis flow and `plan -p`, the second at the analysis flow and `amend --brief`, the third at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`); the retired `check` subcommand likewise: exit code 1 + retirement notice (pointing at `fix --dryrun` — the principle scan and the reference check were removed) |
 | Unknown `--` options (including misspellings like `--next`) | Exit code 1 + near-name suggestions (breaking; previously silently ignored). `status` accepts only a directory argument and rejects any option; `reset` accepts only a directory argument and `-f`; `fix` accepts only a directory argument, `-f` and `--dryrun` |
-| Close-family flags (`--reason`, `--cascade`, `--commit-changes`, `--stash-changes`) or the lane value flags (`--unit`, `--merge`) on `run`, `transfer` or `init` | Exit code 1 + a pointer at the owning command — `close` / `plan --force-close` for the close family, the hidden `_lane` entry for the lane flags (breaking; previously silently ignored — `init --dryrun` wrote everything and `run --merge <dir>` swallowed the directory) |
+| Close-family flags (`--reason`, `--cascade`, `--commit-changes`, `--stash-changes`) or the lane value flags (`--unit`, `--merge`) on `run`, `plan`, `transfer` or `init` | Exit code 1 + a pointer at the owning command — `close` / `plan --force-close` for the close family, the hidden `_lane` entry for the lane flags (breaking; previously silently ignored — `init --dryrun` wrote everything and `run --merge <dir>` swallowed the directory; `plan` silently dropped the lane flags until the 0159 guard) |
 | Repeated `init` (no arguments) | **Every key falls back to its default** (breaking: previously "config unchanged"); templates and the marker block stay idempotent |
 | Parameterized init like `init --test-by-driver true` | Given keys are written with their values, **keys not given fall back to defaults** |
 | `amend --test-by-driver true` | Only the explicitly given keys are rewritten, the rest are kept |
@@ -324,10 +324,12 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; subta
 
 Under `init` (the default full overwrite), the config-writing options above mean "not given falls back to the
 default"; "only explicitly given keys are rewritten" is the `amend` subcommand's semantics (its `-p`, `-f`,
-`--amend` are all usage errors). The project brief `.opencode/auto/brief.md` is a separate file: `init` writes
-the project brief stub when the file is missing and keeps an existing one (it is not cleared by the config's
-full overwrite); to supply intent, edit it directly — `init -p` is retired (appearing gets a message pointing
-at this file and `plan -p`). `--server` was removed from init along with its de-AI-ification (init starts no
+`--amend` are all usage errors). The project brief `.opencode/auto/brief.md` is not an init product (its seed
+half retired, auto-core plans/0133): the assisted project analysis the first `plan`/`transfer` opens proposes
+it (`## Project brief` in `docs/analysis.md`) and the approved proposal installs the brief on release — every
+survey release likewise installs the revised one; a later manual override is `amend --brief <text> |
+--brief-file <path>`, and `init -p` / `init --brief` are retired (appearing gets a message pointing at the
+analysis flow and `amend --brief`). `--server` was removed from init along with its de-AI-ification (init starts no
 sessions), and init now refuses every foreign option outright — exit 1 with a pointer at the owning command
 — instead of silently dropping it. init writes nothing under `docs/` (round directories are established by
 `transfer` — `plan` in `m` mode) and starts no AI
@@ -338,14 +340,20 @@ sessions.
 `opencode-auto amend [dir] --<key-option> <value> ...` rewrites the given config keys and keeps the rest at
 their existing values (auto-core plans/0052 D25; the old spelling `init --amend` is retired, folded into this
 command). It accepts the same key options and values as init (`-m/--mode`, `--agent`, `--subtask`,
-`--idle-time`, `--idle-max`, `--context-limit`, `--phases`, `--test-by-driver`,
+`--idle-time`, `--idle-max`, `--context-limit`, `--test-by-driver`,
 `--handover-test`, `--auto-number`/`--no-auto-number`, `--wrapup`/`--no-wrapup`, `--parallel`, `--tree-lanes`,
-`--scan-exempt`); value-range
-validation, the `handoverTest` pairing check and the phase index prefix guardrail share their code with init.
+`--scan-exempt`, `--intent` a plain pack name, and `--isolate <rel-path>` repeatable with `none` clearing
+the key); value-range validation and the `handoverTest` pairing check share their code with init, and the
+brief rides its own channel — `--brief <text> | --brief-file <path>` revises `.opencode/auto/brief.md`
+verbatim (satisfying "at least one key" on its own). `--phases` is the one init key amend refuses outright
+(plans/0137: the config `phases` key is init-stamped machinery — a round's phases reshape by moving or
+adding its `- R-NN <phases> — <goal>` line in `docs/analysis.md`, the next `transfer` re-deriving the
+unstarted tail; the prefix guardrail guards init's changes alone, since amend never changes the key).
 
-- **Config keys only**: `-p` is a usage error (the brief is not config — edit `.opencode/auto/brief.md`
-  directly); `-f` is a usage error (amend discards no keys, there is no overwrite confirmation or cleanliness
-  gate to skip); `--amend` is a usage error (redundant).
+- **Config keys only**: `-p` is a usage error (the planning input is `plan`'s; the brief is revised with
+  `amend --brief <text> | --brief-file <path>`, or by hand outside a run); `-f` is a usage error (amend
+  discards no keys, there is no overwrite confirmation or cleanliness gate to skip); `--amend` is a usage
+  error (redundant).
 - **At least one key**: giving no key option at all is a usage error, and the message points at `fix` (to
   only refresh the contract / AGENTS.md block to match the existing config, use `fix`).
 - **Refused without a config**: when the target directory has no `.opencode/auto/config.json`, exit code 1
@@ -354,10 +362,10 @@ validation, the `handoverTest` pairing check and the phase index prefix guardrai
 - **Strict loading**: if the existing config fails to load (retired keys, out-of-range values, …) it fails
   rather than carrying bad keys forward; when the failure is of a class `fix` can repair, a `fix:` line is
   appended to the message.
-- **What it writes**: config.json, the agent contract and the AGENTS.md marker block (both rendered from the
-  config) — it never touches round directories: changing `--phases` runs only the read-only prefix
-  guardrail, and the difference between index and config is left as drift for `plan` to re-sync;
-  `opencode.json`, `.gitignore` and the brief.md stub belong to `init` / `fix`, which amend does not touch.
+- **What it writes**: config.json, the agent contract and the AGENTS.md marker block (both rendered from
+  the config — plus the brief when `--brief`/`--brief-file` was given) and nothing else: it never touches
+  round directories (`--phases` is refused, never drifted); `opencode.json` and `.gitignore` belong to
+  `init` / `fix`, which amend does not touch.
 - On success it prints `✓ amended (<given options>)`; the changes stay in the worktree, uncommitted — review
   and commit them yourself.
 

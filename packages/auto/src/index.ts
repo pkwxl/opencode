@@ -168,7 +168,12 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize"])
+// --probe (models' alone, plans/0055 §9) is a boolean like the rest: presence
+// means true, --probe=false the explicit opt-out, and a following true/false
+// swallowed — before it joined this set, `--probe=false` set the flag with the
+// value "false" and still ran the probe (a token-spending opt-out ignored),
+// and `--probe true <dir>` left "true" as the directory.
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize", "probe"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -308,9 +313,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "amend",
-    "amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. " +
-      "A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with. " +
-      "Mid-phase — the current phase holding pending work — the amendment refuses naming the boundary (finish the phase with run or close it, amend, and the next transfer applies the value to the round's unstarted tail before constructing)",
+    "amend changes the config keys given and keeps the rest (at least one key, or a brief revision with --brief <text> | --brief-file <path>; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. " +
+      "The phases key is init-stamped machinery (plans/0137): amend refuses --phases outright — a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md, and the next transfer re-derives the round's unstarted tail before constructing",
   ],
   [
     "fix",
@@ -554,7 +558,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not " +
       "(outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. " +
       "It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; " +
-      "--probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error",
+      "--probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error; " +
+      "--probe=false is the explicit opt-out (the boolean forms every other flag takes)",
   ],
   [
     "status",
@@ -573,9 +578,15 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ["check-retired", `check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings`],
 ]
 // The exit-codes line and the per-command pointer close every help view.
+// 3 is the /exit pause under --interactive (auto-core plans/0143): the core's
+// loop converts the request at a safe boundary; the help row carried only
+// 0/1/2/130 while README and MANUAL already named 3 — one vocabulary, one
+// conscious lockstep (P13).
 const EXIT_CODES =
   "exit codes: 0 all complete (including the boundary stop of run --boundary stop and transfer's review stops); 1 usage/environment error (the same code fix --dryrun answers with configuration findings); " +
-  "2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C"
+  "2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); " +
+  "3 /exit received under --interactive, paused and exited at a safe boundary (no human attention needed — rerunning recovers fully); " +
+  "130 force-terminated by two consecutive Ctrl+C"
 // The public command rows, in the full usage's order. Every `options` key
 // must exist in OPTION_HELP (or be "frozen") — the table is static and
 // reviewed together.
@@ -680,7 +691,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     name: "models",
     summary: "print the model registry's effective table without starting an agent",
-    synopsis: "opencode-auto models [dir] [--probe]",
+    synopsis: "opencode-auto models [dir] [--probe [true|false]]",
     options: ["models"],
   },
   {
@@ -799,9 +810,16 @@ if (flags.has("help")) {
 // planning-input template), --new-task (plans/0058, the no-session task add),
 // --export/--adopt (plans/0076, the standalone work-order routes),
 // --round/--phase (plans/0084, the assisted preparation stops), transfer's
-// --resynthesize (plans/0101 D3, the advance's construct half) and land's
-// --keep/--abandon (plans/0074 §2.3, U-L2, one line for the pair) — in
-// refusal order: with several offending flags present, the first row answers.
+// --resynthesize (plans/0101 D3, the advance's construct half), land's
+// --keep/--abandon (plans/0074 §2.3, U-L2, one line for the pair), sync's
+// --from-bundle (plans/0100 D5, the unstamped bootstrap's overwrite
+// assertion — the flag passed the global whitelist for every command while
+// only sync consumed it, so `run <dir> --from-bundle` started a full run
+// with the flag silently ignored) and models' --probe (plans/0055 §9, the
+// opt-in probe — joining BOOLEAN_FLAGS put it on the whitelist too, so it
+// needs the same owned refusal to keep `run --probe` an error rather than a
+// silently ignored word) — in refusal order: with several offending flags
+// present, the first row answers.
 const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line: (key: string, command: string | undefined) => string }> = [
   {
     owner: "plan",
@@ -855,6 +873,20 @@ const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line:
     line: (_key, command) =>
       `--keep and --abandon are land options: ${command ?? "this command"} takes neither. ` +
       `Land a round's isolation branches with opencode-auto land <dir> [--keep | --abandon]`,
+  },
+  {
+    owner: "sync",
+    keys: ["from-bundle"],
+    line: (_key, command) =>
+      `--from-bundle is a sync option (the unstamped bootstrap's overwrite assertion: opencode-auto sync <dir> --from-bundle); ` +
+      `${command ?? "this command"} does not accept it — a bundle itself is materialized by init --intent alone`,
+  },
+  {
+    owner: "models",
+    keys: ["probe"],
+    line: (_key, command) =>
+      `--probe is a models option (the opt-in probe: opencode-auto models <dir> --probe); ${command ?? "this command"} does not accept it — ` +
+      `the probe starts agents and costs tokens, so it never rides another command`,
   },
 ]
 for (const owned of OWNED_FLAGS) {
@@ -1312,6 +1344,11 @@ if (command === "plan") {
   refuseFrozenFlags("plan")
   // run's options for the task loop: plan stops before any task runs.
   refuseRunOptions("plan")
+  // The lane value flags are _lane's (the hidden machine surface): plan
+  // shares run and transfer's refusal — each swallows the next token as its
+  // value, so the directory would be eaten (0159 closed the gap where plan
+  // silently dropped them).
+  refuseLaneValueFlags("plan")
   // --force-close <ref> (auto-core plans/0053 D28): close a unit, then keep
   // planning in this process — replace a task (--force-close T-005 --reason
   // "…" --append -p "do X instead") or skip a phase into the next one
@@ -1815,10 +1852,13 @@ function refuseCloseFamilyFlags(command: "run" | "transfer"): void {
 
 // The lane value flags are _lane's alone (hidden, auto-core plans/0068 §6.4):
 // the parent run's lane launcher re-invokes this CLI with `_lane <dir> --unit
-// <id> [--merge <branch>]`, never `run` or `transfer` — a person's command
-// takes neither, and each swallows the next token as its value (the directory
-// would be eaten).
-function refuseLaneValueFlags(command: "run" | "transfer"): void {
+// <id> [--merge <branch>]`, never `run`, `plan` or `transfer` — a person's
+// command takes neither, and each swallows the next token as its value (the
+// directory would be eaten). plan joined run and transfer's refusal late
+// (0159): it shared their option machinery but not this check, so
+// `plan <dir> --unit T-001` sailed into a real planning dispatch with the
+// flag silently dropped.
+function refuseLaneValueFlags(command: "run" | "plan" | "transfer"): void {
   for (const key of ["unit", "merge"]) {
     if (!flags.has(key)) continue
     console.error(
@@ -2478,8 +2518,9 @@ if (command === "init" || command === "amend") {
   // than silently dropped (before this, `init --dryrun` wrote everything and
   // `init --merge <dir>` swallowed the directory as the lane value). Retired
   // flags need no entry: the RETIRED_FLAGS interception runs ahead of every
-  // command block, and the plan/transfer/land-owned flags are refused
-  // globally the same way — the generic line below is their backstop alone.
+  // command block, and the plan/transfer/land/sync/models-owned flags are
+  // refused globally the same way — the generic line below is their backstop
+  // alone.
   if (command === "init") {
     const pointers: Record<string, string> = {
       dryrun:
@@ -2514,8 +2555,6 @@ if (command === "init" || command === "amend") {
         "--unit is _lane's value flag (the hidden lane-worker entry the parent run's lane launcher invokes, never a person's); init does not accept it",
       merge:
         "--merge is _lane's value flag (the hidden lane-worker entry the parent run's lane launcher invokes, never a person's) and land's landing-mode boolean (opencode-auto land <dir> --merge); init does not accept it",
-      "from-bundle":
-        "--from-bundle is a sync option (the unstamped bootstrap's overwrite assertion: opencode-auto sync <dir> --from-bundle); init does not accept it — init materializes a bundle from --intent alone",
     }
     const allowed = new Set([...CONFIG_FLAGS, "brief", "brief-file", "name", "email", "force"])
     for (const key of flags.keys()) {
@@ -3210,11 +3249,13 @@ if (command === "status") {
 // model through the agent pool — the only thing here that starts agents, and
 // opt-in because it costs tokens; the shell only prints the lines the core
 // answers (probeModels, auto-core src/agent-pool.ts). A failed probe is a
-// finding printed per model, not a command error.
+// finding printed per model, not a command error. A true boolean read
+// (`!== "false"`): --probe=false is the explicit opt-out and runs nothing —
+// before 0159 the bare-presence read started the probe against it.
 if (command === "models") {
   const description = await describeModels(directory, Date.now())
   for (const line of formatModels(description)) console.log(line)
-  if (flags.has("probe")) {
+  if (flags.has("probe") && flags.get("probe") !== "false") {
     if (description.registry === undefined) console.log("probe: no model registry, nothing to probe")
     else {
       console.log("probing every listed model (this sends one short prompt to each; it may take a while)")
