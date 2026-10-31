@@ -233,6 +233,14 @@ iteration.
         Auto-Task: <task id>
         Auto-Stage: execute
 
+   When the target holds nested git repositories, this repository's commit — the pass's last — carries one
+   more trailer line per nested repository, `Auto-Nested: <nested repository path> @ <its short HEAD sha>`
+   (`git -C <path> rev-parse --short HEAD`), each recording that repository's HEAD as it stands now, its own
+   commit of this pass already landed: a repository that changed this share shows the SHA just landed, an
+   untouched one its recorded baseline. The lines never ride the nested repositories' own commits (the two
+   trailers alone), and they ride every commit you land in this repository — the park commit below, the fix
+   shares, the phase-transfer commits — so any commit of this repository aligns cross-repository state.
+
    When the session left `docs/T-NNN/handoff.md` — it ended by handing over — the subject carries the share
    ordinal: `<task id> exec <short title> [<k>]`, `<k>` one past the count of this task's landed exec shares
    (you count your own landings; a restarted master control derives it from the log the same way). The

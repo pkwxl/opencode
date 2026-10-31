@@ -121,7 +121,12 @@ Disk state alone decides where the run re-enters — never re-run a stage that a
        Auto-Stage: <stage>
 
    The `Auto-Task`/`Auto-Stage` trailers are what mark a driver commit — write them verbatim, never omit them; the
-   subject is truncated past 100 characters. Never push, stash, reset, rebase or amend.
+   subject is truncated past 100 characters. When the target holds nested git repositories, the enclosing
+   repository's commit additionally carries one `Auto-Nested: <nested repository path> @ <its short HEAD sha>`
+   trailer line per nested repository beneath the two, recording that repository's HEAD as it stands at the
+   commit — the pass commits the nested repositories first, so a repository that changed shows the SHA just
+   landed, an untouched one its baseline; the nested repositories' own commits carry the two trailers alone.
+   Never push, stash, reset, rebase or amend.
 
 Commit subjects and stages (T-NNN = the task, S<nn> = the two-digit subtask number):
 

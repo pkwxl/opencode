@@ -112,6 +112,28 @@ describe("manual-driver prompt ratchet", () => {
     expect(verify.indexOf("Auto-Stage: execute")).toBeLessThan(verify.indexOf("## The verdict"))
   })
 
+  test("the Auto-Nested alignment lines ride the enclosing repository's driver commits", () => {
+    // The driver's unified commit (src/git.ts message/nestedHeads) reads the
+    // current HEAD of every nested repository when the enclosing repository
+    // commits — one `Auto-Nested: <rel> @ <short sha>` trailer line per
+    // repository, the just-landed SHA where it committed this pass, the
+    // baseline where it did not — so any commit of the enclosing repository
+    // aligns cross-repository state (the fork command's reconstruction
+    // anchor, src/fork.ts). The manual suite's commit-making roles each
+    // teach the same grammar in their own file (every companion is a
+    // separate session that never sees run.md): the master control's
+    // share/park/fix/phase commits, the verification close-out, the handover
+    // close-out and the subtask pipeline's driver cycles — the nested
+    // repositories' own commits carrying the two trailers alone. Found as
+    // field evidence (P19): the aster-mig cleanroom baseline run's log
+    // carries the line on every commit of the enclosing repository —
+    // exec/fix/wrapup/done alike — while the suite taught none of it.
+    expect(src("git.ts")).toContain("`Auto-Nested: ${repo.rel} @ ${repo.sha}`")
+    for (const name of ["run.md", "run-verify.md", "run-handover.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
+      expect(text(name), name).toContain("`Auto-Nested: <nested repository path> @ <its short HEAD sha>`")
+    }
+  })
+
   test("carryover is the self-heal string only — never the close-out", () => {
     // plans/0078 §1's fix: `T-NNN carryover driver-state posting` is how the
     // driver self-heals uncommitted driver-state leftovers (src/git.ts

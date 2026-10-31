@@ -90,8 +90,11 @@ exactly this order — the same writes and commits the driver itself makes (comp
         Auto-Task: PLAN
         Auto-Stage: phase-transition
 
-The trailers are written verbatim, never omitted. Nothing else: no task-level writes, no tick of any
-tasks.md, nothing under `.auto/`.
+The trailers are written verbatim, never omitted. When the target holds nested git repositories, each
+commit above additionally carries one `Auto-Nested: <nested repository path> @ <its short HEAD sha>`
+trailer line per nested repository beneath the two, recording that repository's HEAD as it stands at the
+commit; the nested repositories' own commits carry the two trailers alone. Nothing else: no task-level
+writes, no tick of any tasks.md, nothing under `.auto/`.
 
 ## Constraints
 

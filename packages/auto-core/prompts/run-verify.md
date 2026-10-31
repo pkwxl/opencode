@@ -95,6 +95,11 @@ else — and overwrite that gap list with the current one.
           Auto-Task: <task id>
           Auto-Stage: done
 
+  When the target holds nested git repositories, each commit you make in this repository additionally
+  carries one `Auto-Nested: <nested repository path> @ <its short HEAD sha>` trailer line per nested
+  repository beneath the two, recording that repository's HEAD as it stands at the commit; the nested
+  repositories' own commits carry the two trailers alone.
+
   Then end your reply, on a line of its own, with `Verification: PASS` (a protocol string for the master
   control, verbatim) — it certifies the task as verified, committed and state-advanced: the master control may
   move on to the next task.
