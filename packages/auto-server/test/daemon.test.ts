@@ -58,14 +58,15 @@ type Harness = {
 }
 
 // One daemon over one temp data directory, with a read and a control token
-// issued up front (the same store the CLI commands write).
-async function withHarness(fn: (h: Harness) => Promise<void>, register: string[] = []): Promise<void> {
+// issued up front (the same store the CLI commands write). `launch` threads
+// into startDaemon as the confinement launcher (plans/0162's --launch).
+async function withHarness(fn: (h: Harness) => Promise<void>, register: string[] = [], launch?: string): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "auto-server-data-"))
   const store = new DaemonStore(dataDir)
   for (const dir of register) store.register(dir)
   const read = store.issueToken("read", "reader").token
   const control = store.issueToken("control", "controller").token
-  const daemon = await startDaemon({ dataDir, port: 0 })
+  const daemon = await startDaemon({ dataDir, port: 0, ...(launch !== undefined ? { launch } : {}) })
   const request = (method: string, path: string, token?: string, body?: unknown) =>
     fetch(`${daemon.url}${path}`, {
       method,
@@ -266,11 +267,18 @@ describe("daemon: the whitelist is absolute", () => {
         const smuggled = await h.request("POST", "/runs", h.control, { project: dir, transfer: {} })
         expect(smuggled.status).toBe(400)
         expect(((await smuggled.json()) as { error: string }).error).toContain('a run request carries no "transfer"')
+        // The lane surface is the lane launcher's own channel, never a run
+        // field (plans/0162).
+        const laneField = await h.request("POST", "/runs", h.control, { project: dir, lane: { unit: "T-001" } })
+        expect(laneField.status).toBe(400)
+        expect(((await laneField.json()) as { error: string }).error).toContain('a run request carries no "lane"')
         // The shared option vocabulary answers here too (a 400, not a run
-        // that dies on arrival).
-        const badOption = await h.request("POST", "/runs", h.control, { project: dir, options: { maxSessions: 2 } })
-        expect(badOption.status).toBe(400)
-        expect(((await badOption.json()) as { error: string }).error).toContain("concurrent execution is not supported yet")
+        // that dies on arrival) — width itself is served since plans/0162, so
+        // the 400 here is the width pair the core itself refuses at run
+        // start.
+        const widthPair = await h.request("POST", "/runs", h.control, { project: dir, options: { maxSessions: 2, stopAfter: "T-001" } })
+        expect(widthPair.status).toBe(400)
+        expect(((await widthPair.json()) as { error: string }).error).toContain("serial-path option")
         const unknownSwitch = await h.request("POST", "/runs", h.control, { project: dir, switches: { OPENCODE_AUTO_NOPE: "on" } })
         expect(unknownSwitch.status).toBe(400)
         expect(((await unknownSwitch.json()) as { error: string }).error).toContain("is not a known switch")
@@ -420,6 +428,131 @@ describe("daemon: the exit-code vocabulary maps onto run states", () => {
       })
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  }, 300_000)
+})
+
+// plans/0162 — the phase-run absorb: one daemon hosts runs for many
+// registered projects concurrently (one run per project at a time — the
+// registry and the run lock both arbitrate per directory, so two projects
+// simply run in parallel), width ≥ 2 is served (the daemon attaching no
+// interactive transport to a wide run — the core's one-channel rule, the
+// CLI's own width-run shape), and `serve --launch <script>` routes every
+// spawned run through the operator's confinement launcher
+// (`bash <script> <project-dir> -- <worker command...>`, the launcher's
+// exit code the run's).
+describe("daemon: concurrent projects, width, and the confinement launcher (plans/0162)", () => {
+  test("two registered projects run concurrently: both live at once, both complete 0", async () => {
+    const one = await fixtureProject("auto-server-par-a-")
+    const two = await fixtureProject("auto-server-par-b-")
+    try {
+      await withFakeAgent({ FAKE_CLAUDE_DELAY_MS: "300" }, async () => {
+        await withHarness(async (h) => {
+          // The second POST is another DIRECTORY: no 409, no 423 — the
+          // registry's one-run rule is per project, and the lock is per
+          // directory.
+          const a = await h.request("POST", "/runs", h.control, { project: basename(one), switches: { OPENCODE_AUTO_AGENT: "claude" } })
+          const b = await h.request("POST", "/runs", h.control, { project: basename(two), switches: { OPENCODE_AUTO_AGENT: "claude" } })
+          expect(a.status).toBe(202)
+          expect(b.status).toBe(202)
+          const idA = ((await a.json()) as RunView).id
+          const idB = ((await b.json()) as RunView).id
+          await untilRunning(h, h.read, idA)
+          await untilRunning(h, h.read, idB)
+          // The concurrency witness: at this observation both are live
+          // together (the per-turn delay stretches both past the point B
+          // took its lock).
+          const viewA = (await (await h.request("GET", `/runs/${idA}`, h.read)).json()) as RunView
+          expect(viewA.live).toBe(true)
+          const doneA = await untilTerminal(h, h.read, idA)
+          const doneB = await untilTerminal(h, h.read, idB)
+          expect(doneA.state).toBe("completed")
+          expect(doneA.code).toBe(0)
+          expect(doneB.state).toBe("completed")
+          expect(doneB.code).toBe(0)
+          expect(await Bun.file(join(one, "docs", TASK, "done.md")).exists()).toBe(true)
+          expect(await Bun.file(join(two, "docs", TASK, "done.md")).exists()).toBe(true)
+        }, [one, two])
+      })
+    } finally {
+      await rm(one, { recursive: true, force: true })
+      await rm(two, { recursive: true, force: true })
+    }
+  }, 300_000)
+
+  test("a wide run carries no interactive channel: the 202 names the width, the interactive endpoint 409s, the worker's banner states the question semantics", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-wide-"))
+    try {
+      await withHarness(async (h) => {
+        // Width is served (plans/0162, the plans/0069 §6 item 5 reserved
+        // call made): the empty directory's run fails fast, but every
+        // surface statement around it is observable first.
+        const res = await h.request("POST", "/runs", h.control, { project: dir, options: { maxSessions: 2 } })
+        expect(res.status).toBe(202)
+        const body = (await res.json()) as RunView & { note?: string }
+        expect(body.note ?? "").toContain("width 2")
+        // The client endpoint answers the no-channel rule loudly, before
+        // any upgrade could hang on a socket nothing will speak on.
+        const interactive = await h.request("GET", `/runs/${body.id}/interactive?token=${h.control}`)
+        expect(interactive.status).toBe(409)
+        expect(((await interactive.json()) as { error: string }).error).toContain("carries no interactive channel")
+        const done = await untilTerminal(h, h.read, body.id)
+        expect(done.state).toBe("failed") // the empty directory's own preflight exit 1
+        // The worker's own banner names the width and the degradation path;
+        // no transport banner exists for this run.
+        expect(done.tail).toContain("🛣 width 2:")
+        expect(done.tail).not.toContain("interactive transport:")
+      }, [dir])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("the confinement launcher: every spawn rides `bash <script> <dir> -- <cmd...>`, exit codes propagate, running is still observed", async () => {
+    const dir = await fixtureProject("auto-server-launch-")
+    const empty = await mkdtemp(join(tmpdir(), "auto-server-launch-empty-"))
+    const scratch = await mkdtemp(join(tmpdir(), "auto-server-launch-scratch-"))
+    // A fake confinement launcher: record the project argument and the
+    // worker command word, then exec the command — the generic contract
+    // (`<dir> -- <cmd...>`, exit code the command's own).
+    const marker = join(scratch, "invocations")
+    const script = join(scratch, "launch.sh")
+    await Bun.write(script, [`printf '%s\\n' "$1" >> ${JSON.stringify(marker)}`, `printf '%s\\n' "$3" >> ${JSON.stringify(marker)}`, `shift 2`, `exec "$@"`, ""].join("\n"))
+    try {
+      await withFakeAgent({}, async () => {
+        await withHarness(async (h) => {
+          // A failing run first: the empty directory's preflight exit 1 must
+          // survive the launcher (exec propagates it verbatim).
+          const fail = await h.request("POST", "/runs", h.control, { project: empty })
+          expect(fail.status).toBe(202)
+          const failed = await untilTerminal(h, h.read, ((await fail.json()) as RunView).id)
+          expect(failed.state).toBe("failed")
+          expect(failed.code).toBe(1)
+          // A completing run through the launcher: the watcher still flips
+          // starting → running (under a launcher it is the lock's presence,
+          // not the holder pid's match with the wrapper), and the run's own
+          // exit 0 is the record's.
+          const run = await h.request("POST", "/runs", h.control, { project: basename(dir), switches: { OPENCODE_AUTO_AGENT: "claude" } })
+          expect(run.status).toBe(202)
+          const id = ((await run.json()) as RunView).id
+          await untilRunning(h, h.read, id)
+          const done = await untilTerminal(h, h.read, id)
+          expect(done.state).toBe("completed")
+          expect(done.code).toBe(0)
+          expect(await Bun.file(join(dir, "docs", TASK, "done.md")).exists()).toBe(true)
+        }, [dir, empty], script)
+      })
+      // The launcher really wrapped both spawns: one line per invocation
+      // pair — the project directory and the worker command word (the
+      // interpreter that starts src/index.ts), two of each, in order.
+      const lines = (await Bun.file(marker).text()).trim().split("\n")
+      expect(lines.filter((line) => line === realpathSync(dir)).length).toBe(1)
+      expect(lines.filter((line) => line === realpathSync(empty)).length).toBe(1)
+      expect(lines.filter((line) => /\/bun$/.test(line)).length).toBe(2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(empty, { recursive: true, force: true })
+      await rm(scratch, { recursive: true, force: true })
     }
   }, 300_000)
 })

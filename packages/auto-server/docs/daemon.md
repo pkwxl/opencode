@@ -100,12 +100,29 @@ are per-run `OPENCODE_AUTO_*` overrides — the same shared validator the
 worker enforces (`src/request.ts`); anything else, notably any
 constitutional config key (`intent`, `treeLanes`, `isolate` and the
 hand-edited `lanes` table included), is refused with the frozen-flag
-message ("frozen by init … revise with amend") as a **400**. `maxSessions`
-is capped at 1 by design — concurrent execution is the shell owner's
-reserved call (auto-core plans/0069 §6 item 5; the core itself runs lanes
-since 0068, this surface does not yet) — and `repair`/`stopAfter`/`boundary`
-ride plain runs only: the plan and transfer payloads carry stop conditions,
-and the core allows no budget under one.
+message ("frozen by init … revise with amend") as a **400**. Width is
+served since plans/0162 (the plans/0069 §6 item 5 reserved call made):
+`maxSessions ≥ 2` activates the core's lane scheduler exactly as the CLI's
+`--max-sessions` — doc lanes at tier 0, worktree lanes under `treeLanes
+on|auto`, each lane child a worker of this binary (the profile's
+`laneLauncher` self-spawns it carrying a `lane` payload, the machine shape
+of the CLI's hidden `_lane` entry; `POST /runs` refuses a `lane` field the
+way it refuses `plan` and `transfer` — it is the launcher's own channel).
+A wide run carries **no interactive transport** — the core's one-channel
+rule — so its questions take the stdin-closed degradation path (a
+permission question blocks the run with exit 2) and
+`/runs/<id>/interactive` answers **409** naming the rule; the 202 of a
+wide run points at the observation surfaces alone. The width pairs the
+core itself refuses at run start are refused up front as 400s:
+`stopAfter` cannot ride `maxSessions ≥ 2`, nor can `waitAnswer > 0`.
+`repair`/`stopAfter`/`boundary` ride plain runs only: the plan and
+transfer payloads carry stop conditions, and the core allows no budget
+under one.
+
+**Concurrent projects**: the one-run rule is per directory — the registry
+answers 409 for a second run on a project with one live, the lock 423
+against any other driver process, and runs on *different* registered
+projects execute in parallel, each in its own worker child.
 
 ### The run resource and the exit-code vocabulary
 
@@ -494,7 +511,7 @@ error frame and a close):
 
 | route                          | auth | meaning |
 | ------------------------------ | ---- | ------- |
-| `GET /runs/<id>/interactive`   | an operator token with the `answer` **or** `control` scope (the `Authorization` header, or `?token=` — a browser WebSocket cannot set headers) | the client socket: the question channel and the control channel, multiplexed |
+| `GET /runs/<id>/interactive`   | an operator token with the `answer` **or** `control` scope (the `Authorization` header, or `?token=` — a browser WebSocket cannot set headers) | the client socket: the question channel and the control channel, multiplexed. **Not offered to a wide run** (plans/0162): a `maxSessions ≥ 2` run carries no transport at all — the endpoint answers **409** naming the one-channel rule, and such a run's questions take the stdin-closed degradation path |
 | `GET /runs/<id>/worker`        | the per-run secret the daemon wrote into the worker's spawn payload | the run's own bridge — the worker entry's injected `Interactive` implementation (`src/worker-interactive.ts`) connects back here through the P3a seam (`RunAllOpts.interactive`) |
 
 Frames (JSON, one per message; `v` on every one):
@@ -797,6 +814,34 @@ Materializing an intent bundle into a target (`init --intent <bundle>`) is
 CLI-side too — the API revises the `intent` key against packs the target
 already holds.
 
+## The confinement launcher (`serve --launch <script>`, plans/0162)
+
+By default the daemon spawns workers bare, inheriting its environment (minus
+the `OPENCODE_AUTO_*` layer). With `--launch <script>`, every spawned run —
+plain, planning, transfer — starts as `bash <script> <project-dir> --
+<worker command...>`: the operator's own wrapper owns the run's environment
+overlay and writable surface, **execs** the command, and its exit code is
+the run's. The pattern is the per-project container sandbox — a launcher
+that maps the project argument to that project's own container (its own
+name, its own writable binds at identical paths) isolates concurrent
+projects while the daemon stays the one control plane; the daemon itself
+learns nothing of the launcher's mechanics (the seam is the three-part
+invocation alone). Lane children need no launcher of their own: they are
+children of a confined worker, inside its confinement already.
+
+Under a launcher: the run's recorded pid is the wrapper's; the
+`starting → running` watcher flips on the lock file's *presence* (the
+holder's pid names a process inside the launcher's own namespace, never the
+wrapper pid); `DELETE /runs/<id>` signals the wrapper — what a kill means
+is the launcher's own (a container launcher's run may outlive its wrapper;
+the lock arbitrates any successor and the core's interruption recovery
+heals the directory on the next run); and the daemon's environment is what
+the launcher reads — environment-referenced values (model-registry keys by
+name) resolve from it, so the daemon must be started from an environment
+that carries them. The worker bridge URL must be reachable from inside the
+launcher's environment (host-network containers reach a loopback-bound
+daemon; wide runs carry no bridge at all).
+
 ## Supervision and the daemon's lifetime
 
 Workers are cattle, not pets. Exit, crash and kill are all observed and recorded
@@ -813,5 +858,17 @@ history does not survive a restart; nothing else depends on it — except, since
 P3c, the **pending questions**: a run that still holds an open question when
 the daemon stopped is restored from the journal as described in the queue
 section above, so its worker reconnects and its client still finds the ask.
+
+### Hosting — where the daemon itself must live
+
+The daemon is an ordinary foreground process, and it is the vehicle for runs
+that must outlive the shell that asked for them: the runs are children of the
+*daemon*, and a client's interactions with the daemon are short HTTP calls.
+But the daemon has no reaper escape of its own — host it where nothing kills
+it: a terminal the person owns, or a container/service manager outside any
+job reaper's reach (harness reapers walk process trees and catch reparented
+processes, so `nohup`/`setsid` buys nothing). A daemon killed mid-run is the
+same scene as any killed run — the lock arbitrates and the next run
+recovers; re-host and re-run.
 
 <!-- auto: eof -->

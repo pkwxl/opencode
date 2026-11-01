@@ -25,7 +25,7 @@ import { runWorker } from "./worker"
 const USAGE = `usage:
   opencode-auto-server --help
   opencode-auto-server --version
-  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>]
+  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>]
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
@@ -93,6 +93,22 @@ serve — the daemon (P1c/P1d/P1e/P3/P4). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PO
   client's own sources live under web/ (plain TypeScript, no framework, no
   dependency); bun run build:web bundles them into the assets the daemon
   serves.
+  --launch <script> — the confinement launcher (plans/0162): every spawned
+  run (a plain run, a planning run, a transfer advance) starts as
+  bash <script> <project-dir> -- <worker command...> instead of bare. The
+  launcher owns the run's environment overlay and writable surface (a
+  sandbox script, a per-project container launcher — whatever derives its
+  confinement from the project argument), execs the command, and its exit
+  code is the run's; the daemon itself knows nothing of the launcher's
+  mechanics, and the daemon's environment is what the launcher reads
+  (environment-referenced values resolve by name from it). One daemon hosts
+  runs for many registered projects concurrently — one run per project at a
+  time (the registry and the run lock both arbitrate per directory), and a
+  per-project launcher gives each its own confined environment. A kill
+  (DELETE /runs/<id>) signals the wrapper process; what a kill means under
+  the launcher is the launcher's own (a container launcher's run may outlive
+  its wrapper), and the core's interruption recovery heals the directory on
+  the next run. Without --launch, workers spawn bare exactly as before.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
@@ -118,10 +134,17 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
   directory  (required) the target directory of the run
   options    per-run options (the run flags of opencode-auto run): verbose,
              waitAnswer, waitBetween, permission, newSession, dryrun,
-             maxSessions, server, repair, stopAfter, boundary. The project's
-             constitutional config keys are frozen by init
-             (.opencode/auto/config.json) and refused here — revise them
-             with opencode-auto amend, never on a run
+             maxSessions, server, repair, stopAfter, boundary. Width ≥ 2
+             (maxSessions) is served: it activates the core's lane scheduler
+             (doc lanes at tier 0, worktree lanes under treeLanes on|auto —
+             the lane children are workers of this binary), and a wide run
+             carries no interactive transport (the core's one-channel rule),
+             so its questions take the stdin-closed degradation path.
+             stopAfter and waitAnswer > 0 are serial-path options — refused
+             up front when they ride width. The project's constitutional
+             config keys are frozen by init (.opencode/auto/config.json)
+             and refused here — revise them with opencode-auto amend, never
+             on a run
   switches   per-run OPENCODE_AUTO_* experimental switch overrides, applied
              to the worker's environment before the run starts (each run is
              a fresh process, so the switch layer is safely per-run)
@@ -143,6 +166,13 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
              advance resolved by state (the project start, the phase
              boundary, the round close/open), the loop under stopBefore
              formulate inside it — mutually exclusive with plan
+  lane       the lane payload (laneLauncher-written, never a client's — POST
+             /runs refuses it): { "unit": "<task id>", "merge"?: "<branch>" }.
+             The run performs the CLI's hidden _lane entry's work:
+             runLaneWorker, one unit in its worktree — this is the payload
+             the profile's lane launcher self-spawns per lane dispatch of a
+             wide parent run, mutually exclusive with plan, transfer and the
+             transport
 
 transfer <dir> — the person's advance command, the CLI shell's transfer on
   this binary (every core text naming "opencode-auto-server transfer <dir>"
@@ -351,6 +381,7 @@ if (command === "serve") {
   const { dataDir, rest } = takeDataDir(args.slice(1))
   let port = DEFAULT_PORT
   let host = DEFAULT_HOSTNAME
+  let launch: string | undefined
   for (let at = 0; at < rest.length; at++) {
     const flag = rest[at]
     const value = rest[at + 1]
@@ -362,14 +393,18 @@ if (command === "serve") {
       if (value === undefined || value.startsWith("--")) refuse("--host takes the address to bind (default 127.0.0.1 — v1 is single-machine)")
       host = value
       at++
+    } else if (flag === "--launch") {
+      if (value === undefined || value.startsWith("--")) refuse("--launch takes the confinement launcher script (invoked per spawned run as: bash <script> <project-dir> -- <worker command...>; it execs the command and its exit code is the run's)")
+      launch = value
+      at++
     } else {
-      refuse(`unknown serve argument "${flag}" (serve takes --port, --host and --data-dir)`)
+      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir and --launch)`)
     }
   }
   const store = new DaemonStore(dataDir)
   const projects = store.listProjects()
   const tokens = store.listTokens()
-  const daemon = await startDaemon({ dataDir, port, hostname: host })
+  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(launch !== undefined ? { launch } : {}) })
   // AUTO-DECISION (default bind 127.0.0.1): v1 is single-machine (the
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane
@@ -380,6 +415,9 @@ if (command === "serve") {
   console.log(`auth: ${tokens.length} token${tokens.length === 1 ? "" : "s"} (scopes: ${SCOPES.join(", ")}); requests carry 'Authorization: Bearer <token>'`)
   console.log(`v1 boundary: single machine, multiple directories; the daemon binds ${daemon.hostname} — a lock held on another host cannot be probed from here (recovery: delete that .auto/run.lock by hand)`)
   console.log(`stopping the daemon (Ctrl+C) leaves live workers running to completion; their runs stay observable on disk and the run lock arbitrates any successor`)
+  if (launch !== undefined) {
+    console.log(`confinement launcher: every spawned run (plain, planning, transfer) starts as bash ${launch} <project-dir> -- <worker command...> — the launcher owns the run's environment and writable surface, execs the command, and its exit code is the run's; the daemon's environment is the carrier the launcher reads`)
+  }
 } else {
   // Nothing else exists: refuse with the usage text rather than pretending.
   console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer and worker`)

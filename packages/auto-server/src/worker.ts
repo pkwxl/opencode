@@ -45,13 +45,13 @@ import {
   type ProjectConfig,
 } from "@opencode-ai/auto-core/config"
 import { fixHint } from "@opencode-ai/auto-core/config-fix"
-import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
+import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parsePlan, parseSwitches, parseTransfer, parseTransport, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -90,6 +90,16 @@ import { wsInteractive } from "./worker-interactive"
 //              `plan`; the run-side widths repair/stopAfter/boundary ride
 //              neither payload (the core carries no budget under a stop
 //              condition).
+//   lane       the lane payload (plans/0162, laneLauncher-written): the run
+//              performs the CLI's hidden `_lane` entry's work —
+//              runLaneWorker, one unit in its worktree, the lane report the
+//              parent run reads after this process exits. Written only by
+//              this shell's own profile laneLauncher (a worker of this
+//              binary self-spawned per lane dispatch); mutually exclusive
+//              with plan, transfer and the transport (a lane child asks no
+//              questions through a channel — the one-channel rule), and the
+//              run-side widths ride it no more than they ride the stop
+//              conditions (a lane is one unit by construction).
 // The vocabulary itself — the option keys, the frozen-key table, the switch
 // registry — lives in src/request.ts, the one module the daemon (P1c) and
 // this entry share: the daemon pre-validates a POST /runs body with it, so
@@ -103,6 +113,7 @@ export type RunRequest = {
   transport?: TransportPayload
   plan?: PlanPayload
   transfer?: TransferPayload
+  lane?: LanePayload
 }
 
 // Usage refusal: exit 1 with the message on stderr (the CLI convention —
@@ -140,7 +151,7 @@ function applySwitches(switches: Record<string, string>): void {
 // changes — parse/validate/run stay put.
 export async function runWorker(argv: string[]): Promise<void> {
   if (argv.length !== 1 || !argv[0]) {
-    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … }, "transfer": { … } })`)
+    refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … }, "transfer": { … }, "lane": { … } })`)
   }
   let document: unknown
   try {
@@ -149,11 +160,11 @@ export async function runWorker(argv: string[]): Promise<void> {
     refuse(`the run request is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … }, \"transfer\"?: { … } }")
+    refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … }, \"transfer\"?: { … }, \"lane\"?: { … } }")
   }
   const request = document as Record<string, unknown>
   for (const key of Object.keys(request)) {
-    if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan" || key === "transfer") continue
+    if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan" || key === "transfer" || key === "lane") continue
     // A dedicated config carrier gets the same answer as a config key in
     // options: there is no per-run config surface, by constitution.
     if (key === "config") {
@@ -161,7 +172,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     }
     if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
-    refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport, plan and transfer)`)
+    refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport, plan, transfer and lane)`)
   }
   if (typeof request.directory !== "string" || !request.directory.trim()) {
     refuse(`the run request requires "directory": the target directory of the run (resolved against the worker's working directory)`)
@@ -175,29 +186,44 @@ export async function runWorker(argv: string[]): Promise<void> {
   let transport: TransportPayload | undefined
   let plan: PlanPayload | undefined
   let transfer: TransferPayload | undefined
+  let lane: LanePayload | undefined
   try {
     options = parseOptions(request.options)
     switches = parseSwitches(request.switches)
     transport = "transport" in request ? parseTransport(request.transport) : undefined
     plan = "plan" in request ? parsePlan(request.plan) : undefined
     transfer = "transfer" in request ? parseTransfer(request.transfer) : undefined
+    lane = "lane" in request ? parseLane(request.lane) : undefined
   } catch (error) {
     refuseRequest(error)
   }
-  // The two command payloads are exclusive (one process, one command shape),
-  // and the run-side widths ride neither: the core carries no repair budget
-  // and no stop-after under a stop condition (plan and transfer), and the
-  // boundary shape is plain run's alone — the CLI refuses the same pairs on
-  // its flags.
+  // The command payloads are exclusive (one process, one command shape), and
+  // the run-side widths ride none of them: the core carries no repair budget
+  // and no stop-after under a stop condition (plan and transfer), the
+  // boundary shape is plain run's alone, and a lane is one unit by
+  // construction — the CLI refuses the same pairs on its flags. A lane
+  // carries no transport either: the one-channel rule is exactly why the
+  // core refuses a channel under width, and a lane child is one lane of a
+  // wide parent.
   if (plan !== undefined && transfer !== undefined) {
     refuse(`the plan and transfer payloads are mutually exclusive: a worker performs one command's work — plan dispatches the planning session (stopBefore: execute), transfer advances one person-bracketed boundary (stopBefore: formulate)`)
   }
-  if ((plan !== undefined || transfer !== undefined) && (options.repair > 0 || options.stopAfter !== undefined || options.boundary === "flow")) {
+  const commandPayload = plan !== undefined ? "a planning run (the plan payload)" : transfer !== undefined ? "a transfer run (the transfer payload)" : lane !== undefined ? "a lane run (the lane payload)" : undefined
+  if (commandPayload !== undefined && (options.repair > 0 || options.stopAfter !== undefined || options.boundary === "flow")) {
     const field = options.repair > 0 ? "repair" : options.stopAfter !== undefined ? "stopAfter" : "boundary"
     refuse(
-      `options.${field} is a plain run's option; ${plan !== undefined ? "a planning run (the plan payload)" : "a transfer run (the transfer payload)"} does not accept it — ` +
-        `the stop conditions carry no budget and no boundary shape (send it on a run request with neither payload)`,
+      `options.${field} is a plain run's option; ${commandPayload} does not accept it — ` +
+        `the stop conditions carry no budget and no boundary shape (send it on a run request with no command payload)`,
     )
+  }
+  if (lane !== undefined && (plan !== undefined || transfer !== undefined)) {
+    refuse(`the lane payload is mutually exclusive with plan and transfer: a lane child is one unit of a wide parent run, dispatched by the profile's laneLauncher — never a person-facing command shape`)
+  }
+  if (lane !== undefined && transport !== undefined) {
+    refuse("a lane run carries no transport: the one-channel rule keeps a channel off concurrent sessions, and a lane child is one lane of a wide parent — its questions take the stdin-closed degradation path")
+  }
+  if (lane !== undefined && options.maxSessions >= 2) {
+    refuse(`options.maxSessions ${options.maxSessions} cannot ride a lane run: a lane worker runs one unit in one worktree — width belongs to the parent run that dispatched it`)
   }
   applySwitches(switches)
 
@@ -227,6 +253,16 @@ export async function runWorker(argv: string[]): Promise<void> {
   if (transport) {
     log(`🔗 interactive transport: questions and /exit, /failback control are served by the daemon over the bridge ${transport.url} (run ${transport.run}); a transport loss degrades every open question to the unanswered path — never a hang`)
   }
+  // The width banner (plans/0162): a wide run carries no transport by the
+  // daemon's own skip, so the banner names the question semantics the run
+  // actually takes — the CLI's own width-run shape, stated here because
+  // nothing else announces it (the transport's banner above is the
+  // complementary case).
+  if (options.maxSessions >= 2) {
+    log(
+      `🛣 width ${options.maxSessions}: the run schedules concurrent lanes (doc lanes at tier 0, worktree lanes under treeLanes on|auto — each lane child is a worker of this binary); no interactive channel under width, the CLI's own rule — a permission question blocks the run (exit 2), the rest take the auto-answer path`,
+    )
+  }
   // The plan payload's own banner (P3c): the run stops before execution,
   // its sessions' questions are the human's (humanQuestions — no timeout,
   // no proxy answer), and they ride the transport like every other ask.
@@ -243,6 +279,15 @@ export async function runWorker(argv: string[]): Promise<void> {
   if (transfer) {
     log(
       `⇄ transfer run: one person-bracketed advance resolved by state (the project start, the phase boundary, the round close/open), stopping at the review seam (stopBefore: formulate${transfer.resynthesize ? "; resynthesize bypasses the standing plan task's digest-keep" : ""}) — its questions wait for the human over the interactive transport with no timeout`,
+    )
+  }
+  // The lane payload's own banner (plans/0162): this process is one lane
+  // child of a wide parent run — the CLI's hidden `_lane` entry's shape, the
+  // worktree holding the copied scaffolding, the lane report the parent
+  // reads landing at the unit's close.
+  if (lane) {
+    log(
+      `🛣 lane run: one unit (${lane.unit}${lane.merge ? `, merging ${lane.merge} first — a conflict repair's re-dispatch` : ""}) in its worktree; this process is the child the parent run's lane launcher spawned, and the lane report the parent reads lands at the unit's close`,
     )
   }
 
@@ -299,10 +344,15 @@ export async function runWorker(argv: string[]): Promise<void> {
   // channel when the transport is attached, 130 force-terminated). The
   // transfer payload swaps runAll for runTransfer — the core's own entry,
   // which takes the same lock itself ("transfer", re-entered by the runAll
-  // the advance delegates to) and returns the advance's own exit code.
-  const code = transfer
-    ? await runTransfer(directory, { ...runOptions(config, mode, options, interactive, plan), ...(transfer.resynthesize ? { resynthesize: true } : {}) })
-    : await runAll(directory, runOptions(config, mode, options, interactive, plan))
+  // the advance delegates to) and returns the advance's own exit code. The
+  // lane payload swaps in runLaneWorker — the worktree's own lock (the lock
+  // is per-directory, and the worktree is its own directory), one unit, the
+  // lane report the parent reads after this process exits.
+  const code = lane
+    ? await runLaneWorker(directory, { ...runOptions(config, mode, options, interactive, plan), lane: { unit: lane.unit, ...(lane.merge !== undefined ? { merge: lane.merge } : {}) } })
+    : transfer
+      ? await runTransfer(directory, { ...runOptions(config, mode, options, interactive, plan), ...(transfer.resynthesize ? { resynthesize: true } : {}) })
+      : await runAll(directory, runOptions(config, mode, options, interactive, plan))
   process.exit(code)
 }
 

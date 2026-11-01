@@ -67,7 +67,7 @@
 // writes live in its own data directory: the whitelist, the token digests
 // (src/store.ts) and, since P3c, the question journal
 // (src/question-journal.ts) — never under a target's `.auto/`.
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { createHash, timingSafeEqual } from "node:crypto"
 import { join } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
@@ -80,6 +80,7 @@ import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { PROTOCOL_VERSION } from "./ws-protocol"
+import { workerCommand } from "./worker-command"
 
 export const DEFAULT_PORT = 4770
 export const DEFAULT_HOSTNAME = "127.0.0.1"
@@ -161,6 +162,22 @@ export type DaemonOptions = {
   // compiled runs: the binary itself). Derived when absent; tests may pass
   // their own.
   worker?: { command: string; prefix: string[] }
+  // The confinement launcher (`serve --launch <script>`, plans/0162): when
+  // set, every spawned worker is started as
+  //   bash <launch> <project-dir> -- <worker command...>
+  // — the operator's own wrapper around the worker command. The launcher
+  // owns the run's environment and writable surface (a sandbox script, a
+  // per-project container launcher — whatever derives its confinement from
+  // the project argument), must exec the command, and its exit code is the
+  // run's. The daemon knows nothing of the launcher's mechanics: the seam is
+  // the generic three-part invocation, absent by default (today's bare
+  // spawn). Applies at the one spawn seam, so plain runs, planning runs and
+  // transfer advances all ride it; lane children inherit the confinement
+  // (a child of a confined process is inside it). Under a launcher the
+  // recorded pid is the wrapper's and the lock's holder pid names a process
+  // in the launcher's own namespace, so the starting→running watcher flips
+  // on the lock's presence alone.
+  launch?: string
 }
 
 export type DaemonHandle = {
@@ -173,22 +190,15 @@ export type DaemonHandle = {
   stop(): Promise<void>
 }
 
-// The worker command, resolved once per daemon before the first spawn:
-//   - a source layout (the daemon runs as `bun src/index.ts`, or in-process
-//     in a test): the same interpreter on this module's neighbor entry
-//     src/index.ts, which exists on the real filesystem;
-//   - a compiled binary (script/build.ts): the embedded modules live on
-//     Bun's virtual $bunfs, where a script path cannot be spawned — but
-//     process.execPath already IS the server binary, whose argv goes
-//     straight to the command dispatch (`<binary> worker '<json>'`).
+// The worker command, resolved once per daemon before the first spawn. The
+// derivation itself moved to src/worker-command.ts (plans/0162): the
+// profile's lane launcher — which runs in the WORKER process — needs the
+// same derivation without importing this module, and a wrapper here keeps
+// the entry's `transfer` command and the tests on their existing import.
 // Exported for the entry's own `transfer` command — the same self-invocation
 // this daemon performs per run (one worker child per process).
 export async function deriveWorkerCommand(): Promise<{ command: string; prefix: string[] }> {
-  if (!import.meta.dir.includes("$bunfs")) {
-    const entry = join(import.meta.dir, "index.ts")
-    if (existsSync(entry)) return { command: process.execPath, prefix: [entry] }
-  }
-  return { command: process.execPath, prefix: [] }
+  return workerCommand()
 }
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
@@ -199,7 +209,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // closeUnit's undo lines) names this shell's bin either way.
   applyServerProfile()
   const store = new DaemonStore(options.dataDir)
-  const worker = options.worker ?? (await deriveWorkerCommand())
+  const worker = options.worker ?? workerCommand()
   // The spawn cwd is arbitrary (the run target is the registry's absolute
   // path, the worker resolves it itself); it must only be a REAL directory
   // — in a compiled binary import.meta.dir sits on Bun's virtual $bunfs,
@@ -358,7 +368,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const proc = run.proc!
     // starting → running when the worker takes .auto/run.lock (the holder
     // names its pid; the lock file is atomic, so a partial read never
-    // happens — a read that fails simply hasn't happened yet).
+    // happens — a read that fails simply hasn't happened yet). Under a
+    // confinement launcher the holder's pid names a process inside the
+    // launcher's own namespace, never the wrapper pid recorded here, so the
+    // flip is the lock's presence — the run is observable either way through
+    // its exit.
     run.watcher = setInterval(() => {
       if (run.state !== "starting") {
         clearInterval(run.watcher!)
@@ -367,7 +381,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       try {
         const holder = JSON.parse(readFileSync(join(run.directory, ".auto", "run.lock"), "utf8"))
-        if (holder?.pid === proc.pid) run.state = "running"
+        if (options.launch || holder?.pid === proc.pid) run.state = "running"
       } catch {
         // No lock yet (or the run refused before taking it).
       }
@@ -396,7 +410,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // worker performs: runAll under stopBefore "execute", or runTransfer.
   const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, plan?: PlanPayload, transfer?: TransferPayload): void => {
     const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
-    const proc = Bun.spawn([worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })], {
+    const argv = [worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })]
+    // The confinement launcher (plans/0162): the one seam every spawned run
+    // rides — plain runs, planning runs, transfer advances — wrapped as
+    // `bash <launch> <project-dir> -- <command...>`. The launcher owns the
+    // environment overlay and the writable surface (the daemon's env passes
+    // through to it, so environment-referenced values — key references by
+    // name — resolve from the daemon's own environment), execs the command,
+    // and its exit code is the run's.
+    const proc = Bun.spawn(options.launch ? ["bash", options.launch, project.directory, "--", ...argv] : argv, {
       cwd: spawnCwd,
       env,
       stdin: "ignore",
@@ -445,8 +467,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
     // The transport URL names this daemon's own bound address (the worker
     // connects back on the loopback or whatever host the operator bound;
-    // the spawn and the bridge are the same machine in v1).
-    const transport: TransportPayload = { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker`, token: secret }
+    // the spawn and the bridge are the same machine in v1). Under width
+    // (plans/0162) no transport is attached at all: the core refuses a
+    // channel under maxSessions ≥ 2 (one channel cannot serve concurrent
+    // sessions — the CLI's own rule), so the daemon never offers one and a
+    // wide run's questions take the stdin-closed degradation path. The hub
+    // and the journal entry exist for every run regardless — uniform
+    // lifecycle, and nothing connects to a wide run's.
+    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker`, token: secret }
     spawnWorker(project, run, runOptions, switches, transport, plan, transfer)
     return run
   }
@@ -550,6 +578,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       if (key === "transfer") {
         return json(400, { error: 'a run request carries no "transfer": the advance surface is the transfer operation (POST /projects/<project>/transfer, taking "resynthesize"), which spawns the advance as a run (one boundary per invocation)' })
       }
+      // The lane surface is the profile laneLauncher's own channel
+      // (plans/0162): a lane child is a worker this shell self-spawns per
+      // lane dispatch of a wide parent run — the machine shape of the CLI's
+      // hidden `_lane` subcommand, never a client field.
+      if (key === "lane") {
+        return json(400, { error: 'a run request carries no "lane": the lane surface is this shell\'s own lane launcher (a worker self-spawned per lane dispatch of a wide parent run — the machine shape of the CLI\'s hidden _lane entry); start a wide run with options.maxSessions instead' })
+      }
       if (key in CONFIG_KEYS) return json(400, { error: frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!) })
       if (HAND_EDITED_KEYS.has(key)) {
         return json(400, { error: `"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init` })
@@ -619,6 +654,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       })
     }
     const id = startRun(project, options, switches, server).id
+    // A wide run carries no interactive channel (the transport skip above),
+    // so its 202 points at the observation surfaces alone — the interactive
+    // pointer is the width-1 run's.
+    if (options.maxSessions >= 2) {
+      return json(202, { ...view(runs.get(id)!), note: `the run was accepted at width ${options.maxSessions} (concurrent lanes — no interactive channel under width, the CLI's own rule; a permission question blocks the run with exit 2); observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail) and the project's observability surface` }, { location: `/runs/${id}` })
+    }
     return json(202, { ...view(runs.get(id)!), note: "the run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and drive it interactively over the WebSocket endpoint /runs/<id>/interactive (questions and /exit, /failback control)", interactive: `/runs/${id}/interactive` }, { location: `/runs/${id}` })
   }
 
@@ -665,7 +706,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
       }, 250).unref?.()
     }
-    return json(202, { ...view(run), note: "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)" })
+    return json(202, {
+      ...view(run),
+      note: options.launch
+        ? "kill requested — the SIGINTs go to the confinement launcher's wrapper process, and what a kill means under the launcher is the launcher's own (a container launcher's run may outlive its wrapper; the run lock arbitrates any successor, and the core's interruption recovery heals the directory on the next run); observe GET /runs/<id> for the terminal state"
+        : "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)",
+    })
   }
 
   const fetchHandler = async (request: Request, server: Bun.Server<SocketData>): Promise<Response> => {
@@ -775,6 +821,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         if (auth.scopes === undefined) return json(auth.status, auth.body)
         if (!auth.scopes.includes("answer") && !auth.scopes.includes("control")) {
           return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
+        }
+        // A wide run carries no channel (plans/0162): the transport skip at
+        // spawn time is the rule, and this endpoint answers it plainly
+        // instead of upgrading into a socket nothing will ever speak on —
+        // the question semantics such a run takes are the run's own, not a
+        // channel's.
+        if (run.request.options.maxSessions >= 2) {
+          return json(409, {
+            error: `run ${run.id} carries no interactive channel: it runs at width ${run.request.options.maxSessions} (concurrent lanes), and one channel cannot serve concurrent sessions — the CLI's own rule. Its questions take the run's own degradation path (a permission question blocks the run with exit 2)`,
+            run: view(run),
+          })
         }
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
           return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })

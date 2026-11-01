@@ -40,11 +40,14 @@ export type RunRequestOptions = {
 
 // The options after validation, defaults resolved (the CLI's parse* helpers'
 // absent-value semantics: waitAnswer/waitBetween 0 = no wait, permission
-// ask-deny, maxSessions 1 — this shell's own current cap, not the core's:
-// since 0068 the core runs maxSessions ≥ 2 as concurrent lanes under a
-// parallel level, and the worker maps the value straight into the core's
-// run options; parseOptions below is what holds this service at one session
-// per run). repair defaults to 0 (none), boundary to "stop" (the reading of
+// ask-deny, maxSessions 1). Width ≥ 2 is served (plans/0162, the reserved
+// call of plans/0069 §6 item 5 made): it activates the core's lane
+// scheduler — doc lanes at tier 0, worktree lanes under treeLanes on|auto,
+// the lane children being workers of this binary (the profile's
+// laneLauncher self-spawns them) — and the daemon attaches no interactive
+// transport to a wide run (the core refuses a channel under width, the
+// CLI's own rule, so its questions take the stdin-closed degradation
+// path). repair defaults to 0 (none), boundary to "stop" (the reading of
 // absent — only "flow" is threaded into the run, the CLI's own shape).
 export type RunOptions = {
   verbose: boolean
@@ -180,16 +183,14 @@ export function parseOptions(raw: unknown): RunOptions {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
       fail("options.maxSessions takes a positive integer (concurrent AI sessions); defaults to 1")
     }
-    // The limit this refusal enforces is this shell's own current boundary,
-    // not the core's — the core has run concurrency since 0068 (maxSessions
-    // ≥ 2 under a parallel level becomes lanes), and the worker maps the
-    // value straight into the core's run options, so nothing in the core
-    // requires 1 here. The message's wording stays as written: it is the
-    // shell owner's reserved call (plans/0069 §6 item 5), pinned by
-    // worker.test.ts and daemon.test.ts.
-    if (value > 1) {
-      fail(`options.maxSessions ${value}: concurrent execution is not supported yet; only 1 is accepted (plan for parallelism at init --parallel; tasks still run one at a time)`)
-    }
+    // Width ≥ 2 is served since plans/0162 — the reserved call of plans/0069
+    // §6 item 5 made by the shell owner: the core has run concurrency since
+    // 0068 (width alone activates the scheduler since 0125 — doc lanes at
+    // tier 0, worktree lanes under treeLanes on|auto), the lane children
+    // are workers of this binary (the profile's laneLauncher self-spawns
+    // them), and the daemon attaches no interactive transport to a wide run
+    // (the core's own refusal — one channel cannot serve concurrent
+    // sessions — so questions degrade the CLI's width-run way).
     parsed.maxSessions = value
   }
   if ("server" in given) {
@@ -208,8 +209,9 @@ export function parseOptions(raw: unknown): RunOptions {
     parsed.repair = value
   }
   // --stop-after (auto-core plans/0128): the task id whose completion ends
-  // this run — the serial path alone (the core's own confinement; the
-  // maxSessions cap keeps every daemon run serial today).
+  // this run — the serial path alone (the core's own confinement, refused
+  // up front as the width pair below so the request dies as a 400, never a
+  // spawned run that exits 1 in its first lines).
   if ("stopAfter" in given) {
     const value = given.stopAfter
     if (typeof value !== "string" || !/^T-\d{3,}$/.test(value)) {
@@ -226,6 +228,18 @@ export function parseOptions(raw: unknown): RunOptions {
       fail("options.boundary takes stop or flow (stop ends the run at each clean phase end, the default; flow crosses the boundaries continuously as before)")
     }
     parsed.boundary = value
+  }
+  // The width pairs the core itself refuses at run start (auto-core
+  // src/loop-task.ts's --stop-after confinement; src/loop-preflight.ts's
+  // waitAnswer refusal) are refused here instead — the shared-validator
+  // pattern's own rule: an invalid request is a 400 on POST /runs, never a
+  // 202 whose run dies on arrival, and the worker's stderr refusal carries
+  // the same text for a hand-spawned payload.
+  if (parsed.stopAfter !== undefined && parsed.maxSessions >= 2) {
+    fail(`options.stopAfter is a serial-path option: it cannot ride maxSessions ${parsed.maxSessions} (the core confines --stop-after to one-task-at-a-time runs — send it alone at the default width 1, or run the phase wide without it)`)
+  }
+  if (parsed.waitAnswer > 0 && parsed.maxSessions >= 2) {
+    fail(`options.waitAnswer cannot ride maxSessions ${parsed.maxSessions}: one answer window cannot serve concurrent sessions (the core's own refusal — a wide run takes the no-wait question path)`)
   }
   return parsed
 }
@@ -370,4 +384,41 @@ export function parseTransfer(raw: unknown): TransferPayload {
     resynthesize = given.resynthesize
   }
   return { ...(resynthesize !== undefined ? { resynthesize } : {}) }
+}
+
+// The lane payload (plans/0162): a request carrying `lane` runs the worker
+// as the CLI's hidden `_lane` entry does — runLaneWorker, one unit in its
+// worktree, the lane report the parent run reads after this process exits.
+// Written only by this shell's own profile laneLauncher (a worker of this
+// binary self-spawned per lane dispatch, src/profile.ts), never by the
+// daemon's POST /runs and never by a client — the lane surface is the
+// launcher's private channel, the machine shape of the CLI's hidden
+// subcommand, and a run request naming it gets the same refusal `plan` and
+// `transfer` get. The worktree holds the copied scaffolding (config
+// included), so the child loads the project config itself like the CLI's
+// _lane does; the session flags take their defaults and everything else
+// rides the inherited environment. `merge` is a conflict repair's
+// re-dispatch alone (the parent's current main branch the lane merges into
+// its branch first — auto-core src/shell.ts's LaneMergeInstruction).
+export type LanePayload = { unit: string; merge?: string }
+
+export function parseLane(raw: unknown): LanePayload {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail('lane must be an object: { "unit": "<task id>", "merge"?: "<branch>" }')
+  }
+  const given = raw as Record<string, unknown>
+  for (const key of Object.keys(given)) {
+    if (key === "unit" || key === "merge") continue
+    fail(`lane.${key} is not a lane field (unit, merge)`)
+  }
+  const unit = given.unit
+  if (typeof unit !== "string" || !/^T-\d{3,}(\.S\d{2,})?$/.test(unit)) {
+    fail('lane.unit takes the unit id this lane worker runs (T-NNN, or a stream lane T-NNN.Snn)')
+  }
+  let merge: string | undefined
+  if ("merge" in given) {
+    if (typeof given.merge !== "string" || !given.merge.trim()) fail("lane.merge takes the branch name of a conflict repair's re-dispatch (the parent's current main branch the lane merges into its own first)")
+    merge = given.merge
+  }
+  return { unit, ...(merge !== undefined ? { merge } : {}) }
 }

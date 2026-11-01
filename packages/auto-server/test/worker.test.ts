@@ -182,8 +182,12 @@ describe("worker: the run request's usage vocabulary", () => {
         ["interactive", { directory: dir, options: { interactive: true } }, /options\.interactive is refused/],
         ["bad permission", { directory: dir, options: { permission: "yolo" } }, /options\.permission takes/],
         ["waitAnswer out of range", { directory: dir, options: { waitAnswer: 90 } }, /options\.waitAnswer takes an integer 0\.\.60/],
-        ["maxSessions not yet", { directory: dir, options: { maxSessions: 2 } }, /concurrent execution is not supported yet/],
         ["maxSessions not an integer", { directory: dir, options: { maxSessions: 1.5 } }, /options\.maxSessions takes a positive integer/],
+        // Width ≥ 2 is served (plans/0162, the plans/0069 §6 item 5 reserved
+        // call made): what stays refused are the width pairs the core itself
+        // refuses at run start, surfaced here as usage errors instead.
+        ["stopAfter riding width", { directory: dir, options: { maxSessions: 2, stopAfter: "T-001" } }, /options\.stopAfter is a serial-path option/],
+        ["waitAnswer riding width", { directory: dir, options: { maxSessions: 3, waitAnswer: 5 } }, /options\.waitAnswer cannot ride maxSessions 3/],
         ["verbose not a boolean", { directory: dir, options: { verbose: "yes" } }, /options\.verbose takes true\|false/],
         ["unknown switch", { directory: dir, switches: { OPENCODE_AUTO_NOPE: "on" } }, /is not a known switch/],
         ["switch name without the prefix", { directory: dir, switches: { STEP: "task" } }, /OPENCODE_AUTO_\*/],
@@ -210,6 +214,18 @@ describe("worker: the run request's usage vocabulary", () => {
         ["repair under a plan payload", { directory: dir, plan: { input: "x" }, options: { repair: 3 } }, /options\.repair is a plain run's option/],
         ["stopAfter under a transfer payload", { directory: dir, transfer: {}, options: { stopAfter: "T-001" } }, /options\.stopAfter is a plain run's option/],
         ["boundary under a transfer payload", { directory: dir, transfer: {}, options: { boundary: "flow" } }, /options\.boundary is a plain run's option/],
+        // The lane payload (plans/0162, the lane launcher's own channel): its
+        // grammar and exclusivities, the machine shape of the CLI's hidden
+        // _lane entry.
+        ["lane not an object", { directory: dir, lane: "T-001" }, /lane must be an object/],
+        ["unknown lane field", { directory: dir, lane: { unit: "T-001", force: true } }, /lane\.force is not a lane field/],
+        ["lane unit not a task id", { directory: dir, lane: { unit: "task-1" } }, /lane\.unit takes the unit id/],
+        ["lane merge not a branch name", { directory: dir, lane: { unit: "T-001", merge: " " } }, /lane\.merge takes the branch name/],
+        ["lane with plan", { directory: dir, lane: { unit: "T-001" }, plan: { input: "x" } }, /mutually exclusive with plan and transfer/],
+        ["lane with transfer", { directory: dir, lane: { unit: "T-001" }, transfer: {} }, /mutually exclusive with plan and transfer/],
+        ["lane with transport", { directory: dir, lane: { unit: "T-001" }, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker", token: "secret" } }, /a lane run carries no transport/],
+        ["width under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { maxSessions: 2 } }, /cannot ride a lane run/],
+        ["repair under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { repair: 2 } }, /options\.repair is a plain run's option/],
       ]
       for (const [name, request, pattern] of cases) {
         const run = await runWorker(request)
