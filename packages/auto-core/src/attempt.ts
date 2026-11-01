@@ -38,12 +38,14 @@ import {
 import { formatClientError, formatTokens } from "./format"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
+import { ringKeyLabel } from "./keyring"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { currentRound } from "./phases"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgressOf, peekProgress, saveProgress } from "./resume"
+import type { Router } from "./router"
 import { routingOf, selectContext } from "./routing"
 import { services } from "./services"
 import { clientOf, contextLimitsOf, missingAgentHint, renameSession, zeroUsage } from "./session-api"
@@ -74,6 +76,40 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
       source: "driver" as const,
       question: event.question,
     })),
+  )
+}
+
+// The new-session key-ring walk (plans/0163 D2): every new session — a
+// create or a consumed fork, never a resumed takeover (not a new session)
+// — re-walks the picked entry's provider ring in declared order. When an
+// earlier key's mark has passed its instant (the five-minute hold of an
+// unstated failure, most commonly), the walk lands there: the position
+// moves, the spawn config names the landed key and the managed server
+// restarts before the session's first call — the maintainer's "every new
+// session tries the keys in order", so a recovered earlier key is
+// re-preferred without waiting for the current key to fail. Nothing
+// recovered answers undefined and costs one small map read; the caller
+// runs this before the agent client resolves, so a host that has not
+// started yet spawns directly on the walked key. The restart logs its own
+// ↻ line; under an external server the rings are inactive and the walk
+// never fires.
+async function walkProviderKey(
+  opts: Opts,
+  router: Router,
+  provider: string | undefined,
+  now: number,
+  agent: string | undefined,
+): Promise<void> {
+  if (provider === undefined) return
+  const walk = router.ringWalk(provider, now)
+  if (walk === undefined) return
+  const host = opts.server
+  if (host === undefined || host.setConfig === undefined) return
+  router.commitWalk(walk)
+  host.setConfig(router.spawnKeyConfig())
+  await host.restart(
+    `an earlier key's hold passed; rotating the provider ${walk.provider} key ring to key ${ringKeyLabel(walk.to)} for the new session`,
+    agent,
   )
 }
 
@@ -198,6 +234,11 @@ export async function attempt(
   // to the create path naturally (design §4.3).
   const forked = resumed ? undefined : chain.pending
   consumePending(chain)
+  // The new-session key-ring walk (plans/0163 D2), before the agent client
+  // resolves: a forked session's next provider call rides the spawn
+  // config's current key exactly a created one's does.
+  if (!resumed)
+    await walkProviderKey(opts, router, pick?.entry?.provider, clockNow(), pickAgent ?? (forked !== undefined ? chain.agent : undefined))
   // The client this dispatch runs on (§8.1): the pick's agent, the chain's
   // for a consumed fork or a takeover (the same agent the pick kept).
   const dispatchClient: AgentClient = await clientOf(client, pickAgent ?? (resumed || forked !== undefined ? chain.agent : undefined))

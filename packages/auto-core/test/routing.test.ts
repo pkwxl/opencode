@@ -111,8 +111,9 @@ describe("the run-start routing block (§6.5)", () => {
     services().router.activateRings(reg, false)
     logRunRouting(facts(reg))
     expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 1/3 ZHIPU_KEY_A) → k3 (opencode, open, ring 0)")
-    // A rotation moves the display: the position never moves back on its own.
-    services().router.commitRotation(services().router.ringRotation("zhipuai", NOW)!)
+    // A rotation moves the display: the position moves only when a search
+    // lands.
+    services().router.commitRotation(services().router.ringRotation("zhipuai", NOW)!, NOW + 300_000)
     printed.length = 0
     logRunRouting(facts(reg))
     expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 2/3 ZHIPU_KEY_B) → k3 (opencode, open, ring 0)")

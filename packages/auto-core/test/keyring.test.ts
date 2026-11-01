@@ -1,13 +1,15 @@
-// Key rings (plans/0055 §4.3, §6.4, §7 step 1; the key-failure state split
-// and the order-first search of plans/0144): the per-provider rings built
-// from a registry, the in-memory position (never moved back on its own, but
-// searched from declared order at every rotation and rewound by /failback),
-// the one-shot skip flags and `until` marks, the spawn config content
-// (references only — no key value ever appears), the usable-key predicate of
-// §6.2 rule 4, and the labels the logs show. The ring run state lives in the
-// router service; every test reads the fresh instance the preload installed.
+// Key rings (plans/0055 §4.3, §6.4, §7 step 1; the order-first search of
+// plans/0144, the hold marks and the new-session walk of plans/0163): the
+// per-provider rings built from a registry, the in-memory position (moved
+// only when a search lands — rotations searched from declared order, every
+// new session walked the same order — and rewound by /failback), the key
+// marks (a stated reset held to its instant, an unstated failure held the
+// five-minute hold), the spawn config content (references only — no key
+// value ever appears), the usable-key predicate of §6.2 rule 4, and the
+// labels the logs show. The ring run state lives in the router service;
+// every test reads the fresh instance the preload installed.
 import { describe, expect, test } from "bun:test"
-import { buildRings, ringKeyLabel, type RingRotation } from "../src/keyring"
+import { buildRings, ringKeyLabel, UNSTATED_KEY_HOLD_MS, type RingRotation } from "../src/keyring"
 import type { ModelEntry, ModelReference, ModelRegistry } from "../src/models-schema"
 import { createServices, installServices, services } from "../src/services"
 
@@ -80,8 +82,8 @@ describe("activation and the spawn config (§4.3 injection)", () => {
   test("a rotated ring changes the apiKey reference; a {file:} key is the absolute path reference", () => {
     router().activateRings(registry(), false)
     const rotation = router().ringRotation("zhipuai", NOW)!
-    router().commitRotation(rotation)
-    router().commitRotation(router().ringRotation("zhipuai", NOW)!)
+    router().commitRotation(rotation, NOW + UNSTATED_KEY_HOLD_MS)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().spawnKeyConfig()).toEqual({
       provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
     })
@@ -124,99 +126,86 @@ describe("activation and the spawn config (§4.3 injection)", () => {
   })
 })
 
-describe("rotation (plans/0144 D2: the search is order-first; the position never moves back on its own)", () => {
-  const rotate = (provider = "zhipuai"): RingRotation | undefined => {
-    const search = router().ringRotation(provider, NOW)
-    if (search?.to !== undefined) router().commitRotation(search)
+describe("rotation (plans/0144 D2, 0163 D1: the search is order-first; the position moves only when a search lands)", () => {
+  const rotate = (provider = "zhipuai", now = NOW): RingRotation | undefined => {
+    const search = router().ringRotation(provider, now)
+    if (search?.to !== undefined) router().commitRotation(search, now + UNSTATED_KEY_HOLD_MS)
     return search
   }
 
-  test("each search lands on the earliest declared key the run holds no evidence against; the refusal applies the passed consumption", () => {
+  test("each search lands on the earliest declared key the run holds no evidence against; a refusal marks the current key and moves nothing", () => {
     router().activateRings(registry(), false)
     // From A: the search starts at index 0, skips A itself (the failure
     // being rotated away from) and lands on B.
     expect(rotate()?.to).toMatchObject({ index: 1, total: 3 })
-    // From B: the search starts at index 0 again — A carries the skip flag
-    // of its own failure, is passed over (the flag clears at the commit)
-    // and C lands.
+    // From B: the search starts at index 0 again — A carries the hold of
+    // its own failure and is passed over, so C lands.
     expect(rotate()?.to).toMatchObject({ index: 2, total: 3 })
-    // From C: A's flag was consumed by the search that passed it, so the
-    // order-first search lands back on A — a recovered earlier key is
-    // re-preferred the moment a rotation fires at all.
-    expect(rotate()?.to).toMatchObject({ index: 0, total: 3 })
-    // From A: B and C both carry their flags and the search refuses to
-    // land, naming both in `passed`; applying the refusal consumes them
-    // (the next search considers them again) and writes A's failure, the
-    // position staying where it is.
+    // From C: A and B are both held and the search refuses to land;
+    // applying the refusal writes C's failure and the position stays.
     const refusal = router().ringRotation("zhipuai", NOW)!
     expect(refusal.to).toBeUndefined()
-    expect(refusal.passed).toEqual([KEY_B.ref, KEY_C.ref])
-    expect(router().isKeyDown("zhipuai", KEY_B.ref, NOW)).toBe(true)
-    router().commitRotation(refusal)
-    expect(router().isKeyDown("zhipuai", KEY_B.ref, NOW)).toBe(false)
-    expect(router().isKeyDown("zhipuai", KEY_C.ref, NOW)).toBe(false)
-    expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
-    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
+    router().commitRotation(refusal, NOW + UNSTATED_KEY_HOLD_MS)
+    expect(router().isKeyDown("zhipuai", KEY_C.ref, NOW)).toBe(true)
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
+    // Past the holds the order-first search lands back on A — a recovered
+    // earlier key is re-preferred the moment a rotation fires at all.
+    expect(rotate("zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1)?.to).toMatchObject({ index: 0, total: 3 })
   })
 
-  test("a skip flag is one-shot: the applying search consumes it; deciding clears nothing", () => {
+  test("an unstated failure holds its key for the five-minute hold, no longer", () => {
     router().activateRings(registry(), false)
-    const first = router().ringRotation("zhipuai", NOW)!
-    expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(false)
-    router().commitRotation(first)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    expect(router().keyDownMark("zhipuai", KEY_A.ref)).toEqual({ until: NOW + UNSTATED_KEY_HOLD_MS })
     expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
-    // The second search passes A's flag — deciding collects it (`passed`)
-    // without clearing it, so a decided-but-uncommitted search stays
-    // replayable.
+    // Deciding a search mutates nothing: a decided-but-uncommitted search
+    // stays replayable, the mark standing to its instant.
     const second = router().ringRotation("zhipuai", NOW)!
-    expect(second.passed).toEqual([KEY_A.ref])
+    expect(second.to).toMatchObject({ index: 2, total: 3 })
     expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
-    router().commitRotation(second)
-    expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(false)
+    expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW + UNSTATED_KEY_HOLD_MS)).toBe(false)
   })
 
   test("an `until` mark holds its key to the stated instant, then the order-first search lands on it", () => {
     router().activateRings(registry(), false)
     // B's failure stated a reset an hour out: a rotation from A passes B
-    // (evidence, not a flag — B never joins `passed`) and lands on C.
+    // (evidence, not a guess) and lands on C, A's own failure stated two
+    // hours.
     router().markKeyDown("zhipuai", KEY_B.ref, NOW + 3_600_000)
     const held = router().ringRotation("zhipuai", NOW)!
-    expect(held.passed).toEqual([])
     expect(held.to).toMatchObject({ index: 2, total: 3 })
-    router().commitRotation(held)
-    // Past the instant B is eligible again, and the next search starts at
-    // declared order: A carries its flag (passed, cleared at the commit),
-    // B lands.
+    router().commitRotation(held, NOW + 7_200_000)
+    // Past B's instant B is eligible again, and the next search starts at
+    // declared order: A still held (two hours), B lands.
     const released = router().ringRotation("zhipuai", NOW + 3_600_001)!
-    expect(released.passed).toEqual([KEY_A.ref])
     expect(released.to).toMatchObject({ index: 1, total: 3 })
-    router().commitRotation(released)
+    router().commitRotation(released, NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
   })
 
   test("a boundary clear moves nothing: the position stays, key state survives, and the next rotation's search decides", () => {
     router().activateRings(registry(), false)
-    rotate()
-    rotate()
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + 7_200_000)
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
-    // A scope boundary clears model marks only (plans/0144 D1) — the key
-    // state is not boundary state, and nothing rewinds the position without
-    // a failure (§6.4's restart-churn floor).
+    // A scope boundary clears model marks only (plans/0144 D1, 0163 D1) —
+    // the key state is not boundary state, and nothing rewinds the
+    // position without a search landing (§6.4's restart-churn floor).
     router().clearDownMarks("task", "task")
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
     expect(router().spawnKeyConfig()).toEqual({
       provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
     })
-    // The next rotation's order-first search lands on A — B's flag stands,
-    // A's was consumed by the search that passed it.
-    expect(rotate()?.to).toMatchObject({ index: 0, total: 3 })
+    // The next rotation's order-first search lands on A — its hold has
+    // passed, B's stated reset stands.
+    expect(rotate("zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1)?.to).toMatchObject({ index: 0, total: 3 })
   })
 
-  test("a flagged or held key is skipped: rotation lands on the next key with no evidence against it", () => {
+  test("a held key is skipped: rotation lands on the next key with no evidence against it", () => {
     router().activateRings(registry(), false)
-    // Key B flagged out-of-band (a bare auth failure, say): a failure of
-    // key A skips straight to key C.
-    router().markKeyDown("zhipuai", KEY_B.ref)
+    // Key B held out-of-band (a stated reset, say): a failure of key A
+    // skips straight to key C.
+    router().markKeyDown("zhipuai", KEY_B.ref, NOW + 3_600_000)
     expect(router().ringRotation("zhipuai", NOW)?.to).toMatchObject({ index: 2, total: 3 })
   })
 
@@ -226,7 +215,7 @@ describe("rotation (plans/0144 D2: the search is order-first; the position never
     expect(rotation).toBeDefined()
     expect(router().keyDownMark("zhipuai", KEY_A.ref)).toBeUndefined()
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
-    router().commitRotation(rotation!)
+    router().commitRotation(rotation!, NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
   })
 
@@ -238,7 +227,6 @@ describe("rotation (plans/0144 D2: the search is order-first; the position never
     // escalation's path), so rule 4 can hold the provider out.
     const refusal = router().ringRotation("prov", NOW)!
     expect(refusal.to).toBeUndefined()
-    expect(refusal.passed).toEqual([])
     expect(router().ringRotation("other", NOW)).toBeUndefined()
     router().activateRings(registry(), true)
     expect(router().ringRotation("zhipuai", NOW)).toBeUndefined()
@@ -246,14 +234,65 @@ describe("rotation (plans/0144 D2: the search is order-first; the position never
   })
 })
 
+describe("the new-session walk (plans/0163 D2)", () => {
+  test("a passed hold on an earlier key walks the ring back: decide mutates nothing, commit moves the position alone and the spawn config names the landed key", () => {
+    router().activateRings(registry(), false)
+    // A failed unstated (held five minutes) and the rotation landed on B.
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
+    // Before the hold passes the walk answers nothing — the session stays
+    // on B, no restart.
+    expect(router().ringWalk("zhipuai", NOW)).toBeUndefined()
+    // Past the instant the walk lands back on A — the current key included
+    // in the search, nothing failed, the maintainer's "every new session
+    // tries the keys in order".
+    const walk = router().ringWalk("zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1)!
+    expect(walk.from).toMatchObject({ index: 1, total: 3 })
+    expect(walk.to).toMatchObject({ index: 0, total: 3 })
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
+    router().commitWalk(walk)
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
+    expect(router().spawnKeyConfig()).toEqual({
+      provider: { zhipuai: { options: { apiKey: "{env:ZHIPU_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } },
+    })
+    // The walk wrote no mark: the from key did not fail.
+    expect(router().keyDownMark("zhipuai", KEY_B.ref)).toBeUndefined()
+  })
+
+  test("a key with no mark never triggers a walk: the probe's cleared ring stays on the current key; a still-held earlier key walks nowhere either", () => {
+    router().activateRings(registry(), false)
+    // Rotate to B (A held), then the recovery probe clears the provider's
+    // marks: every key unmarked — the probe's session must test the
+    // current key, not walk.
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + 3_600_000)
+    router().clearRingMarks("zhipuai")
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
+    expect(router().ringWalk("zhipuai", NOW + 7_200_000)).toBeUndefined()
+    // A still-held earlier key (a stated reset) does not walk.
+    router().markKeyDown("zhipuai", KEY_A.ref, NOW + 7_200_000)
+    expect(router().ringWalk("zhipuai", NOW)).toBeUndefined()
+    // The recovered key being the current one answers nothing — the ring
+    // already stands where the walk would land.
+    router().markKeyDown("zhipuai", KEY_B.ref, NOW + UNSTATED_KEY_HOLD_MS)
+    expect(router().ringWalk("zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1)).toBeUndefined()
+    // No ring, an unknown provider, inactive rings and unactivated rings
+    // answer nothing.
+    expect(router().ringWalk("other", NOW)).toBeUndefined()
+    router().activateRings(registry(), true)
+    expect(router().ringWalk("zhipuai", NOW)).toBeUndefined()
+    expect(freshRouter().ringWalk("zhipuai", NOW)).toBeUndefined()
+  })
+})
+
 describe("the usable-key predicate (§6.2 rule 4)", () => {
   test("a ring with a key that is not excluded is usable; an exhausted ring is not; the probe's clear restores it", () => {
     router().activateRings(registry(), false)
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(true)
-    for (const key of [KEY_A, KEY_B, KEY_C]) router().markKeyDown("zhipuai", key.ref)
+    for (const key of [KEY_A, KEY_B, KEY_C]) router().markKeyDown("zhipuai", key.ref, NOW + 3_600_000)
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(false)
-    // Not a boundary clear — key state never clears at one (plans/0144 D1);
-    // the recovery probe's wholesale clear is what restores the ring.
+    // Not a boundary clear — key state never clears at one (plans/0144 D1,
+    // 0163 D1); the recovery probe's wholesale clear is what restores the
+    // ring (and past the marks' instants they age out by themselves).
     router().clearDownMarks("task", "task")
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(false)
     router().clearRingMarks("zhipuai")
@@ -272,9 +311,9 @@ describe("the usable-key predicate (§6.2 rule 4)", () => {
 describe("/failback rewinds the rings (plans/0144 D3)", () => {
   test("the person's reset command clears all key state and every position to the first key", () => {
     router().activateRings(registry(), false)
-    // Two rotations deep (position C), a stated reset holding B, a flag on A.
-    router().commitRotation(router().ringRotation("zhipuai", NOW)!)
-    router().commitRotation(router().ringRotation("zhipuai", NOW)!)
+    // Two rotations deep (position C), a stated reset holding B, a hold on A.
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
     router().markKeyDown("zhipuai", KEY_B.ref, NOW + 3_600_000)
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
     router().requestFailback()
@@ -287,15 +326,15 @@ describe("/failback rewinds the rings (plans/0144 D3)", () => {
     })
   })
 
-  test("a late classifier reset upgrades a skip flag to an `until` mark; no state reads false", () => {
+  test("a late classifier reset extends an existing mark; no state reads false", () => {
     router().activateRings(registry(), false)
-    // A bare failure flagged B; the classifier's resetAt arrives after the
-    // turn ended — the fact replaces the guess.
-    router().markKeyDown("zhipuai", KEY_B.ref)
+    // An unstated failure held B five minutes; the classifier's resetAt
+    // arrives after the turn ended — the fact replaces the guess.
+    router().markKeyDown("zhipuai", KEY_B.ref, NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().extendKeyDownMark("zhipuai", KEY_B.ref, NOW + 3_600_000)).toBe(true)
     expect(router().keyDownMark("zhipuai", KEY_B.ref)).toEqual({ until: NOW + 3_600_000 })
     expect(router().isKeyDown("zhipuai", KEY_B.ref, NOW + 3_600_000)).toBe(false)
-    // An `until` mark extends to a later instant; a key with no state at
+    // A mark extends to a later instant; a key with no state at
     // all is not resurrected.
     expect(router().extendKeyDownMark("zhipuai", KEY_B.ref, NOW + 7_200_000)).toBe(true)
     expect(router().extendKeyDownMark("zhipuai", KEY_C.ref, NOW + 3_600_000)).toBe(false)
@@ -305,19 +344,19 @@ describe("/failback rewinds the rings (plans/0144 D3)", () => {
 describe("the recovery probe's ring half (§6.3)", () => {
   test("clearRingMarks clears the provider's key marks without moving the position; markCurrentKeyDown re-marks the key the probe ran on", () => {
     router().activateRings(registry(), false)
-    router().commitRotation(router().ringRotation("zhipuai", NOW)!)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + 3_600_000)
     // The current key (B) and the tail (C) both fail: the ring is exhausted.
-    router().markKeyDown("zhipuai", KEY_B.ref)
-    router().markKeyDown("zhipuai", KEY_C.ref)
+    router().markKeyDown("zhipuai", KEY_B.ref, NOW + 3_600_000)
+    router().markKeyDown("zhipuai", KEY_C.ref, NOW + 3_600_000)
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(false)
     router().clearRingMarks("zhipuai")
     expect(router().ringHasUsableKey("zhipuai", NOW)).toBe(true)
     expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
-    router().markCurrentKeyDown("zhipuai")
+    router().markCurrentKeyDown("zhipuai", NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().isKeyDown("zhipuai", KEY_B.ref, NOW)).toBe(true)
     // A provider without a ring and an unknown provider are no-ops.
     expect(() => router().clearRingMarks("other")).not.toThrow()
-    expect(() => router().markCurrentKeyDown("other")).not.toThrow()
+    expect(() => router().markCurrentKeyDown("other", NOW + UNSTATED_KEY_HOLD_MS)).not.toThrow()
   })
 })
 
@@ -334,7 +373,7 @@ describe("labels and the startup note (§6.5, §4.3 limits)", () => {
     expect(router().ringLabel(plain)).toBe("0")
     router().activateRings(registry(), false)
     expect(router().ringLabel(glm)).toBe("1/3 ZHIPU_KEY_A")
-    router().commitRotation(router().ringRotation("zhipuai", NOW)!)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
     expect(router().ringLabel(glm)).toBe("2/3 ZHIPU_KEY_B")
     router().activateRings(registry(), true)
     expect(router().ringLabel(glm)).toBe("3")

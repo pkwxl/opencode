@@ -42,6 +42,7 @@ import { runTaskLoop, type LoopCtx } from "../src/loop-task"
 import { renderTaskIndex } from "../src/tasks"
 import { createGitOps } from "../src/git-ops"
 import { EOF_MARK } from "../src/doccheck"
+import { UNSTATED_KEY_HOLD_MS } from "../src/keyring"
 import { WORKTREE_CHECK, forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
@@ -873,12 +874,16 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   })
 })
 
-// Key rings (plans/0055 §4.3, §7 step 1): a quota/auth/rate failure on a
-// ringed provider first rotates the ring — the current key is marked down,
-// the next key goes into the spawn config, the managed server restarts and
-// the SAME model continues from a fork of the failed session. An exhausted
-// ring falls through to model failover; a cleared key mark never moves the
-// ring back; under an external server the rings are inactive, with a note.
+// Key rings (plans/0055 §4.3, §7 step 1; the hold marks and new-session
+// walk of plans/0163): a quota/auth/rate failure on a ringed provider first
+// rotates the ring — the current key is marked (a stated reset to its
+// instant, an unstated failure the five-minute hold), the next key goes
+// into the spawn config, the managed server restarts and the SAME model
+// continues from a fork of the failed session. Every new session walks the
+// ring in declared order, restarting onto an earlier key whose hold has
+// passed — no failure of the current key needed. An exhausted ring falls
+// through to model failover; under an external server the rings are
+// inactive, with a note.
 describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
   const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
@@ -968,7 +973,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     }
   })
 
-  test("a refusing ring falls through to model failover on the next candidate, the passed flags consumed", async () => {
+  test("a refusing ring falls through to model failover on the next candidate, both keys held to their instants", async () => {
     const routing = facts()
     routing.router.activateRings(routing.registry, false)
     const agent = make({ turn: classTurn("usage limit reached, quota exceeded", undefined, 2) })
@@ -976,21 +981,23 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     const chain = deepChain()
     const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
     expect(result.type).toBe("idle")
-    // a fails on key A (rotation), fails again on key B (the two-key ring
-    // refuses — the search passes A and lands nowhere): the refusal applies
-    // (A's flag consumed, B's failure written) and the model itself is
+    // a fails on key A (rotation, A held the five minutes), fails again on
+    // key B (the two-key ring refuses — A still held, nothing to land on):
+    // the refusal applies (B's failure written too) and the model itself is
     // marked down, so b takes over via a fork.
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a", "other/b"])
     expect(restarts).toHaveLength(1)
     expect(configs).toHaveLength(1)
     expect(chain.modelEntry).toBe("b")
     expect(services().router.isModelDown("a", Date.now())).toBe(true)
-    // The refusal consumed the flag of the key the search passed (the next
-    // retry checks A again, plans/0144 D2); the provider's entries leave
-    // this selection through the model mark, and the spawn config still
-    // names the current key — the position never moves on a refusal.
-    expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(true)
-    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_A}", Date.now())).toBe(false)
+    // Both keys are held to their instants (plans/0163 D1): the provider's
+    // entries leave this selection through the model mark, rule 4 holds
+    // them out while the instants stand, and the spawn config still names
+    // the current key — the position never moves on a refusal. The next
+    // session after the holds pass is the walk's to heal, not a retry's.
+    expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(false)
+    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_A}", Date.now())).toBe(true)
+    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_B}", Date.now())).toBe(true)
     expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } })
   })
 
@@ -1010,44 +1017,43 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     expect(chain.modelEntry).toBe("a")
   })
 
-  test("the skip flag is one-shot: the refusing search consumes it, and the later retry re-checks the earlier key (plans/0144)", async () => {
+  test("the new-session walk returns to an earlier key whose hold passed — no failure of the later key needed (plans/0163)", async () => {
+    const mc = manualClock(Date.parse("2026-11-01T12:00:00Z"))
+    installServices(createServices({ clock: mc.clock }))
     const routing = facts()
     routing.router.activateRings(routing.registry, false)
-    // First dispatch: turn 1 fails with quota on key A, the ring rotates
-    // A → B (A flagged) and the forked re-dispatch succeeds.
+    // First dispatch: key A fails quota, the ring rotates A → B (A held
+    // five minutes) and the forked re-dispatch succeeds on B.
     const first = fakeHost()
     const firstAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
     await runSession(firstAgent.client, task, "p", optsWith(first.host, routing), deepChain(), undefined, undefined, DEFAULTS)
     expect(first.restarts).toHaveLength(1)
     expect(first.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
-    // Second dispatch fails on key B: the two-key ring refuses — the search
-    // passes A and lands nowhere — the refusal applies (A's flag consumed,
-    // B's failure written) and the model failover takes over.
+    // Within the hold a new session stays on B — no restart, no state write.
+    const within = fakeHost()
+    const withinAgent = make()
+    await runSession(withinAgent.client, task, "q", optsWith(within.host, routing), deepChain(), undefined, undefined, DEFAULTS)
+    expect(within.restarts).toEqual([])
+    expect(within.configs).toEqual([])
+    // Minutes later (the hold passed), a brand-new session walks the ring
+    // back: the position moves to A, the spawn config names A's reference
+    // and the managed server restarts before the session's first call —
+    // the dispatch succeeds on A with no failure on B at all. The field
+    // shape this pins: a run that rotated at 07:28 returns to key 1 at its
+    // next session after the hold instead of burning key 2 for hours.
+    mc.advance(UNSTATED_KEY_HOLD_MS + 1)
     const second = fakeHost()
-    const secondAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+    const secondAgent = make()
     const secondChain = deepChain()
-    const secondResult = await runSession(secondAgent.client, task, "q", optsWith(second.host, routing), secondChain, undefined, undefined, DEFAULTS)
+    const secondResult = await runSession(secondAgent.client, task, "r", optsWith(second.host, routing), secondChain, undefined, undefined, DEFAULTS)
     expect(secondResult.type).toBe("idle")
-    expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "other/b"])
-    expect(second.restarts).toEqual([])
-    expect(secondChain.modelEntry).toBe("b")
-    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_A}", Date.now())).toBe(false)
-    expect(services().router.isKeyDown("prov", "{env:PROV_KEY_B}", Date.now())).toBe(true)
-    // Third dispatch, the model mark cleared at its boundary (key state
-    // never clears at one, plans/0144 D1): a is selected again, the
-    // position still holds B — whose failure this dispatch re-states — and
-    // the order-first search lands on A, the clean earlier key: the later
-    // retry checks it again.
-    services().router.clearDownMarks("task", "task")
-    const third = fakeHost()
-    const thirdAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
-    const thirdChain = deepChain()
-    const thirdResult = await runSession(thirdAgent.client, task, "r", optsWith(third.host, routing), thirdChain, undefined, undefined, DEFAULTS)
-    expect(thirdResult.type).toBe("idle")
-    expect(thirdAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
-    expect(third.restarts).toHaveLength(1)
-    expect(third.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
-    expect(thirdChain.modelEntry).toBe("a")
+    expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a"])
+    expect(second.restarts).toEqual([`an earlier key's hold passed; rotating the provider prov key ring to key 1/2 PROV_KEY_A for the new session`])
+    expect(second.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}", headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } }, other: { options: { headerTimeout: 1_200_000, chunkTimeout: 1_200_000 } } } }])
+    expect(secondChain.modelEntry).toBe("a")
+    expect(services().router.currentKey("prov")?.ref).toBe("{env:PROV_KEY_A}")
+    // The walk wrote no mark — B did not fail.
+    expect(services().router.keyDownMark("prov", "{env:PROV_KEY_B}")).toBeUndefined()
   })
 
   test("under an external server the rings are inactive, with a note, and quota goes straight to model failover", async () => {

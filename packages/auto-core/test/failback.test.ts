@@ -101,9 +101,11 @@ describe("failback (the router's state for failover, failback and /failback)", (
 // Down marks (plans/0055 §6.4): the registry-era replacement of the sticky
 // holder — per model, cleared at the failback scope boundaries and by
 // /failback, an `until` mark lasting until its instant instead. Key state
-// left this family with plans/0144 D1: the skip flag is one-shot search
-// state, the `until` key mark provider-stated evidence, and neither ever
-// clears at a boundary (/failback clears both and rewinds the rings).
+// left this family with plans/0144 D1 and its one-shape successor 0163 D1:
+// every key mark carries an `until` (a stated reset to its instant, an
+// unstated failure the five-minute hold), is duration state, never
+// boundary state, and clears only at its instant or by /failback (which
+// rewinds the rings).
 describe("down marks (§6.4)", () => {
   test("markModelDown / modelDownMark / isModelDown: down now, with or without an until", () => {
     const router = services().router
@@ -119,16 +121,17 @@ describe("down marks (§6.4)", () => {
     expect(router.downMarks().get("k3")).toEqual({})
   })
 
-  test("key state is held per provider and key reference, split by whether the failure stated a reset (plans/0144 D1)", () => {
+  test("key state is held per provider and key reference, every mark carrying its instant (plans/0163 D1)", () => {
     const router = services().router
-    router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
+    router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW + 300_000)
     router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)
-    router.markKeyDown("zhipuai", "{env:ZHIPU_KEY_A}")
-    // A bare failure carries the one-shot skip flag: excluded, but no
-    // duration — keyDownMark, the `until`-mark reader, answers undefined.
-    expect(router.keyDownMark("moonshotai", "{env:MOONSHOT_KEY_A}")).toBeUndefined()
+    router.markKeyDown("zhipuai", "{env:ZHIPU_KEY_A}", NOW + 300_000)
+    // An unstated failure holds the five-minute hold: excluded until the
+    // instant, eligible after — the caller states the duration.
+    expect(router.keyDownMark("moonshotai", "{env:MOONSHOT_KEY_A}")).toEqual({ until: NOW + 300_000 })
     expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(true)
-    // A stated reset is an `until` mark held to its instant.
+    expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW + 300_000)).toBe(false)
+    // A stated reset is the same shape held to its own instant.
     expect(router.keyDownMark("moonshotai", "{env:MOONSHOT_KEY_B}")).toEqual({ until: NOW + 1_000 })
     expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)).toBe(false)
     expect(router.isKeyDown("zhipuai", "{env:ZHIPU_KEY_A}", NOW)).toBe(true)
@@ -153,16 +156,16 @@ describe("down marks (§6.4)", () => {
     for (const { boundary, scope, clears } of cases) {
       router.markModelDown("k3")
       router.markModelDown("opus", NOW + 3_600_000)
-      router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
+      router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW + 300_000)
       router.clearDownMarks(boundary, scope)
       expect({ boundary, scope, cleared: !router.isModelDown("k3", NOW) }).toEqual({ boundary, scope, cleared: clears })
       // An until mark survives every boundary clear and reads as cleared
       // once its instant passes.
       expect(router.isModelDown("opus", NOW)).toBe(true)
       expect(router.isModelDown("opus", NOW + 3_600_000)).toBe(false)
-      // Key state is not boundary state at all (plans/0144 D1): the skip
-      // flag clears only when a rotation search passes over it, the
-      // `until` mark only at its instant — under every scope.
+      // Key state is not boundary state at all (plans/0144 D1, 0163 D1): a
+      // key mark is duration state, held to its instant — under every
+      // scope.
       expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(true)
     }
   })

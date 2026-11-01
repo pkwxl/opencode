@@ -809,8 +809,8 @@ export async function runTask(
           // same point (and may redefine the model order wholesale). Registry routing
           // (plans/0055 §6.4): the same boundary clears the model down marks the
           // scope covers, and the chain's selected entry with the raw candidate
-          // (key state never clears at a boundary — plans/0144 D1: an `until` key
-          // mark is provider-stated evidence, a skip flag one-shot search state).
+          // (key state never clears at a boundary — plans/0144 D1, 0163 D1: a
+          // key mark is duration state, held to its instant).
           // The failback holders and the marks live in the run's router, which
           // rides the session options (the pipeline sits below the services'
           // entry modules): the loop fills it from the installed services; a

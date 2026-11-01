@@ -1264,8 +1264,8 @@ letters (precedence as in `OPENCODE_AUTO_MODEL`'s key syntax; `*` is not allowed
 are the default), values are a tier name or an ordered list of internal names.
 
 Every dispatch takes the **first entry available right now** from the candidate list: past the agent
-filter, inside its window, not down-marked, its provider's key ring (if any) still has a key that is neither
-skip-flagged nor held to a stated reset, and
+filter, inside its window, not down-marked, its provider's key ring (if any) still has a key that is not
+held (a stated reset to its instant, an unstated failure for five minutes), and
 its known context window is at least the project limit (stepped entries check the top step). Continuations
 of the same prompt (retries, forks after failure, wait-loop redispatches, strict recovery) keep the chain's
 model; a new prompt goes back to the preferred entry at any time — it returns automatically once the
@@ -1300,14 +1300,18 @@ any string: the reference reaches the managed opencode server through the spawn 
 (`OPENCODE_CONFIG_CONTENT`) and is substituted inside the server's own process; logs and output name the
 reference only (`key 2/3 ZHIPU_KEY_B`). **Rotation is a managed server restart**: the landed key goes into
 the spawn config and the server restarts (sessions survive the restart); the failed session is forked and
-resent on the **same model**. A key that fails **without stating a reset** carries a **one-shot skip flag**:
-the next rotation's search skips it once and the one after that considers it again — recovery may be manual,
-not only timed, so a bare failure never parks a key on an invented schedule. A failure that **states a
-reset** holds the key until the stated instant (provider-stated evidence; it survives every failback
-boundary — boundaries never touch key state at all). The rotation search is **order-first**: it starts at
-the first declared key and lands on the earliest key with no evidence against it, so a recovered earlier
-key is re-preferred the moment a rotation fires; the position never moves without a failure (no restart
-churn), and a refused search (nothing eligible) is applied too, consuming the flags it passed. `/failback`
+resent on the **same model**. A key that fails **without stating a reset** is held for **five minutes** —
+a short, person-ruled hold (ruled against measured 30–90-minute session lengths: recovery may be manual,
+not only timed, so the key is re-checked soon rather than parked on a long invented schedule). A failure
+that **states a reset** holds the key until the stated instant (provider-stated evidence; it survives every
+failback boundary — boundaries never touch key state at all). Both searches are **order-first**: the
+rotation search starts at the first declared key and lands on the earliest key with no evidence against it,
+and **every new session walks the same order** — when an earlier key's hold or reset has passed, the ring
+moves back to it and the managed server restarts before the session's first call, so a recovered earlier
+key is retried at the next session without waiting for the current key to fail. The walk never oscillates
+(the fork a rotation just seeded rides the held key it landed on), and a key with no mark never triggers
+one (the recovery probe's cleared ring stays on the key it tests). A refused rotation search (every other
+key held) is applied too — the failed key is marked, the position stays. `/failback`
 clears all key state and rewinds every ring to its first key; a successful probe likewise clears the key
 state it tested. An external server (`--server`, a profile's `server`) cannot be restarted, so the ring is
 inactive under it (the startup log says so). **No provider is listed as verified for key rings yet**: the
@@ -1394,7 +1398,7 @@ conclusion stay byte-identical.
 | --- | --- | --- |
 | `OPENCODE_AUTO_MODEL` | Unchanged | Same key syntax; the value is an **internal name**, or a bare `provider/model` running on the default agent (no window, no ring, no stepping). Overrides the matched session's candidate list, this run only |
 | `OPENCODE_AUTO_MODEL_FALLBACK` | Unchanged | **Usage error** (exit code 1): the tier list is the failover order |
-| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | Unchanged | Clears model down marks (key state never clears at a boundary — a failed key carries a one-shot skip flag, or a reset mark held to its stated instant) |
+| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | Unchanged | Clears model down marks (key state never clears at a boundary — a failed key carries a mark: a stated reset held to its instant, an unstated failure held five minutes) |
 | `/failback [a b …]` | Unchanged | Arguments are internal names; wholly replaces every list from then on (same semantics as an override); also clears every key mark and rewinds the key rings to their first key |
 | `OPENCODE_AUTO_AGENT`, the shell profile's `agent` | Selects the run's single agent | **Filter**: only models on that adapter are candidates. The config's `agent` (init `--agent`) is no longer a filter but the **default agent** — bare `provider/model` values and session records without an agent belong to it; a startup notice when no tier uses it |
 | `--server` / `OPENCODE_AUTO_SERVER` | Unchanged | Overrides an opencode profile's `server`; the key ring is inactive under an external server, and the profile's `bin` / `env` have no effect on it |
