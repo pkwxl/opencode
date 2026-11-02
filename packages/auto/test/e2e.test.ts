@@ -3133,6 +3133,34 @@ describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 011
       expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 10 files`)
       expect(again.out).toContain("left alone (not in the suite): my-own.md")
       expect(await Bun.file(join(dir, "prompts/my-own.md")).text()).toContain("Mine")
+      // plans/0164 — the vintage pin and the drift gate. The install wrote
+      // prompts/MANIFEST (excluded from the extras report above); --check
+      // over a current suite exits 0, over drift exits 1 naming it, and the
+      // resync restores current; anything but --check is refused.
+      expect(again.out).toContain("manifest: prompts/MANIFEST pins this suite")
+      const manifest = JSON.parse(await Bun.file(join(dir, "prompts/MANIFEST")).text()) as { suite: string; files: Record<string, string> }
+      expect(Object.keys(manifest.files).length).toBe(10)
+      expect(manifest.suite).toMatch(/^sha256-[0-9a-f]{64}$/)
+      const clean = await runCli(["install-prompts", dir, "--check"])
+      expect(clean.code).toBe(0)
+      expect(clean.out).toContain(`prompt suite current in ${dir}/prompts (the manifest pins this binary's suite)`)
+      await Bun.write(join(dir, "prompts/run.md"), "drifted\n")
+      await rm(join(dir, "prompts/MANIFEST"))
+      const drift = await runCli(["install-prompts", dir, "--check"])
+      expect(drift.code).toBe(1)
+      expect(drift.out).toContain(`prompt suite drift in ${dir}/prompts:`)
+      expect(drift.out).toContain("drifted from this binary's suite: run.md")
+      expect(drift.out).toContain("manifest absent: prompts/MANIFEST pins no vintage")
+      expect(await Bun.file(join(dir, "prompts/run.md")).text()).toBe("drifted\n")
+      expect((await runCli(["install-prompts", dir])).code).toBe(0)
+      expect((await runCli(["install-prompts", dir, "--check"])).code).toBe(0)
+      expect(await Bun.file(join(dir, "prompts/run.md")).text()).toContain("# run — master control")
+      const badFlag = await runCli(["install-prompts", dir, "--dryrun"])
+      expect(badFlag.code).toBe(1)
+      expect(badFlag.err).toContain("unknown option --dryrun: install-prompts takes only --check (a directory argument and no other options)")
+      const owned = await runCli(["status", dir, "--check"])
+      expect(owned.code).toBe(1)
+      expect(owned.err).toContain("--check is an install-prompts option (the read-only drift gate: opencode-auto install-prompts <dir> --check); status does not accept it")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

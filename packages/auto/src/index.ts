@@ -27,7 +27,7 @@ import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { clarifyGate } from "@opencode-ai/auto-core/clarify"
-import { formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
+import { checkPrompts, formatCheckPrompts, formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { renderHelperBrief } from "@opencode-ai/auto-core/driver-helper"
 import { landUnit } from "@opencode-ai/auto-core/land"
 import { forkTask, removeFork } from "@opencode-ai/auto-core/fork"
@@ -173,7 +173,7 @@ const repeatFlags = new Map<string, string[]>()
 // swallowed — before it joined this set, `--probe=false` set the flag with the
 // value "false" and still ran the probe (a token-spending opt-out ignored),
 // and `--probe true <dir>` left "true" as the directory.
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize", "probe"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize", "probe", "check"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -569,7 +569,13 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "install-prompts",
     "install-prompts resyncs the manual-driver prompt suite into the project: every suite file is copied byte-identical into <dir>/prompts/ (differing content rewritten, identical files untouched) " +
-      "and files the suite does not carry are reported and left alone; it requires an initialized project, writes nothing a running driver reads, takes no run lock and runs no git — the person reviews and commits the resync",
+      "and files the suite does not carry are reported and left alone; it also writes prompts/MANIFEST — the per-file digests and the suite-level digest of the installed vintage, the pin an arm commits instead of the suite's bytes (plans/0164); " +
+      "it requires an initialized project, writes nothing a running driver reads, takes no run lock and runs no git — the person reviews and commits the resync",
+  ],
+  [
+    "install-prompts-check",
+    "--check answers the drift question without writing: it compares the target's prompts/ against this binary's embedded suite and the manifest against the vintage it should pin, " +
+      "prints the drifted and missing files and the manifest's state, and exits 0 clean or 1 with any drift (a scripted gate — run it before handing a target to a manual-driver session; local additions are reported and never count as drift)",
   ],
   [
     "continue-retired",
@@ -696,9 +702,9 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     name: "install-prompts",
-    summary: "resync the manual-driver prompt suite into the project's prompts/ (you review and commit)",
-    synopsis: "opencode-auto install-prompts [dir]",
-    options: ["install-prompts"],
+    summary: "resync the manual-driver prompt suite into the project's prompts/ and pin its vintage in prompts/MANIFEST (you review and commit)",
+    synopsis: "opencode-auto install-prompts [dir] [--check]",
+    options: ["install-prompts", "install-prompts-check"],
   },
   {
     name: "driver-helper",
@@ -888,6 +894,13 @@ const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line:
       `--probe is a models option (the opt-in probe: opencode-auto models <dir> --probe); ${command ?? "this command"} does not accept it — ` +
       `the probe starts agents and costs tokens, so it never rides another command`,
   },
+  {
+    owner: "install-prompts",
+    keys: ["check"],
+    line: (_key, command) =>
+      `--check is an install-prompts option (the read-only drift gate: opencode-auto install-prompts <dir> --check); ${command ?? "this command"} does not accept it — ` +
+      `the check names the prompt-suite drift it found and writes nothing`,
+  },
 ]
 for (const owned of OWNED_FLAGS) {
   if (command === owned.owner) continue
@@ -945,13 +958,15 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent", "tree-lanes"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); status, install-prompts, release, driver-helper
+// agents and spends tokens); install-prompts takes exactly one too: --check
+// (plans/0164's read-only drift gate); status, release, driver-helper
 // and clarify stay flagless (release certifies the destination as it stands —
 // no options to shape a read-only gate; driver-helper renders the
 // person-proxy brief from live state, plans/0105; clarify writes the person's
 // release mark, plans/0116).
 const MODELS_FLAGS = new Set(["probe"])
-const FLAGLESS = command === "status" || command === "models" || command === "install-prompts" || command === "release" || command === "driver-helper" || command === "clarify"
+const INSTALL_PROMPTS_FLAGS = new Set(["check"])
+const FLAGLESS = command === "status" || command === "models" || command === "release" || command === "driver-helper" || command === "clarify"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skips the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
@@ -977,7 +992,8 @@ const LAND_FLAGS = new Set(["keep", "abandon", "merge"])
 // The unknown-option interception: every flag outside its command's policy
 // below is an error with exit 1, so a typo is never silently ignored. The
 // strict commands (close, land) run their own refusal ladder; the narrow
-// readers (reset/fix/sync, models) and the flagless status/install-prompts
+// readers (reset/fix/sync, models, install-prompts) and the flagless
+// status/release/driver-helper/clarify
 // name their whole surface; everything else (init/amend/plan/transfer/run and
 // the hidden _lane) accepts the known flag vocabulary here and leaves its
 // specific refusals to its command block (the frozen config flags, the
@@ -1018,8 +1034,9 @@ const closeOptionRefusal = strictOptionRefusal(
 )
 const landOptionRefusal = strictOptionRefusal("land", LAND_FLAGS, "land takes only --keep, --abandon and --merge (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge])")
 // One command's option policy: the refusal line for a flag, undefined to
-// accept it here. Models (auto-core plans/0055 §9) only reads and prints;
-// status and install-prompts take no options at all.
+// accept it here. Models (auto-core plans/0055 §9) and install-prompts
+// (plans/0164) each read and print with one shaping option; status takes no
+// options at all.
 const optionRefusal = (key: string): string | undefined => {
   if (command === "close") return closeOptionRefusal(key)
   if (command === "land") return landOptionRefusal(key)
@@ -1032,6 +1049,10 @@ const optionRefusal = (key: string): string | undefined => {
   if (command === "models") {
     if (MODELS_FLAGS.has(key)) return undefined
     return `unknown option --${key}: models takes only --probe (a directory argument and no other options)`
+  }
+  if (command === "install-prompts") {
+    if (INSTALL_PROMPTS_FLAGS.has(key)) return undefined
+    return `unknown option --${key}: install-prompts takes only --check (a directory argument and no other options)`
   }
   if (FLAGLESS) return `unknown option --${key}: ${command} only accepts a directory argument, no options`
   if (KNOWN_FLAGS.has(key)) return undefined
@@ -3269,14 +3290,27 @@ if (command === "models") {
 // install-prompts (auto-core plans/0093): resync the manual-driver prompt
 // suite into the project — every suite file copied byte-identical into
 // <dir>/prompts/ (differing content rewritten, identical files untouched),
-// files the suite does not carry reported and left alone. It requires an
+// files the suite does not carry reported and left alone, and prompts/
+// MANIFEST written pinning the installed vintage's digests (plans/0164 — the
+// manifest a target commits instead of the suite's bytes). It requires an
 // initialized project and writes nothing a running driver reads (the
 // automated driver never reads the target's prompts/), so it takes no run
 // lock; it runs no git command — the suite is tracked content, so the person
 // reviews and commits the resync. Exit 0 on a completed resync (an
 // already-current suite included), 1 on refusal or write failure.
+// --check (plans/0164) is the read-only half: the same comparisons against
+// this binary's embedded suite and the manifest's pin, nothing written, exit
+// 0 clean and 1 on any drift (drifted files, missing files, or a manifest
+// absent or pinning another vintage) — the scripted preflight before a
+// manual-driver session takes the suite. A true boolean read (0159):
+// --check=false is the explicit opt-out and runs the resync.
 if (command === "install-prompts") {
   try {
+    if (flags.has("check") && flags.get("check") !== "false") {
+      const report = await checkPrompts(directory)
+      for (const line of formatCheckPrompts(directory, report)) console.log(line)
+      process.exit(report.drifted.length || report.missing.length || report.manifest !== "current" ? 1 : 0)
+    }
     const result = await installPrompts(directory)
     for (const line of formatInstallPrompts(directory, result)) console.log(line)
     process.exit(0)

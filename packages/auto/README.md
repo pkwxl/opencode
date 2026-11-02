@@ -56,7 +56,7 @@ opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: 
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — an installed approved proposal or a person's `amend --brief` write; delete it by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
-opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (runbooks for a coding-agent session acting as the driver) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual-driver prompt suite (install-prompts)"
+opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (runbooks for a coding-agent session acting as the driver) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted, prompts/MANIFEST written pinning the vintage; --check is the read-only drift gate; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual-driver prompt suite (install-prompts)"
 opencode-auto driver-helper [dir]   # render the person-proxy brief (plans/0105): the six-block context — role pin (never the driver; prompts/ is reference material), the driver's working model, the live state plus the stop's own lines, the person-owned channels open right now, the assist policy, the exact recovery commands — to paste into the coding-agent session acting with your pen at a boundary run cannot cross; read-only, stdout, nothing written, no run lock (a live lock is reported, never refused on), see "The person-proxy brief (driver-helper)"
 ```
 
@@ -1080,15 +1080,21 @@ midway (the removal is resumable by re-running: an already-removed member is see
 child sessions as workers (`run.md` the master control, the `run-task`/`run-verify`/`run-fix`/
 `run-handover`/`run-plan` children, `run-as-subtasks`/`resume-subtasks` for the subtask pipeline,
 `plan-append` the append planner) — the other way of driving a round, with no automated driver process
-at all. The command is flagless and **requires an initialized project**.
+at all. The command **requires an initialized project** and takes exactly one option, `--check`.
 
 - **Byte-identical overwrite is the point**: every suite file whose content differs is rewritten, an
   already-identical one is left untouched, and files in `prompts/` the suite does not carry are
   **reported and never deleted** — local additions are yours.
+- **The vintage pin (plans/0164)**: the resync also writes `prompts/MANIFEST` — every suite file's
+  digest plus the suite-level digest of the installed revision. Commit the manifest alone and the
+  target proves which suite drives it; `install-prompts <dir> --check` is the read-only gate over the
+  same facts (drifted/missing files, the manifest's state), exit `0` clean and `1` on any drift — run
+  it before handing a target to a manual-driver session.
 - **No run lock, no git**: the automated driver never reads the target's `prompts/`, so the command
   writes nothing a running driver reads and runs beside a live run; and it runs no git command — the
   suite is tracked content in the target, so you review and commit the resync.
-- Exit `0` on a completed resync (an already-current suite included), `1` on refusal or write failure.
+- Exit `0` on a completed resync (an already-current suite included), `1` on refusal or write failure;
+  `--check` exits `0` clean and `1` on drift, writing nothing.
 
 ### The person-proxy brief (driver-helper)
 

@@ -242,4 +242,4 @@ driver's unified commit is the completion condition.
 | `land [dir] [--keep \| --abandon \| --merge]` | return isolated round branches |
 | `status [dir]` | read-only progress tree |
 | `models [dir] [--probe]` | print the effective model routing |
-| `install-prompts [dir]` | resync the manual-driver prompt suite (the runbooks for a coding-agent session acting as the driver) into `prompts/` byte-identically — extras reported, never deleted; no run lock, no git (you review and commit) |
+| `install-prompts [dir] [--check]` | resync the manual-driver prompt suite (the runbooks for a coding-agent session acting as the driver) into `prompts/` byte-identically and write `prompts/MANIFEST` pinning the vintage — extras reported, never deleted; no run lock, no git (you review and commit); `--check` compares without writing, exit 1 on drift |

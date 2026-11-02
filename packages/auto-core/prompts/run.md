@@ -5,7 +5,8 @@ coding-agent session opened in the target directory, together with its five comp
 `run-verify.md`, `run-fix.md`, `run-handover.md` and `run-plan.md` (same directory, or all six pasted into
 the session). There is nothing to fill
 in. The session takes the role of the driver (`opencode-auto run`) and executes **every** incomplete task of the
-current phase, one at a time — or, when the hand-over line names `parallel: <n>`, as concurrent waves of
+current phase, one at a time — or exactly through the task the hand-over line's `stop-after: T-NNN` names, when
+it names one (the Run modes section's phrase) — or, when the hand-over line names `parallel: <n>`, as concurrent waves of
 independent documentation-scoped tasks (the Parallel waves section) — or, when it names `mode: single`,
 with no child sessions at all, the one session itself in every role (the Single-session runs section): it
 determines the next ready task, launches task child sessions that carry the
@@ -46,7 +47,10 @@ checks specified below.
 1. Initialized target directory: `.opencode/auto/config.json` exists. Otherwise stop: the person must run `init`
    first.
 2. No live driver: `.auto/run.lock` absent. A running driver process owns this directory; the person finishes or
-   stops the run first.
+   stops the run first. Read the lock before reporting it: its `pid`, `command` and `started` fields name the
+   run that wrote it — a pid that no longer answers a `kill -0` probe marks the lock stale, its run having
+   died without the cleanup. Stale or live, clearing it is the person's alone: report which you found with
+   the lock's own facts, and stop — never delete or edit anything under `.auto/` yourself.
 3. Inside a git work tree where a commit can succeed (a commit identity resolves): committing is the completion
    condition of every unit here — outside git this file does not apply.
 4. Clean worktree: `git status --porcelain` lists nothing — in this repository and in every nested repository
@@ -206,7 +210,11 @@ iteration.
 0. Confirm the current phase is planned: its directory holds a `tasks.md`. Without one the phase is
    established but unplanned → run the planning child on it (the Phase transfer section's step 6), then
    re-read the index here.
-1. Take the first ready task `T-NNN` in index order (rules above). Nothing ready → either every task of the
+1. Take the first ready task `T-NNN` in index order (rules above). Under a `stop-after: T-NNN` phrase: when the
+   named task is done — its `done.md` present, a `Closed:` field counting alike — or parked (the park is a
+   legal boundary), the segment is complete; do not take the next task, Finish with the resume note. The phrase
+   bounds the run's end, never its order: a named task not yet reached runs in index order as ever. Nothing
+   ready → either every task of the
    phase is done — go to the Phase transfer section — or tasks remain pending but none is ready, an
    unsatisfiable dependency graph: stop and report. Record the baseline:
    the current HEAD of this repository and of every nested repository. The task's first child session starts
@@ -338,7 +346,9 @@ the loop above is exactly as written — the serial floor. With it, independent 
 this same tree, the manual suite's twin of the driver's doc lanes: no worktrees, no landing machinery —
 the master control stays the sole git writer and the sole ticker of the index. The phrase composes with
 every run mode but `single` (a single-session run launches no children to wave — both phrases in one
-hand-over line are a stop and report) — `window` gates wave launches like any launch (none outside the
+hand-over line are a stop and report) — and `stop-after: T-NNN` never rides it either: one task's bound
+cannot gate a concurrent shape, exactly the driver's own `--stop-after` refusal, and both phrases in one
+hand-over line are a stop and report — `window` gates wave launches like any launch (none outside the
 working period), `pace` waits before each launch as
 written, a `sprint` wall lands every ended child's share before the Finish — and the report names it
 beside the mode line so the restart repeats it.
@@ -599,11 +609,16 @@ The person may name a run mode in the hand-over line — `window`, `sprint`, `pa
 may ride with `window`, never with `sprint`; `single` may ride with `window` alone — never with `sprint`
 or `pace`, its wall the only bound it carries); none named, the run is
 unlimited — no window, no wall, no pause: it goes on until its tasks and phases are done or this file's
-own rules stop it. The same line may carry two more phrases beside them: `phases: all`, the Phase
+own rules stop it. The same line may carry three more phrases beside them: `phases: all`, the Phase
 transfer section's phrase that lifts the default stop at each phase boundary — an unattended run (a
 sprint) usually names it,
-since nobody is there to review between phases — and `parallel: <n>`, the Parallel waves section's phrase
-that runs independent documentation-scoped task sessions beside each other. Where a mode conflicts with this file's rules, the mode
+since nobody is there to review between phases — `parallel: <n>`, the Parallel waves section's phrase
+that runs independent documentation-scoped task sessions beside each other — and `stop-after: T-NNN`,
+the one-task segment (the driver's own `--stop-after`): the loop's pick ends the run the moment the
+named task is done or parked, and a named task already done at the start means the segment is spent
+before it began — Finish, saying so. The phrase never rides `parallel: <n>` (one task's bound cannot
+gate a concurrent shape — the driver's own refusal), and it bounds one segment only: the report names
+it spent, and the restart repeats nothing of it. Where a mode conflicts with this file's rules, the mode
 wins. The park/resume rules at this section's end are every run's, a mode named or none — they govern an
 already-begun task wherever the boundary check meets one. Whatever you end with, your report names
 the mode line — and the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise — so the
