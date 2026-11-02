@@ -1,0 +1,41 @@
+// The chain-writes ratchet's binding finder and write patterns, copied verbatim
+// from auto-core/test/chain-writes.test.ts:182-185 and :226-230 (not exported).
+import { expect, test } from "bun:test"
+const fields = "id pct used at hinted wall note phase subject forkBase forkLead pending role model modelEntry modelStep agent failed modelShown baseline".split(" ")
+function chainBindingsOf(text: string): Set<string> {
+  const names = new Set<string>()
+  for (const m of text.matchAll(/\b([A-Za-z_$][\w$]*)\s*:\s*SessionChain\b/g)) names.add(m[1]!)
+  return names
+}
+function hits(code: string): string[] {
+  const names = chainBindingsOf(code)
+  if (names.size === 0) return []
+  const fieldAlt = fields.join("|"), nameAlt = [...names].join("|")
+  const patterns = [
+    new RegExp(`\\b(?:${nameAlt})\\.(?:${fieldAlt})\\s*(?:=(?!=)|\\+=|-=|\\*=|/=|%=|\\?\\?=|\\|=|&&=|\\+\\+|--)`, "g"),
+    new RegExp(`(?:\\+\\+|--)\\s*(?:${nameAlt})\\.(?:${fieldAlt})\\b`, "g"),
+    new RegExp(`\\bdelete\\s+(?:${nameAlt})\\.(?:${fieldAlt})\\b`, "g"),
+  ]
+  const out: string[] = []
+  for (const re of patterns) for (const m of code.matchAll(re)) out.push(m[0])
+  return out
+}
+test("escapes", () => {
+  const cases: Record<string, string> = {
+    logicalOr: "function f(chain: SessionChain) { chain.hinted ||= true }",
+    alias: "function f(chain: SessionChain) { const c = chain; c.model = 'x' }",
+    objectAssign: "function f(chain: SessionChain) { Object.assign(chain, { model: 'x' }) }",
+    bracket: "function f(chain: SessionChain) { chain['model'] = 'x' }",
+    optionalParam: "function f(chain?: SessionChain) { if (chain) chain.model = 'x' }",
+    nonNull: "function f(chain: SessionChain | undefined) { chain!.model = 'x' }",
+    newlineDot: "function f(chain: SessionChain) { chain\n  .model = 'x' }",
+    inferred: "const chain = makeChain(); chain.model = 'x'",
+    arrayElem: "function f(chains: SessionChain[]) { chains[0].model = 'x' }",
+    typeAlias: "type C = SessionChain; function f(x: C) { x.model = 'x' }",
+    control: "function f(chain: SessionChain) { chain.model = 'x' }",
+  }
+  const report: Record<string, number> = {}
+  for (const [k, v] of Object.entries(cases)) report[k] = hits(v).length
+  console.log(JSON.stringify(report))
+  expect(report.control).toBe(1)
+})

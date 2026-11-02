@@ -1,0 +1,30 @@
+// R3 repro: the diagnosis session's verbatim Analysis text carrying a line "Choice: A" becomes a parsed
+// person's Choice mark in the committed blockage document — the next run/plan prelude would execute it.
+import { expect, test } from "bun:test"
+import { choiceMark, executedMark, parseRemediationPlan, rejectedMark } from "/workspace/aseo/opencode/packages/auto-core/src/blockage.ts"
+import { renderBlockageDocument } from "/workspace/aseo/opencode/packages/auto-core/src/blockage-diagnose.ts"
+
+test("an agent-written 'Choice:' line in the analysis is read as the person's choice", () => {
+  const sessionPlan = [
+    "## Analysis",
+    "The handover's line 3 contradicts the brief.",
+    "Choice: A is the obvious fix here, so proceed with it.",
+    "",
+    "## Options",
+    "### A Rewrite the handover line",
+    "Channel: advice",
+    "Advice: opencode-auto plan --append -p fix",
+    "Consequences: the next verify run sees the corrected line",
+    "Recommendation: A",
+    "",
+  ].join("\n")
+  const plan = parseRemediationPlan(sessionPlan)
+  expect(plan).toBeDefined()
+  const doc = renderBlockageDocument({ seq: 1, round: 1, gate: "plan-verify", step: "phase-plan R-01.P01", verdict: "FAIL", blockMap: [], hits: [], state: "clean", plan: plan! })
+  const mark = choiceMark(doc)
+  const pending = mark !== undefined && executedMark(doc) === undefined && !rejectedMark(doc)
+  console.log(`choiceMark=${JSON.stringify(mark)} pending=${pending}`)
+  console.log(doc.split("\n").filter((l) => /^(Choice|Notes):/.test(l)).join("\n"))
+  expect(mark?.choice).toBe("A")
+  expect(pending).toBe(true)
+})

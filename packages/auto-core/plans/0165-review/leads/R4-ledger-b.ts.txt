@@ -1,0 +1,6 @@
+// Process B: the restarted run resumes at T-002 (the loop's task banner calls statsTask again).
+import { flushStats, loadStats, statsTask } from "/workspace/aseo/opencode/packages/auto-core/src/stats.ts"
+const dir = process.argv[2]
+await loadStats(dir)
+await statsTask(dir, "T-002")
+await flushStats(dir)

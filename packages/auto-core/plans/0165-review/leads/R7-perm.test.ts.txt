@@ -1,0 +1,81 @@
+// R7 repro: the opencode.json permission stamps evaluated with opencode's own
+// matcher (packages/core/src/util/wildcard.ts) under its last-match-wins rule
+// (packages/opencode/src/permission/index.ts evaluate = findLast), the way
+// fromConfig flattens a config object in key order.
+import { expect, test } from "bun:test"
+import path from "node:path"
+import { match } from "/workspace/aseo/opencode/packages/core/src/util/wildcard.ts"
+import {
+  coveringAllowKeys,
+  externalDirectoryEntries,
+  readOnlyEditEntries,
+  stampExternalDirectories,
+  stampKnowledgeBoundary,
+  stampReadOnlyEdits,
+  stampWallClosure,
+} from "/workspace/aseo/opencode/packages/auto-core/src/external-dirs.ts"
+
+type Rule = { permission: string; pattern: string; action: string }
+function fromConfig(permission: Record<string, unknown>): Rule[] {
+  const rules: Rule[] = []
+  for (const [key, value] of Object.entries(permission)) {
+    if (typeof value === "string") rules.push({ permission: key, pattern: "*", action: value })
+    else for (const [pattern, action] of Object.entries(value as Record<string, string>)) rules.push({ permission: key, pattern, action })
+  }
+  return rules
+}
+function evaluate(rules: Rule[], permission: string, pattern: string): string {
+  return rules.findLast((r) => match(permission, r.permission) && match(pattern, r.pattern))?.action ?? "ask"
+}
+const rulesOf = (text: string) => fromConfig(JSON.parse(text).permission)
+
+const WORKTREE = "/workspace/proj"
+const REAL = "/workspace/linux"
+const template = JSON.stringify({ $schema: "x", permission: { edit: "allow", external_directory: { "/**": "deny", "/tmp/**": "allow" } } }, null, 2) + "\n"
+
+test("F1: the 0147 D2 edit deny never matches the v1 edit tool's relative resource", () => {
+  let text = stampExternalDirectories(template, externalDirectoryEntries([REAL]))!
+  text = stampReadOnlyEdits(text, readOnlyEditEntries([REAL]))!
+  console.log("stamped permission:", JSON.stringify(JSON.parse(text).permission))
+  const rules = rulesOf(text)
+  const file = `${REAL}/drivers/x.c`
+  // the external_directory gate (v1 tool/external-directory.ts: path.join(dirname, "*"), absolute)
+  const extPattern = path.join(path.dirname(file), "*")
+  const ext = evaluate(rules, "external_directory", extPattern)
+  // v1 tool/edit.ts, write.ts, apply_patch.ts: patterns [path.relative(instance.worktree, filepath)]
+  const v1EditPattern = path.relative(WORKTREE, file)
+  const v1Edit = evaluate(rules, "edit", v1EditPattern)
+  // v2 packages/core location-mutation.ts: external resource = canonical absolute path
+  const v2Edit = evaluate(rules, "edit", file)
+  console.log({ extPattern, ext, v1EditPattern, v1Edit, v2Edit })
+  expect(ext).toBe("allow")
+  expect(v2Edit).toBe("deny")
+  expect(v1Edit).toBe("allow") // the read-only composite does not close the write side on the v1 tool path
+})
+
+test("F2: a person catch-all spelled '*' defeats the 0122 allow (only '/**' is recognised as the catch-all)", () => {
+  const person = JSON.stringify({ permission: { external_directory: { "*": "deny" } } }, null, 2) + "\n"
+  let text = stampKnowledgeBoundary(person)!
+  text = stampExternalDirectories(text, externalDirectoryEntries([REAL]))!
+  console.log("stamped external_directory:", JSON.stringify(JSON.parse(text).permission.external_directory))
+  const rules = rulesOf(text)
+  const read = evaluate(rules, "external_directory", `${REAL}/drivers/*`)
+  const tmp = evaluate(rules, "external_directory", "/tmp/opencode/*")
+  console.log({ read, tmp })
+  expect(read).toBe("deny")
+  expect(tmp).toBe("deny")
+})
+
+test("F3: the wall's covering-allow reader misses opencode-wildcard allows; the seal does not hold", () => {
+  const target = REAL
+  for (const personKey of ["/workspace/*", "*", "/workspace/lin*/**", `${REAL}*`]) {
+    const live = { "/**": "deny", "/tmp/**": "allow", [`${target}/**`]: "allow", [personKey]: "allow" }
+    const text = JSON.stringify({ permission: { external_directory: live } }, null, 2) + "\n"
+    const covering = coveringAllowKeys(text, [target])
+    const sealed = stampWallClosure(text, [target])!
+    const after = evaluate(rulesOf(sealed), "external_directory", `${target}/drivers/*`)
+    console.log({ personKey, covering, afterSeal: after, external: JSON.stringify(JSON.parse(sealed).permission.external_directory) })
+    expect(covering).toEqual([`${target}/**`]) // the person key is not seen: no blocking finding, the close proceeds
+    expect(after).toBe("allow") // and the reference stays readable after the "sealed" close
+  }
+})

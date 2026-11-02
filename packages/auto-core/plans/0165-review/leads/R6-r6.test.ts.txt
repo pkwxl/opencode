@@ -1,0 +1,247 @@
+// R6 reproductions — read-only against the repository; every scene lives in
+// $SCR/repro/R6/tmp/<mkdtemp>.
+import { describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { releaseCheck } from "/workspace/aseo/opencode/packages/auto-core/src/release.ts"
+import { unitBaseline, unitViolations, baselineIntact, foreignCommits } from "/workspace/aseo/opencode/packages/auto-core/src/git.ts"
+import { forkTask, removeFork } from "/workspace/aseo/opencode/packages/auto-core/src/fork.ts"
+import { coveringAllowKeys, externalDirectoryLive, stampWallClosure, stampKey } from "/workspace/aseo/opencode/packages/auto-core/src/external-dirs.ts"
+import { planFix, applyFix } from "/workspace/aseo/opencode/packages/auto-core/src/config-fix.ts"
+
+const TMP = "/tmp/claude-1101/-workspace-aseo-opencode-packages-auto-core/27d3dc86-6886-4cd2-af42-e6f5379c2dc3/scratchpad/repro/R6/tmp"
+mkdirSync(TMP, { recursive: true })
+const scene = (fn: (dir: string) => Promise<void>) => async () => {
+  const dir = mkdtempSync(join(TMP, "s-"))
+  try {
+    await fn(dir)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+async function git(dir: string, ...args: string[]) {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit ${code}: ${err || out}`)
+  return out.trim()
+}
+async function repo(dir: string) {
+  mkdirSync(dir, { recursive: true })
+  await git(dir, "init", "-q", "-b", "main")
+  await git(dir, "config", "user.email", "t@example.com")
+  await git(dir, "config", "user.name", "t")
+}
+function put(root: string, rel: string, text: string) {
+  mkdirSync(dirname(join(root, rel)), { recursive: true })
+  writeFileSync(join(root, rel), text)
+}
+const DRIVER = "\n\nAuto-Task: T-001\nAuto-Stage: implement"
+
+describe("R6 release gate", () => {
+  test(
+    "a person commit on top of the driver run hides the driver-written reference (0119 D1 linear run)",
+    scene(async (dir) => {
+      await repo(dir)
+      const v = join(dir, "vendor")
+      await repo(v)
+      put(v, "seed.txt", "seed\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", "seed")
+      put(v, "src/a.rs", "// see docs/T-004/report.md for the reason (T-004)\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", `T-001 work${DRIVER}`)
+      const before = await releaseCheck(dir)
+      console.log("BEFORE person commit:", JSON.stringify(before))
+      // a one-line person fix on an unrelated file (or `land`'s trailerless squash)
+      put(v, "README", "hello\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", "person: add README")
+      const after = await releaseCheck(dir)
+      console.log("AFTER person commit:", JSON.stringify(after))
+      expect(before.problems.length).toBeGreaterThan(0)
+      expect(after.problems).toEqual([])
+      expect(after.certified[0]).toContain("no process references, no task ids")
+    }),
+  )
+
+  test(
+    "land's trailerless squash commit then release certifies the whole round unscanned",
+    scene(async (dir) => {
+      await repo(dir)
+      const v = join(dir, "vendor")
+      await repo(v)
+      put(v, "seed.txt", "seed\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", "seed")
+      await git(v, "checkout", "-q", "-b", "auto/R-01")
+      put(v, "src/a.rs", "// see docs/T-004/report.md (T-004)\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", `T-001 work${DRIVER}`)
+      const onBranch = await releaseCheck(dir)
+      // land's own two git steps (git-land.ts squashOnto): merge --squash, commit with land's subject
+      await git(v, "checkout", "-q", "main")
+      await git(v, "merge", "--squash", "auto/R-01")
+      await git(v, "commit", "-qm", "land auto/R-01: 1 commit(s) of round R-01")
+      await git(v, "branch", "-D", "auto/R-01")
+      const landed = await releaseCheck(dir)
+      console.log("ON ROUND BRANCH:", JSON.stringify(onBranch.problems.length), "AFTER LAND:", JSON.stringify(landed))
+      expect(onBranch.problems.length).toBeGreaterThan(0)
+      expect(landed.problems).toEqual([])
+    }),
+  )
+
+  test(
+    "a corrupt destination index: release certifies (statusEntries quiet [] + unitAddedLines' diff failure skipped)",
+    scene(async (dir) => {
+      await repo(dir)
+      const v = join(dir, "vendor")
+      await repo(v)
+      put(v, "seed.txt", "seed\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", "seed")
+      put(v, "src/a.rs", "// see docs/T-004/report.md (T-004)\n")
+      await git(v, "add", "-A")
+      await git(v, "commit", "-qm", `T-001 work${DRIVER}`)
+      const healthy = await releaseCheck(dir)
+      writeFileSync(join(v, ".git", "index"), "garbage-not-an-index")
+      const corrupt = await releaseCheck(dir)
+      console.log("HEALTHY:", healthy.problems.length, "CORRUPT:", JSON.stringify(corrupt))
+      expect(healthy.problems.length).toBeGreaterThan(0)
+      expect(corrupt.problems).toEqual([])
+      expect(corrupt.certified.length).toBe(1)
+    }),
+  )
+})
+
+describe("R6 close-out / resume trailer criterion", () => {
+  test(
+    "unitViolations: a person commit quoting 'Auto-Stage:' in prose, and a HEAD rewound below the baseline, both pass",
+    scene(async (dir) => {
+      await repo(dir)
+      put(dir, "a.txt", "1\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", `T-001 one${DRIVER}`)
+      put(dir, "a.txt", "2\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", `T-001 two${DRIVER}`)
+      const base = await unitBaseline(dir)
+      // (a) person commit whose body merely mentions the word
+      put(dir, "b.txt", "x\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "person: tweak\n\nNote: the driver's Auto-Stage: trailer is not on this one.")
+      const a = await unitViolations(dir, base)
+      const aResume = await baselineIntact(dir, base)
+      console.log("(a) person-prose commit → unitViolations:", JSON.stringify(a), "baselineIntact:", JSON.stringify(aResume))
+      expect(a).toEqual([])
+      // (b) rewind: HEAD moved to an ancestor of the baseline
+      await git(dir, "reset", "-q", "--hard", "HEAD~2")
+      const b = await unitViolations(dir, base)
+      const bResume = await baselineIntact(dir, base)
+      console.log("(b) rewound HEAD → unitViolations:", JSON.stringify(b), "baselineIntact:", JSON.stringify(bResume))
+      expect(b).toEqual([])
+      expect(bResume).toEqual([])
+      // (c) an unknown baseline sha: foreignCommits' log fails, counts 0
+      const c = await foreignCommits(dir, "deadbee")
+      console.log("(c) foreignCommits over an unresolvable baseline:", c)
+      expect(c).toBe(0)
+    }),
+  )
+})
+
+describe("R6 fork", () => {
+  test(
+    "a nested-of-nested repository: fork creates the deepest worktree first, then its parent's add fails",
+    scene(async (dir) => {
+      const root = join(dir, "proj")
+      await repo(root)
+      put(root, ".gitignore", "/a/\n")
+      put(root, "r.txt", "r\n")
+      const a = join(root, "a")
+      await repo(a)
+      put(a, ".gitignore", "/b/\n")
+      put(a, "a.txt", "a\n")
+      await git(a, "add", "-A")
+      await git(a, "commit", "-qm", "a seed")
+      const b = join(a, "b")
+      await repo(b)
+      put(b, "b.txt", "b\n")
+      await git(b, "add", "-A")
+      await git(b, "commit", "-qm", "b seed")
+      const aSha = await git(a, "rev-parse", "--short", "HEAD")
+      const bSha = await git(b, "rev-parse", "--short", "HEAD")
+      await git(root, "add", "-A")
+      await git(root, "commit", "-qm", `T-001 x\n\nAuto-Task: T-001\nAuto-Stage: implement\nAuto-Nested: a/b @ ${bSha}\nAuto-Nested: a @ ${aSha}`)
+      const point = await git(root, "rev-parse", "HEAD")
+      const out = await forkTask(root, point, join(dir, "forkwt"))
+      console.log("fork outcome:", JSON.stringify(out))
+      expect(out.type).toBe("blocked")
+    }),
+  )
+
+  test(
+    "remove-fork: the 'recoverable via git reflog' line — no reflog in any repository names the fork's commit afterwards",
+    scene(async (dir) => {
+      const root = join(dir, "proj")
+      await repo(root)
+      put(root, "r.txt", "r\n")
+      await git(root, "add", "-A")
+      await git(root, "commit", "-qm", "seed")
+      const point = await git(root, "rev-parse", "HEAD")
+      const wt = join(dir, "forkwt")
+      const made = await forkTask(root, point, wt)
+      expect(made.type).toBe("forked")
+      put(wt, "exp.txt", "experiment\n")
+      await git(wt, "add", "-A")
+      await git(wt, "commit", "-qm", "experiment commit")
+      const exp = await git(wt, "rev-parse", "HEAD")
+      const removed = await removeFork(root, wt)
+      console.log("remove-fork:", JSON.stringify(removed))
+      const reflogAll = await git(root, "reflog", "--all", "--format=%H")
+      const headReflog = await git(root, "reflog", "--format=%H")
+      const inReflog = reflogAll.split("\n").includes(exp) || headReflog.split("\n").includes(exp)
+      const objectStill = await git(root, "cat-file", "-t", exp)
+      console.log("experiment commit", exp.slice(0, 7), "in any reflog:", inReflog, "object still present:", objectStill)
+      expect(removed.lines.join("\n")).toContain("recoverable via git reflog")
+      expect(inReflog).toBe(false)
+    }),
+  )
+})
+
+describe("R6 wall × fix (0122 stamp sync)", () => {
+  test(
+    "a root symlink into the sealed target's subtree: fix re-opens part of the corpus and the wall's covering check misses it",
+    scene(async (dir) => {
+      const corpus = join(dir, "corpus")
+      mkdirSync(join(corpus, "sub"), { recursive: true })
+      writeFileSync(join(corpus, "sub", "secret.c"), "int x;\n")
+      const proj = join(dir, "proj")
+      mkdirSync(join(proj, ".opencode", "auto"), { recursive: true })
+      writeFileSync(join(proj, ".opencode", "auto", "config.json"), "{}\n")
+      // the post-wall opencode.json: the boundary pair, the stamp retired into the standing deny
+      const pre = JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [stampKey(corpus)]: "allow" } } }, null, 2) + "\n"
+      const sealed = stampWallClosure(pre, [corpus])!
+      writeFileSync(join(proj, "opencode.json"), sealed)
+      console.log("post-wall external_directory:", JSON.stringify(externalDirectoryLive(sealed)))
+      // a new root symlink (any name) into the corpus subtree
+      symlinkSync(join(corpus, "sub"), join(proj, "notes"))
+      const plan = await planFix(proj)
+      console.log("plan:", JSON.stringify({ ...plan, writes: (plan as any).writes?.map((w: any) => w.path) }))
+      const stampFinding = plan.findings.filter((f: any) => String(f.problem ?? "").includes("root-symlink stamps"))
+      console.log("fix findings:", JSON.stringify(stampFinding))
+      await applyFix(plan)
+      const after = readFileSync(join(proj, "opencode.json"), "utf8")
+      const live = externalDirectoryLive(after)!
+      console.log("after fix external_directory (order = last-match precedence):", JSON.stringify(live))
+      console.log("wall covering check over the recorded target:", JSON.stringify(coveringAllowKeys(after, [corpus])))
+      expect(live[`${join(corpus, "sub")}/**`]).toBe("allow")
+      expect(Object.keys(live).indexOf(`${join(corpus, "sub")}/**`)).toBeGreaterThan(Object.keys(live).indexOf(stampKey(corpus)))
+      // The covering check over synthetic paths outside /tmp (the scene itself lives under /tmp, which
+      // the boundary's own /tmp allowance covers — the real close refuses such targets):
+      const synth = stampWallClosure(JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", "/corpus/**": "allow" } } }), ["/corpus"])!
+      const { stampExternalDirectories } = await import("/workspace/aseo/opencode/packages/auto-core/src/external-dirs.ts")
+      const reopened = stampExternalDirectories(synth, { "/corpus/sub/**": "allow" })!
+      console.log("synthetic post-fix:", JSON.stringify(externalDirectoryLive(reopened)), "covering(/corpus):", JSON.stringify(coveringAllowKeys(reopened, ["/corpus"])))
+      expect(coveringAllowKeys(reopened, ["/corpus"])).toEqual([])
+    }),
+  )
+})

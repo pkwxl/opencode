@@ -1,0 +1,22 @@
+// R2 repro: a round-brief proposal structured with #### sub-headings (the
+// round.md's own Goal / Acceptance / Release shape one level down) is
+// truncated at the first sub-heading by the 0158 D3 terminator.
+import { test, expect } from "bun:test"
+import { roundBriefProposals, roundBriefNearMisses, analysisProblems } from "/workspace/aseo/opencode/packages/auto-core/src/analysis.ts"
+import { loadPhaseTypes } from "/workspace/aseo/opencode/packages/auto-core/src/phases/custom.ts"
+const doc = [
+  "# Project analysis", "", "## Analysis", "", "A.", "", "## Goals", "", "G.", "", "## Project brief", "", "B.", "",
+  "## Roadmap", "", "- R-01 adm — port the core", "- R-02 adm — port the rest", "",
+  "## Round briefs", "",
+  "### R-01", "", "Port the core.", "", "#### Acceptance criteria", "", "- the suite passes", "", "#### Release criteria", "", "- tagged", "",
+  "### R-02", "", "#### Goal", "", "Port the rest.", "", "#### Acceptance criteria", "", "- parity", "",
+  "Clarified: yes", "",
+].join("\n")
+test("sub-headings inside a round-brief proposal", () => {
+  const found = roundBriefProposals(doc)
+  console.log("R-01 body:", JSON.stringify(found.get(1)))
+  console.log("R-02 body:", JSON.stringify(found.get(2)))
+  console.log("near-misses:", JSON.stringify(roundBriefNearMisses(doc)))
+  console.log("problems:", JSON.stringify(analysisProblems(doc, loadPhaseTypes("/nonexistent-dir-r2"))))
+  expect(found.get(1)).toBe("Port the core.")
+})

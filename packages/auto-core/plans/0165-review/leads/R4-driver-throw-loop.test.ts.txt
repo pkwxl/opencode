@@ -1,0 +1,46 @@
+// A deterministic driver-side exception inside a turn (here: the interactive
+// sideband's question() throwing while a --wait-answer question is handled)
+// is reclassified as a transient "session error", runs the retry ladder, the
+// failover, then the wait-and-probe loop — whose fresh probe session succeeds
+// ("service recovered"), re-dispatching into the same throw. Nothing ever
+// terminates at the person; only this test's prompt cutoff ends the loop.
+import { expect, spyOn, test } from "bun:test"
+import { ev, fakeAgent } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/agent.ts"
+import { runSession } from "/workspace/aseo/opencode/packages/auto-core/src/session.ts"
+import { parseSwitches, SWITCH_ENV } from "/workspace/aseo/opencode/packages/auto-core/src/switches.ts"
+
+test("a driver-side throw cycles ladder → recovery → re-dispatch with no human terminal", async () => {
+  const CUTOFF = 14
+  let taskTurns = 0
+  const agent = fakeAgent({
+    turn: (ctx) => {
+      if (ctx.text.includes("Service availability probe")) return undefined // the probe succeeds
+      taskTurns += 1
+      if (taskTurns >= CUTOFF) return undefined // the test's own cutoff: answer normally
+      return [ev.message(ctx.session, `m${ctx.n}`, 1000), ev.question(ctx.session, `q${ctx.n}`, "which option?")]
+    },
+  })
+  const interactive = {
+    attach() {},
+    question(): Promise<string | undefined> {
+      throw new Error("driver bug: sideband exploded")
+    },
+    close() {},
+  }
+  const switches = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0", [SWITCH_ENV.retryWaits]: "0,0" })
+  const lines: string[] = []
+  const spy = spyOn(console, "log").mockImplementation((...a: unknown[]) => void lines.push(a.map(String).join(" ")))
+  let outcome
+  try {
+    outcome = await runSession(agent.client, { id: "T-001", title: "t" } as never, "do the task", { waitAnswer: 1, interactive } as never, { pct: 100, used: 0, at: 0 }, undefined, undefined, switches)
+  } finally {
+    spy.mockRestore()
+  }
+  const probes = agent.prompts.filter((p) => p.text.includes("Service availability probe")).length
+  const recovered = lines.filter((l) => l.includes("service recovered")).length
+  const ladder = lines.filter((l) => l.includes("retry ladder exhausted") || l.includes("transient session error")).length
+  console.log(JSON.stringify({ taskTurns, probes, recovered, ladderLines: ladder, outcome: outcome?.type }))
+  console.log(lines.filter((l) => /session error|recovered|ladder|⏳/.test(l)).slice(0, 8).join("\n"))
+  expect(taskTurns).toBe(CUTOFF)
+  expect(probes).toBeGreaterThan(2)
+}, 120_000)

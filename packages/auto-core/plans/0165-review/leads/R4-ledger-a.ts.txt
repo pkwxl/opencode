@@ -1,0 +1,11 @@
+// Process A: two task switches; SIGKILL right after the second statsTask returns.
+import { loadStats, statsTask, statsSessionBegin, statsSessionEnd } from "/workspace/aseo/opencode/packages/auto-core/src/stats.ts"
+const dir = process.argv[2]
+const u = { input: 100, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 1 }
+await loadStats(dir)
+await statsTask(dir, "T-001")
+await statsSessionBegin(dir, "T-001")
+await statsSessionEnd(dir, "ses-1", u, undefined, undefined, "T-001")
+await Bun.sleep(300) // the T-001 bookings land on disk
+await statsTask(dir, "T-002") // ledger line for T-001 appended synchronously; stats.json write queued
+process.kill(process.pid, "SIGKILL")

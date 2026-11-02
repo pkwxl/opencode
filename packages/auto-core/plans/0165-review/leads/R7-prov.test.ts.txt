@@ -1,0 +1,19 @@
+// R7 repro: the provenance direction for a body-only difference (same headings).
+// A project materialized by a NEWER binary (charter paragraph fixed, no heading
+// change) opened by an OLDER binary: the stale direction should be binary-older
+// (0100 D2: "the binary-older direction ... is named too").
+import { expect, test } from "bun:test"
+import { compareProvenance, provenanceFindings, provenanceNoticeLine, provenanceStampOf } from "/workspace/aseo/opencode/packages/auto-core/src/provenance.ts"
+
+test("F4: a body-only difference is labelled binary-newer whichever binary is older", () => {
+  const path = ".opencode/auto/intents/x.md"
+  const newer = "## guarantees\n### verify-plan-test\nThe charter, corrected wording v2.\n"
+  const older = "## guarantees\n### verify-plan-test\nThe charter, original wording v1.\n"
+  // materialized by the newer binary: stamp = disk = newer; the running binary carries older
+  const stamp = provenanceStampOf("cleanroom", { [path]: newer })
+  const comparison = compareProvenance(stamp, { [path]: newer }, { [path]: older })
+  console.log(JSON.stringify(comparison.files[path]))
+  console.log(provenanceFindings(comparison)[0]?.problem)
+  console.log(provenanceNoticeLine(comparison))
+  expect(comparison.files[path]).toMatchObject({ state: "stale", direction: "binary-newer" })
+})

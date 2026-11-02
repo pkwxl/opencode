@@ -1,0 +1,51 @@
+// R3 repro: a work session that renames its own docs/T-NNN/todo.md -> done.md has the rename committed by the
+// unified commit; the verification then FAILs and the task blocks — yet the next load reads the task as done
+// (the unit files win), so the FAIL verdict is bypassed by the session's own state write.
+import { expect, test } from "bun:test"
+import { existsSync, rmSync } from "node:fs"
+import { rename } from "node:fs/promises"
+import { join } from "node:path"
+import { runTask } from "/workspace/aseo/opencode/packages/auto-core/src/runner.ts"
+import { reloadUnits, seedUnits } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/units.ts"
+import { fakeClient, freshRepo, git } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+
+function scriptedClient(scripts: Array<() => Promise<unknown>>) {
+  let round = 0
+  return fakeClient({
+    events: (sid) =>
+      (async function* () {
+        const script = scripts[Math.min(round++, scripts.length - 1)]
+        if (script) await script()
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })(),
+  })
+}
+const gaps = ["# Gaps (T-001)", "", "## Verified OK", "", "- nothing", "", "## Gaps", "", "### Gap 1 — the work is missing", "", "Result: FAIL the acceptance is unmet", ""].join("\n")
+
+test("a session-written done.md survives a FAIL block and the task reads done on the next load", async () => {
+  const dir = await freshRepo()
+  try {
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+    await git(dir, "add", "-A"); await git(dir, "commit", "-qm", "init")
+    const verify = async () => { await Bun.write(join(dir, "docs/T-001/gaps.md"), gaps) }
+    const fix = async () => { await Bun.write(join(dir, "FIX.md"), `fix ${Date.now()}\n`) }
+    const { client } = scriptedClient([
+      async () => { // the work session marks its own task done
+        await Bun.write(join(dir, "src.ts"), "// partial\n")
+        await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      },
+      verify, fix, verify, fix, verify,
+      async () => { throw new Error("no further session expected") },
+    ])
+    const plan = await reloadUnits(dir)
+    const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
+    const after = await reloadUnits(dir)
+    console.log(`outcome=${outcome.type} ${(outcome as any).question?.slice(0, 120)}`)
+    console.log(`after reload: status=${after.tasks[0]!.status} done.md committed=${(await git(dir, "ls-files", "docs/T-001/done.md")).trim()}`)
+    expect(outcome.type).toBe("blocked")
+    expect(after.tasks[0]!.status).toBe("done")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 120000)

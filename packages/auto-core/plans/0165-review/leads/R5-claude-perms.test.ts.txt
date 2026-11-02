@@ -1,0 +1,7 @@
+import { test } from "bun:test"
+import { claudePermissions } from "/workspace/aseo/opencode/packages/auto-core/src/agent/claude/contract.ts"
+test("boundary translation", () => {
+  // The 0147 template pair + a 0122 root-symlink read-only composite.
+  const config = { permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", "/srv/ref/**": "allow" }, edit: { "*": "allow", "/srv/ref/**": "deny" }, bash: "allow" } }
+  console.log(JSON.stringify(claudePermissions(config)))
+})

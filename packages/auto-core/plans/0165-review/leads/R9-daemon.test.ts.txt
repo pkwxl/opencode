@@ -1,0 +1,66 @@
+// R9 daemon-level reproductions: the per-run bridge secret in the worker's
+// argv, and the restored-run immortality across restarts.
+import { expect, test } from "bun:test"
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+const SRV = "/workspace/aseo/opencode/packages/auto-server"
+const { startDaemon } = await import(`${SRV}/src/daemon.ts`)
+const { journalPath } = await import(`${SRV}/src/question-journal.ts`)
+const TMP = join(import.meta.dir, "tmp")
+
+test("F: the per-run bridge secret rides the worker's argv (readable from /proc/<pid>/cmdline)", async () => {
+  const dataDir = await mkdtemp(join(TMP, "data-"))
+  const project = await mkdtemp(join(TMP, "proj-"))
+  // A stand-in worker: sh -c 'sleep 3; true' sh worker '<json>' — the
+  // daemon's real argv shape ([command, ...prefix, "worker", json]).
+  const daemon = await startDaemon({ dataDir, port: 0, worker: { command: "/bin/sh", prefix: ["-c", "sleep 3; true", "sh"] } })
+  try {
+    daemon.store.register(project)
+    const { token } = daemon.store.issueToken("read,control", "r9")
+    const response = await fetch(`${daemon.url}/runs`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ project }) })
+    expect(response.status).toBe(202)
+    const run = (await response.json()) as { id: string; pid: number }
+    const cmdline = (await readFile(`/proc/${run.pid}/cmdline`, "utf8")).split("\0")
+    const payload = JSON.parse(cmdline.at(-2) || cmdline.at(-1)!)
+    console.log("F argv payload transport:", JSON.stringify(payload.transport))
+    expect(payload.transport.token).toMatch(/^oar_/)
+    // The secret authenticates the bridge endpoint: a third party holding it
+    // is accepted as the run's worker (the upgrade answers 101).
+    const ws = new WebSocket(`${daemon.url.replace("http", "ws")}/runs/${run.id}/worker?token=${encodeURIComponent(payload.transport.token)}`)
+    const hello = await new Promise<string>((resolve, reject) => {
+      ws.onmessage = (event) => resolve(String(event.data))
+      ws.onerror = () => reject(new Error("refused"))
+      setTimeout(() => reject(new Error("timeout")), 3000)
+    })
+    console.log("F impostor bridge hello:", hello)
+    expect(JSON.parse(hello).type).toBe("hello")
+    ws.close()
+  } finally {
+    await daemon.stop()
+    await Bun.sleep(3200)
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(project, { recursive: true, force: true })
+  }
+}, 20_000)
+
+test("G: a restored run whose worker is gone is restored again at every restart — nothing ever retires it", async () => {
+  const dataDir = await mkdtemp(join(TMP, "data-"))
+  try {
+    const at = new Date().toISOString()
+    const lines = [
+      { v: 1, at, run: "run-000007", event: "opened", project: "gone", directory: "/nonexistent/gone", secret: "oar_x", started: at, request: { options: {}, switches: {} } },
+      { v: 1, at, run: "run-000007", event: "raised", id: "q1", text: "continue? [y/N]" },
+    ]
+    await writeFile(journalPath(dataDir), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 })
+    for (let restart = 1; restart <= 3; restart++) {
+      const daemon = await startDaemon({ dataDir, port: 0, worker: { command: "/bin/true", prefix: [] } })
+      const views = daemon.runs()
+      console.log(`G restart ${restart}:`, JSON.stringify(views.map((view: any) => [view.id, view.state, view.live])))
+      expect(views.some((view: any) => view.id === "run-000007" && view.state === "restored")).toBe(true)
+      await daemon.stop()
+    }
+    console.log("G journal after 3 restarts:", (await readFile(journalPath(dataDir), "utf8")).trim().split("\n").length, "lines")
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+}, 20_000)

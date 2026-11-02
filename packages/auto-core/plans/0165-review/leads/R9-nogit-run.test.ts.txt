@@ -1,0 +1,31 @@
+import { expect, test } from "bun:test"
+import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { join } from "node:path"
+const SRV = "/workspace/aseo/opencode/packages/auto-server"
+const { OP_DEFINITIONS } = await import(`${SRV}/src/ops.ts`)
+const { applyServerProfile } = await import(`${SRV}/src/profile.ts`)
+const { establishRound } = await import("/workspace/aseo/opencode/packages/auto-core/src/phases.ts")
+const { fakeAgent, scrubbedEnv, TASK, TASK_DOC } = await import(`${SRV}/test/fixtures/project.ts`)
+const TMP = join(import.meta.dir, "tmp")
+test("B2: a server-initialized non-git target runs to completion with no commit anywhere", async () => {
+  applyServerProfile()
+  const dir = await mkdtemp(join(TMP, "nogit-run-"))
+  const agent = await fakeAgent()
+  try {
+    const init = await OP_DEFINITIONS.find((e: any) => e.segment === "init")!.run({ project: { name: "p", directory: dir, registered: "" }, body: {}, query: new URLSearchParams(), spawnPlanningRun: () => ({ status: 599, body: {} }), spawnTransferRun: () => ({ status: 599, body: {} }), probeWindow: { claim: () => ({ ok: true }) } })
+    expect(init.status).toBe(200)
+    await establishRound(dir, { phases: "m" })
+    await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+    await mkdir(join(dir, "docs", TASK), { recursive: true })
+    await Bun.write(join(dir, "docs", TASK, "todo.md"), TASK_DOC)
+    const proc = Bun.spawn(["bun", `${SRV}/src/index.ts`, "worker", JSON.stringify({ directory: dir, switches: { OPENCODE_AUTO_AGENT: "claude" } })], { env: { ...scrubbedEnv(), ...agent.env }, stdout: "pipe", stderr: "pipe" })
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+    console.log("B2 exit", code)
+    console.log("B2 tail", out.split("\n").filter((l) => /commit|git|✓|T-001|done/i.test(l)).slice(-12).join("\n"), err.slice(-400))
+    console.log("B2 done.md", existsSync(join(dir, "docs", TASK, "done.md")), ".git", existsSync(join(dir, ".git")))
+  } finally {
+    await agent.done()
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 180_000)

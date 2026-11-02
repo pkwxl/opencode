@@ -1,0 +1,2 @@
+#!/bin/bash
+exec env -u OPENCODE_AUTO_MODELS XDG_CONFIG_HOME=/tmp/claude-1101/-workspace-aseo-opencode-packages-auto-core/27d3dc86-6886-4cd2-af42-e6f5379c2dc3/scratchpad/xdg bun /workspace/aseo/opencode/packages/auto/src/index.ts "$@"

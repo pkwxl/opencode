@@ -1,0 +1,74 @@
+// R5 repro: under in-process concurrency (doc lanes share ctx.server), a
+// new session's walk restarts the shared managed server while a sibling
+// session's turn is in flight on it.
+import { expect, test } from "bun:test"
+import type { AgentEvent, AgentHost } from "/workspace/aseo/opencode/packages/auto-core/src/agent/types.ts"
+import type { SessionChain } from "/workspace/aseo/opencode/packages/auto-core/src/chain.ts"
+import type { ModelEntry, TierList } from "/workspace/aseo/opencode/packages/auto-core/src/models-schema.ts"
+import type { RoutingFacts } from "/workspace/aseo/opencode/packages/auto-core/src/routing.ts"
+import { singleHost } from "/workspace/aseo/opencode/packages/auto-core/src/agent-pool.ts"
+import { runSession } from "/workspace/aseo/opencode/packages/auto-core/src/session.ts"
+import { createServices, installServices, services } from "/workspace/aseo/opencode/packages/auto-core/src/services.ts"
+import { parseSwitches } from "/workspace/aseo/opencode/packages/auto-core/src/switches.ts"
+import { UNSTATED_KEY_HOLD_MS } from "/workspace/aseo/opencode/packages/auto-core/src/keyring.ts"
+import { ev, fakeAgent } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/agent.ts"
+import { manualClock } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/clock.ts"
+import { task } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+
+const DEFAULTS = parseSwitches({})
+const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+const KEY_A = { kind: "env" as const, name: "PROV_KEY_A", ref: "{env:PROV_KEY_A}", label: "PROV_KEY_A" }
+const KEY_B = { kind: "env" as const, name: "PROV_KEY_B", ref: "{env:PROV_KEY_B}", label: "PROV_KEY_B" }
+const MODELS = [entry("a", { model: "prov/a", provider: "prov", keys: [KEY_A, KEY_B] })]
+const facts = (): RoutingFacts => ({
+  registry: {
+    layers: [{ name: "operator", path: "/unused/models.json" }],
+    tz: "UTC",
+    agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+    models: new Map(MODELS.map((item) => [item.name, item])),
+    tiers: { deep: tierList("deep", ["a"]), simple: tierList("simple", ["a"]) },
+    routes: new Map(),
+    unused: [],
+  } as any,
+  agentFilter: "opencode", filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode",
+  router: services().router, clock: services().clock,
+})
+
+test("walk restarts the shared host under a sibling's in-flight turn", async () => {
+  const mc = manualClock(Date.parse("2026-11-01T12:00:00Z"))
+  installServices(createServices({ clock: mc.clock }))
+  const routing = facts()
+  const router = routing.router
+  router.activateRings(routing.registry, false)
+  // Earlier in the run: key A failed (unstated), the ring rotated to B.
+  router.commitRotation(router.ringRotation("prov", mc.at)!, mc.at + UNSTATED_KEY_HOLD_MS)
+  expect(router.currentKey("prov")?.label).toBe("PROV_KEY_B")
+  let siblingInFlight = false
+  const restartsDuringSibling: string[] = []
+  const host: AgentHost = {
+    client: undefined as never,
+    syncContext: async () => {},
+    restart: async (reason) => {
+      if (siblingInFlight) restartsDuringSibling.push(reason)
+      return true
+    },
+    setConfig: () => {},
+    close: () => {},
+  }
+  const opts = { routing, server: singleHost(host) }
+  // Lane 1 (sibling): a long turn still running on key B (no idle yet).
+  const sibling = fakeAgent({ turn: (ctx): AgentEvent[] | undefined => [ev.message(ctx.session, "m1", 20000)] })
+  const chain1: SessionChain = { pct: 100, used: 0, at: 0, role: "decompose" }
+  void runSession(sibling.client, task, "lane-1", opts, chain1, undefined, undefined, DEFAULTS)
+  await new Promise((r) => setTimeout(r, 50))
+  siblingInFlight = sibling.prompts.length === 1
+  // Six minutes later, lane 2 opens a new session: the walk fires.
+  mc.advance(UNSTATED_KEY_HOLD_MS + 60_000)
+  const lane2 = fakeAgent()
+  const chain2: SessionChain = { pct: 100, used: 0, at: 0, role: "decompose" }
+  await runSession(lane2.client, task, "lane-2", opts, chain2, undefined, undefined, DEFAULTS)
+  console.log("sibling prompt in flight:", siblingInFlight)
+  console.log("restarts of the shared host while the sibling's turn ran:", JSON.stringify(restartsDuringSibling))
+  expect(restartsDuringSibling.length).toBe(1)
+})

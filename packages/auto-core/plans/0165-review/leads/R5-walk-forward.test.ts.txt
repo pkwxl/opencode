@@ -1,0 +1,38 @@
+// R5 repro: the walk moves FORWARD off a healthy, unmarked current key onto a
+// later key whose hold passed (keyring.ts:106 says "Present exactly when such
+// a key sits before the current position").
+import { expect, test } from "bun:test"
+import { createRouter } from "/workspace/aseo/opencode/packages/auto-core/src/router.ts"
+import { UNSTATED_KEY_HOLD_MS } from "/workspace/aseo/opencode/packages/auto-core/src/keyring.ts"
+
+const KEY = (n: string) => ({ kind: "env" as const, name: n, ref: `{env:${n}}`, label: n })
+const registry: any = {
+  layers: [{ name: "operator", path: "/x" }], tz: "UTC",
+  agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+  models: new Map([["a", { name: "a", layer: "operator", agent: "opencode", model: "prov/a", provider: "prov", keys: [KEY("K_A"), KEY("K_B")] }]]),
+  tiers: {}, routes: new Map(), unused: [],
+}
+test("forward walk", () => {
+  const r = createRouter()
+  let now = 1_000_000
+  r.activateRings(registry, false)
+  // A fails -> rotate to B (A held 5 min).
+  r.commitRotation(r.ringRotation("prov", now)!, now + UNSTATED_KEY_HOLD_MS)
+  // B fails too -> the ring refuses (A held): B marked, position stays B.
+  r.commitRotation(r.ringRotation("prov", now)!, now + UNSTATED_KEY_HOLD_MS)
+  // Every key held -> the recovery probe clears the ring's marks (§6.3) and
+  // succeeds on B.
+  r.clearRingMarks("prov")
+  // Later B fails again (its 5h window really is spent): rotation lands on
+  // the unmarked A, B held 5 min. A works.
+  now += 60_000
+  const rot = r.ringRotation("prov", now)!
+  console.log("rotation:", rot.from.ref.label, "->", rot.to?.ref.label)
+  r.commitRotation(rot, now + UNSTATED_KEY_HOLD_MS)
+  console.log("current:", r.currentKey("prov")?.label, "A mark:", JSON.stringify(r.keyDownMark("prov", "{env:K_A}")))
+  // Six minutes later a new session starts while A is healthy:
+  now += UNSTATED_KEY_HOLD_MS + 60_000
+  const walk = r.ringWalk("prov", now)
+  console.log("walk:", walk ? `${walk.from.ref.label}(index ${walk.from.index}) -> ${walk.to.ref.label}(index ${walk.to.index})` : "none")
+  expect(walk?.to.index).toBe(1)
+})

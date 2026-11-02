@@ -1,0 +1,29 @@
+import { expect, test } from "bun:test"
+import { mkdtemp, rm, readFile } from "node:fs/promises"
+import { join } from "node:path"
+const SRV = "/workspace/aseo/opencode/packages/auto-server"
+const { startDaemon } = await import(`${SRV}/src/daemon.ts`)
+const { parseTransport } = await import(`${SRV}/src/request.ts`)
+const TMP = join(import.meta.dir, "tmp")
+test("H: an IPv6 bind writes a transport URL the worker's own validator refuses", async () => {
+  const dataDir = await mkdtemp(join(TMP, "data6-"))
+  const project = await mkdtemp(join(TMP, "proj6-"))
+  const daemon = await startDaemon({ dataDir, port: 0, hostname: "::1", worker: { command: "/bin/sh", prefix: ["-c", "sleep 2; true", "sh"] } })
+  try {
+    daemon.store.register(project)
+    const { token } = daemon.store.issueToken("control", "r9")
+    const response = await fetch(`http://[::1]:${new URL(daemon.url.replace("::1", "[::1]")).port || daemon.url.split(":").at(-1)}/runs`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ project }) }).catch((e) => { console.log("fetch failed", String(e), daemon.url); return undefined })
+    console.log("H daemon.url", daemon.url, "status", response?.status)
+    const run = (await response!.json()) as { pid: number }
+    const argv = (await readFile(`/proc/${run.pid}/cmdline`, "utf8")).split("\0").filter(Boolean)
+    const transport = JSON.parse(argv.at(-1)!).transport
+    console.log("H transport.url", transport.url)
+    let refusal = ""
+    try { parseTransport(transport) } catch (error) { refusal = String(error) }
+    console.log("H worker validator:", refusal)
+    expect(refusal).toContain("not a URL")
+  } finally {
+    await daemon.stop(); await Bun.sleep(2200)
+    await rm(dataDir, { recursive: true, force: true }); await rm(project, { recursive: true, force: true })
+  }
+}, 20_000)

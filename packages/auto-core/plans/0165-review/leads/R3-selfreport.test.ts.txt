@@ -1,0 +1,52 @@
+// R3 repro: a work session's own report.md `Result: PASS` outranks the verify session's FAIL gap list —
+// verifyVerdict reads report.md first and nothing removes a work-session-written report before verification.
+import { expect, test } from "bun:test"
+import { existsSync, rmSync } from "node:fs"
+import { join } from "node:path"
+import { EOF_MARK } from "/workspace/aseo/opencode/packages/auto-core/src/doccheck.ts"
+import { runTask } from "/workspace/aseo/opencode/packages/auto-core/src/runner.ts"
+import { reloadUnits, seedUnits } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/units.ts"
+import { fakeClient, freshRepo, git } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+
+function scriptedClient(scripts: Array<() => Promise<unknown>>) {
+  let round = 0
+  return fakeClient({
+    events: (sid) =>
+      (async function* () {
+        const script = scripts[Math.min(round++, scripts.length - 1)]
+        if (script) await script()
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })(),
+  })
+}
+const filler = "Verification evidence line. ".repeat(20)
+
+test("the work session's self-written PASS report beats the verifier's FAIL gap list; the task is marked done", async () => {
+  const dir = await freshRepo()
+  try {
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+    await git(dir, "add", "-A"); await git(dir, "commit", "-qm", "init")
+    const { client, calls } = scriptedClient([
+      // 1: the whole-task (work) session: does half the work and writes its own "report" claiming PASS
+      async () => {
+        await Bun.write(join(dir, "src.ts"), "// half the work\n")
+        await Bun.write(join(dir, "docs/T-001/report.md"), `# Report\n\n${filler}\n\nResult: PASS\n\n${EOF_MARK}\n`)
+      },
+      // 2: the verify session: finds a gap, follows the template ("write no report at all") — writes gaps.md FAIL
+      async () => {
+        await Bun.write(join(dir, "docs/T-001/gaps.md"), ["# Gaps (T-001)", "", "## Verified OK", "", "- nothing", "", "## Gaps", "", "### Gap 1 — the work is half done", "", "Result: FAIL the acceptance is unmet", ""].join("\n"))
+      },
+      async () => { throw new Error("no further session expected") },
+    ])
+    const plan = await reloadUnits(dir)
+    const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
+    const after = await reloadUnits(dir)
+    console.log(`outcome=${JSON.stringify(outcome)} sessions=${calls.prompts.length} status=${after.tasks[0]!.status} doneMd=${existsSync(join(dir, "docs/T-001/done.md"))} gapsLeft=${existsSync(join(dir, "docs/T-001/gaps.md"))}`)
+    console.log((await git(dir, "log", "--format=%s")))
+    expect(outcome).toEqual({ type: "completed" })
+    expect(existsSync(join(dir, "docs/T-001/gaps.md"))).toBe(false) // the verifier's FAIL evidence deleted by the driver
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 120000)

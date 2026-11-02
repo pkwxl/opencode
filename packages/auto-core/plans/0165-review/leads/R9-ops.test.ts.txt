@@ -1,0 +1,121 @@
+// R9 reproductions over the auto-server ops surface (read-only on the repo;
+// every directory lives under $SCR/repro/R9/tmp).
+import { expect, test } from "bun:test"
+import { mkdtemp, mkdir, symlink, rm, writeFile } from "node:fs/promises"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
+const SRV = "/workspace/aseo/opencode/packages/auto-server"
+const { OP_DEFINITIONS } = await import(`${SRV}/src/ops.ts`)
+const { applyServerProfile } = await import(`${SRV}/src/profile.ts`)
+const { planFix } = await import("/workspace/aseo/opencode/packages/auto-core/src/config-fix.ts")
+const { readStatusModel } = await import(`${SRV}/src/observe.ts`)
+const { planPrelude } = await import("/workspace/aseo/opencode/packages/auto-core/src/plan.ts")
+const { fixtureProject } = await import(`${SRV}/test/fixtures/project.ts`)
+
+const TMP = join(import.meta.dir, "tmp")
+const op = (method: string, segment: string) => OP_DEFINITIONS.find((entry: any) => entry.method === method && entry.segment === segment)!
+const call = (segment: string, dir: string, body: Record<string, unknown>) =>
+  op("POST", segment).run({
+    project: { name: "p", directory: dir, registered: "" },
+    body,
+    query: new URLSearchParams(),
+    spawnPlanningRun: () => ({ status: 599, body: { spawned: "plan" } }),
+    spawnTransferRun: () => ({ status: 599, body: { spawned: "transfer" } }),
+    probeWindow: { claim: () => ({ ok: true }) },
+  })
+const git = async (dir: string, ...args: string[]) => {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+  return { out, code }
+}
+
+test("A: the server's amend accepts config.phases — the key 0137 retired on amend", async () => {
+  applyServerProfile()
+  const dir = await mkdtemp(join(TMP, "amend-phases-"))
+  try {
+    await git(dir, "init", "-q")
+    await git(dir, "config", "user.email", "r9@x")
+    await git(dir, "config", "user.name", "r9")
+    const init = await call("init", dir, { config: { phases: "am" } })
+    expect(init.status).toBe(200)
+    const amended = await call("amend", dir, { config: { phases: "adm" } })
+    console.log("A amend status", amended.status, JSON.stringify(amended.body.lines?.at(-1)))
+    expect(amended.status).toBe(200)
+    expect(JSON.parse(readFileSync(join(dir, ".opencode/auto/config.json"), "utf8")).phases).toBe("adm")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("B: the server's init on a non-git directory writes the config layer, bootstraps no repository (0073)", async () => {
+  applyServerProfile()
+  const dir = await mkdtemp(join(TMP, "init-nogit-"))
+  try {
+    const init = await call("init", dir, {})
+    console.log("B init status", init.status, (init.body.lines as string[]).join(" | "))
+    expect(init.status).toBe(200)
+    expect(existsSync(join(dir, ".opencode/auto/config.json"))).toBe(true)
+    expect(existsSync(join(dir, ".git"))).toBe(false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("C: the server's init stamps no root-symlink external_directory allows (0122/0147); fix reports them at once", async () => {
+  applyServerProfile()
+  const dir = await mkdtemp(join(TMP, "init-ext-"))
+  const ref = await mkdtemp(join(TMP, "ref-"))
+  try {
+    await git(dir, "init", "-q")
+    await git(dir, "config", "user.email", "r9@x")
+    await git(dir, "config", "user.name", "r9")
+    await symlink(ref, join(dir, "reference"))
+    const init = await call("init", dir, {})
+    expect(init.status).toBe(200)
+    const opencode = readFileSync(join(dir, "opencode.json"), "utf8")
+    console.log("C opencode.json mentions the ref realpath:", opencode.includes(ref))
+    const plan = await planFix(dir)
+    const ext = plan.findings.filter((finding: any) => /external|symlink|opencode\.json/i.test(`${finding.path} ${finding.change}`))
+    console.log("C fix findings right after init:", JSON.stringify(plan.findings.map((f: any) => `${f.class} ${f.path}: ${f.change}`)))
+    expect(opencode.includes(ref)).toBe(false)
+    expect(ext.length).toBeGreaterThan(0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(ref, { recursive: true, force: true })
+  }
+})
+
+test("D: observe's worktree verdict reads an unreadable repository as clean (failure direction)", async () => {
+  const dir = await mkdtemp(join(TMP, "observe-broken-"))
+  try {
+    await git(dir, "init", "-q")
+    await writeFile(join(dir, "dirty.txt"), "uncommitted\n")
+    // A corrupt HEAD: git refuses every command in this repository.
+    await writeFile(join(dir, ".git", "HEAD"), "garbage\n")
+    const status = await git(dir, "status", "--porcelain")
+    console.log("D git status exit", status.code)
+    const model = await readStatusModel(dir)
+    console.log("D model git", JSON.stringify(model.git), "worktree verdict", model.verdicts.worktree)
+    expect(model.git.clean).toBe(true)
+    expect(model.verdicts.worktree).toBe("clean")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("E: under the server profile the core's served lines name commands this binary does not have", async () => {
+  applyServerProfile()
+  process.env.TMPDIR = TMP
+  const dir = await fixtureProject("prelude-")
+  try {
+    const prelude = await planPrelude(dir, { phases: "m", autoNumber: true, testByDriver: false })
+    const lines = prelude.type === "stop" ? prelude.lines : []
+    console.log("E prelude", prelude.type, JSON.stringify(lines))
+    const named = [...lines.join("\n").matchAll(/opencode-auto-server ([a-z-]+)/g)].map((match) => match[1])
+    console.log("E commands named:", JSON.stringify(named))
+    const served = new Set(["serve", "register", "unregister", "projects", "token", "transfer", "worker"])
+    expect(named.some((name) => !served.has(name!))).toBe(true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

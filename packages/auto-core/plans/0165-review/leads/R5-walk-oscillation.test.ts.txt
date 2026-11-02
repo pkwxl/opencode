@@ -1,0 +1,96 @@
+// R5 repro: a stated reset shorter than the rotation's restart makes the
+// fork's new-session walk undo the rotation (0163 claims the oscillation is
+// impossible).
+import { describe, expect, spyOn, test } from "bun:test"
+const C = "/workspace/aseo/opencode/packages/auto-core"
+import type { AgentEvent, AgentHost } from "/workspace/aseo/opencode/packages/auto-core/src/agent/types.ts"
+import type { SessionChain } from "/workspace/aseo/opencode/packages/auto-core/src/chain.ts"
+import type { ModelEntry, TierList } from "/workspace/aseo/opencode/packages/auto-core/src/models-schema.ts"
+import type { Opts } from "/workspace/aseo/opencode/packages/auto-core/src/opts.ts"
+import type { RoutingFacts } from "/workspace/aseo/opencode/packages/auto-core/src/routing.ts"
+import { singleHost } from "/workspace/aseo/opencode/packages/auto-core/src/agent-pool.ts"
+import { runSession } from "/workspace/aseo/opencode/packages/auto-core/src/session.ts"
+import { createServices, installServices, services } from "/workspace/aseo/opencode/packages/auto-core/src/services.ts"
+import { parseSwitches } from "/workspace/aseo/opencode/packages/auto-core/src/switches.ts"
+import { ev, fakeAgent } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/agent.ts"
+import { manualClock } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/clock.ts"
+import { task } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+
+const DEFAULTS = parseSwitches({})
+const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+const KEY_A = { kind: "env" as const, name: "PROV_KEY_A", ref: "{env:PROV_KEY_A}", label: "PROV_KEY_A" }
+const KEY_B = { kind: "env" as const, name: "PROV_KEY_B", ref: "{env:PROV_KEY_B}", label: "PROV_KEY_B" }
+const MODELS = [entry("a", { model: "prov/a", provider: "prov", keys: [KEY_A, KEY_B] }), entry("b", { model: "other/b", provider: "other" })]
+const facts = (): RoutingFacts => ({
+  registry: {
+    layers: [{ name: "operator", path: "/unused/models.json" }],
+    tz: "UTC",
+    agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+    models: new Map(MODELS.map((item) => [item.name, item])),
+    tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
+    routes: new Map(),
+    unused: [],
+  } as any,
+  agentFilter: "opencode",
+  filterSource: undefined,
+  defaultAgent: "opencode",
+  runAgent: "opencode",
+  router: services().router,
+  clock: services().clock,
+})
+
+describe("R5 walk oscillation", () => {
+  for (const fails of [1, 3]) {
+    test(`stated 1s reset, restart takes 3s, ${fails} failing turn(s) on key A`, async () => {
+      const mc = manualClock(Date.parse("2026-11-01T12:00:00Z"))
+      installServices(createServices({ clock: mc.clock }))
+      const routing = facts()
+      routing.router.activateRings(routing.registry, false)
+      const restarts: string[] = []
+      const configs: unknown[] = []
+      const host: AgentHost = {
+        client: undefined as never,
+        syncContext: async () => {},
+        restart: async (reason) => {
+          restarts.push(reason)
+          mc.advance(3000) // a managed opencode server restart takes seconds
+          return true
+        },
+        setConfig: (config) => {
+          configs.push((config as any)?.provider?.prov?.options?.apiKey)
+        },
+        close: () => {},
+      }
+      // The quota failure states a reset one second out (a retry-after: 1 /
+      // x-ratelimit-reset-*: 1s header on the refusal).
+      const agent = fakeAgent({
+        turn: (ctx: { session: string; n: number }): AgentEvent[] | undefined =>
+          ctx.n <= fails
+            ? [
+                ev.message(ctx.session, `msg_fail_${ctx.n}`, 5000),
+                ev.error(ctx.session, { name: "APIError", message: "quota exceeded", isRetryable: false, resetAt: mc.at + 1000 } as any),
+                ev.idle(ctx.session),
+              ]
+            : undefined,
+      })
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "))
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "decompose" }
+      try {
+        const opts: Opts = { routing, server: singleHost(host) }
+        const result = await runSession(agent.client, task, "p", opts, chain, undefined, undefined, DEFAULTS)
+        printed.mockRestore()
+        console.log("result:", result.type)
+        console.log("restarts:", JSON.stringify(restarts, null, 1))
+        console.log("spawn-config apiKey sequence:", JSON.stringify(configs))
+        console.log("current key at end:", services().router.currentKey("prov")?.label)
+        console.log("prompt models:", JSON.stringify(agent.prompts.map((p) => p.model)))
+      } finally {
+        printed.mockRestore()
+      }
+    })
+  }
+})

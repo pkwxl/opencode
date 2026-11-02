@@ -1,0 +1,36 @@
+// R2 repro: the formulation todo beside a --new-task hand-added task (the
+// review-seam state awaitingFormulation was widened for, 0101 D4) cannot be
+// reconstructed: constructFormulation's formulationState reads "foreign".
+import { expect, test } from "bun:test"
+import { rm } from "node:fs/promises"
+import { syncPhaseIndex } from "/workspace/aseo/opencode/packages/auto-core/src/phases.ts"
+import { constructFormulation, formulationAcceptance, standingFormulation, formulationState } from "/workspace/aseo/opencode/packages/auto-core/src/formulate.ts"
+import { addTask } from "/workspace/aseo/opencode/packages/auto-core/src/task-add.ts"
+import { loadPlan } from "/workspace/aseo/opencode/packages/auto-core/src/tasks.ts"
+import { promptFacts } from "/workspace/aseo/opencode/packages/auto-core/src/prompt-facts.ts"
+import { freshRepo, git } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+
+const BODY = { goal: "g", scope: "scope v1", acceptance: formulationAcceptance(promptFacts()) }
+
+test("reconstruct after --new-task beside the awaiting todo", async () => {
+  const repo = await freshRepo()
+  try {
+    const [, impl] = await syncPhaseIndex(repo, 1, "adm")
+    const phase = impl!
+    await git(repo, "add", "-A")
+    await git(repo, "commit", "-qm", "setup")
+    const first = await constructFormulation(repo, phase, BODY)
+    console.log("first:", JSON.stringify(first))
+    const added = await addTask(repo, phase, "a hand-added task")
+    console.log("added:", JSON.stringify(added))
+    const plan = await loadPlan(repo, phase)
+    console.log("tasks:", plan.tasks.map((t) => `${t.id}:${t.status}:${t.formulate ?? "-"}`).join(" "))
+    console.log("standing (awaiting predicate):", (await standingFormulation(repo, phase))?.id)
+    console.log("formulationState:", JSON.stringify(await formulationState(repo, phase)))
+    const again = await constructFormulation(repo, phase, { ...BODY, scope: "scope v2 — the person's edited input" })
+    console.log("reconstruct:", JSON.stringify(again))
+    expect(again.type).toBe("failed")
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})

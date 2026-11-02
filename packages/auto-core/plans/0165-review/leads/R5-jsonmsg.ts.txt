@@ -1,0 +1,3 @@
+for (const t of [`{"keys": [sk-ABCSECRET123]}`, `{"keys": ['sk-ABCSECRET123']}`, `{"keys": [ABCSECRET123]}`, `{"keys": ["sk-ABC\x01SECRET"]}`, `{"keys": [123SECRET]}`, `{"k": "sk-SECRET" "x"}`, `{"keys": [sk_live_SECRET]}`]) {
+  try { JSON.parse(t) } catch (e) { const m = (e as Error).message; console.log(JSON.stringify(m), "=>", JSON.stringify(m.replace(/"[^"]*"/g, "").replace(/\s+/g, " ").trim())) }
+}

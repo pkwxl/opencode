@@ -1,0 +1,67 @@
+// R4 repros over the stats store (read-only on the repo; temp dirs under $SCR/repro/R4/tmp).
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { createServices, installServices, uninstallServices } from "/workspace/aseo/opencode/packages/auto-core/src/services.ts"
+import { fixedClock } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/clock.ts"
+import {
+  flushStats,
+  loadStats,
+  statsLaneRollup,
+  statsLaneUsage,
+  statsSessionBegin,
+  statsSessionEnd,
+} from "/workspace/aseo/opencode/packages/auto-core/src/stats.ts"
+import { roundCompleteLines } from "/workspace/aseo/opencode/packages/auto-core/src/conclusion.ts"
+
+const TMP = "/tmp/claude-1101/-workspace-aseo-opencode-packages-auto-core/27d3dc86-6886-4cd2-af42-e6f5379c2dc3/scratchpad/repro/R4/tmp"
+const zero = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
+
+describe("R4 stats", () => {
+  let dir: string
+  let now: number
+  beforeEach(async () => {
+    dir = await mkdtemp(join(TMP, "stats-"))
+    now = 1_000_000
+    installServices(createServices({ clock: fixedClock(() => now) }))
+  })
+  afterEach(async () => {
+    uninstallServices()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("lanes section survives round rollover and is reported in the next round's conclusion", async () => {
+    await mkdir(join(dir, "docs", "R-01"), { recursive: true })
+    await loadStats(dir)
+    await statsLaneUsage(dir, "T-001", { tokens: 5000, wallMs: 60_000, sessions: 3 })
+    await flushStats(dir)
+    // Round 2 opens; a fresh run (new process equivalent: handle unloaded by flush).
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    now += 10_000
+    await loadStats(dir)
+    const rollup = await statsLaneRollup(dir)
+    console.log("round-2 rollup:", JSON.stringify(rollup))
+    const lines = await roundCompleteLines(dir)
+    console.log(lines.join("\n"))
+    await flushStats(dir)
+    expect(rollup?.lanes).toBe(1) // round 1's lane still counted in round 2
+  })
+
+  test("doc lanes: one sibling's session end stops the heartbeat the other session still needs", async () => {
+    // Real wall time here: the heartbeat is a real setInterval (30 s).
+    uninstallServices()
+    installServices(createServices({}))
+    await loadStats(dir)
+    await statsSessionBegin(dir, "T-001")
+    await statsSessionBegin(dir, "T-002")
+    await statsSessionEnd(dir, "ses-A", zero, undefined, undefined, "T-001")
+    await Bun.sleep(300)
+    const before = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()).lastWriteAt
+    await Bun.sleep(33_000)
+    const after = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()).lastWriteAt
+    console.log("T-002 still active; lastWriteAt advanced by", after - before, "ms over 33 s")
+    await statsSessionEnd(dir, "ses-B", zero, undefined, undefined, "T-002")
+    await flushStats(dir)
+    expect(after).toBe(before) // no heartbeat while T-002's session runs
+  }, 60_000)
+})

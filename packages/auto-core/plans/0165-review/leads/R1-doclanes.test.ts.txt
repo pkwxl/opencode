@@ -1,0 +1,155 @@
+// R1 repros: doc-lane loop composition (read-only against the repo; temp repos only).
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import { mkdir, rm } from "node:fs/promises"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+const CORE = "/workspace/aseo/opencode/packages/auto-core"
+const { singleHost } = await import(`${CORE}/src/agent-pool.ts`)
+const { runTaskLoop } = await import(`${CORE}/src/loop-task.ts`)
+const { renderTaskIndex } = await import(`${CORE}/src/tasks.ts`)
+const { createGitOps } = await import(`${CORE}/src/git-ops.ts`)
+const { EOF_MARK } = await import(`${CORE}/src/doccheck.ts`)
+const { createServices, installServices, services, uninstallServices } = await import(`${CORE}/src/services.ts`)
+const { flushStats } = await import(`${CORE}/src/stats.ts`)
+const { setSwitchModelRegistry } = await import(`${CORE}/src/switches.ts`)
+const { ExitRequested } = await import(`${CORE}/src/exit.ts`)
+const { establishRound, readPhases } = await import(`${CORE}/src/phases.ts`)
+const { fakeAgent } = await import(`${CORE}/test/fixtures/agent.ts`)
+const { artifactTurns } = await import(`${CORE}/test/fixtures/loop.ts`)
+const { freshRepo, git } = await import(`${CORE}/test/fixtures/runner.ts`)
+
+let printed: ReturnType<typeof spyOn>
+const lines: string[] = []
+let dir = ""
+beforeEach(() => {
+  installServices(createServices())
+  lines.length = 0
+  printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "))
+  })
+})
+afterEach(async () => {
+  printed.mockRestore()
+  uninstallServices()
+  await flushStats(dir).catch(() => {})
+  await rm(dir, { recursive: true, force: true })
+})
+
+const todo = (id: string) =>
+  [`# ${id}: task ${id}`, "Phase: R-01.P01", "Depends: none", `Touches: docs/${id}/`, "", "## Goal", "", `task ${id}.`, "", "## Scope", "", `docs/${id}/ alone.`, "", "## Acceptance", "", `ok.`, "", EOF_MARK, ""].join("\n")
+
+async function docRepo(ids: string[]) {
+  const repo = await freshRepo()
+  dir = repo
+  await Bun.write(join(repo, ".gitignore"), ".auto/\ntmp/\n")
+  await establishRound(repo, { phases: "m" })
+  await Bun.write(join(repo, "docs", "R-01", "P01-implement", "tasks.md"), renderTaskIndex("R-01.P01", ids.map((id) => ({ id, title: `task ${id}` }))))
+  for (const id of ids) {
+    await mkdir(join(repo, "docs", id), { recursive: true })
+    await Bun.write(join(repo, "docs", id, "todo.md"), todo(id))
+  }
+  await git(repo, "add", "-A")
+  await git(repo, "commit", "-qm", "baseline")
+  return { repo, phase: (await readPhases(repo))!.phases[0]! }
+}
+
+const turns = (repo: string) => (ctx: any) => {
+  if (!ctx.text.includes("you are this task's verification session")) {
+    const id = /docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
+    if (id) {
+      mkdirSync(join(repo, "docs", id), { recursive: true })
+      writeFileSync(join(repo, "docs", id, "notes.md"), `# Notes (${id})\n\nx\n\n${EOF_MARK}\n`)
+    }
+  }
+  return artifactTurns(repo)(ctx)
+}
+
+const ctxOf = (repo: string, agent: any): any => {
+  const holder = services()
+  const host = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+  return {
+    directory: repo,
+    opts: { maxSessions: 2, subtask: "off", parallel: "low" },
+    server: { ...singleHost(host), startedAgents: () => ["fake"] },
+    agentName: "auto",
+    phases: "m",
+    manual: true,
+    ran: 0,
+    repairs: 0,
+    router: holder.router,
+    control: holder.control,
+    git: createGitOps(),
+  }
+}
+
+async function scrubbed<T>(fn: () => Promise<T>): Promise<T> {
+  const ambient = Object.entries(process.env).filter(([k]) => k.startsWith("OPENCODE_AUTO_"))
+  for (const [k] of ambient) delete process.env[k]
+  setSwitchModelRegistry(undefined)
+  try {
+    return await fn()
+  } finally {
+    for (const [k, v] of ambient) if (v !== undefined) process.env[k] = v
+    setSwitchModelRegistry(undefined)
+  }
+}
+
+test("R1-A: /exit at a doc lane's wrap-up entry throws out of the doc loop mid-drain while a sibling pipeline is still in flight", async () => {
+  const { repo, phase } = await docRepo(["T-001", "T-002"])
+  const agent = fakeAgent({ turn: turns(repo) })
+  const ctx = ctxOf(repo, agent)
+  let releaseT2!: () => void
+  const t2Gate = new Promise<void>((r) => (releaseT2 = r))
+  let t2ExecStarted = false
+  let t2ExecFinished = false
+  const plain = agent.client.prompt.bind(agent.client)
+  agent.client.prompt = async (input: any, signal: any) => {
+    const exec = !input.text.includes("verification session")
+    if (exec && input.text.includes("docs/T-002/todo.md")) {
+      t2ExecStarted = true
+      // the person asks /exit while both lanes run
+      ctx.control.requestExit()
+      await t2Gate
+      const out = await plain(input, signal)
+      t2ExecFinished = true
+      return out
+    }
+    return plain(input, signal)
+  }
+  let thrown: unknown
+  const code = await scrubbed(() => runTaskLoop(ctx, phase)).catch((e) => {
+    thrown = e
+    return "threw"
+  })
+  console.error("R1-A loop result:", code, thrown instanceof ExitRequested ? `ExitRequested(${(thrown as any).boundary}: ${(thrown as any).label})` : String(thrown))
+  console.error("R1-A sibling T-002 exec started:", t2ExecStarted, "finished at loop exit:", t2ExecFinished)
+  expect(thrown).toBeInstanceOf(ExitRequested)
+  expect(t2ExecStarted).toBe(true)
+  expect(t2ExecFinished).toBe(false) // the sibling is abandoned in flight: the drain rule did not hold
+  // let the orphan pipeline finish after the "run" returned, to show it keeps writing
+  releaseT2()
+  await Bun.sleep(1500)
+  console.error("R1-A after loop exit: T-002 done.md exists:", existsSync(join(repo, "docs", "T-002", "done.md")), "notes:", existsSync(join(repo, "docs", "T-002", "notes.md")))
+  console.error("R1-A git log:", (await git(repo, "log", "--format=%s")).trim().split("\n").join(" | "))
+})
+
+test("R1-B: a doc-eligible in_progress leftover with no active progress record dead-ends the doc loop with a wrong remedy", async () => {
+  const { repo, phase } = await docRepo(["T-001", "T-002"])
+  // The killed two-lane scene, record half: both units in_progress, the
+  // single-slot progress file names T-001 (last writer); T-002's record was overwritten.
+  // Here T-001 finished before the kill (so only T-002 is the leftover), the
+  // shape any kill with two lanes in flight leaves for the overwritten one.
+  await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-002": { status: "in_progress", attempts: 1 } } }, null, 2)}\n`)
+  const agent = fakeAgent({ turn: turns(repo) })
+  const code = await scrubbed(() => runTaskLoop(ctxOf(repo, agent), phase))
+  console.error("R1-B exit code:", code)
+  for (const line of lines.filter((l) => l.startsWith("⏸") || l.includes("T-002"))) console.error("R1-B line:", line)
+  expect(code).toBe(2)
+  expect(lines.some((l) => l.includes("T-002 is not ready and nothing is executing; the dependency graph cannot progress — fix the task index manually"))).toBe(true)
+  expect(existsSync(join(repo, "docs", "T-001", "done.md"))).toBe(true)
+  // a re-run (same in_progress mark — preflight's docKeep keeps it) dead-ends again
+  lines.length = 0
+  const again = await scrubbed(() => runTaskLoop(ctxOf(repo, fakeAgent({ turn: turns(repo) })), phase))
+  console.error("R1-B second run exit code:", again, lines.filter((l) => l.startsWith("⏸")).join(" / "))
+  expect(again).toBe(2)
+})

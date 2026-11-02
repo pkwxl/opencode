@@ -1,0 +1,60 @@
+// R3 repro: the 0146 progress rule compares against the previous count, not the best
+// count, so an oscillating gap count (2,1,2,1,...) never blocks — the fix loop is unbounded.
+import { expect, test } from "bun:test"
+import { rmSync } from "node:fs"
+import { join } from "node:path"
+import { EOF_MARK } from "/workspace/aseo/opencode/packages/auto-core/src/doccheck.ts"
+import { saveProgress } from "/workspace/aseo/opencode/packages/auto-core/src/resume.ts"
+import { runWrapup } from "/workspace/aseo/opencode/packages/auto-core/src/wrapup.ts"
+import { reloadUnits, seedUnits } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/units.ts"
+import { fakeClient, freshRepo, git } from "/workspace/aseo/opencode/packages/auto-core/test/fixtures/runner.ts"
+import type { Opts } from "/workspace/aseo/opencode/packages/auto-core/src/opts.ts"
+import type { SessionChain } from "/workspace/aseo/opencode/packages/auto-core/src/chain.ts"
+
+function scriptedClient(scripts: Array<() => Promise<unknown>>) {
+  let round = 0
+  return fakeClient({
+    events: (sid) =>
+      (async function* () {
+        const script = scripts[Math.min(round++, scripts.length - 1)]
+        if (script) await script()
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })(),
+  })
+}
+const gapList = (count: number) =>
+  ["# Gaps (T-001)", "", "## Verified OK", "", "- ok", "", "## Gaps", "",
+   ...Array.from({ length: count }, (_, i) => `### Gap ${i + 1} — gap ${i + 1}`), "", "Result: FAIL gaps stand", ""].join("\n")
+const passReport = `# Report\n\n${"Verification evidence line. ".repeat(20)}\n\nResult: PASS\n\n${EOF_MARK}\n`
+
+test("oscillating gap counts 2,1,2,1,... never trip the 0146 block (bound claimed 2+N = 4 rounds)", async () => {
+  const dir = await freshRepo()
+  try {
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+    await git(dir, "add", "-A"); await git(dir, "commit", "-qm", "init")
+    let verify = 0
+    const LIMIT = 12 // verify sessions before the scripted verifier finally passes
+    const verifyScript = async () => {
+      verify++
+      if (verify >= LIMIT) { await Bun.write(join(dir, "docs/T-001/report.md"), passReport); return }
+      await Bun.write(join(dir, "docs/T-001/gaps.md"), gapList(verify % 2 === 1 ? 2 : 1))
+    }
+    let fixes = 0
+    const fixScript = async () => { fixes++; await Bun.write(join(dir, "FIXES.md"), `fix ${fixes}\n`) }
+    const scripts: Array<() => Promise<unknown>> = []
+    for (let i = 0; i < LIMIT; i++) { scripts.push(verifyScript); scripts.push(fixScript) }
+    const { client } = scriptedClient(scripts)
+    const plan = await reloadUnits(dir)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const persist = (phase: any) => saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase })
+    const outcome = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session", persist })
+    const subjects = (await git(dir, "log", "--format=%s")).split("\n").filter((l) => l.startsWith("T-001 fix "))
+    console.log(`outcome=${outcome === undefined ? "PASS (undefined)" : JSON.stringify(outcome).slice(0, 200)} verifySessions=${verify} fixRounds=${fixes} fixCommits=${subjects.length}`)
+    // The ruled bound (0146 D3): a loop starting from N=2 gaps runs at most 2+N = 4 rounds.
+    expect(fixes).toBeGreaterThan(4)
+    expect(outcome).toBeUndefined()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 120000)
