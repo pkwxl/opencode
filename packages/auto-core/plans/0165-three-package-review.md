@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 5 of 36 steps done (S00–S03, S11). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 6 of 36 steps done (S00–S03, S11, S12). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -61,7 +61,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 3 | S02 corpus audit | rule→principle, family check, lifecycle, release state, registers | done 2026-11-02 @d579016b2 | [S02](./0165-review/S02-corpus-audit.md) | 0/0/5/4 |
 | 4 | S03 falsification replay | blind replay of six 0124–0163 rulings | done 2026-11-02 | [S03](./0165-review/S03-replay.md) | 0/1/1/2 |
 | 5 | S11 task pipeline B — verification, scripts, receipts | 3.0K | done 2026-11-02 @36614f72f (=d579016b2 in scope) | [S11](./0165-review/S11-verification.md) | 2/4/4/1 |
-| 6 | S12 recovery and blockage | 2.1K | todo | | |
+| 6 | S12 recovery and blockage | 2.1K | done 2026-11-02 @f3c24fc1c (=d579016b2 in scope) | [S12](./0165-review/S12-recovery.md) | 2/5/4/1 |
 | 7 | S29 service shell A — daemon, auth, spawn | 2.7K | todo | | |
 | 8 | S17 models, key rings, secrets | 2.9K | todo | | |
 | 9 | S10 task pipeline A — dispatch, execution | 3.4K | todo | | |
