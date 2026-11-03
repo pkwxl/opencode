@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 21 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19, S20, S21, S04, S05, S06, S07, S08, S09, S15). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 22 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19, S20, S21, S04, S05, S06, S07, S08, S09, S15, S16). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -77,7 +77,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 19 | S08 planning B — formulation | 2.9K | done 2026-11-03 @92f45c501 (=d579016b2 in scope) | [S08](./0165-review/S08-formulation.md) | 0/4/6/2 |
 | 20 | S09 round documents and read-outs | 1.9K | done 2026-11-03 @1d81d6bd9 (=d579016b2 in scope) | [S09](./0165-review/S09-round-docs.md) | 0/1/4/1 |
 | 21 | S15 accounting and journals | 2.3K | done 2026-11-03 @ac64730f0 (=d579016b2 in scope) | [S15](./0165-review/S15-accounting.md) | 0/0/5/1 |
-| 22 | S16 routing and recovery policy | 3.8K | todo | | |
+| 22 | S16 routing and recovery policy | 3.8K | done 2026-11-03 @7d4eea707 (=d579016b2 in scope) | [S16](./0165-review/S16-routing.md) | 0/3/4/1 |
 | 23 | S18 agent adapters and the pool | 2.9K | todo | | |
 | 24 | S22 config and materialization | 2.6K | todo | | |
 | 25 | S23 policy-as-data, code side | 2.8K | todo | | |
