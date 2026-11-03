@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 9 of 36 steps done (S00–S03, S11, S12, S29, S17, S10). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 10 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -65,7 +65,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 7 | S29 service shell A — daemon, auth, spawn | 2.7K | done 2026-11-02 @2674dbaf3 (=d579016b2 in scope) | [S29](./0165-review/S29-daemon.md) | 0/3/7/1 |
 | 8 | S17 models, key rings, secrets | 2.9K | done 2026-11-03 @2674dbaf3 (=d579016b2 in scope) | [S17](./0165-review/S17-models.md) | 0/2/6/2 |
 | 9 | S10 task pipeline A — dispatch, execution | 3.4K | done 2026-11-03 @423d24bbd (=d579016b2 in scope) | [S10](./0165-review/S10-dispatch.md) | 1/4/3/1 |
-| 10 | S13 session driving | 3.2K | todo | | |
+| 10 | S13 session driving | 3.2K | done 2026-11-03 @2d586e16e (=d579016b2 in scope) | [S13](./0165-review/S13-session.md) | 0/3/2/2 |
 | 11 | S14 the turn engine | 3.0K | todo | | |
 | 12 | S19 git core and the commit boundary | 2.3K | todo | | |
 | 13 | S20 isolation, fork, the wall, permissions | 2.4K | todo | | |
