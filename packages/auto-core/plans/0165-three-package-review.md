@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 12 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 13 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19, S20). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -68,7 +68,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 10 | S13 session driving | 3.2K | done 2026-11-03 @2d586e16e (=d579016b2 in scope) | [S13](./0165-review/S13-session.md) | 0/3/2/2 |
 | 11 | S14 the turn engine | 3.0K | done 2026-11-03 @f9556a00d (=d579016b2 in scope) | [S14](./0165-review/S14-engine.md) | 0/2/4/1 |
 | 12 | S19 git core and the commit boundary | 2.3K | done 2026-11-03 @17af6f844 (=d579016b2 in scope) | [S19](./0165-review/S19-git.md) | 1/3/5/1 |
-| 13 | S20 isolation, fork, the wall, permissions | 2.4K | todo | | |
+| 13 | S20 isolation, fork, the wall, permissions | 2.4K | done 2026-11-03 @cea51c524 (=d579016b2 in scope) | [S20](./0165-review/S20-isolation.md) | 1/4/8/1 |
 | 14 | S21 the task store and documents | 2.6K | todo | | |
 | 15 | S04 loop composition A — root and phases | 3.6K | todo | | |
 | 16 | S05 loop composition B — task loop and lanes | 2.9K | todo | | |
