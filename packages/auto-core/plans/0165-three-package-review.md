@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 17 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19, S20, S21, S04, S05, S06). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 18 of 36 steps done (S00–S03, S11, S12, S29, S17, S10, S13, S14, S19, S20, S21, S04, S05, S06, S07). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -73,7 +73,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 15 | S04 loop composition A — root and phases | 3.6K | done 2026-11-03 @247d49061 (=d579016b2 in scope) | [S04](./0165-review/S04-loop-root.md) | 1/1/7/1 |
 | 16 | S05 loop composition B — task loop and lanes | 2.9K | done 2026-11-03 @018ed7715 (=d579016b2 in scope) | [S05](./0165-review/S05-loop-task.md) | 0/1/8/1 |
 | 17 | S06 run control — services, lock, exit, interactive | 2.0K | done 2026-11-03 @ee3af2c6f (=d579016b2 in scope) | [S06](./0165-review/S06-control.md) | 0/2/6/1 |
-| 18 | S07 planning A — person-boundary commands | 2.9K | todo | | |
+| 18 | S07 planning A — person-boundary commands | 2.9K | done 2026-11-03 @71763228f (=d579016b2 in scope) | [S07](./0165-review/S07-planning-a.md) | 1/2/4/2 |
 | 19 | S08 planning B — formulation | 2.9K | todo | | |
 | 20 | S09 round documents and read-outs | 1.9K | todo | | |
 | 21 | S15 accounting and journals | 2.3K | todo | | |
