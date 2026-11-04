@@ -246,7 +246,7 @@ Conventions: one step = one worker session = one committed unit; the findings co
 | # | step | wave | findings | record | status | start HEAD | verification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 001 | init — Program initialization: status table, coverage ledger, current position (this step) | program | — | [001](./0166-remediation/001-init.md) | **done** 2026-11-05 | 5d5e427bf | completeness script OK; typecheck clean |
-| 002 | w0-index-navigation — INDEX grammar/order repair, stale code homes, AGENTS.md navigation R4 reduction | W0-governance | 060 061 065 176 | [002](./0166-remediation/002-w0-index-navigation.md) | todo | — | — |
+| 002 | w0-index-navigation — INDEX grammar/order repair, stale code homes, AGENTS.md navigation R4 reduction | W0-governance | 060 061 065 176 | [002](./0166-remediation/002-w0-index-navigation.md) | **done** 2026-11-05 | 9e61f6e0b | probe P1+P2 empty; arrows/pointers zero-loss; typecheck clean |
 | 003 | w0-category-scope — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164) | W0-governance | 066 F9 | [003](./0166-remediation/003-w0-category-scope.md) | todo | — | — |
 | 004 | w0-0132-enactment — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked | W0-governance | 067 F10 | [004](./0166-remediation/004-w0-0132-enactment.md) | todo | — | — |
 | 005 | w0-premise-guard — Premise-drift guard line ('premises this ruling changes') + SERVER_ENV drift ratchet | W0-governance | 201 F22 | [005](./0166-remediation/005-w0-premise-guard.md) | todo | — | — |
@@ -392,12 +392,12 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-057 | S2 | W2-keyring | 018 | — |
 | 0165-058 | S3 | WF-server | 064 | — |
 | 0165-059 | S3 | WB-test | 072 | — |
-| 0165-060 | S3 | W0-governance | 002 | — |
-| 0165-061 | S3 | W0-governance | 002 | — |
+| 0165-060 | S3 | W0-governance | 002 | fixed (step 002) |
+| 0165-061 | S3 | W0-governance | 002 | fixed (step 002) |
 | 0165-062 | S3 | WC-hygiene | 079 | — |
 | 0165-063 | S3 | WB-test | 072 | — |
 | 0165-064 | S3 | WA-docs | 067 | — |
-| 0165-065 | S3 | W0-governance | 002 | — |
+| 0165-065 | S3 | W0-governance | 002 | fixed (step 002) |
 | 0165-066 | S3 | W0-governance | 003 | — |
 | 0165-067 | S3 | W0-governance | 004 | — |
 | 0165-068 | S3 | WA-docs | 065 | — |
@@ -508,7 +508,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-173 | S3 | WF-server | 064 | — |
 | 0165-174 | S3 | W3-shell-seam | 036 | — |
 | 0165-175 | S3 | WC-hygiene | 077 | — |
-| 0165-176 | S4 | W0-governance | 002 | — |
+| 0165-176 | S4 | W0-governance | 002 | fixed (step 002) |
 | 0165-177 | S4 | WC-hygiene | 075 | — |
 | 0165-178 | S4 | W0-governance | 008 | — |
 | 0165-179 | S4 | WA-docs | 066 | — |
@@ -574,9 +574,9 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 
 ## Current position
 
-- **Active step**: 001-init — **done** with this change.
-- **Completed**: the initialization clause of the durable program — (1) scope: W0 plus all 36 register buckets plus F9–F22; (2) the prescribed order with the standalone buckets placed (see Program status); (3) the status table of 81 ordered steps including this one; (4) this coverage ledger, 238 rows; (5) this current-position section.
-- **Modified/created files**: modified `plans/0166-three-package-remediation.md` (these three sections + the Status line); created `plans/0166-remediation/001-init.md`. Later step records are created by their own steps.
-- **Commands and results**: register extraction + completeness script — 224 ids (no gaps, no dupes) across 36 buckets, 81 steps, every finding in exactly one step, bucket fidelity (aliases: `W-fork/W-lanes`→W-fork step 031, `W-shell-seam`→W3 step 033, union 006 split 010+011), 14 F-ids each assigned once; `bun typecheck` clean. Docs-only change (plans/ alone) — no test suite due.
+- **Active step**: none — step 002 (w0-index-navigation) **done** 2026-11-05, committed with its record; the commit's short sha recoverable from git history.
+- **Completed this step**: INDEX grammar repaired (27 rows → all 6-cell, the two unescaped pipes escaped, 0147/0148 order restored), the 11 stale code homes annotated across 22 rows (dispositions git-derived), the AGENTS.md navigation diet (67 bullets, avg 485 → 181 chars, zero arrows/pointers lost; the maintaining rule encodes the diet), the probe's P2 taught to hold the annotated-homes line.
+- **Modified/created files**: modified `plans/INDEX.md`, `AGENTS.md`, `plans/0165-review/tools/probe.ts`, `plans/0166-three-package-remediation.md`; created `plans/0166-remediation/002-w0-index-navigation.md`.
+- **Commands and results**: `bun plans/0165-review/tools/probe.ts` — P1 empty (was 27 broken rows), P2 empty (was 11 stale paths), P3 at the triaged baseline; `bun plans/0165-review/tools/family-check.ts` — unchanged outside step 003's scope; `bun typecheck` clean (exit 0). Docs + evidence-tooling change; no product test suite due.
 - **Unresolved problems**: none.
-- **Next action**: the next orchestrator invocation schedules a worker for step **002 (w0-index-navigation)** — INDEX grammar/order repair, the 11 stale code homes, AGENTS.md navigation R4 reduction; findings 0165-060, 0165-061, 0165-065, 0165-176. Evidence: `plans/0165-review/S01-probes.md`, `S02-corpus-audit.md`.
+- **Next action**: the next orchestrator invocation schedules a worker for step **003 (w0-category-scope)** — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164); findings 0165-066, F9. Evidence: `plans/0165-review/S02-corpus-audit.md`, the probe's P4 output and the family-check tool.

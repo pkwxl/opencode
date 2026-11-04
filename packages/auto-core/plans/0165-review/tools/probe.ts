@@ -36,13 +36,16 @@ say("\n## P2 INDEX code homes that do not exist (by row status)")
 const missingByPath = new Map<string, string[]>()
 for (const r of rows) {
   const c = cells(r.l)
-  const homes = (c[4] ?? "").match(/[\w./-]+\.(ts|md|json)/g) ?? []
-  for (const h of homes) {
+  const cell = c[4] ?? ""
+  for (const m of cell.matchAll(/[\w./-]+\.(ts|md|json)/g)) {
+    const h = m[0]
+    // a home followed by a disposition annotation — "(→ <new home>)", "(retired NNNN)", "(deleted NNNN)" — is the manifest recording a moved/retired home, not a defect (0166 step 002)
+    const tail = cell.slice(m.index! + h.length, m.index! + h.length + 12)
+    if (tail.startsWith(" (→ ") || tail.startsWith(" (retired ") || tail.startsWith(" (deleted ")) continue
     const p = h.startsWith("packages/") ? join(PKGS, "..", h) : h.startsWith("src/") || h.startsWith("test/") || h.startsWith("templates/") || h.startsWith("docs/") || h.startsWith("prompts/") ? join(CORE, h) : undefined
     if (!p) continue
     if (!existsSync(p)) {
-      const k = h
-      missingByPath.set(k, [...(missingByPath.get(k) ?? []), `${c[0].slice(0, 4)}(${(c[2] ?? "").split(" ")[0]})`])
+      missingByPath.set(h, [...(missingByPath.get(h) ?? []), `${c[0].slice(0, 4)}(${(c[2] ?? "").split(" ")[0]})`])
     }
   }
 }
