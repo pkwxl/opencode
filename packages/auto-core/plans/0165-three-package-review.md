@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 25 of 36 steps done (S00–S23, S29). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 26 of 36 steps done (S00–S24, S29). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -81,7 +81,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 23 | S18 agent adapters and the pool | 2.9K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S18](./0165-review/S18-agent-adapters.md) | 0/1/3/3 |
 | 24 | S22 config and materialization | 2.6K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S22](./0165-review/S22-config.md) | 0/1/5/2 |
 | 25 | S23 policy-as-data, code side | 2.8K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S23](./0165-review/S23-policy.md) | 0/4/1/0 |
-| 26 | S24 templates — prompt copy, default pack | md | todo | | |
+| 26 | S24 templates — prompt copy, default pack | md | done 2026-11-04 @d617ee3b9 (=d579016b2 in scope) | [S24](./0165-review/S24-templates.md) | 0/2/3/1 |
 | 27 | S25 bundles and the manual-driver suite | md | todo | | |
 | 28 | S26 CLI shell A — parser, help, option policy | ~1.2K | todo | | |
 | 29 | S27 CLI shell B — command blocks | ~2.1K | todo | | |
