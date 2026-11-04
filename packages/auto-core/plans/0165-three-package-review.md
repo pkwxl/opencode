@@ -82,7 +82,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 24 | S22 config and materialization | 2.6K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S22](./0165-review/S22-config.md) | 0/1/5/2 |
 | 25 | S23 policy-as-data, code side | 2.8K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S23](./0165-review/S23-policy.md) | 0/4/1/0 |
 | 26 | S24 templates — prompt copy, default pack | md | done 2026-11-04 @d617ee3b9 (=d579016b2 in scope) | [S24](./0165-review/S24-templates.md) | 0/2/3/1 |
-| 27 | S25 bundles and the manual-driver suite | md | todo | | |
+| 27 | S25 bundles and the manual-driver suite | md | done 2026-11-04 @7a33654f6 (=d579016b2 in scope) | [S25](./0165-review/S25-bundles.md) | 1/6/3/1 |
 | 28 | S26 CLI shell A — parser, help, option policy | ~1.2K | todo | | |
 | 29 | S27 CLI shell B — command blocks | ~2.1K | todo | | |
 | 30 | S28 CLI docs and the e2e strategy | docs (grep) | todo | | |
