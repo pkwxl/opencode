@@ -87,7 +87,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 29 | S27 CLI shell B — command blocks | ~2.1K | done 2026-11-04 @bb7daf7cd (=d579016b2 in scope) | [S27](./0165-review/S27-cli-commands.md) | 0/0/1/1 |
 | 30 | S28 CLI docs and the e2e strategy | docs (grep) | done 2026-11-04 @98bbf0e55 (=d579016b2 in scope) | [S28](./0165-review/S28-cli-docs.md) | 0/0/0/4 |
 | 31 | S30 service shell B — operations, observation | 3.0K | done 2026-11-04 @80e3c9300 (=d579016b2 in scope) | [S30](./0165-review/S30-server-ops.md) | 0/0/3/2 |
-| 32 | S31 service shell C — web, docs, test health | 2.4K + docs | todo | | |
+| 32 | S31 service shell C — web, docs, test health | 2.4K + docs | done 2026-11-04 @dca9544ab (=d579016b2 in scope) | [S31](./0165-review/S31-server-web.md) | 0/0/0/3 |
 | 33 | S32 cross-cutting design synthesis | step outputs | todo | | |
 | 34 | S33 verification A (S04–S18) | findings | todo | | |
 | 35 | S34 verification B (S19–S32 + S02/S03) | findings | todo | | |
