@@ -90,7 +90,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 32 | S31 service shell C — web, docs, test health | 2.4K + docs | done 2026-11-04 @dca9544ab (=d579016b2 in scope) | [S31](./0165-review/S31-server-web.md) | 0/0/0/3 |
 | 33 | S32 cross-cutting design synthesis | step outputs | done 2026-11-04 @06cc471e0 (=d579016b2 in scope) | [S32](./0165-review/S32-synthesis.md) | 0/2/3/1 |
 | 34 | S33 verification A (S04–S18) | findings | done 2026-11-04 @7ae1469a2 | [S33](./0165-review/S33-verify-a.md) | 46 confirmed |
-| 35 | S34 verification B (S19–S32 + S02/S03) | findings | todo | | |
+| 35 | S34 verification B (S19–S32 + S02/S03) | findings | done 2026-11-04 @3d52292e3 | [S34](./0165-review/S34-verify-b.md) | 45 confirmed |
 | 36 | S35 report assembly + INDEX row | all outputs | todo | | |
 
 ## Digest — established facts (do not re-derive; cite the step)
