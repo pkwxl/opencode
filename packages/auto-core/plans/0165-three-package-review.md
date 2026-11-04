@@ -85,7 +85,7 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 27 | S25 bundles and the manual-driver suite | md | done 2026-11-04 @7a33654f6 (=d579016b2 in scope) | [S25](./0165-review/S25-bundles.md) | 1/6/3/1 |
 | 28 | S26 CLI shell A — parser, help, option policy | ~1.2K | done 2026-11-04 @e9c166fba (=d579016b2 in scope) | [S26](./0165-review/S26-cli-parser.md) | 0/0/2/3 |
 | 29 | S27 CLI shell B — command blocks | ~2.1K | done 2026-11-04 @bb7daf7cd (=d579016b2 in scope) | [S27](./0165-review/S27-cli-commands.md) | 0/0/1/1 |
-| 30 | S28 CLI docs and the e2e strategy | docs (grep) | todo | | |
+| 30 | S28 CLI docs and the e2e strategy | docs (grep) | done 2026-11-04 @98bbf0e55 (=d579016b2 in scope) | [S28](./0165-review/S28-cli-docs.md) | 0/0/0/4 |
 | 31 | S30 service shell B — operations, observation | 3.0K | todo | | |
 | 32 | S31 service shell C — web, docs, test health | 2.4K + docs | todo | | |
 | 33 | S32 cross-cutting design synthesis | step outputs | todo | | |
