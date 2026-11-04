@@ -1,6 +1,6 @@
 # 0165 — The three-package review (auto-core, auto, auto-server): a resumable program
 
-Status: **in progress** — 23 of 36 steps done (S00–S21, S29). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
+Status: **in progress** — 24 of 36 steps done (S00–S22, S29). Opened 2026-11-02 at HEAD 358be4003 (branch `auto-core`,
 clean tree); baseline moved to **d579016b2** (= 358be4003 + the maintainer's plan 0164) before the code steps.
 
 A full expert review of the auto tool family — the core library `auto-core`, the CLI shell `auto`, the service
@@ -79,8 +79,8 @@ Order is execution order (highest risk first); ids follow the layer map. Counts 
 | 21 | S15 accounting and journals | 2.3K | done 2026-11-03 @ac64730f0 (=d579016b2 in scope) | [S15](./0165-review/S15-accounting.md) | 0/0/5/1 |
 | 22 | S16 routing and recovery policy | 3.8K | done 2026-11-03 @7d4eea707 (=d579016b2 in scope) | [S16](./0165-review/S16-routing.md) | 0/3/4/1 |
 | 23 | S18 agent adapters and the pool | 2.9K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S18](./0165-review/S18-agent-adapters.md) | 0/1/3/3 |
-| 24 | S22 config and materialization | 2.6K | todo | | |
-| 25 | S23 policy-as-data, code side | 2.8K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S23](./0165-review/S23-policy.md) | 0/4/1/0 |
+| 24 | S22 config and materialization | 2.6K | done 2026-11-04 @119ffdcf1 (=d579016b2 in scope) | [S22](./0165-review/S22-config.md) | 0/1/5/2 |
+| 25 | S23 policy-as-data, code side | 2.8K | todo | | |
 | 26 | S24 templates — prompt copy, default pack | md | todo | | |
 | 27 | S25 bundles and the manual-driver suite | md | todo | | |
 | 28 | S26 CLI shell A — parser, help, option policy | ~1.2K | todo | | |
