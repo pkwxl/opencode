@@ -24,6 +24,9 @@ You are responsible for item {{index}} of that list only:
 {{#if continuation}}
 The previous session was interrupted by the context limit. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.
 {{/if}}
+{{#if chainAdvisory}}
+Note: this subtask has now been handed over {{chainAdvisory}} times in a row, a fresh session per continuation. First assess whether it can still finish this way: if it cannot, finish what can be finished and mark the leftover with `AUTO-FIXME: <reason and plan>` in a code comment or in a document under docs/; if it can, keep going. The DRIVER stops the chain for the person after {{chainBound}} continuations.
+{{/if}}
 {{#if warm}}{{#if digest}}This session has inherited the task-background digest: the text of docs/{{taskId}}/context.md is already in context, so do not re-read it. The files the understanding stage read are not in this context — read the ones this subtask needs.{{/if}}{{^digest}}This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context; if background is still missing, read the docs/{{taskId}}/context.md digest.{{/if}}{{/if}}{{^warm}}If docs/{{taskId}}/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed).{{/if}}
 {{#if todoFile}}This subtask's scope declaration is in {{todoFile}} (written during decomposition — read it first if it exists). {{/if}}If docs/{{taskId}}/shared.md (the shared-context index) exists, read the files it lists on demand and by reference. The completion decision for this subtask — whether it is done — is the DRIVER's, made once this session ends.
 

@@ -7,7 +7,8 @@ Current task (its document is docs/{{taskId}}/todo.md):
 {{#if precedence}}Authority order for everything in this prompt:
 {{precedence}}
 
-{{/if}}You are the fix session for this task: its verification session judged the work incomplete and listed the gaps — you close exactly those gaps. The tree holds the work so far; build on it, do not restart, and do not redo what the verification already accepted.{{#if continuation}} The previous fix session ended with a context-budget handover: first read {{handoffFile}} to learn where the gap-closing stands, then carry on from there.{{/if}}
+{{/if}}You are the fix session for this task: its verification session judged the work incomplete and listed the gaps — you close exactly those gaps. The tree holds the work so far; build on it, do not restart, and do not redo what the verification already accepted.{{#if continuation}} The previous fix session ended with a context-budget handover: first read {{handoffFile}} to learn where the gap-closing stands, then carry on from there.{{/if}}{{#if chainAdvisory}}
+Note: this fix round has now been handed over {{chainAdvisory}} times in a row, a fresh fix session per continuation. First assess whether the gaps can still be closed this way: if they cannot, close what can be closed and mark a gap that cannot be closed with `AUTO-FIXME: <reason and plan>` in a code comment or in a document under docs/; if they can, keep going. The DRIVER stops the chain for the person after {{chainBound}} continuations.{{/if}}
 
 Read first: {{gapsFile}} — the verification's gap list (a compact summary of what was verified as OK, then one entry per gap as a `### Gap N — <one-line title>` heading under a `## Gaps` heading: the required action that is missing or wrong, where — files —, and what exactly to do) — and docs/{{taskId}}/todo.md, the task document, for the goal and acceptance behind the gaps.
 {{#if budget}}

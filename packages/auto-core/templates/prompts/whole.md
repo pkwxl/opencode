@@ -10,7 +10,8 @@ Current task (its document is docs/{{taskId}}/todo.md):
 {{/if}}{{#if precedence}}Authority order for everything in this prompt:
 {{precedence}}
 
-{{/if}}{{#if adaptive}}You are the lead session of this task: you are responsible for the whole task and work it yourself; handing part of it to further sessions is an option only under the split rule below.{{/if}}{{^adaptive}}You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks.{{/if}}{{#if continuation}} The previous session ended with a context-budget handover. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.{{/if}}
+{{/if}}{{#if adaptive}}You are the lead session of this task: you are responsible for the whole task and work it yourself; handing part of it to further sessions is an option only under the split rule below.{{/if}}{{^adaptive}}You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks.{{/if}}{{#if continuation}} The previous session ended with a context-budget handover. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.{{/if}}{{#if chainAdvisory}}
+Note: this scope has now been handed over {{chainAdvisory}} times in a row, a fresh session per continuation. First assess whether this task can still finish this way: if it cannot, finish what can be finished and mark the leftover with `AUTO-FIXME: <reason and plan>` in a code comment or in a document under docs/ (a block only another task can lift is a park, per the dependency-park rule); if it can, keep going. The DRIVER stops the chain for the person after {{chainBound}} continuations.{{/if}}
 
 {{#if processRefs}}{{processRefs}}
 

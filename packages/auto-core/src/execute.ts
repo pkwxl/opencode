@@ -75,7 +75,17 @@ import {
 // rollback redo was spent. The caller creates the holder (the pipeline seeds
 // consumed with the recovery document) and rewinds it inside its rollback
 // redo; the engine spends the two flags.
-export type HandoverState = { consumed: string; retried: boolean; rolled: boolean }
+export type HandoverState = { consumed: string; retried: boolean; rolled: boolean; continuations: number }
+
+// The steer chain's bounds (plans/0168 D1, finding 0165-018): past the
+// advisory count of one scope's continuations the next session's prompt
+// carries the chain's length and an honest-assessment teaching (the 0023
+// TEST_HANDOVER_ADVISORY shape, same number); past the bound the verdict
+// blocks for the person (P2's terminal — the chain is an automatic
+// escalation). Both provisional, the 0130 D5 handover journal the named
+// re-measurement basis; constants like their 0023 sibling, no switch (P21).
+export const STEER_CHAIN_ADVISORY = 10
+export const STEER_CHAIN_BOUND = 20
 
 // The engine's verdict over one ended session's handover document:
 // - natural — the end stands: nothing was due and no fresh document exists,
@@ -191,6 +201,21 @@ export async function handoverVerdict(
       ...(chain.wall !== undefined ? { wall: chain.wall } : {}),
     })
     state.consumed = doc
+    state.continuations += 1
+    // The chain bound (plans/0168 D1): the continuation chain is a P2
+    // escalation, and past the bound the person — not the session's
+    // self-report — is the terminal. The advisory tier (the prompt-side
+    // teaching past the advisory count) is carried by the callers' render.
+    if (state.continuations > STEER_CHAIN_BOUND) {
+      log(`⏸ ${who} context-handover chain reached ${state.continuations} continuations (bound ${STEER_CHAIN_BOUND}); stopping for the person`)
+      return {
+        type: "blocked",
+        question:
+          `${who} keeps handing its session over without finishing: ${state.continuations} continuations of this scope so far (bound ${STEER_CHAIN_BOUND}, the advisory teaching from ${STEER_CHAIN_ADVISORY}), ` +
+          `${formatTokens(chain.used)} in use${chain.wall !== undefined ? ` against the ${formatTokens(chain.wall)} wall` : ""}. ` +
+          `The handover document ${file} and the unified-commit trail hold everything the next continuation would carry — the person decides: split or narrow the task, close it on the completed part, or re-run to continue the chain.`,
+      }
+    }
     return { type: "continue", doc }
   }
   // A handover due but no valid document (strict resume): one invalid attempt
@@ -471,7 +496,7 @@ export async function executeWhole(
   // flags, the rollback redo below rewinds it (the rejected-split path below
   // re-seeds consumed too — a document the lead left is not this round's
   // signal).
-  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
+  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false, continuations: 0 }
   // The park's one relaunch with feedback (plans/0096 D6): an invalid park
   // gets the same single retry the invalid handover does; a second failure
   // is a hidden blockage.
@@ -510,7 +535,7 @@ export async function executeWhole(
       task,
       brief
         ? feedback.trimStart()
-        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel, docLane: input.docLane }) + feedback + release,
+        : renderWhole(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined, adaptive: split === "open", parallel: opts.parallel, docLane: input.docLane, ...(handover.continuations > STEER_CHAIN_ADVISORY ? { chainAdvisory: handover.continuations, chainBound: STEER_CHAIN_BOUND } : {}) }) + feedback + release,
       opts,
       chain,
       steer,
@@ -1026,6 +1051,7 @@ export async function runSubtask(
             digest: Boolean(base?.digest),
             budget: steer !== undefined,
             ...(laneStream ? { handoff: subtaskDoc(task.id, index, "handoff") } : {}),
+            ...(handover.continuations > STEER_CHAIN_ADVISORY ? { chainAdvisory: handover.continuations, chainBound: STEER_CHAIN_BOUND } : {}),
           })
     }
     let feedback = ""
@@ -1041,7 +1067,7 @@ export async function runSubtask(
     // The session-handover engine's per-scope state (D4): consumed is seeded
     // with the recovery document; the engine spends the retry and rollback
     // flags, the rollback redo below rewinds it.
-    const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
+    const handover: HandoverState = { consumed: priorText, retried: false, rolled: false, continuations: 0 }
     // Strict-resume rollback redo (tightened in 3.3 R3): one test-handover
     // write-check failure rolls back to
     // the subtask baseline and cold-starts a redo, with no retry with

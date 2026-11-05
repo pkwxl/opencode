@@ -516,7 +516,7 @@ export function renderSubtask(
   task: TaskView,
   docs: TaskDocs,
   subtask: string,
-  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean; handoff?: string } = {},
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean; handoff?: string; chainAdvisory?: number; chainBound?: number } = {},
 ): string {
   const items = task.checklist ?? []
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
@@ -534,6 +534,7 @@ export function renderSubtask(
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: opts.handoff ?? docs.handoff,
+    ...(opts.chainAdvisory !== undefined ? { chainAdvisory: String(opts.chainAdvisory), chainBound: String(opts.chainBound) } : {}),
     // Closing self-check sentence (M1.3): (b)-class quality intent from the
     // active pack's `## quality` / `### self-check-subtask`; the guard drops
     // the wrap-up item cleanly when the pack omits it (zero-intent baseline).
@@ -699,7 +700,7 @@ export function renderWrapup(facts: PromptFacts, plan: PlanView, task: TaskView,
 // documents — 0056's floor), and continuation means the round's previous
 // session handed its context over and this one must read the handover
 // document first.
-export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { continuation?: boolean; budget?: boolean } = {}): string {
+export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, docs: TaskDocs, opts: Opts & { continuation?: boolean; budget?: boolean; chainAdvisory?: number; chainBound?: number } = {}): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "fix", {
     ...ctx,
@@ -707,6 +708,7 @@ export function renderFix(facts: PromptFacts, plan: PlanView, task: TaskView, do
     handoffFile: docs.handoff,
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
+    ...(opts.chainAdvisory !== undefined ? { chainAdvisory: String(opts.chainAdvisory), chainBound: String(opts.chainBound) } : {}),
     // The pack's repair discipline (plans/0080 §6): the boundary that keeps a
     // fix from re-architecting; absent subsection drops the block cleanly.
     repairDuties: intentText(facts, "governance", "repair", ctx),
@@ -905,7 +907,7 @@ export function renderWhole(
   plan: PlanView,
   task: TaskView,
   docs: TaskDocs,
-  opts: Opts & { continuation?: boolean; budget?: boolean; adaptive?: boolean } = {},
+  opts: Opts & { continuation?: boolean; budget?: boolean; adaptive?: boolean; chainAdvisory?: number; chainBound?: number } = {},
 ): string {
   const ctx = baseCtx(facts, plan, task, docs, opts)
   return renderPrompt(facts, "whole", {
@@ -913,6 +915,7 @@ export function renderWhole(
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
     adaptive: Boolean(opts.adaptive),
+    ...(opts.chainAdvisory !== undefined ? { chainAdvisory: String(opts.chainAdvisory), chainBound: String(opts.chainBound) } : {}),
     // The doc-lane concurrency clause (plans/0099 D11): sibling doc units
     // run beside this session; the write fence is the declared Touches.
     docLane: Boolean(opts.docLane),

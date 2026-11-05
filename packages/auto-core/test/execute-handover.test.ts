@@ -166,9 +166,58 @@ Body.
       await rm(dir, { recursive: true, force: true })
     }
   })
-})
 
-// The same engine's other retry policy (D4): a stream of auto's taken split
+  // The steer chain's two bounds (plans/0168 D1, finding 0165-018): every
+  // session hands itself over with a fresh document, exactly the confirmed
+  // defect's shape (a chain that never ends on anything but the session's
+  // self-report). Past the advisory count the continuation prompt carries the
+  // chain's length and the honest-assessment teaching (the 0023 shape); past
+  // the bound the verdict blocks for the person (P2's terminal), the question
+  // naming the count and the bound.
+  test("past the advisory count the continuation prompt carries the chain advisory; below it, nothing", async () => {
+    let k = 0
+    const { dir, plan, task, agent, chain, writeHandoff } = await setup((ctx) => {
+      // Sessions 1..12 keep handing over (each document fresh; the turn
+      // script runs once per session, k counts them); session 13 writes
+      // nothing and ends naturally, closing the chain short of the bound.
+      if (++k <= 12) writeHandoff(`# Handover ${k}\n\nStill going.\n\nStatus: continue\n`)
+      return undefined
+    })
+    try {
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain)).toBeUndefined()
+      expect(agent.prompts).toHaveLength(13)
+      // The 11th continuation dispatched the 12th session: its prompt is the
+      // first carrying the advisory, naming the count.
+      expect(agent.prompts[10]!.text).not.toContain("handed over")
+      expect(agent.prompts[11]!.text).toContain("handed over 11 times in a row")
+      expect(agent.prompts[11]!.text).toContain("after 20 continuations")
+      expect(agent.prompts[12]!.text).toContain("handed over 12 times in a row")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("past the chain bound the verdict blocks for the person, naming the count and the bound", async () => {
+    let k = 0
+    const { dir, plan, task, agent, chain, writeHandoff } = await setup(() => {
+      writeHandoff(`# Handover ${++k}\n\nStill going.\n\nStatus: continue\n`)
+      return undefined
+    })
+    try {
+      const result = await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain)
+      // The 21st handover crosses the bound (STEER_CHAIN_BOUND = 20): 21
+      // sessions ran, the 21st continuation attempt never dispatches.
+      expect(result).toEqual({
+        type: "blocked",
+        question: expect.stringContaining("21 continuations of this scope so far (bound 20, the advisory teaching from 10)"),
+      })
+      expect(agent.prompts).toHaveLength(21)
+      expect(agent.prompts[20]!.text).toContain("handed over 20 times in a row")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
 // (runSubtask with a split baseline) that hits the wall without a handover
 // document is demanded in a fork of the ended session, with the feedback
 // alone — the working context the document must summarize lives there. The

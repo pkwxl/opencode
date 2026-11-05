@@ -55,7 +55,7 @@ import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-l
 import { ledgerSection } from "./formulate-synthesis"
 import { roundOfPhaseId, strictRegressionWait } from "./regression"
 import { autobanner, log } from "./log"
-import { handoverVerdict, type HandoverState } from "./execute"
+import { handoverVerdict, STEER_CHAIN_ADVISORY, STEER_CHAIN_BOUND, type HandoverState } from "./execute"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
 import { codeWork } from "./phases/registry"
 import { promptViews, bookAttempt, type Plan, type Task } from "./tasks"
@@ -313,7 +313,7 @@ async function runFixRound(
   // consumed seed, not a signal) or an interrupted fix session's handover
   // (Status: continue — this round's first dispatch continues from it).
   const priorText = await readHandoff()
-  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false }
+  const handover: HandoverState = { consumed: priorText, retried: false, rolled: false, continuations: 0 }
   let continuation = handoffStatus(priorText) === "continue"
   let feedback = ""
   // Per-session commits (plans/0148 D1): every session that ends in a
@@ -337,7 +337,7 @@ async function runFixRound(
       client,
       plan,
       task,
-      renderFix(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined }) + feedback,
+      renderFix(promptFacts(opts), views.plan, views.task, taskDocPaths(task.id), { mode: opts.mode, continuation, budget: steer !== undefined, ...(handover.continuations > STEER_CHAIN_ADVISORY ? { chainAdvisory: handover.continuations, chainBound: STEER_CHAIN_BOUND } : {}) }) + feedback,
       opts,
       chain,
       steer,
