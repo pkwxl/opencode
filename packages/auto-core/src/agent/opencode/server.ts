@@ -34,8 +34,10 @@ export { scrubDriverEnv } from "../env"
 // The external-server override's env name, restated from the driver's switch
 // registry (src/switches.ts SWITCH_ENV.server) the way src/agent/env.ts
 // restates the OPENCODE_AUTO_ prefix: an agent-domain file must not import
-// the driver domain, so the name lives here a second time.
-const SERVER_ENV = "OPENCODE_AUTO_SERVER"
+// the driver domain, so the name lives here a second time. The identity is
+// ratcheted test-side (test/agent-env.test.ts, 0167 D3) — exported for that
+// comparison alone.
+export const SERVER_ENV = "OPENCODE_AUTO_SERVER"
 
 export type Server = {
   client: OpencodeClient

@@ -17,7 +17,7 @@ import { loadModels } from "../src/models"
 import type { ModelRegistry, ProfileEnvValue, RegistryAgentProfile } from "../src/models-schema"
 import { claudeEnv } from "../src/agent/claude/client"
 import { driverVariable } from "../src/agent/env"
-import { serverEnv } from "../src/agent/opencode/server"
+import { serverEnv, SERVER_ENV } from "../src/agent/opencode/server"
 import { autoSwitches, clampSwitches, SWITCH_ENV } from "../src/switches"
 
 const PHASE_TYPES = ["analysis", "design", "implement", "test", "acceptance", "knowledge"]
@@ -336,6 +336,14 @@ describe("the driver's own variables stay out of every agent (plans/0059 X1)", (
     expect(driverVariable("OPENCODE_AUTO_HEAP_SNAPSHOT")).toBe(false)
     expect(driverVariable("OPENCODE_CONFIG")).toBe(false)
     expect(driverVariable("OPENCODE_AUTOSHARE")).toBe(false)
+  })
+
+  // The drift ratchet (0167 D3, finding 0165-201): the adapter's restated
+  // override name and the switch registry's are one vocabulary — a rename on
+  // either side that leaves the other behind silently disables the
+  // external-server override read (manage() would read a name nothing sets).
+  test("the adapter's restated server override name is the registry's name", () => {
+    expect(SERVER_ENV).toBe(SWITCH_ENV.server)
   })
 
   test("both adapters' spawn environments drop every one of them, with or without a profile env", () => {
