@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { AGENTS_BLOCK_START, ensurePointer, removePointer } from "../src/agents-block"
+import { ANALYSIS_DOC } from "../src/docpaths"
 import { MODELS_FILE } from "../src/models"
 import { protect, protectAdditional, unprotect } from "../src/protect"
 
@@ -69,6 +70,30 @@ describe("protect", () => {
     await unprotect(dir)
     expect(await writable(sidecar)).toBe(true)
     expect(await Bun.file(sidecar).text()).toBe("{}\n")
+  })
+
+  // plans/0172 D3 (0165-093): the project analysis is the person's
+  // between-commands governance document — its release mark, roadmap lines
+  // and round-brief proposals all act with the person's authority, and a
+  // run-time session has no legitimate write to it (0084: the drafting agent
+  // works interactively at stops, never as a driver-driven session) — so it
+  // goes read-only during protection like the registry layer (the brief's
+  // precedent), the path pinned to ANALYSIS_DOC.
+  test("the project analysis goes read-only during protection and writable after", async () => {
+    const analysis = join(dir, ANALYSIS_DOC)
+    await mkdir(dirname(analysis), { recursive: true })
+    await Bun.write(analysis, "# Project analysis\n")
+    expect(await writable(analysis)).toBe(true)
+    await protect(dir)
+    expect(await writable(analysis)).toBe(false)
+    await unprotect(dir)
+    expect(await writable(analysis)).toBe(true)
+    expect(await Bun.file(analysis).text()).toBe("# Project analysis\n")
+  })
+
+  test("no analysis: protection skips it without creating it", async () => {
+    await protect(dir)
+    expect(await Bun.file(join(dir, ANALYSIS_DOC)).exists()).toBe(false)
   })
 
   test("task unit documents are not protected, they stay writable throughout", async () => {

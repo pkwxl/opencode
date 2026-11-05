@@ -1,6 +1,8 @@
 // runAll's preflight (pre-run checks): prompt library loading, agent contract
 // integrity check, stats loading and the progress heartbeat, driver state
-// files read-only, test-handover restoration, the start clean gate,
+// files read-only, test-handover restoration, the remediation executor row
+// (plans/0172 D2 — run's half of the blockage protocol's "next run/plan
+// executes" promise), the start clean gate,
 // the scheduler's usage gate (interactive input under concurrency,
 // plans/0068 D11) and its no-level teaching note (plans/0125 D4), orphan
 // lane recovery (D14), interruption state reset, AGENTS.md/.gitignore
@@ -17,6 +19,7 @@ import { checkAgentBins } from "./agent-pool"
 import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { provenanceComparison } from "./bundle"
+import { executeBlockageChoices, executionLines } from "./blockage-execute"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
 import { fileTracked, type GitOps } from "./git"
@@ -564,6 +567,27 @@ export async function preflight(
   // — the number is derived from the surviving files since plans/0150, so
   // the stale record reads as nothing.
   if (!opts.dryrun && (await removeRetiredNumberingRecord(directory))) log("removed: .auto/next-task (numbering record retired; an earlier release wrote it)")
+  // The remediation executor row (plans/0172 D2, 0165-025): the blockage
+  // document's protocol promises "The next `run`/`plan` executes" — this row
+  // is run's half. It runs before the start clean gate so the person's
+  // uncommitted `Choice:` line is committed (the executor's own answer
+  // commit) instead of being refused as dirt by the gate below; a non-stale
+  // reblock exits 2 exactly as plan's prelude row does. Skipped by lane
+  // workers (the parent's row runs ahead of every dispatch; the worker's
+  // copy carries the executed marks) and by dryrun (no writes). A project
+  // without blockage documents — the ordinary run — finds nothing pending
+  // and logs nothing (the byte-identical floor).
+  if (!opts.dryrun && !opts.lane) {
+    const executed = await executeBlockageChoices(directory, await currentRound(directory))
+    if (executed.type === "reblocked" && !executed.stale) {
+      log(`⏸ remediation re-blocked: ${executed.reason}`)
+      log(`next: resolve what it names, then re-run: ${bin} run ${directory}`)
+      progress.close()
+      watcher?.close()
+      return { exit: 2 }
+    }
+    for (const line of executionLines(executed)) log(line)
+  }
   // the start clean gate (plans/0021-commit-boundary-design.md P3): the
   // worktree must be clean — everything the execution units after it
   // (task/subtask/hidden task) depend on is fixed by the previous commit. A

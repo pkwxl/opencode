@@ -9,7 +9,7 @@
 // 1 naming the cause; with no registry preflight is unchanged. The operator
 // layer stays out of these tests (test/preload.ts empties XDG_CONFIG_HOME).
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { AgentHost } from "../src/agent/types"
@@ -241,6 +241,113 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
   test("an active record over a clean tree logs nothing and passes (the exemption is silent when not dirty)", async () => {
     const dir = await project()
     await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
+    const { lines, result } = await capture(dir)
+    expect("exit" in result).toBe(false)
+    expect(lines).toEqual([])
+  })
+})
+
+describe("the remediation executor row at run start (plans/0172 D2, 0165-025)", () => {
+  // The same initialized, committed project shape the interrupted-unit tests
+  // build, plus the blockage document the render-gate diagnosis leaves: the
+  // committed placeholder document, the person's `Choice: A` over it
+  // uncommitted — the state the protocol's "then re-run" hands `run`.
+  const HANDOVER = "docs/R-01/P02-design/handover.md"
+  const OLD = "uapi ABI-constant carve-out: include/uapi/linux/ext4.h may be read by grep/extract for constants only"
+  const HANDOVER_TEXT = ["# Handover", "", "## Constraints and pitfalls", "", OLD, "", "## Artifact index", "", "- none", ""].join("\n")
+  const blockage = (choice: string) =>
+    [
+      "# Blockage 1: plan-verify (phase-plan R-01.P03)",
+      "",
+      "- Round: R-01",
+      "- Gate: plan-verify",
+      "- Step: phase-plan R-01.P03",
+      "- Verdict: INCONSISTENT — the wall",
+      "",
+      "## Analysis",
+      "",
+      "The carve-out launders a provisional default into a constraint.",
+      "",
+      "## Options",
+      "",
+      "### A Tighten the handover",
+      "Channel: handover-edit",
+      "Edits:",
+      `1. ${HANDOVER} — replace lines 5–5 (${OLD} | ${OLD}) with:`,
+      "constants come from the restated ABI in the spec notes",
+      "Consequences: the wall is strict",
+      "Recommendation: A",
+      "",
+      "## Decision",
+      "",
+      `Choice: ${choice}`,
+      "Notes: <optional>",
+      "",
+      "## Execution protocol",
+      "",
+      "1. (the protocol the document ships with)",
+      "",
+    ].join("\n")
+
+  async function project(): Promise<string> {
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  // The invalid-refs test's capture ritual (ambient scrub, console spy,
+  // progress/watcher close, unprotect, flushStats).
+  async function capture(dir: string): Promise<{ lines: string[]; result: Awaited<ReturnType<typeof preflight>> }> {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let result: Awaited<ReturnType<typeof preflight>>
+    try {
+      result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    return { lines, result }
+  }
+
+  test("a run-side Choice executes at preflight: the person's uncommitted answer commits, the edits land, no gate exit", async () => {
+    const dir = await project()
+    await mkdir(dirname(join(dir, HANDOVER)), { recursive: true })
+    await writeFile(join(dir, HANDOVER), HANDOVER_TEXT)
+    await Bun.write(join(dir, "docs/R-01/blockage-1.md"), blockage("<one option letter>"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "the blockage")
+    // the person's act: one line over the placeholder, uncommitted
+    await Bun.write(join(dir, "docs/R-01/blockage-1.md"), blockage("A"))
+    const { lines, result } = await capture(dir)
+    expect("exit" in result).toBe(false)
+    const doc = await Bun.file(join(dir, "docs/R-01/blockage-1.md")).text()
+    expect(doc).toMatch(/Executed: A \([0-9a-f]+[, ]*[0-9a-f]*\)/)
+    expect(await Bun.file(join(dir, HANDOVER)).text()).toContain("constants come from the restated ABI in the spec notes")
+    // the executor's commits settled the tree ahead of the start gate
+    expect(await changedFiles(dir)).toEqual([])
+    const subjects = (await git(dir, "log", "--pretty=%s")).split("\n")
+    expect(subjects).toContain("PLAN remediate 1 option A: the person's choice")
+    expect(lines.some((line) => line.includes("the person's choice is on record: docs/R-01/blockage-1.md option A"))).toBe(true)
+    expect(lines.some((line) => line.startsWith("✓ remediation docs/R-01/blockage-1.md option A"))).toBe(true)
+  })
+
+  test("a project without blockage documents: the row is silent (the byte-identical floor)", async () => {
+    const dir = await project()
     const { lines, result } = await capture(dir)
     expect("exit" in result).toBe(false)
     expect(lines).toEqual([])

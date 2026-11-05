@@ -516,9 +516,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // D5 / §5 D6): the pure half every covered block site builds on.
   blockage: "driver",
   // The remediation executor (plans/0082 §5 D7): the prelude row's
-  // mechanical body over the Choice marks — plan.ts imports this module
-  // only, so it starts no session and imports no session-driving layer,
-  // exactly the constraint plan itself lives under.
+  // mechanical body over the Choice marks — plan.ts's prelude and
+  // loop-preflight's run-side row (plans/0172 D2) import this module, so it
+  // starts no session and imports no session-driving layer, exactly the
+  // constraint plan itself lives under.
   "blockage-execute": "driver",
   // The blockage diagnosis session and document (plans/0082 §4-§6
   // D3-D8): the requireArtifact dispatch, the strict parse, the committed

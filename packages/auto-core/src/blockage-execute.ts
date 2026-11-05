@@ -15,6 +15,10 @@
 // enumerated edit spec plus the blockage document's own mark lines, and the
 // commit stages exactly `remediation` (plus `plan-input`, the existing
 // write path the planning-input channel maps onto — its own commit, D7).
+// The person's uncommitted Choice line is committed first as its own
+// `remediation` commit naming their choice (plans/0172 D1) — the one
+// exception to a clean tree at entry, and a pathspec-scoped commit, so the
+// ratchet's shape is unchanged.
 // Driver-exclusive state is never touched: an edit naming it is refused
 // before anything is written.
 import { join } from "node:path"
@@ -31,7 +35,7 @@ import {
 import { BRIEF_FILE } from "./brief"
 import { roundDirName } from "./docpaths"
 import { roleOf } from "./document/roles"
-import { beginUnit, commitTree, headSha } from "./git"
+import { beginUnit, changedFiles, commitTree, headSha } from "./git"
 import { log } from "./log"
 import { savePlanInput } from "./plan-input"
 import { allowWrite, reprotect } from "./protect"
@@ -62,6 +66,26 @@ export async function executeBlockageChoices(dir: string, round: number): Promis
   const docs = await readBlockageDocs(dir, round)
   const pending = docs.filter((doc) => choiceMark(doc.text) !== undefined && executedMark(doc.text) === undefined && !rejectedMark(doc.text))
   if (!pending.length) return { type: "none" }
+  // The person's answer is the pending document's own uncommitted edit (plans/
+  // 0172 D1, 0165-025): the diagnosis commits the document carrying the
+  // placeholder, the person writes their `Choice:` line over it, and the
+  // taught re-run arrives with exactly that edit in the tree. Commit each
+  // pending document's changes first — its own remediation commit naming the
+  // person's choice — so the gate below never refuses the line the protocol
+  // taught them to write (the whole-file commit is the ratification
+  // semantics: the marked text became their words, their Notes and option
+  // edits ride the same commit). Dirt anywhere else still blocks below, and
+  // the executor absorbs no unrelated work.
+  const answerDirt = (await changedFiles(dir)).filter((file) => pending.some((doc) => doc.file === file))
+  for (const doc of pending) {
+    if (!answerDirt.includes(doc.file)) continue
+    const option = choiceMark(doc.text)!.choice
+    const settled = await commitTree(dir, { id: "PLAN", title: `remediation (${doc.file})` }, { stage: "remediation", subject: `${remediationSubjectPrefix(doc.file)}${option}: the person's choice` }, [doc.file])
+    if (!settled.ok) {
+      return { type: "reblocked", landed: [], reason: `committing the person's choice in ${doc.file} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The line is kept in the worktree; commit it manually and re-run` }
+    }
+    log(`✓ the person's choice is on record: ${doc.file} option ${option} (its own remediation commit)`)
+  }
   // The executor's edits are this row's first write: the tree must be clean
   // first (driver-state leftovers self-heal through beginUnit's gate, like
   // every unit start).

@@ -1,5 +1,6 @@
 import { chmod } from "node:fs/promises"
 import { join } from "node:path"
+import { ANALYSIS_DOC } from "./docpaths"
 import { PROTECTED_FILES } from "./document/roles"
 
 // Read-only guard for driver-owned files: during `run`, opencode.json, the
@@ -15,8 +16,9 @@ import { PROTECTED_FILES } from "./document/roles"
 // files (including manual config amendments) after the driver stops.
 // The file list is the driverState role's fixed-location files
 // (document/roles.ts PROTECTED_FILES, M2.3) plus the contract surface AGENTS.md,
-// the model registry's project layer (plans/0055 §4.1) and the bundle
-// provenance sidecar (plans/0100 D1). The project layer
+// the model registry's project layer (plans/0055 §4.1), the bundle
+// provenance sidecar (plans/0100 D1) and the project analysis (plans/0172
+// D3, 0165-093). The project layer
 // is the operator's, not driverState: the driver reads it once at run start and
 // never writes it, so it has no allowWrite path, and it goes read-only while a
 // session runs as opencode.json does. Its path is src/models.ts MODELS_FILE,
@@ -25,7 +27,15 @@ import { PROTECTED_FILES } from "./document/roles"
 // sidecar is the same shape of state (committed, written only by init's
 // materialization and the person's sync — never mid-run; sync refuses under a
 // live run lock), spelled out from src/provenance.ts PROVENANCE_FILE for the
-// same layering reason.
+// same layering reason. The analysis is the person's between-commands
+// governance document: its release mark, roadmap lines and round-brief
+// proposals all act with the person's authority, the driver never writes it
+// during a run (the stub is plan's row, the release is clarify's or the
+// person's hand — commands, protection off), and a run-time session has no
+// legitimate write to it (plans/0084: the drafting agent works interactively
+// at stops, never as a driver-driven session) — the brief's precedent, its
+// path spelled out from src/docpaths.ts ANALYSIS_DOC and pinned beside it in
+// test/protect.test.ts.
 //
 // Beside the fixed-role set stands the declared sealed-path set (plans/0132
 // D4): the vetted channel the wall commit froze — the sealing phase's
@@ -37,7 +47,7 @@ import { PROTECTED_FILES } from "./document/roles"
 // and this set is its guardrail half — the same words bound the claim as
 // PROTECTED_FILES' own.
 // AUTO-RESOLVE: does a run keep the project layer's own mode (say 0o600) or leave it 0o644 like the other files? -> the same fixed modes as the other files, 0o444 during run and 0o644 after (the layer holds references, never a key, and one mode rule keeps a killed run's leftovers repairable by the next run's unprotect)
-const FILES = [...PROTECTED_FILES, "AGENTS.md", ".opencode/auto/models.json", ".opencode/auto/provenance.json"]
+const FILES = [...PROTECTED_FILES, "AGENTS.md", ".opencode/auto/models.json", ".opencode/auto/provenance.json", ANALYSIS_DOC]
 
 let enabled = false
 let sealed: string[] = []

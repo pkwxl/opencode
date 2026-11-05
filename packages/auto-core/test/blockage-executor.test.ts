@@ -127,6 +127,32 @@ describe("the executor's write ratchet (plans/0082 §5 D7, the chain-writes patt
     }
   })
 
+  // plans/0172 D1 (0165-025): the person's real act — the diagnosis commits
+  // the document carrying the placeholder, their edit writes `Choice: A`
+  // over it uncommitted — is never refused as dirt: the executor commits the
+  // choice as its own remediation commit first, then executes.
+  test("the person's uncommitted Choice line is committed first and executed, never refused as dirt", async () => {
+    const dir = await repo()
+    try {
+      await seededDoc(dir, blockageDoc({ choice: "<one option letter>" }))
+      await writeFile(join(dir, "docs/R-01/blockage-1.md"), blockageDoc({ choice: "A" }))
+      const outcome = await executeBlockageChoices(dir, 1)
+      expect(outcome).toMatchObject({ type: "executed", file: "docs/R-01/blockage-1.md", option: "A" })
+      // The person's choice is its own remediation commit — the first one to
+      // land, ahead of the edit and record commits.
+      const subjects = (await git(dir, "log", "--reverse", "--pretty=%s")).split("\n").slice(2)
+      expect(subjects[0]).toBe("PLAN remediate 1 option A: the person's choice")
+      expect(subjects.length).toBeGreaterThanOrEqual(3)
+      // The edit itself landed (not just the choice commit).
+      expect(await Bun.file(join(dir, HANDOVER)).text()).toContain("constants come from the restated ABI in the spec notes")
+      const stages = await stageOf(dir)
+      expect(stages.every((stage) => stage === "Auto-Stage: remediation")).toBe(true)
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("the planning-input channel maps onto its existing write path: its own commit stage, the input text verbatim", async () => {
     const dir = await repo()
     try {
