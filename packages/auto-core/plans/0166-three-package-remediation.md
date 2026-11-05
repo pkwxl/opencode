@@ -140,6 +140,11 @@ WORKER STARTUP AND UNCLEAN-STATE RECOVERY
 
 1. Read AGENTS.md, the program and the active step record. Read only the
    detailed 0165 evidence needed for that step; do not re-review the corpus.
+   Re-read the program's status table and current position from disk at the
+   start of every session and again after any conversation pause — the program
+   may have advanced through another worker in the meantime, and conversation
+   memory is never the position authority (a resumed session once reopened a
+   step another worker had already completed).
 2. Inspect `git status`, relevant diffs and recent commits. An unclean tree is
    expected after interruption and is not, by itself, a reason to stop.
 3. Select the first `doing` step in table order. If the tree contains work
@@ -592,9 +597,9 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 
 ## Current position
 
-- **Active step**: none — step 003 (w0-category-scope) **done** 2026-11-05, committed with its record; the commit's short sha recoverable from git history.
-- **Completed this step**: all 22 lapsed rulings (0142–0161, 0163, 0164) regained a `## Category scope` section — placed between the final Derives paragraph and the Tests paragraph, reconstructed from each ruling's own D-blocks with every `changed` home grounded in its landing-commit chain; the register's remedy ("reconstruct home-sets where S32 finds family drift") discharged with S32 confirming practice drift, not enactment drift.
-- **Modified/created files**: modified the 22 `plans/0142…0164-*.md` documents; created `plans/0166-remediation/003-w0-category-scope.md`; this program's status table, ledger rows (0165-066, F9) and current position updated. No src, no templates, no INDEX, no AGENTS.md change.
-- **Commands and results**: `bun plans/0165-review/tools/family-check.ts` — all 22 now compute, every one `ok` (before: 22 × "no Category scope section"); `bun plans/0165-review/tools/probe.ts` — P4 zero flags (before: the 22 missing-section lines); table-grammar awk check — every new row exactly 2 cells; `bun typecheck` clean (exit 0). Docs-only change; no product suite due.
+- **Active step**: none. Steps 001–003 are `done` (init; w0-index-navigation @8f2dca4a8 — 0165-060/061/065/176 `fixed`; w0-category-scope @2d02f8bfa — 0165-066, F9 `fixed`). The first `todo` in table order is step 004.
+- **Latest session (2026-11-05, maintainer-instructed)**: protocol amended — a worker now completes consecutive proper steps (each verified and committed before the next begins) while its budget safely covers one more (≥30-minute acceptance margin), ending with a per-step report; worker startup hardened to re-read the durable position from disk at every session start and after any pause (conversation memory is never the position authority). Recovery: a mistaken step-002 reopen by a stale session (c38161ba1) had overwritten the done step-002 record — restored verbatim from 2d02f8bfa @9b0c52981, no commit rewritten; the premature `doing` mark on step 004 reverted. No remediation step was executed in that session.
+- **Modified/created files**: `plans/0166-three-package-remediation.md` (protocol + this section), `plans/INDEX.md` (0166 row synced), `plans/0166-remediation/002-w0-index-navigation.md` (restored).
+- **Commands and results**: governance only — no code, no suites due; step records of 001–003 carry their own verification lines.
 - **Unresolved problems**: none.
-- **Next action**: the next orchestrator invocation schedules a worker for step **004 (w0-0132-enactment)** — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked; findings 0165-067, F10. Evidence: `plans/0165-review/S20-isolation.md` (S20's verdict decides whether code follows), `plans/0132-sealed-reference-wall.md` (Category scope), commit 5b5b52fcd.
+- **Next action**: the next orchestrator invocation schedules a worker for step **004 (w0-0132-enactment)** — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked; findings 0165-067, F10. Evidence: `plans/0165-review/S20-isolation.md` (S20-02's reproduction decides whether code follows), `plans/0132-sealed-reference-wall.md` (Category scope), commit 5b5b52fcd. Under the amended protocol that worker then continues with steps 005+ while its budget allows.
