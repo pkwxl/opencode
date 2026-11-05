@@ -42,7 +42,7 @@ import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
 import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, commitLaneReceipts, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
@@ -181,7 +181,7 @@ export async function runRegressionLane(
   dir: string,
   round: number,
   lane: TestLane,
-  opts: { isolate: boolean; reflink?: boolean; idleMs?: number; maxMs?: number; pollMs?: number; logDir?: string },
+  opts: { isolate: boolean; reflink?: boolean; idleMs?: number; maxMs?: number; pollMs?: number; logDir?: string; git?: Pick<GitOps, "commitTree"> },
 ): Promise<RegressionRun> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
@@ -223,6 +223,13 @@ export async function runRegressionLane(
     ...(violation ? { violation } : {}),
   }
   await writeLaneReceipt(dir, run, heads)
+  // The receipt's janitor commit (plans/0171 D2): the introducing commit is
+  // a `regression`-stage driver commit — the provenance witness the coverage
+  // readers (regressionCovered, dependencyComplete) demand. The pathspec
+  // commit never absorbs the concurrent session's work; under a kill between
+  // the write and this commit, the receipt stays dirty and the next
+  // boundary's commitPendingReceipts sweeps it with the same stage.
+  await commitLaneReceipts(dir, opts.git, { id: "PLAN", title: `regression receipts (R-${String(round).padStart(2, "0")})` }, [run.receipt], "regression", `PLAN regression R-${String(round).padStart(2, "0")} ${lane.name}`)
   if (opts.isolate) {
     await rm(join(dir, RECORD), { force: true }).catch(() => {})
     if (copy !== undefined) await rm(copy, { recursive: true, force: true }).catch(() => {})
@@ -247,12 +254,14 @@ export async function recoverRegression(dir: string): Promise<void> {
   log(`⚠ an interrupted background regression run${which} is discarded — no receipt landed, the lane re-runs at the next boundary (plans/0098 D4)`)
 }
 
-// The boundary's receipt commit (plans/0098 D4): a receipt the background
-// run wrote while a session worked rides that session's unified commit; one
-// still uncommitted at the following boundary (the run finished between the
-// last close-out and now) would dirty the next unit's start gate, so it gets
-// its own driver commit — but only when it is the ONLY change (foreign dirt
-// keeps its owner: the clean gate's block, not a sweep into our commit).
+// The boundary's receipt commit (plans/0098 D4, the stage made total by
+// plans/0171 D2): a receipt still uncommitted at a boundary (the write's
+// janitor commit failed, or a killed process left it dirty) is swept by its
+// own pathspec commit — stage `regression`, the provenance witness the
+// readers demand — never left to ride a session's unified commit. The
+// pathspec commits only the receipt paths: foreign dirt keeps its owner
+// (the clean gate's block, not a sweep into our commit), which is why the
+// sweep no longer defers when other changes are present.
 // Exported since plans/0132 D3: the wall's admission scan runs the
 // regression lanes fresh ahead of the wall commit, and its receipts must
 // never ride the wall commit (which carries the door removal alone).
@@ -260,15 +269,10 @@ export async function commitPendingReceipts(dir: string, round: number, git: Pic
   const changed = await changedFiles(dir)
   const receipts = changed.filter((path) => roleOf(path) === "regression")
   if (!receipts.length) return
-  const foreign = changed.filter((path) => roleOf(path) !== "regression")
   const label = `R-${String(round).padStart(2, "0")}`
   const names = receipts.map((path) => basename(path)).join(", ")
-  if (foreign.length) {
-    log(`⚠ the regression receipt(s) ${names} share the dirty tree with other changes (${foreign.join(", ")}); they ride the next unified commit instead of a dedicated one`)
-    return
-  }
-  const settled = await git.commitTree(dir, { id: "PLAN", title: `regression receipts (${label})` }, { stage: "regression", subject: `PLAN regression ${label} ${names}` })
-  if (!settled.ok) log(`⚠ the regression receipt commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")} — the next unit's clean gate will name them`)
+  const settled = await git.commitTree(dir, { id: "PLAN", title: `regression receipts (${label})` }, { stage: "regression", subject: `PLAN regression ${label} ${names}` }, receipts)
+  if (!settled.ok) log(`⚠ the regression receipt commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")} — the receipts stay in the worktree; the readers reject them until a janitor commit lands`)
   else log(`✓ regression receipt${receipts.length === 1 ? "" : "s"} committed: ${names}`)
 }
 
@@ -283,7 +287,7 @@ const deferred = new Set<string>()
 // the committed state the receipt's heads will vouch for). Fire-and-forget:
 // the completion writes its own receipt and cleans up after itself, and the
 // hold awaits the slot through regressionInFlight when it must.
-async function launchStale(dir: string, opts: RegressionOpts, round: number, rows: readonly TestLane[]): Promise<void> {
+async function launchStale(dir: string, opts: RegressionOpts, round: number, rows: readonly TestLane[], git?: Pick<GitOps, "commitTree">): Promise<void> {
   const key = resolve(dir)
   if (slots.has(key)) return
   if (await pendingChanges(dir)) return
@@ -296,7 +300,7 @@ async function launchStale(dir: string, opts: RegressionOpts, round: number, row
       }
       return
     }
-    const done: Promise<void> = runRegressionLane(dir, round, lane, { isolate: true, idleMs: opts.idleMs, maxMs: opts.maxMs }).then(
+    const done: Promise<void> = runRegressionLane(dir, round, lane, { isolate: true, idleMs: opts.idleMs, maxMs: opts.maxMs, git }).then(
       () => undefined,
       (error) => {
         log(`⚠ the background regression run of ${lane.name} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -324,7 +328,7 @@ export async function regressionBoundary(ctx: { directory: string; git: Pick<Git
   if (!autoSwitches().regression || opts.dryrun || !(opts.testByDriver && codeWork(phase.entry))) return
   const rows = regressionLanes(parseTestLanes(promptFacts({ dir: ctx.directory, intent: opts.intent }).pack))
   if (!rows) return
-  await launchStale(ctx.directory, opts, round, rows)
+  await launchStale(ctx.directory, opts, round, rows, ctx.git)
 }
 
 // —— The phase-close hold (plans/0098 D5) ——
@@ -387,7 +391,7 @@ export async function ensureRegressionGreen(
       await inFlight
       if ((await regressionCovered(ctx.directory, round, lane)).covered) continue
     }
-    const run = await runRegressionLane(ctx.directory, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    const run = await runRegressionLane(ctx.directory, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs, git: ctx.git })
     if (run.violation?.kind === "head") {
       await commitPendingReceipts(ctx.directory, round, ctx.git)
       return { kind: "corrupted", moved: run.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`) }
@@ -479,7 +483,7 @@ type StrictWait = { lane: string; deps: string[]; run: RegressionRun } | { corru
 // the stash guard armed. A green receipt at the current HEAD completes
 // every dependency at once; a red rides the anchor-red path (the fix loop
 // owns the dependency's defect through this unit's rounds).
-export async function strictRegressionWait(dir: string, round: number, rows: readonly TestLane[], deps: readonly string[], ownTask: string, opts: RegressionOpts): Promise<StrictWait> {
+export async function strictRegressionWait(dir: string, round: number, rows: readonly TestLane[], deps: readonly string[], ownTask: string, opts: RegressionOpts, git?: Pick<GitOps, "commitTree">): Promise<StrictWait> {
   const strict = rows.filter((lane) => lane.strict)
   if (!strict.length || !deps.length) return undefined
   const ownPaths = await taskChangedPaths(dir, ownTask)
@@ -500,7 +504,7 @@ export async function strictRegressionWait(dir: string, round: number, rows: rea
       if (!(await dependencyComplete(dir, round, lane, dep, ownPaths))) awaitedStill.push(dep)
     }
     if (!awaitedStill.length) continue
-    const run = await runRegressionLane(dir, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    const run = await runRegressionLane(dir, round, lane, { isolate: false, idleMs: opts.idleMs, maxMs: opts.maxMs, git })
     if (run.violation?.kind === "head") {
       return { corrupted: run.violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`) }
     }

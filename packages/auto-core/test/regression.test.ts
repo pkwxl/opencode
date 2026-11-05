@@ -30,6 +30,15 @@ const writeReceipt = (dir: string, seq: number, text: string) => {
   return rel
 }
 
+// The receipts' janitor commit (plans/0171 D2): a green receipt is carry
+// basis only when the commit introducing its current bytes carries the
+// regression stage — the fixtures land receipts the way the driver does, so
+// the coverage/hold/strict reads below witness them.
+const commitReceipt = async (dir: string, rel: string) => {
+  await git(dir, "add", "--", rel)
+  await git(dir, "commit", "-qm", `PLAN regression fixture ${rel}`, "-m", "Auto-Task: PLAN", "-m", "Auto-Stage: regression")
+}
+
 describe("the regression receipt home (plans/0098 D2)", () => {
   test("the path constructor and the seq scan", async () => {
     expect(regressionReceiptDoc(1, 3, "verify-full")).toBe(join("docs", "R-01", "regression", "3-verify-full.md"))
@@ -90,6 +99,39 @@ describe("the coverage predicate (regressionCovered — the complete-pass rule, 
     }
   })
 
+  // The provenance witness (plans/0171 D2, enacting S20-05): a green
+  // receipt a session wrote — riding a task-stage unified commit, or sitting
+  // dirty in the tree — is never carry basis. Location is not provenance:
+  // before the witness, a session-shaped receipt naming older HEADs and a
+  // future End discharged the regression hold without the lane ever running.
+  test("a session-shaped receipt is not carry basis: a task-stage commit or tree dirt rejects it, a janitor commit accepts", async () => {
+    const dir = await freshRepo()
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "--allow-empty", "-qm", "init")
+      const head = (await git(dir, "rev-parse", "HEAD")).trim()
+      // A session's forged receipt riding a task-shaped commit (no janitor
+      // stage): rejected.
+      writeReceipt(dir, 1, receiptText(head, "green", "2099-01-01T00:00:00Z"))
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-002 exec", "-m", "Auto-Task: T-002", "-m", "Auto-Stage: execute")
+      expect(await newestGreenReceipt(dir, 1, lane.name)).toBeUndefined()
+      expect((await regressionCovered(dir, 1, lane)).covered).toBe(false)
+      // A dirty receipt (the kill window before any commit): rejected.
+      writeReceipt(dir, 2, receiptText(head, "green", "2099-01-02T00:00:00Z"))
+      expect(await newestGreenReceipt(dir, 1, lane.name)).toBeUndefined()
+      // The janitor commit (what runRegressionLane and the boundary sweep
+      // write) is the witness: the same bytes carry.
+      await commitReceipt(dir, "docs/R-01/regression/2-verify-full.md")
+      const carried = await newestGreenReceipt(dir, 1, lane.name)
+      expect(carried).toMatchObject({ end: "2099-01-02T00:00:00Z" })
+      expect((await regressionCovered(dir, 1, lane)).covered).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a green receipt at the current HEADs covers; a later change on its surfaces uncovers with the diff as the attribution basis", async () => {
     const dir = await freshRepo()
     try {
@@ -100,11 +142,11 @@ describe("the coverage predicate (regressionCovered — the complete-pass rule, 
       await git(dir, "add", "-A")
       await git(dir, "commit", "--allow-empty", "-qm", "init")
       const head = (await git(dir, "rev-parse", "HEAD")).trim()
-      writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z"))
+      await commitReceipt(dir, writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z")))
       expect(await regressionCovered(dir, 1, lane)).toEqual({ covered: true, receipt: await newestGreenReceipt(dir, 1, lane.name) })
       // A newer green receipt wins by its End time; an older stale one does
       // not shadow it.
-      writeReceipt(dir, 2, receiptText(head, "green", "2026-10-15T12:00:00Z"))
+      await commitReceipt(dir, writeReceipt(dir, 2, receiptText(head, "green", "2026-10-15T12:00:00Z")))
       expect((await newestGreenReceipt(dir, 1, lane.name))?.end).toBe("2026-10-15T12:00:00Z")
       // A change off the lane's surfaces keeps it covered (docs only).
       writeFileSync(join(dir, "docs", "note.md"), "changed\n")
@@ -224,13 +266,17 @@ describe("the boundary and the orphan recovery (plans/0098 D4)", () => {
       await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase)
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: regression")
-      // Foreign dirt beside a pending receipt: no dedicated commit sweeps it.
+      // Foreign dirt beside a pending receipt: the pathspec sweep commits the
+      // receipt alone (plans/0171 D2 — the ride-the-unified-commit deferral
+      // retired); the foreign dirt keeps its owner for the clean gate to
+      // name.
       writeReceipt(dir, 2, receiptText((await git(dir, "rev-parse", "--short", "HEAD")).trim(), "green", "2026-10-15T11:00:00Z"))
       writeFileSync(join(dir, "src.ts"), "someone else's work\n")
       await regressionBoundary({ directory: dir, git: { commitTree } }, { testByDriver: false }, phase)
       const status = await git(dir, "status", "--porcelain")
-      expect(status).toContain("docs/R-01/regression/2-verify-full.md")
+      expect(status).not.toContain("docs/R-01/regression/2-verify-full.md")
       expect(status).toContain("src.ts")
+      expect(await git(dir, "log", "-1", "--pretty=%B", "--", "docs/R-01/regression/2-verify-full.md")).toContain("Auto-Stage: regression")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -303,7 +349,7 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
       withPack(dir, "echo must-not-run")
       await taskCommit(dir, "T-001", "src/a.ts", "a\n")
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z"))
+      await commitReceipt(dir, writeReceipt(dir, 1, receiptText(head, "green", "2026-10-15T10:00:00Z")))
       const covered = await ensureRegressionGreen({ directory: dir, git: { commitTree } }, { testByDriver: true }, phase, tasks)
       expect(covered).toEqual({ kind: "ok" })
       expect(await latestRegressionSeq(dir, 1)).toBe(1)
@@ -400,7 +446,7 @@ describe("the strict test-readiness (strictRegressionWait — plans/0098 D7)", (
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "T-001 exec", "-m", "Auto-Task: T-001")
       const green = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      writeReceipt(dir, 1, receiptText(green, "green", "2026-10-15T10:00:00Z"))
+      await commitReceipt(dir, writeReceipt(dir, 1, receiptText(green, "green", "2026-10-15T10:00:00Z")))
       // The current unit's own commits touch the dependency's paths — its
       // own testing assesses that building; no wait, no run.
       writeFileSync(join(dir, "src", "a.ts"), "a built-upon\n")

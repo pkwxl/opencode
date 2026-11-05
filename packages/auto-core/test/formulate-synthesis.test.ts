@@ -7,7 +7,7 @@
 // formulation whose floor assembly is unchanged keeps its landed todo, no
 // constructor re-run).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
@@ -550,6 +550,130 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(lines.some((line) => line.includes("the formulation output is invalid") && line.includes("no longer lists the formulation task"))).toBe(true)
       // The wrap-up never dispatched: the guard blocked before it.
       expect(createTitles(f).some((title) => title!.includes("wrapup"))).toBe(false)
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  // The landed todo, not the session's copy (plans/0171 D6, enacting
+  // S08-04): a formulation session that deletes its own todo's obligations
+  // ledger once passed the collect with no coverage map at all and the
+  // wrap-up judged the reduced Scope. The commit boundary now restores the
+  // edit (the detection line names it), the collect reads the landed ledger,
+  // and the coverage totality holds — done.md carries the ledger.
+  test("a session deleting its own todo's ledger is restored at the boundary; the collect judges the landed text", async () => {
+    const stripLedger = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes("What this task writes (the DRIVER's format protocol)")) {
+        const done = artifactTurns(dir)(ctx)
+        const own = /# (T-\d+): Formulate /.exec(ctx.text)?.[1]
+        if (own) {
+          const file = join(dir, "docs", own, "todo.md")
+          const text = readFileSync(file, "utf8")
+          const at = text.indexOf("## Obligations ledger")
+          if (at >= 0) {
+            const rest = text.slice(at)
+            const end = rest.indexOf("\n## ", 1)
+            writeFileSync(file, `${text.slice(0, at)}${end >= 0 ? rest.slice(end + 1) : ""}`)
+          }
+        }
+        return done
+      }
+      return artifactTurns(dir)(ctx)
+    }
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? stripLedger(dir)(ctx))
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      // The strip is detected and restored; the plan proceeds on the landed
+      // text (the ledger present, the coverage map checked against it).
+      expect(code).toBe(0)
+      expect(lines.some((line) => line.includes("a session modified") && line.includes("DRIVER-owned; restored from HEAD"))).toBe(true)
+      const done = await Bun.file(join(f.dir, "docs", "T-001", "done.md")).text()
+      expect(done).toContain("## Obligations ledger")
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  // The digest pin's own blocked voice (plans/0171 D6): an edit the boundary
+  // cannot cover (a hand-committed change past the exec commit — the
+  // interruption-commit shape) meets the collect's digest check and blocks
+  // with the restore remedy.
+  // The driver's markers are never a planned task's to carry (plans/0171 D6,
+  // enacting S08-08): a session copying `Formulate:` onto a task it planned
+  // once reclassified the task as machinery. The collect names it a problem.
+  test("a planned task carrying the Formulate marker is a collect problem: the marker is the driver's", async () => {
+    const forgeMarker = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes("What this task writes (the DRIVER's format protocol)")) {
+        const done = artifactTurns(dir)(ctx)
+        const planned = nextPlanned(dir)
+        if (planned) {
+          const file = join(dir, "docs", planned, "todo.md")
+          const text = readFileSync(file, "utf8")
+          writeFileSync(file, text.replace(/^Phase: (.+)$/m, `Phase: $1\nFormulate: $1`))
+        }
+        return done
+      }
+      return artifactTurns(dir)(ctx)
+    }
+    // The task artifactTurns just planned: the highest-numbered todo.md the
+    // planning turn created (never the formulation unit's own).
+    const nextPlanned = (dir: string): string | undefined => {
+      let best: { id: string; n: number } | undefined
+      for (const name of readdirSync(join(dir, "docs"))) {
+        const m = /^T-(\d+)$/.exec(name)
+        if (!m || !existsSync(join(dir, "docs", name, "todo.md"))) continue
+        if (!best || Number(m[1]) > best.n) best = { id: name, n: Number(m[1]) }
+      }
+      return best?.id
+    }
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? forgeMarker(dir)(ctx))
+    try {
+      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      expect(code).toBe(2)
+      expect(lines.some((line) => line.includes("carries a `Formulate:` field") && line.includes("the driver's marker of the phase's formulation unit; remove the field line"))).toBe(true)
+      expect(createTitles(f).some((title) => title!.includes("wrapup"))).toBe(false)
+    } finally {
+      await rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  // The dropped row is driver-restored and the re-run re-dispatches
+  // (plans/0171 D7, enacting S08-06): before the restore, the blocked
+  // collect left the row-less index committed and a plain re-run executed
+  // the unjudged plan through a "clean phase end" — the formulation unit
+  // invisible to every later load.
+  test("the row-drop block restores the row and commits it; the re-run re-dispatches the formulation over the surviving files", async () => {
+    const dropOwnRow = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes("What this task writes (the DRIVER's format protocol)")) {
+        const phaseDir = promptPhaseDir(ctx.text)
+        const own = /# (T-\d+): Formulate /.exec(ctx.text)?.[1]
+        if (phaseDir && own) {
+          appendOneTask(dir, phaseDir)
+          const file = join(dir, phaseDir, "tasks.md")
+          const kept = readFileSync(file, "utf8").split("\n").filter((line) => !line.startsWith(`- [ ] ${own} `))
+          writeFileSync(file, `${kept.join("\n").replace(/\n+$/, "\n")}`)
+        }
+        return undefined
+      }
+      return artifactTurns(dir)(ctx)
+    }
+    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? dropOwnRow(dir)(ctx))
+    try {
+      const first = await f.run({ intent: "verify", routing: routing() })
+      expect(first.code).toBe(2)
+      expect(first.lines.some((line) => line.includes("no longer lists the formulation task"))).toBe(true)
+      // The driver restored the row at the head and committed the restore as
+      // its own write — the index lists the unit again.
+      expect(first.lines.some((line) => line.includes("the driver restored the row at the head"))).toBe(true)
+      const index = await Bun.file(join(f.dir, "docs/R-01/P01-implement/tasks.md")).text()
+      expect(index).toContain("- [ ] T-001 Formulate")
+      expect((await f.git("log", "--format=%s", "--", "docs/R-01/P01-implement/tasks.md")).trim()).toContain("row restore")
+      // The re-run sees the unit and re-dispatches the formulation over the
+      // surviving files (the session drops the row again — the same blocked
+      // voice, never a silent execution of the unjudged plan).
+      const second = await f.run({ intent: "verify", routing: routing() })
+      expect(second.code).toBe(2)
+      expect(second.lines.some((line) => line.includes("no longer lists the formulation task"))).toBe(true)
     } finally {
       await rmSync(f.dir, { recursive: true, force: true })
     }

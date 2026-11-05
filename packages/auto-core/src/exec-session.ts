@@ -321,7 +321,7 @@ export async function runExecSession(
     if (test.pending) {
       const pending = test.pending
       test.pending = undefined
-      ran = await runTestScript(test, opts, pending.script, pending.seq)
+      ran = await runTestScript(test, opts, pending.script, pending.seq, pending.refused)
       // The side-effect guard's verdict (plans/0083 D11): a moved HEAD is the
       // corrupted-baseline family — block, no continuation over a corrupted
       // baseline; a tracked mutation is restored, the continuation prompt

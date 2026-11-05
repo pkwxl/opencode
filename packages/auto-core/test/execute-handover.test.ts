@@ -66,6 +66,61 @@ Body.
     }
   })
 
+  // Freshness required for every due verdict (plans/0171 D3, enacting
+  // S10-07): a due session is judged only by a document THIS session wrote.
+  // Before the fix, the predecessor's consumed `Status: continue` satisfied
+  // the due check — the phantom handover: the retry built for exactly this
+  // never ran, and the continuation resumed from next steps two sessions old
+  // while the log asserted a handover happened.
+  test("a due session over the consumed document is the retry case, never a phantom handover", async () => {
+    const { dir, plan, task, agent, chain, writeHandoff } = await setup((ctx) => {
+      if (ctx.n === 1) {
+        writeHandoff("# Handover\n\nHalf done; next: the rest.\n\nStatus: continue\n")
+        return [ev.message(ctx.session, "m_big", 90_000), ev.text(ctx.session, "t1", "working"), ev.idle(ctx.session)]
+      }
+      if (ctx.n === 2) return [ev.message(ctx.session, "m2", 90_000), ev.text(ctx.session, "t2", "still going"), ev.idle(ctx.session)]
+      return undefined
+    })
+    try {
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain)).toBeUndefined()
+      // Session 1 handed itself over (its document fresh); session 2 was due
+      // again and wrote nothing — the consumed document is not its handover,
+      // so the demand goes out (the retry), and session 3 finishes quietly.
+      expect(agent.prompts).toHaveLength(3)
+      expect(agent.prompts[1]!.text).toContain("First read docs/T-001/handoff.md")
+      expect(agent.prompts[2]!.text).toContain("This is a hard requirement")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The retry re-arms on every accepted handover (plans/0171 D3): the
+  // feedback promises one retry per handover, and a chain's later invalid
+  // document gets its own — not a "failed twice" block on its first failure.
+  test("the invalid-document retry re-arms after an accepted handover: a later failure retries instead of blocking as failed twice", async () => {
+    const { dir, plan, task, agent, chain, writeHandoff } = await setup((ctx) => {
+      if (ctx.n === 1) return [ev.message(ctx.session, "m1", 90_000), ev.text(ctx.session, "t1", "working"), ev.idle(ctx.session)]
+      if (ctx.n === 2) {
+        writeHandoff("# Handover\n\nHalf done; next: the rest.\n\nStatus: continue\n")
+        return [ev.message(ctx.session, "m2", 90_000), ev.text(ctx.session, "t2", "continuing"), ev.idle(ctx.session)]
+      }
+      if (ctx.n === 3) return [ev.message(ctx.session, "m3", 90_000), ev.text(ctx.session, "t3", "again"), ev.idle(ctx.session)]
+      return undefined
+    })
+    try {
+      expect(await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain)).toBeUndefined()
+      // 1: due, no document → the first retry (retried spent). 2: due, a
+      // fresh continue → accepted (the retry re-armed). 3: due, nothing →
+      // its own retry, not a block. 4: quiet natural finish.
+      expect(agent.prompts).toHaveLength(4)
+      expect(agent.prompts[1]!.text).toContain("This is a hard requirement")
+      expect(agent.prompts[2]!.text).toContain("First read docs/T-001/handoff.md")
+      expect(agent.prompts[3]!.text).toContain("This is a hard requirement")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("no document written and no wall hit: a single natural session, nothing demanded", async () => {
     const { dir, plan, task, agent, chain } = await setup()
     try {

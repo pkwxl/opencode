@@ -16,7 +16,7 @@ import { taskNumber, taskNumberFloor } from "./numbering"
 import { phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
-import { loadPlan, qualifiedPhase, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths, type PlanPhase, type Task } from "./tasks"
+import { loadPlan, qualifiedPhase, recordTodoDigest, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths, todoDigest, type PlanPhase, type Task } from "./tasks"
 import { parseIndex } from "./document/unit"
 
 // The formulation marker (plans/0095 D1): the task document's `Formulate:`
@@ -141,7 +141,16 @@ export async function constructFormulation(
   })
   const previous = await Bun.file(join(dir, pending)).text().catch(() => undefined)
   const fresh = state.type === "none"
-  if (previous === document && !fresh) return { type: "current", id, numberStart: n + 1 }
+  // The landed-todo digest (plans/0171 D6): recorded beside the floor digest
+  // on every construction (and re-recorded on the idempotent `current`
+  // return, which heals a pre-0171 standing construction whose todo still
+  // matches the render) — the formulation collect compares the file on disk
+  // against it, so the ledger and the Acceptance it judges are the driver's
+  // landed text, never the session's edited copy.
+  if (previous === document && !fresh) {
+    await recordTodoDigest(dir, id, todoDigest(document))
+    return { type: "current", id, numberStart: n + 1 }
+  }
   await mkdir(join(dir, "docs", id), { recursive: true })
   await Bun.write(join(dir, pending), document)
   const index = taskIndexPath(phase)
@@ -156,7 +165,31 @@ export async function constructFormulation(
       question: `formulation commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The task is left in the worktree; commit manually — a re-run writes the same content and does not duplicate it`,
     }
   }
+  await recordTodoDigest(dir, id, todoDigest(document))
   return { type: fresh ? "constructed" : "current", id, numberStart: n + 1 }
+}
+
+// The blocked collect's own self-heal (plans/0171 D7, enacting S08-06): a
+// formulation session that dropped its own row from the phase index left
+// the unit invisible to every later load — the collect's blocked voice
+// taught a hand restore while a plain re-run silently executed the unjudged
+// plan through a "clean phase end". The driver re-inserts the row at the
+// head (construction's position, ahead of the planned tasks) and commits it
+// as its own write, so the re-run re-dispatches the formulation over the
+// surviving files exactly as 0141 D2 promises. Idempotent — a row already
+// present, or no index at all, writes nothing.
+export async function restoreFormulationRow(dir: string, phase: PlanPhase, id: string, title: string): Promise<boolean> {
+  const index = taskIndexPath(phase)
+  const text = await Bun.file(join(dir, index)).text().catch(() => undefined)
+  if (text === undefined) return false
+  if (parseIndex(text, "task").entries.some((entry) => entry.id === id)) return false
+  const lines = text.split("\n")
+  const at = lines.findIndex((line) => /^[-*] \[.[x ]\] /.test(line))
+  const row = `- [ ] ${id} ${title}`
+  if (at < 0) lines.push(row)
+  else lines.splice(at, 0, row)
+  await Bun.write(join(dir, index), `${lines.join("\n")}${text.endsWith("\n") ? "" : "\n"}`)
+  return true
 }
 
 // The charter-as-acceptance (plans/0095 D2, phase-aware since 0097 D1): the

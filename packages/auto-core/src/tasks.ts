@@ -367,6 +367,11 @@ type Runtime = {
   // keeps its landed todo (no churn from constructor nondeterminism); a
   // changed digest re-constructs through the full pipeline.
   synthDigest?: string
+  // The landed-todo digest (plans/0171 D6): the content digest of the
+  // formulation todo.md as the driver last wrote it — the collect's pin that
+  // the ledger and the Acceptance it judges are the landed text, not the
+  // session's edited copy.
+  todoDigest?: string
 }
 type Units = { tasks: Record<string, Runtime> }
 
@@ -477,6 +482,24 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
   const scan = await scanUnitStates(dir, parsed.entries.map((entry) => taskRef(entry.id)))
   for (const bad of scan.illegal) {
     problems.push(`docs/${bad.id}/ has ${bad.kind === "both" ? `both ${UNIT_PENDING} and ${UNIT_COMPLETE}` : `neither ${UNIT_PENDING} nor ${UNIT_COMPLETE}`}`)
+  }
+  // The orphan formulation guard (plans/0171 D7, enacting S08-06): a
+  // formulation unit of THIS phase whose todo.md still carries the
+  // `Formulate:` marker but whose row the index does not list is invisible
+  // to every route — the drop shape's kill window (a session removed its own
+  // row and the process died before the blocked collect's driver restore).
+  // Loading refuses and names the restore; without this, a re-run routed
+  // straight to executing the planned tasks no collect ever judged and
+  // reported a clean phase end. Closed phases never trip it (a done unit
+  // reads done.md, and the scan reads pending files only).
+  const listed = new Set(parsed.entries.map((entry) => entry.id))
+  for await (const file of new Bun.Glob("docs/T-*/todo.md").scan({ cwd: dir, onlyFiles: true })) {
+    const id = /^(T-\d+)\/todo\.md$/.exec(file)?.[1]
+    if (!id || listed.has(id)) continue
+    const fields = parseUnitDoc(await Bun.file(join(dir, file)).text().catch(() => "")).fields
+    if (fields.formulate === plan.phase) {
+      problems.push(`docs/${id}/todo.md carries \`Formulate: ${plan.phase}\` but the index does not list ${id} — the formulation unit is driver-owned state no session may remove; restore its row \`- [ ] ${id} <title>\` at the index head, then re-run`)
+    }
   }
   if (problems.length) {
     throw new Error(
@@ -776,6 +799,37 @@ export async function recordSynthDigest(dir: string, id: string, digest: string 
   })
 }
 
+// —— The landed-todo digest (plans/0171 D6) ——
+// The formulation unit's todo.md is the session's single input and
+// DRIVER-owned (0101 D3); its content digest is recorded at construction
+// (beside the floor-assembly digest above) and the formulation collect
+// compares the file on disk against it — the ledger and the Acceptance the
+// collect and the wrap-up judge are the driver's landed text, never the
+// session's edited copy. Absent (pre-0171 constructions) = no check, the
+// byte-identical floor.
+
+// The content digest of a landed formulation todo (sha256 hex).
+export function todoDigest(document: string): string {
+  return new Bun.CryptoHasher("sha256").update(document).digest("hex")
+}
+
+// Reads a task's recorded landed-todo digest, if any.
+export async function unitTodoDigest(dir: string, id: string): Promise<string | undefined> {
+  const units = await readUnits(dir)
+  const value = units.tasks[id]?.todoDigest
+  return typeof value === "string" && value !== "" ? value : undefined
+}
+
+// Records (or, with undefined, drops) a task's landed-todo digest.
+export async function recordTodoDigest(dir: string, id: string, digest: string | undefined): Promise<void> {
+  await updateTask(dir, id, (entry) => {
+    const next = { ...entry }
+    if (digest === undefined) delete next.todoDigest
+    else next.todoDigest = digest
+    return next
+  })
+}
+
 // —— The dependency park (plans/0096 D7) ——
 
 // Records the park (the blocker id) or clears it (undefined — the released
@@ -960,8 +1014,17 @@ export async function newTaskProblems(
   problems.push(...checked.problems)
   if (checked.problems.length) return { problems }
   const doc = await Bun.file(join(dir, paths.pending)).text()
-  const phaseField = parseUnitDoc(doc).fields.phase
-  if (phaseField !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
+  const fields = parseUnitDoc(doc).fields
+  if (fields.phase !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
+  // The driver's own markers are never a planned task's to carry
+  // (plans/0171 D6, enacting S08-08): `Formulate:` is driver-written
+  // (0095 D1), and a session copying its own todo's field block onto a task
+  // it planned once reclassified that task as machinery — missing from the
+  // person's review summary, run through the formulation collect, blocked
+  // with a remedy naming a different task. `Closed:` is the done.md closure
+  // record's field; on a pending document it is nothing at all.
+  if (fields.formulate !== undefined) problems.push(`${paths.pending} carries a \`Formulate:\` field — the driver's marker of the phase's formulation unit; remove the field line`)
+  if (fields.closed !== undefined) problems.push(`${paths.pending} carries a \`Closed:\` field — the closure record belongs to a done.md; remove the field line`)
   return { problems, decl: taskDecl(id, doc) }
 }
 

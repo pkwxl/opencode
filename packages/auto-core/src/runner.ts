@@ -1,10 +1,13 @@
+import { rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
+import { restoreFormulationRow } from "./formulate"
 import { coverageProblems, ledgerOf } from "./formulate-synthesis"
+import { gitOf } from "./git-ops"
 import type { DecomposeMode } from "./document/unit"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
@@ -19,7 +22,7 @@ import { type ClientSource, type Opts, type Outcome, type SubtaskMode, type Unit
 import { phaseText, recoveryLadder, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, routingOf, runSession } from "./session"
 import { splitTaken } from "./split"
-import { begin, checklistTitle, inversionWarnings, markDone, plannedTaskProblems, reloadTask, takenTaskIds, type ChecklistItem, type Plan, type Task } from "./tasks"
+import { begin, checklistTitle, inversionWarnings, markDone, plannedTaskProblems, reloadTask, takenTaskIds, taskStatePaths, todoDigest, unitTodoDigest, type ChecklistItem, type Plan, type Task } from "./tasks"
 import { forgetProgressOf, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { emitStatus } from "./run-status"
@@ -320,8 +323,18 @@ export async function runTask(
       switches.steer
         ? await Bun.file(join(dir, opts.stream !== undefined ? subtaskDoc(task.id, opts.stream, "handoff") : taskDoc(task.id, "handoff"))).text().catch(() => undefined)
         : undefined
+    // The document is the handover signal only of the phase-scope that owns
+    // it (plans/0171 D5): whole (the execution stage), subtasks (a stream's
+    // own file, the read above), wrapup (a fix session's handover) and
+    // decompose. A record at closeout is past the fix loop — the document
+    // there is a leftover the retirement rules above will not reach (a kill
+    // inside the round's close-out window), and presence alone must not
+    // discard the live session for a fresh rung built on a stale document
+    // (S10-01's second scene).
     const handedOff =
-      recalled.active === true && (handoffRaw !== undefined || (opts.handoverTest === true && (await testHandoffExists(dir, task))))
+      recalled.active === true &&
+      recalled.phase?.kind !== "closeout" &&
+      (handoffRaw !== undefined || (opts.handoverTest === true && (await testHandoffExists(dir, task))))
     // Strict resume (plans/0022-session-recovery-fidelity-design.md 3.3): a
     // handover document present but without a valid status line (low quality)
     // → R3 fires — roll back and re-run, do not continue from the document; a
@@ -585,13 +598,32 @@ export async function runTask(
         // mechanical collect below could name the breach (plans/0141 D2) — a
         // crash where the designed shape is the collect's own blocked voice.
         // The unit's row is how the driver ticks and closes it; the remedy is
-        // restoring the row by hand, and a re-run dispatches a fresh session
-        // over the surviving files (the collect's v1 simplification, applied
-        // to its own grammar breach). Any other task's reload still throws —
-        // its row is driver-exclusive state no session may write.
+        // restoring the row, and a re-run dispatches a fresh session over the
+        // surviving files (the collect's v1 simplification, applied to its
+        // own grammar breach). Any other task's reload still throws — its row
+        // is driver-exclusive state no session may write.
         if (task.formulate !== undefined) {
           const reloaded = await reloadTask(plan, task.id).catch(() => undefined)
           if (!reloaded) {
+            // The dropped row is driver-exclusive state, so the driver
+            // restores it itself before blocking (plans/0171 D7, enacting
+            // S08-06): the row goes back at the index head and the restore
+            // commits as the driver's own write — the blocked voice stays
+            // the collect's, and the re-run re-dispatches the formulation
+            // over the surviving files instead of silently executing the
+            // unjudged plan through a "clean phase end". loadPlan's orphan
+            // guard is the same rule at read time — it catches the kill
+            // window this restore cannot (a kill between the exec commit
+            // and the collect).
+            const [roundId, phaseId] = plan.phase.split(".")
+            if (await restoreFormulationRow(dir, { round: roundId!, id: phaseId!, dir: dirname(plan.index) }, task.id, task.title)) {
+              const settled = await gitOf(opts).commitTree(dir, { id: task.id, title: task.title }, { stage: "phase-formulate", subject: `PLAN formulate ${task.id} row restore` }, [plan.index])
+              if (!settled.ok) {
+                log(`⚠ the formulation row restore commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(the row is in the worktree, handle manually)`)
+              } else {
+                log(`↻ ${task.id} the formulation session dropped its own index row; the driver restored the row at the head — the re-run re-dispatches the formulation over the surviving files`)
+              }
+            }
             return {
               type: "blocked",
               question: `the formulation output is invalid: ${plan.index} no longer lists the formulation task ${task.id} — its own row must stay in the index (the driver ticks and closes the unit through it); restore the row, then re-run`,
@@ -834,6 +866,23 @@ export async function runTask(
       // retry of the bypass era is not rebuilt; a re-run dispatches a fresh
       // session over the surviving files).
       if (task.formulate !== undefined) {
+        // The landed todo, not the session's copy (plans/0171 D6, enacting
+        // S08-04): the todo.md this collect and the wrap-up judge is the
+        // driver's construction — a digest recorded at construction
+        // (absent for pre-0171 units = no check, the floor) pins it, and a
+        // session that edited its own single input (dropping ledger rows or
+        // the whole `## Obligations ledger` section once made the
+        // coverage-map totality opt-out) blocks with the restore remedy. The
+        // commit boundary restores the edit (git-ops, D6's other half); this
+        // check is the window the boundary cannot cover (an interruption
+        // commit, a lane, a hand-edited tree).
+        const landed = await unitTodoDigest(dir, task.id)
+        if (landed !== undefined && todoDigest(await Bun.file(join(dir, taskStatePaths(task.id).pending)).text().catch(() => "")) !== landed) {
+          return {
+            type: "blocked",
+            question: `the formulation output is invalid: the session edited its own todo.md (docs/${task.id}/todo.md) — the driver's input, never the session's to write; restore it from the PLAN formulate commit (the ledger rows and the Acceptance are judged as landed), then re-run`,
+          }
+        }
         const [round, phaseId] = plan.phase.split(".")
         const phase = { round: round!, id: phaseId!, dir: dirname(plan.index) }
         const n = taskNumber(task.id) ?? 1
@@ -906,6 +955,18 @@ async function runCloseout(
   // shape gates live inside it too. The loop is lane-local (D8): it sits in the closeout tail,
   // so every lane runs it without parent involvement.
   if (input.resume?.kind !== "closeout" && (opts.wrapup ?? true)) {
+    // The execution stage's handover document is retired at the wrap-up
+    // tail's entry (plans/0171 D5, enacting S10-01): the task-level handoff.md
+    // belongs to the execution stage's scope alone, and a natural stage end
+    // left it standing — its stale `Status: continue` then seeded the first
+    // fix round as "the previous fix session ended with a handover" and fed
+    // every later interruption of the wrap-up/fix tail a false handover cause
+    // (the fresh rung discarding the live session). The deletion rides the
+    // wrap-up's own commit below (or the terminal close under --no-wrapup).
+    // A wrapup resume keeps the document: an interrupted fix session's
+    // `Status: continue` is the round's re-entry seed (0148 D1), and the
+    // round retires it at its own natural end.
+    await rm(join(input.dir, handoffFile(task)), { force: true })
     const stopped = await runWrapup(client, plan, task, opts, chain, {
       solo: input.solo,
       label: "wrapup session",

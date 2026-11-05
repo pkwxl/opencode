@@ -298,10 +298,11 @@ async function verifySession(
 // itself over through docs/<id>/handoff.md (`Status: continue` — a fresh fix
 // session continues from the document, each session's own batch committing
 // at its boundary, plans/0148 D1); the whole role's usage policy governs (a
-// fix round is a whole-scope execution dispatch), and the whole stage's own
-// leftover handover document is the engine's consumed seed — a `Status: done`
-// the execution stage left is not this round's signal, and an interrupted
-// fix session's `Status: continue` seeds the round's first continuation.
+// fix round is a whole-scope execution dispatch). The execution stage's
+// handover document never reaches a round (retired at the wrap-up tail's
+// entry, plans/0171 D5) — a document present here belongs to the fix tail
+// itself, and an interrupted fix session's `Status: continue` seeds the
+// round's first continuation.
 // There is no rollback redo inside a round (the strict-resume unit rollback
 // stays the execution stage's; a handover due without a valid document takes
 // the engine's single retry with feedback, then blocks).
@@ -320,10 +321,11 @@ async function runFixRound(
   log(`↻ ${task.id} verification found gaps; fix round ${round} closes exactly ${taskDoc(task.id, "gaps")}`)
   const readHandoff = async (): Promise<string> => Bun.file(join(plan.dir, handoffFile(task))).text().catch(() => "")
   const steer = sessionRole("whole").usage.handover ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task) : undefined
-  // Interruption seeding: a leftover handover document at the round's entry
-  // is either the execution stage's completion document (Status: done — the
-  // consumed seed, not a signal) or an interrupted fix session's handover
-  // (Status: continue — this round's first dispatch continues from it).
+  // Interruption seeding: since the execution stage's document is retired at
+  // the wrap-up tail's entry (plans/0171 D5), a leftover handover document at
+  // a round's entry is an interrupted fix session's handover — Status:
+  // continue seeds this round's first dispatch as its continuation; any
+  // other shape is the consumed seed, not a signal.
   const priorText = await readHandoff()
   const handover: HandoverState = { consumed: priorText, retried: false, rolled: false, continuations: 0 }
   let continuation = handoffStatus(priorText) === "continue"
@@ -380,6 +382,13 @@ async function runFixRound(
     if (decision.type === "stop") return decision.stop
     return decision
   }
+  // The round's natural end retires the handover document (plans/0171 D5):
+  // a `Status: continue` a mid-round session left and the finishing session
+  // did not rewrite would otherwise seed the NEXT round's first dispatch as
+  // this round's continuation — the same stale-inheritance shape the
+  // execution stage's leftover gave the tail (S10-01). The deletion rides
+  // the round's close-out commit below.
+  await rm(join(plan.dir, handoffFile(task)), { force: true })
   const committed = await git.afterSession(dir, opts, task, { stage: "execute", subject })
   if (committed.type === "failed") return commitBlocked(`${task.id} fix ${round}.${session - 1}`, committed)
   // The round never books a wait (plans/0142 D2): a fix session that ended
@@ -470,7 +479,7 @@ async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?:
   // wrap-up's commits like every lane receipt.
   {
     const deps = task.depends === "none" ? [] : task.depends ?? previousTaskId(plan, task.id)
-    const wait = await strictRegressionWait(dir, roundOfPhaseId(opts.phase?.id), lanes, deps, task.id, opts)
+    const wait = await strictRegressionWait(dir, roundOfPhaseId(opts.phase?.id), lanes, deps, task.id, opts, gitOf(opts))
     if (wait && "corrupted" in wait) {
       return {
         kind: "stop",
@@ -492,7 +501,7 @@ async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?:
     }
   }
   const anchor = anchorLaneOf(acceptanceSection(task.body), lanes)
-  const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs })
+  const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs, git: gitOf(opts) })
   if (set.violation?.kind === "head") {
     return {
       kind: "stop",

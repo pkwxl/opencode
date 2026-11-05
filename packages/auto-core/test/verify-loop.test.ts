@@ -405,6 +405,60 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
+  // The execution stage's handover document is retired at the wrap-up tail's
+  // entry (plans/0171 D5, enacting S10-01): its stale `Status: continue` once
+  // seeded the first fix round as "the previous fix session ended with a
+  // handover" — feeding it the execution stage's superseded next steps.
+  test("the execution stage's leftover handoff never seeds the fix round: retired at the wrap-up tail's entry", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The execution session hands itself over (a fresh Status: continue,
+      // far under the wall); the continuation finishes the task WITHOUT
+      // rewriting the document; the verify session FAILs; the fix round
+      // runs.
+      const { client, calls } = scriptedClient([
+        async () => {
+          writeFileSync(join(dir, "src.ts"), "// the work\n")
+          mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# Handover\n\nHalf done; next: the rest.\n\nStatus: continue\n")
+        },
+        async () => {
+          writeFileSync(join(dir, "MORE.md"), "the continuation finished the task\n")
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          writeFileSync(join(dir, "FIXES.md"), "fix round 1\n")
+          mkdirSync(join(dir, "tmp"), { recursive: true })
+          writeFileSync(join(dir, "tmp", "fixed"), "")
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off" })
+      expect(outcome).toEqual({ type: "completed" })
+      // work (handing over), continuation, verify (FAIL), fix, re-verify.
+      expect(calls.prompts).toHaveLength(5)
+      expect(promptText(calls.prompts[1]!)).toContain("First read docs/T-001/handoff.md")
+      // The fix round is NOT seeded from the execution stage's leftover —
+      // the clause names a FIX session's handover, and none happened.
+      expect(promptText(calls.prompts[3]!)).not.toContain("context-budget handover")
+      expect(promptText(calls.prompts[3]!)).toContain("You are the fix session")
+      // The stage's document is gone: retired at the tail's entry, the
+      // deletion riding the wrap-up's own commits.
+      expect(await Bun.file(join(dir, "docs/T-001/handoff.md")).exists()).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a fix session's self-directed handover (plans/0130 D2): a fresh Status: continue document under the wall hands the round over, the continuation reads it, and the round commits once", async () => {
     const dir = await freshRepo()
     try {
@@ -800,6 +854,11 @@ describe("the driver-run lane gate (0096 D5)", () => {
         join(dir, "docs/T-000/testhands/gate.md"),
         [`# Lane gate`, ``, `Lane: gate`, `Heads: .=${head}`, `Start: 2026-10-14T00:00:00.000Z`, `End: 2026-10-14T00:01:00.000Z`, `Verdict: green`, `Log: /tmp/opencode/T-000-gate-old.log`, ``, EOF_MARK, ``].join("\n"),
       )
+      // The receipt's janitor commit (plans/0171 D2): a carry-basis receipt
+      // is witnessed by its introducing commit's testhands stage — the
+      // earlier task's gate receipt lands the way the driver lands it.
+      await git(dir, "add", "--", "docs/T-000/testhands/gate.md")
+      await git(dir, "commit", "-qm", "T-000 testhands receipts (gate)", "-m", "Auto-Task: T-000", "-m", "Auto-Stage: testhands")
       // The anchor row's surfaces must miss the task's src/ work: rewrite the
       // pack's gate row before the run.
       const pack = join(dir, ".opencode/auto/intents/default.md")

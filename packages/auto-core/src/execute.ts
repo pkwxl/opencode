@@ -177,46 +177,65 @@ export async function handoverVerdict(
   const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
   const fresh = doc !== "" && doc !== state.consumed
   if (!due && !fresh) return { type: "natural" }
-  const status = handoffStatus(doc)
-  if (status === "done") return { type: "natural" }
-  if (status === "continue") {
-    log(
-      due
-        ? `↻ ${who} context reached the handover wall; handed over as ${file}, continuing in a new session`
-        : `↻ ${who} session handed itself over as ${file}; continuing in a new session`,
-    )
-    // The handover economics' journal line (plans/0130 D5): every handover of
-    // every scope lands in the run-status stream with its figures — due (the
-    // wall forced it) or self-directed, the tokens in use and the wall — so a
-    // later release can pair each continuation session's re-priming spend
-    // against the boundary that caused it (P19's measured basis, no runtime
-    // consumer yet).
-    emitStatus({
-      type: "session-handover",
-      task: task.id,
-      ...(scope.subtask !== undefined ? { subtask: subtaskId(scope.subtask) } : {}),
-      scope: scope.subtask !== undefined ? "subtask" : scope.fix ? "fix" : "whole",
-      due,
-      used: chain.used,
-      ...(chain.wall !== undefined ? { wall: chain.wall } : {}),
-    })
-    state.consumed = doc
-    state.continuations += 1
-    // The chain bound (plans/0168 D1): the continuation chain is a P2
-    // escalation, and past the bound the person — not the session's
-    // self-report — is the terminal. The advisory tier (the prompt-side
-    // teaching past the advisory count) is carried by the callers' render.
-    if (state.continuations > STEER_CHAIN_BOUND) {
-      log(`⏸ ${who} context-handover chain reached ${state.continuations} continuations (bound ${STEER_CHAIN_BOUND}); stopping for the person`)
-      return {
-        type: "blocked",
-        question:
-          `${who} keeps handing its session over without finishing: ${state.continuations} continuations of this scope so far (bound ${STEER_CHAIN_BOUND}, the advisory teaching from ${STEER_CHAIN_ADVISORY}), ` +
-          `${formatTokens(chain.used)} in use${chain.wall !== undefined ? ` against the ${formatTokens(chain.wall)} wall` : ""}. ` +
-          `The handover document ${file} and the unified-commit trail hold everything the next continuation would carry — the person decides: split or narrow the task, close it on the completed part, or re-run to continue the chain.`,
+  // Freshness is required for every verdict except the quiet natural
+  // (plans/0171 D3, enacting S10-07): a due session is judged only by a
+  // document THIS session wrote. A due verdict over the consumed document
+  // accepted the predecessor's `Status: continue`/`done` as this session's
+  // own — the phantom handover of 0022 in a new guise (the retry built for
+  // exactly this never ran, and the continuation resumed from next steps two
+  // sessions old while the log asserted a handover happened), and a stale
+  // `done` closed the scope on the predecessor's claim. The status is read
+  // only when the document is fresh; a due session with a stale document
+  // falls through to the invalid-document path (the retry case).
+  if (fresh) {
+    const status = handoffStatus(doc)
+    if (status === "done") return { type: "natural" }
+    if (status === "continue") {
+      log(
+        due
+          ? `↻ ${who} context reached the handover wall; handed over as ${file}, continuing in a new session`
+          : `↻ ${who} session handed itself over as ${file}; continuing in a new session`,
+      )
+      // The handover economics' journal line (plans/0130 D5): every handover of
+      // every scope lands in the run-status stream with its figures — due (the
+      // wall forced it) or self-directed, the tokens in use and the wall — so a
+      // later release can pair each continuation session's re-priming spend
+      // against the boundary that caused it (P19's measured basis, no runtime
+      // consumer yet).
+      emitStatus({
+        type: "session-handover",
+        task: task.id,
+        ...(scope.subtask !== undefined ? { subtask: subtaskId(scope.subtask) } : {}),
+        scope: scope.subtask !== undefined ? "subtask" : scope.fix ? "fix" : "whole",
+        due,
+        used: chain.used,
+        ...(chain.wall !== undefined ? { wall: chain.wall } : {}),
+      })
+      state.consumed = doc
+      state.continuations += 1
+      // The single invalid-document retry re-arms on every accepted handover
+      // (plans/0171 D3): the feedback promises one retry per handover, but the
+      // flag was spent for the scope's whole life — a long chain's first
+      // invalid document (long after a mid-chain handover) blocked as "failed
+      // twice" on its first failure. Each accepted `Status: continue` is a new
+      // handover with its own retry.
+      state.retried = false
+      // The chain bound (plans/0168 D1): the continuation chain is a P2
+      // escalation, and past the bound the person — not the session's
+      // self-report — is the terminal. The advisory tier (the prompt-side
+      // teaching past the advisory count) is carried by the callers' render.
+      if (state.continuations > STEER_CHAIN_BOUND) {
+        log(`⏸ ${who} context-handover chain reached ${state.continuations} continuations (bound ${STEER_CHAIN_BOUND}); stopping for the person`)
+        return {
+          type: "blocked",
+          question:
+            `${who} keeps handing its session over without finishing: ${state.continuations} continuations of this scope so far (bound ${STEER_CHAIN_BOUND}, the advisory teaching from ${STEER_CHAIN_ADVISORY}), ` +
+            `${formatTokens(chain.used)} in use${chain.wall !== undefined ? ` against the ${formatTokens(chain.wall)} wall` : ""}. ` +
+            `The handover document ${file} and the unified-commit trail hold everything the next continuation would carry — the person decides: split or narrow the task, close it on the completed part, or re-run to continue the chain.`,
+        }
       }
+      return { type: "continue", doc }
     }
-    return { type: "continue", doc }
   }
   // A handover due but no valid document (strict resume): one invalid attempt
   // rolls back to the unit baseline and cold-starts the redo first, with no
@@ -971,18 +990,46 @@ export async function runSubtask(
   // paths come from the spec data (document/spec.ts subtaskStateSpec, M1.4).
   const stateSpec = subtaskStateSpec(task.id, index)
   const stateDone = await Bun.file(join(planDir, stateSpec.complete.path)).exists()
-  // Interruption-recovery seeding: a stale handover document is cleared by the
-  // pipeline on the non-recovery path, so the file still existing here with
-  // status=done → the subtask was already finished by a handover session
-  // before the interruption; tick it directly. Status=continue → open a new
+  // Interruption-recovery seeding: the handover document's interpretation is
+  // a RECOVERY fact (plans/0171 D4, enacting S10-02) — it exists only under
+  // this scope's own steer (OPENCODE_AUTO_STEER off = the protocol does not
+  // exist, the 0130 D1 floor) and an active recalled record naming this
+  // subtask (resumeUnit). Anything else reading a document here reads a
+  // leftover of another scope (the lead's stage's task-level file, a whole
+  // stage's `Status: done` riding the interruption commit) — the pipeline's
+  // cleanup spares a tracked copy, and by presence alone it once ticked
+  // subtasks off with the session's self-report and no shape check. The text
+  // is still read unconditionally: it seeds the handover engine's consumed
+  // state below, so a stale document on disk is never "fresh" for the
+  // handover check either. Status=done under a genuine recovery → the subtask
+  // was already finished by a handover session before the interruption — its
+  // artifacts are verified, then the close-out. Status=continue → open a new
   // session on the continuation prompt to continue from the handover (reusing
   // the old session would only hit the cap again at once).
   const priorText = stateDone ? "" : await readHandoff()
-  const prior = stateDone ? undefined : handoffStatus(priorText)
+  const prior = stateDone || steer === undefined || !resumeUnit ? undefined : handoffStatus(priorText)
   if (stateDone) {
     log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
   } else if (prior === "done") {
-    log(`↻ ${task.id} resume after interruption: handover document ${streamHandoff} marks the subtask complete; checking it off directly`)
+    // A completion document is the session's claim, never the driver's
+    // verdict (P3): the recovery close-out verifies the artifacts the
+    // handover session claimed to have written — the same shape check a
+    // natural end faces — before the driver's tick and rename. The session
+    // that wrote the document is gone (the interruption ended it), so a
+    // failure blocks for the person rather than re-prompting.
+    log(`↻ ${task.id} resume after interruption: handover document ${streamHandoff} marks the subtask complete; verifying its artifacts before the close-out`)
+    if (baseline && shapeCheckOn(opts, baseline, false)) {
+      const item = (await readChecklist(planDir, task.id))[index - 1]
+      const problems = await subtaskArtifactProblems(dir, item?.text ?? text, baseline, opts.scanExempt)
+      if (problems.length) {
+        return {
+          type: "blocked",
+          question:
+            `subtask recovery: the handover document ${streamHandoff} marks ${task.id}.${subtaskId(index)} complete, but the artifact shape check failed (hidden blockage): ${problems.join("; ")}. ` +
+            `The document is the ended session's claim — the artifacts on disk are the driver's evidence. Check the artifacts and re-run; the subtask's session runs again.`,
+        }
+      }
+    }
   } else {
     let continuation = prior === "continue"
     if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${streamHandoff} before the interruption; the new session continues the subtask from the handover document`)

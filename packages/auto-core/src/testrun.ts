@@ -8,8 +8,8 @@
 // exec-session.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S6, pure move).
 
-import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { chmod, mkdir, readdir, realpath, rename, rm } from "node:fs/promises"
+import { dirname, join, resolve, sep } from "node:path"
 import { archivedTestHandoff, handoffFile, latestHandoffSeq, taskDoc, taskDocPaths } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
@@ -147,7 +147,10 @@ export type TestRun = {
   // freeze — the session still has wrap-up ahead of it, and a leftover
   // marker would be misread by the next round; execution is postponed until
   // after commit #2 and closed out by runExecSession. Cleared once executed.
-  pending?: { script: string; seq: number }
+  // A refused request (plans/0171 D1: the marker named an existing path
+  // outside the project root) carries its reason — the deferred execution
+  // renders the refusal instead of running the snapshot.
+  pending?: { script: string; seq: number; refused?: string }
   // One-shot flag of the "wrap-up check" state: seeded in two places — the
   // H1 branch of interruption recovery (§I; this round's session was forked
   // from the freeze point to redo the handover wrap-up, and the wrap-up
@@ -356,7 +359,7 @@ export async function consumeDeadTestMarker(dir: string, opts: Pick<Opts, "testB
 // verdict belongs to the AI.
 export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
   const pending = await resolveTestScript(test)
-  return runTestScript(test, opts, pending.script, pending.seq)
+  return runTestScript(test, opts, pending.script, pending.seq, pending.refused)
 }
 
 // Consumption of the request marker (pins down the script to run this time,
@@ -371,7 +374,18 @@ export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInf
 // of it: the inline snapshot would have bash execute that path as a command,
 // a script missing +x yields exit code 126 and the AI debugs it for nothing.
 // The path form also best-effort adds +x — the AI forgetting chmod is the
-// norm, the driver adds it itself, no session debugging needed;
+// norm, the driver adds it itself, no session debugging needed. The path form
+// is accepted only when the candidate's realpath stays inside the project
+// root (plans/0171 D1): a session confined by the external-directory deny
+// writing an absolute or ../ path must not steer the driver — outside the
+// agent's own permission system — into chmod 0755 and executing an arbitrary
+// file (a private key, a sealed reference repository's script through a root
+// symlink; chmod follows symlinks, so the containment is judged on the
+// resolved path, not the spelling). A single-line request naming an existing
+// file outside the root is refused: the marker is consumed, the request is
+// snapshotted for audit, and the execution renders the refusal instead of
+// running anything (falling back to the inline form would have bash execute
+// the named path as a command line — the outside script would still run);
 // (2) an inline script (the fallback for when the AI did not pin the script
 // into test/ per the protocol): write the content whole to tmp/test.<n>.sh,
 // keeping the execution snapshot for audit.
@@ -380,38 +394,68 @@ export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInf
 // (otherwise a marker rewritten during wrap-up makes the driver run the wrong
 // script), and the inline form must also be materialized at the same moment
 // as the freeze commit.
-export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq">): Promise<{ script: string; seq: number }> {
+// The consumed request marker's resolution (the shape TestRun.pending holds,
+// named for the engine's PendingTest): the pinned script, its archive
+// sequence number, and — for a request the confinement rule refused
+// (plans/0171 D1) — the refusal the execution renders instead of running.
+export type PendingTestResolution = { script: string; seq: number; refused?: string }
+
+export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq">): Promise<PendingTestResolution> {
   const seq = ++test.seq
   const marker = join(test.tmp, "test.sh")
   const content = await Bun.file(marker).text()
   const line = content.trim()
   const candidate = resolve(test.dir, line)
   let script: string
-  // A single line after trim that points at an existing file → run that
-  // test/ script (the protocol's first choice); otherwise fall back to the
-  // inline script.
+  let refused: string | undefined
+  // A single line after trim that points at an existing file inside the
+  // project root (realpath-resolved: a symlink under the root pointing out
+  // is an escape, and so is an absolute path or a ../ spelling) → run that
+  // test/ script (the protocol's first choice); an existing file outside the
+  // root → refused (never executed); anything else falls back to the inline
+  // script.
   if (!line.includes("\n") && (await Bun.file(candidate).exists())) {
-    // best-effort add of the execute bit: exec on a script missing +x gets
-    // EACCES; failure (read-only filesystem and the like) is silent —
-    // runScript still has the exec-bash fallback for non-executable scripts.
-    await chmod(candidate, 0o755).catch(() => {})
-    script = candidate
+    const real = await realpath(candidate).catch(() => undefined)
+    const root = await realpath(test.dir).catch(() => test.dir)
+    if (real !== undefined && (real === root || real.startsWith(root + sep))) {
+      // best-effort add of the execute bit: exec on a script missing +x gets
+      // EACCES; failure (read-only filesystem and the like) is silent —
+      // runScript still has the exec-bash fallback for non-executable scripts.
+      await chmod(candidate, 0o755).catch(() => {})
+      script = candidate
+    } else {
+      refused =
+        `the request names the path \`${line}\`, which resolves ${real === undefined ? "to an unreadable path" : `to ${real}`} — outside this project's root; ` +
+        `the driver-run test channel executes a script under test/ (a path inside the project) or an inline script, never a path outside the project`
+      script = join(test.tmp, `test.${seq}.sh`)
+      await Bun.write(script, content)
+      log(`⚠ the test request ${join(test.tmp, "test.sh")} names a path outside the project root; refused and not executed (the protocol accepts a script under test/ or an inline script)`)
+    }
   } else {
     script = join(test.tmp, `test.${seq}.sh`)
     await Bun.write(script, content)
   }
   await rm(marker, { force: true })
-  return { script, seq }
+  return { script, seq, ...(refused ? { refused } : {}) }
 }
 
 // The execution kernel for a known script path (called by executeTest after
 // consuming the request marker; a test handover also calls it directly to
 // execute the test.pending consumed at the freeze — the marker was taken
 // away long before, there is no second read). Every execution takes a new
-// archive sequence number; the output is always tmp/test.<n>.out.
-export async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq): Promise<TestRunInfo> {
+// archive sequence number; the output is always tmp/test.<n>.out. A refused
+// resolution (plans/0171 D1) renders its reason as the run's whole output
+// with exit code 125 and executes nothing — the request is answered, not
+// silently dropped, and nothing outside the project root ever runs.
+export async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq, refused?: string): Promise<TestRunInfo> {
   const out = join(test.tmp, `test.${seq}.out`)
   await mkdir(test.tmp, { recursive: true })
+  if (refused !== undefined) {
+    await Bun.write(out, `${refused}\n`)
+    const info: TestRunInfo = { script, code: 125, ms: 0, timedOut: false, out, seq }
+    test.last = info
+    return info
+  }
   const run = await runScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(
     `  ⚙ ${test.label} test script exit code ${run.code}${run.timedOut ? ` (timed out: ${run.timeoutReason === "max" ? "absolute duration cap exceeded" : "no output for too long"})` : ""}, took ${run.ms}ms, script: ${script}, output: ${out}`,

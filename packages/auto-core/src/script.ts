@@ -3,7 +3,7 @@ import { statSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { laneReceiptDoc } from "./docpaths"
 import { EOF_MARK } from "./doccheck"
-import { rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, type ScriptGuardViolation } from "./git"
+import { rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, git, commitTree, type GitOps, type ScriptGuardViolation } from "./git"
 import { laneTouches, parseLaneReceipt, type TestLane } from "./intent/test-lanes"
 import { log } from "./log"
 
@@ -297,7 +297,7 @@ export async function runTestLanes(
   dir: string,
   taskId: string,
   lanes: readonly TestLane[],
-  opts: { idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number; logDir?: string } = {},
+  opts: { idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number; logDir?: string; git?: Pick<GitOps, "commitTree"> } = {},
 ): Promise<LaneSetResult> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
@@ -334,6 +334,18 @@ export async function runTestLanes(
   if (violation) logGuardViolation("a driver-run test lane", violation)
   // Receipts after the guard check, so the driver's own writes never meet it.
   for (const run of runs) await writeLaneReceipt(dir, run, heads)
+  // The receipts' janitor commit (plans/0171 D2): the introducing commit is a
+  // `testhands`-stage driver commit, the witness the carry rule reads — a
+  // receipt left to ride the round's unified commit would read as unprovenanced
+  // and the lane would re-run.
+  await commitLaneReceipts(
+    dir,
+    opts.git,
+    { id: taskId, title: "" },
+    runs.map((run) => run.receipt),
+    "testhands",
+    `${taskId} testhands receipts (${[...new Set(runs.map((run) => run.lane))].join(", ")})`,
+  )
   return { runs, ...(violation ? { violation } : {}) }
 }
 
@@ -347,6 +359,10 @@ export type GreenReceipt = { path: string; heads: { root: string; sha: string }[
 // — the lane gate's task-scoped testhands, the regression hold's round-scoped
 // receipts — is parsed, and the newest green one with recorded HEADs wins by
 // its End time. Unparsable, headless and red receipts are not carry basis.
+// Since plans/0171 D2 the winner must also pass the provenance witness below
+// — a green receipt a session wrote (riding some task's unified commit, or
+// dirty in the tree) is named and rejected, never carry basis: location is
+// not provenance (P3).
 export async function newestGreenReceipt(dir: string, pattern: string): Promise<GreenReceipt | undefined> {
   let best: GreenReceipt | undefined
   for await (const file of new Bun.Glob(pattern).scan({ cwd: dir, onlyFiles: true })) {
@@ -354,7 +370,57 @@ export async function newestGreenReceipt(dir: string, pattern: string): Promise<
     if (!receipt || receipt.verdict !== "green" || !receipt.heads.length) continue
     if (!best || (receipt.end ?? "") > best.end) best = { path: file, heads: receipt.heads, end: receipt.end ?? "" }
   }
+  if (best && !(await receiptDriverCommitted(dir, best.path))) {
+    log(
+      `⚠ the green receipt ${best.path} is not driver-committed evidence (no receipt janitor commit — Auto-Stage: regression or testhands — introduced its current bytes, or the tree holds an uncommitted change to it); it is not carry basis, the lane re-runs and a fresh receipt replaces it`,
+    )
+    return undefined
+  }
   return best
+}
+
+// The receipts' provenance witness (plans/0171 D2, enacting S20-05): the
+// commit that introduced the receipt's current bytes must be one of the
+// driver's receipt janitor commits (the `regression` and `testhands` stages
+// — the only writers of receipts are the lane runners, and they commit
+// through those stages), and the tree must hold no uncommitted change to
+// the file. A receipt a session forged rides whatever unified commit was
+// next (stage execute/wrapup/subtask) — rejected; a person-committed one
+// carries no Auto-Stage at all — rejected; unreadable git (P12) — rejected:
+// every rejection degrades toward the lane re-running, the fail-safe
+// direction that self-heals with a fresh janitor receipt.
+export async function receiptDriverCommitted(dir: string, rel: string): Promise<boolean> {
+  const dirty = await git(dir, ["status", "--porcelain", "--", rel]).catch(() => undefined)
+  if (dirty === undefined || dirty.code !== 0 || dirty.out.trim().length > 0) return false
+  const read = await git(dir, ["log", "-1", "--format=%B", "--", rel]).catch(() => undefined)
+  if (read === undefined || read.code !== 0) return false
+  const stages = [...read.out.matchAll(/^Auto-Stage: (.+)$/gm)].map((match) => match[1]!.trim())
+  return stages.includes("regression") || stages.includes("testhands")
+}
+
+// The receipts' janitor commit (plans/0171 D2): every lane run commits its
+// receipts through this — stage `testhands` (the lane gate's task-scoped
+// receipts) or `regression` (the round-scoped ones) — so the introducing
+// commit is always a janitor commit the witness above accepts. The commit is
+// pathspec-scoped (never absorbs other changes); a failure leaves the
+// receipts in the worktree with a loud line — the next boundary's janitor
+// sweep (regression.ts commitPendingReceipts) retries them, and until one
+// lands the readers reject them (the lane re-runs, never silently carries).
+export async function commitLaneReceipts(
+  dir: string,
+  service: Pick<GitOps, "commitTree"> | undefined,
+  task: { id: string; title: string },
+  receipts: readonly string[],
+  family: "testhands" | "regression",
+  subject: string,
+): Promise<void> {
+  if (!receipts.length) return
+  const info = { stage: family, subject }
+  const settled =
+    service !== undefined ? await service.commitTree(dir, task, info, [...receipts]) : await commitTree(dir, task, info, [...receipts])
+  if (!settled.ok) {
+    log(`⚠ the ${family} receipt commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")} — the receipts stay in the worktree; the next boundary's janitor sweep retries them`)
+  }
 }
 
 // The coverage predicate the two scans share: a lane is covered by a green

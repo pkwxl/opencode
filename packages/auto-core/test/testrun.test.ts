@@ -6,7 +6,7 @@
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { changedFiles, commitTree } from "../src/git"
@@ -16,6 +16,7 @@ import {
   cleanTestHandoffs,
   handoffSteer,
   resolveTestScript,
+  runTestScript,
   restoreTestHandoffs,
 } from "../src/testrun"
 import { sessionHandoverDue, testHandoverDue } from "../src/usage"
@@ -165,6 +166,51 @@ describe("resolveTestScript (consuming the tmp/test.sh request marker)", () => {
     const pending = await resolveTestScript(run)
     expect(pending.script).toBe(join(tmp, "test.1.sh"))
     expect(await Bun.file(pending.script).text()).toBe("make check")
+  })
+
+  // The path form's confinement (plans/0171 D1, enacting S11-04): a request
+  // naming an existing file outside the project root is refused — the driver
+  // must not chmod 0755 and execute an arbitrary path (a private key, a
+  // sealed reference repository's script) outside the agent's own permission
+  // system. The refusal is an answer: the marker is consumed, the request
+  // snapshotted for audit, and runTestScript renders the reason at exit 125
+  // instead of executing anything (the inline fallback would have bash run
+  // the named path as a command line).
+  test("a path outside the project root: refused, never chmodded, never executed — the refusal rendered as the run's output", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "auto-test-outside-"))
+    try {
+      const target = join(outside, "outside-secret.txt")
+      await writeFile(target, "echo should-never-run", { mode: 0o600 })
+      await writeFile(join(tmp, "test.sh"), target)
+      const pending = await resolveTestScript({ dir, tmp, seq: 0 })
+      expect(pending.seq).toBe(1)
+      expect(pending.refused).toContain("outside this project's root")
+      expect(pending.script).toBe(join(tmp, "test.1.sh"))
+      expect(await Bun.file(join(tmp, "test.sh")).exists()).toBe(false)
+      const mode = (await stat(target)).mode & 0o777
+      expect(mode).toBe(0o600)
+      const info = await runTestScript({ dir, tmp, label: "T-001", seq: 1 } as never, {}, pending.script, pending.seq, pending.refused)
+      expect(info.code).toBe(125)
+      expect(await Bun.file(info.out).text()).toContain("outside this project's root")
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("a symlink under the root pointing outside is an escape: the containment judges the resolved path, not the spelling", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "auto-test-outside-"))
+    try {
+      const target = join(outside, "reference.sh")
+      await writeFile(target, "echo reference", { mode: 0o600 })
+      await mkdir(join(dir, "test"), { recursive: true })
+      await symlink(target, join(dir, "test", "via-link.sh"))
+      await writeFile(join(tmp, "test.sh"), "test/via-link.sh")
+      const pending = await resolveTestScript({ dir, tmp, seq: 0 })
+      expect(pending.refused).toContain("outside this project's root")
+      expect((await stat(target)).mode & 0o777).toBe(0o600)
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
   })
 
   test("the marker is deleted once read and the sequence increments: a marker rewritten during the session wrap-up cannot make the driver run the wrong script", async () => {

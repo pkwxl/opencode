@@ -141,6 +141,37 @@ describe("afterSession's session-made unit-close restore (plans/0170 D2)", () =>
     }
   })
 
+  // The own contract's content restore (plans/0171 D6, enacting S08-04): a
+  // session editing its own todo.md — dropping ledger rows, weakening an
+  // Acceptance — must not land in the unified commit. HEAD holds the
+  // driver's last word; the boundary writes it back. Other tasks' documents
+  // (a planning session's output) are never touched.
+  test("a session's own todo.md content edit is restored from HEAD before the commit; another task's document keeps the session's write", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await mkdir(join(dir, "docs/T-002"), { recursive: true })
+      const own = ["# T-001", "", "## Acceptance", "", "The acceptance statements hold.", ""].join("\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), own)
+      await Bun.write(join(dir, "docs/T-002/todo.md"), "# T-002\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "tasks planned")
+      // The session's acts: an edit to its own contract (a weakened
+      // Acceptance) and a planned task's document (legitimate planning
+      // output — a different task's file).
+      await Bun.write(join(dir, "docs/T-001/todo.md"), own.replace("The acceptance statements hold.", "(whatever)"))
+      await Bun.write(join(dir, "docs/T-002/todo.md"), "# T-002\n\nplanned by the session\n")
+      const settled = await afterSession(dir, {}, task, { stage: "execute", subject: "T-001 execute" })
+      expect(settled).toEqual({ type: "ok" })
+      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toBe(own)
+      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("planned by the session")
+      expect(await pendingChanges(dir)).toBe(false)
+      expect(await git(dir, "show", "HEAD:./docs/T-001/todo.md")).toBe(own)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("another task's close is deliberately untouched (the interrupted driver close rides the carryover, never this restore)", async () => {
     const dir = await fresh()
     try {

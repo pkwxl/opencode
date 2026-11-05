@@ -374,6 +374,9 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "init")
       const lanes = withMark([lane({ name: "lint" }), lane({ name: "fmt" }), lane({ name: "gate", cost: "anchor" })], file)
+      // The receipts record the frozen tree's HEAD — read it before the set
+      // runs (the janitor commit after the run advances HEAD past it).
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
       const result = await runTestLanes(dir, "T-001", lanes, { logDir })
       expect(result.violation).toBeUndefined()
       expect(result.runs.map((run) => [run.lane, run.verdict])).toEqual([
@@ -387,8 +390,10 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       expect(seen.filter((m) => m === "lint" || m === "fmt")).toHaveLength(2)
       expect(seen.indexOf("gate")).toBe(2)
       // Receipts: the partial's format, the recorded HEADs at the frozen
-      // tree, the terminator — and parseLaneReceipt reads them back.
-      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      // tree, the terminator — and parseLaneReceipt reads them back. The
+      // janitor commit (plans/0171 D2) is the receipts' provenance witness:
+      // their introducing commit carries the testhands stage, and the carry
+      // rule below reads exactly that.
       for (const name of ["lint", "fmt", "gate"]) {
         const text = await Bun.file(join(dir, laneReceiptDoc("T-001", name))).text()
         expect(text.trimEnd().endsWith(EOF_MARK)).toBe(true)
@@ -416,25 +421,25 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "init")
       const table = () => withMark([lane({ name: "lint", surfaces: ["src/"] }), lane({ name: "hdr", surfaces: ["include/"] })], file)
-      // T-001 establishes the green receipts; committing them advances HEAD
-      // (the receipts' recorded tree is the pre-run one).
+      // T-001 establishes the green receipts; the set's own janitor commit
+      // lands them (plans/0171 D2) and advances HEAD — the receipts' recorded
+      // tree is the pre-run one.
       const first = await runTestLanes(dir, "T-001", table(), { logDir })
       expect(first.runs.every((run) => run.verdict === "green" && !run.carried)).toBe(true)
-      await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "T-001 receipts")
       // T-002: the include/ tree moved — lint carries from T-001's receipt
       // (no launch), hdr re-runs.
       writeFileSync(join(dir, "include", "i.h"), "// i changed\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "header change")
+      // The carry receipt records the set's frozen tree and names its source
+      // (HEAD read before the set — its janitor commit advances past it).
+      const t2Head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
       const second = await runTestLanes(dir, "T-002", table(), { logDir })
       expect(second.runs.find((run) => run.lane === "lint")).toMatchObject({ verdict: "green", carried: laneReceiptDoc("T-001", "lint") })
       expect(second.runs.find((run) => run.lane === "hdr")?.carried).toBeUndefined()
-      // The carry receipt records the current tree and names its source.
       const carryText = await Bun.file(join(dir, laneReceiptDoc("T-002", "lint"))).text()
       expect(carryText).toContain(`Carried: ${laneReceiptDoc("T-001", "lint")}`)
-      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      expect(parseLaneReceipt(carryText)?.heads).toEqual([{ root: ".", sha: head }])
+      expect(parseLaneReceipt(carryText)?.heads).toEqual([{ root: ".", sha: t2Head }])
       // T-003: the src/ tree moved — lint re-runs; hdr carries from its
       // newest green receipt (T-002's own run).
       writeFileSync(join(dir, "src", "a.ts"), "// a changed\n")

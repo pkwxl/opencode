@@ -27,12 +27,14 @@
 // createServices(), so the default instance must be reachable from there.
 // This mirrors exit.ts (the control service's home) and router.ts: the
 // service's home keeps its factory.
+import { join } from "node:path"
 import {
   beginUnit,
   changedFiles,
   commitPending,
   commitTree,
   driverStateFile,
+  headText,
   unitBaseline,
   unitViolations,
   untrackedFiles,
@@ -74,26 +76,53 @@ import { collectAgentResolves } from "./resolve"
 // legitimate driver write (P20).
 async function restoreUnitCloses(dir: string, task: { id: string }, stage: string): Promise<void> {
   const untracked = await untrackedFiles(dir)
-  if (!untracked.size) return
-  const own = /^subtask (\d+)$/.exec(stage)?.[1]
-  const ownSubtask = own === undefined ? undefined : `S${own.padStart(2, "0")}`
-  for (const rel of untracked) {
-    const path = rel.replaceAll("\\", "/")
-    // The unit state files' shapes (git.ts DRIVER_STATE's own spelling):
-    // docs/T-NNN/done.md and docs/T-NNN/S<nn>/done.md — the task unit and
-    // its subtask units, nothing deeper and no other task.
-    const match = /^docs\/([^/]+)\/(?:(S\d+)\/)?done\.md$/.exec(path)
-    // The stage's own subtask index is the one exemption (its driver rename
-    // precedes its afterSession); a task-level close is never exempt.
-    if (!match || match[1] !== task.id || (match[2] !== undefined && match[2] === ownSubtask)) continue
-    const ref: UnitRef =
-      match[2] === undefined ? { level: "task", id: task.id } : { level: "subtask", id: match[2], task: task.id }
-    if (await restoreUnitPending(dir, ref)) {
-      log(
-        `  ⚠ ${task.id}: a session renamed this unit's todo.md to done.md — restored; the todo.md → done.md rename is DRIVER-exclusive (the close-out performs it once the verification passes)`,
-      )
+  if (untracked.size) {
+    const own = /^subtask (\d+)$/.exec(stage)?.[1]
+    const ownSubtask = own === undefined ? undefined : `S${own.padStart(2, "0")}`
+    for (const rel of untracked) {
+      const path = rel.replaceAll("\\", "/")
+      // The unit state files' shapes (git.ts DRIVER_STATE's own spelling):
+      // docs/T-NNN/done.md and docs/T-NNN/S<nn>/done.md — the task unit and
+      // its subtask units, nothing deeper and no other task.
+      const match = /^docs\/([^/]+)\/(?:(S\d+)\/)?done\.md$/.exec(path)
+      // The stage's own subtask index is the one exemption (its driver rename
+      // precedes its afterSession); a task-level close is never exempt.
+      if (!match || match[1] !== task.id || (match[2] !== undefined && match[2] === ownSubtask)) continue
+      const ref: UnitRef =
+        match[2] === undefined ? { level: "task", id: task.id } : { level: "subtask", id: match[2], task: task.id }
+      if (await restoreUnitPending(dir, ref)) {
+        log(
+          `  ⚠ ${task.id}: a session renamed this unit's todo.md to done.md — restored; the todo.md → done.md rename is DRIVER-exclusive (the close-out performs it once the verification passes)`,
+        )
+      }
     }
   }
+  await restoreOwnTodoContent(dir, task)
+}
+
+// The unit's own contract restored by content (plans/0171 D6, enacting
+// S08-04): the commit's own task's todo.md is driver-owned state (0101 D3)
+// whose text the collect, the wrap-up and the verifier all judge — a session
+// editing it (dropping ledger rows from a formulation todo, weakening an
+// `## Acceptance`) must not land in the unified commit. Restored from HEAD,
+// which holds the driver's last word on it (construction or plan committed
+// it; the driver's own later writes — the fork repair, the close rename —
+// each commit through their own boundary before any afterSession sees them).
+// Files the task's PLANNING writes (a formulation session's planned tasks'
+// todo.md files) are other tasks' documents and stay exactly as written;
+// subtask-level files are the checklist ticks' own family (S12-07's carryover
+// sweep, step 023). No commit to read (non-git) or the file absent at HEAD
+// (nothing to restore toward) = no-op, the floor.
+async function restoreOwnTodoContent(dir: string, task: { id: string }): Promise<void> {
+  const rel = `docs/${task.id}/todo.md`
+  const base = await headText(dir, rel)
+  if (base === undefined || base === "") return
+  const current = await Bun.file(join(dir, rel)).text().catch(() => undefined)
+  if (current === base) return
+  await Bun.write(join(dir, rel), base)
+  log(
+    `  ⚠ ${task.id}: a session modified docs/${task.id}/todo.md — the unit's contract (ledger, Scope, Acceptance) is DRIVER-owned; restored from HEAD (the planning session plans in NEW documents, never its own)`,
+  )
 }
 
 // Unified commit after a session (the AI's commit right withdrawn, see

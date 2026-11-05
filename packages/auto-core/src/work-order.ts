@@ -181,7 +181,7 @@ export async function adoptUnit(
       startUsed: 0,
     }
     const pending = await resolveTestScript(test)
-    const info = await runTestScript(test, { idleMs: opts.idleMs, maxMs: opts.maxMs }, pending.script, pending.seq)
+    const info = await runTestScript(test, { idleMs: opts.idleMs, maxMs: opts.maxMs }, pending.script, pending.seq, pending.refused)
     testLines.push(`⚙ test handover executed (exit code ${info.code}); the merged output is in ${info.out} — the standalone session judges the result, not the driver`)
   }
   // 2. Validation (a failure blocks with no driver write).

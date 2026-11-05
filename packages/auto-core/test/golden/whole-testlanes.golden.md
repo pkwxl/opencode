@@ -56,7 +56,7 @@ The suite table (a task's `## Acceptance` names which row is its anchor):
 - lint (cheap): `make lint` — surfaces: src/, test/
 - gate (anchor, exclusive): `./scripts/gate.sh full` — surfaces: src/, include/
 
-Test execution protocol (--test-by-driver, compilation and test runs only — build, typecheck, test suites): after writing the script path into tmp/test.sh, end your turn to wait for the run. To test again,
+Test execution protocol (--test-by-driver, compilation and test runs only — build, typecheck, test suites): after writing the script path into tmp/test.sh, end your turn to wait for the run. The path form names a script inside this project's root (under test/ per the protocol — a path resolving outside the project root is refused and never executed); anything else is an inline script. To test again,
 write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running). A driver-run script is an observation: it must not modify, create or delete tracked files and must not run git
 state commands (commit, checkout, rebase, …) — scratch output goes to tmp/ or another gitignored path, and a check that inherently rewrites tracked content (snapshot updates, codegen) does not go through tmp/test.sh at all.
 Formatting or style validation is not a test script and is not routed through tmp/test.sh (a task document that itself demands a formatting or style check makes that check part of that task's acceptance — run it as the task says).
