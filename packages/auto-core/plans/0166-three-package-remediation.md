@@ -1,6 +1,6 @@
 # 0166 — The three-package remediation: a committed, resumable idle-time program
 
-Status: **active**. Initialized 2026-11-05 (step 001); protocol amended the same day at the maintainer's instruction — a worker completes consecutive committed steps until its time budget runs low, not one. See Program status below.
+Status: **active**. Initialized 2026-11-05 (step 001); protocol amended the same day at the maintainer's instruction — a worker completes consecutive committed steps until its time budget runs low, not one; amended again 2026-11-06 at the maintainer's instruction — a worker stops beginning new work only inside the last hour of its budget, and begins a next step even when it plausibly will not finish inside the budget, because the next run resumes unfinished work. See Program status below.
 
 This document carries the executable prompt for completing the fix program proposed by
 [0165](./0165-three-package-review.md). The work runs as a sequence of independent,
@@ -92,12 +92,14 @@ PART B — WORKER: CONSECUTIVE COMMITTED, RECOVERABLE STEPS
 The current worker can run for at most 180 minutes and may be forcefully
 terminated at timeout. It completes whole proper steps one at a time — each
 recovered, executed, verified and committed before the next begins — and keeps
-accepting further steps while the remaining budget safely covers one more; when
-the budget runs low, or no subsequent work exists, it stops beginning new work
-and finishes with the report below. Write recovery state early and often, always
-reserve a time margin for verification and the commit, and never call
-OffPeakCreate or schedule a successor. A later orchestrator invocation schedules
-the next worker.
+accepting further steps while more than one hour of its budget remains: a next
+step is begun even when it plausibly will not finish inside the remaining
+budget, because an interrupted step is recoverable by the next worker. It stops
+beginning new work only inside the last hour, or when no subsequent work exists,
+and finishes with the report below. Write recovery state early and often, keep
+that last-hour margin for verifying and committing the in-flight step, and never
+call OffPeakCreate or schedule a successor. A later orchestrator invocation
+schedules the next worker.
 
 DURABLE PROGRAM
 
@@ -197,9 +199,15 @@ EXECUTION RULES
 - If the step cannot be completed before the worker's time limit, leave it
   `doing` with its changes intact and a precise recovery record. Do not make a
   WIP commit and do not schedule a successor.
-- Time budget: do not begin a new step unless at least 30 minutes remain and
-  the step plausibly fits them; prefer ending the session with a clean report
-  over rushing a step's verification into a forced termination.
+- Time budget (the maintainer's instruction of 2026-11-06, replacing the earlier
+  30-minute rule): when more than 1 hour remains before the 3-hour limit, do
+  not stop — proceed to the next step, even if it plausibly cannot be completed
+  in the remaining time, because unfinished work is resumable on the next run
+  (leave it `doing` with its changes intact and a precise recovery record, as
+  above). Stop beginning new work only inside the last hour, and use that
+  margin to verify and commit the in-flight step and write the closing report.
+  Never rush a step's verification to squeeze it inside the budget — an
+  honestly unfinished step is recoverable, a rushed verdict is not.
 
 VERIFICATION AND COMMIT PROTOCOL
 
@@ -226,12 +234,13 @@ green. When the step is complete:
    any remaining unrelated changes. Do not create a second bookkeeping-only
    commit merely to write that SHA into the program; recover it from git
    history instead.
-6. Check the remaining time budget. If at least 30 minutes remain and
-   subsequent work exists, accept the next step: update the current-position
-   section, select the first `todo` in table order, mark it `doing`, record
-   the date and starting HEAD, create its durable step record, and run it
-   under these same rules. Otherwise stop beginning new work and finish with
-   the report below.
+6. Check the remaining time budget. If more than 1 hour remains before the
+   time limit and subsequent work exists, accept the next step — even when it
+   plausibly will not finish inside the remaining budget, since the next run
+   resumes it: update the current-position section, select the first `todo` in
+   table order, mark it `doing`, record the date and starting HEAD, create its
+   durable step record, and run it under these same rules. Otherwise stop
+   beginning new work and finish with the report below.
 
 Finish the worker with:
 
@@ -264,7 +273,7 @@ idle-time tasks.
 
 Initialized 2026-11-05 at HEAD `5d5e427bf` by step 001. Prescribed order (the executable prompt's initialization clause): **W0 → W1 → W6 → W2 → W5 → W4 → W3 → W7 → W8 → W9 → WD → WE → WF → WA → WB/WC**, with every standalone bucket present in the register placed at a dependency-appropriate position: W-release and W-cleanroom-policy directly after W6 (their surfaces are W6's git/script family), W-secrets after W2 (the S17 keyring family), W-session and W-engine after W5 (runtime control first, then the layers it calls), W-fork and W-land after W4 (the isolation family), the manual-driver suite (W-manual-subtasks → W-manual-fix → W-manual-vocabulary → W-manual-ratchet) after W7 (it mirrors the verification loop W7 rules), W-round-docs after W8 (the round-brief grammar amends the surface W8 touches), W-provenance / W-config / W-template-copy after W9, W-server-trust immediately before WF, W-vocab after WA (its tombstone enactment consumes WA's deprecation-lifecycle ruling), W-tests beside WB.
 
-Conventions: one step = one worker session = one committed unit; the findings column uses bare numbers for `0165-NNN` and verbatim `F…` ids; the union finding `006` (∪15) is enacted jointly by steps 010+011; step 072 coordinates with step 064 (one test repair, two register rows: 058 and 223); steps 079/080 are program-level — the release assessment performs no act of the cut itself (explicit instruction only, after the W1/W6 gate). Step records live under [`0166-remediation/`](./0166-remediation/) and are created by their own step, not pre-created.
+Conventions: one step = one committed unit (a worker completes several steps per session, and a step interrupted at the time limit is left `doing` and resumed by the next worker); the findings column uses bare numbers for `0165-NNN` and verbatim `F…` ids; the union finding `006` (∪15) is enacted jointly by steps 010+011; step 072 coordinates with step 064 (one test repair, two register rows: 058 and 223); steps 079/080 are program-level — the release assessment performs no act of the cut itself (explicit instruction only, after the W1/W6 gate). Step records live under [`0166-remediation/`](./0166-remediation/) and are created by their own step, not pre-created.
 
 | # | step | wave | findings | record | status | start HEAD | verification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
