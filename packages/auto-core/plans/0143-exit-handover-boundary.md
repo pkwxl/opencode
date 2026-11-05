@@ -131,6 +131,23 @@ now `/exit` boundaries (their own standing unaffected). Tier touched: **mechanis
 entry, `src/run-status-schema.ts`, `src/interactive.ts`, comments in `src/loop.ts` and
 `src/control-types.ts`) and the shell README row.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 90b5fe55e)
+
+Family: *`/exit`'s boundary set — where the person's pause request lands, the vocabulary that names
+each kind, and the crash-isomorphism each probe owes.* Home-set reconstructed from D1–D5:
+
+| home | disposition |
+|---|---|
+| `src/exit.ts` (maybeExit's kind union; the acknowledgement copy naming the real set) | changed — D2/D5 |
+| `src/execute.ts` (the handover probes: executeWhole, runSubtask's streams) | changed — D1 |
+| `src/wrapup.ts` (the fix-round handover probe; runWrapup's wrap-up-entry probe) | changed — D1/D5 |
+| `src/run-status-schema.ts` (EXIT_BOUNDARIES gains `handover` and `wrapup`) | changed — D2 |
+| `src/interactive.ts` and the boundary-set comments in `src/loop.ts`, `src/control-types.ts` | changed — D2; `Boundary` itself stays the step trio (no second meaning of `task`) |
+| `packages/auto/README.md` (the /exit row's boundary enumeration) | changed — D4 |
+| The lane drain rule (`src/lanes.ts` — probes inert inside lane workers, the parent's order kept) | held, untouched — D3 |
+| The `retry`/`coldstart` remediation branches and the rejected-split/park-feedback continuations (no document consumed — not handovers) | held, untouched — D4's narrow scope |
+| Test homes: `test/exit.test.ts`, `test/execute-handover.test.ts`, `test/verify-loop.test.ts` (the flag-unset floor pinned by the unchanged continuation cases) | changed |
+
 Tests: `test/exit.test.ts`'s handover- and wrapup-kind pins (the boundaries and the message
 text), `test/execute-handover.test.ts`'s two `/exit`-at-handover cases (whole-task: the exit
 thrown at the handover with exactly one session dispatched; a stream: the same at the subtask's

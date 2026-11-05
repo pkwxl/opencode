@@ -105,6 +105,21 @@ silent), **P16** (genericity — the anchors ride the brief, never the template)
 none — 0085's decision discipline and 0121's gates stand; the duties compose beside them.
 Tier touched: **policy** — `templates/bundles/cleanroom/` duty text + the shipped-text pin.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks, landing commit f8835775f and its review-completion commit)
+
+Family: *the cleanroom bundle's survey and spec-read duties — what enumerates capabilities, what a
+spec entry records, and what the closing consolidation writes.* Home-set reconstructed from D1–D4
+and the floors:
+
+| home | disposition |
+|---|---|
+| `templates/bundles/cleanroom/phases/survey.md` (the enumeration duty against the closed observable surface; the capability-catalog duty with status semantics and the completeness criterion; the pair-diff and delta rules) | changed — D1/D2/D3 |
+| `templates/bundles/cleanroom/phases/spec-read.md` (the evidence-kind provenance; property-first internal enablers) | changed — D4 |
+| The 0085 decision discipline in the same survey (analysis-first, `Settled:` lines, the `Recommend:`-on-the-line fork bar) | held, untouched — the floors |
+| The 0121 compliance gates (the wall, the divergence lanes, the audit dimensions) and the faithful postures' survey shapes | held, untouched — the floors; no shared pin moves |
+| The phase-document grammar (`Phase-artifacts:` stays `survey.md` / `spec-notes.md` — the catalog a project document the duty names) | held, untouched — the floors |
+| Test homes: `test/bundle.test.ts` (the 0153 pin — cleanroom-only, wrap-insensitive) | changed |
+
 Tests: `test/bundle.test.ts` — the 0153 pin test (cleanroom-only, wrap-insensitive: the
 anchor clause, the never-the-instrument clause, the catalog artifact with its status
 semantics and completeness criterion, the pair-diff and recorded-baseline-change rules,

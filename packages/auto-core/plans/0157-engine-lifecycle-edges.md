@@ -186,6 +186,24 @@ comment repeating the same stale name, and `src/format.ts`'s `formatClientError`
 `: string` could see `JSON.stringify(undefined)` → undefined on the (today unreachable)
 unserializable edge — `?? String(error)` keeps the contract honest.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 89122329b)
+
+Family: *the agent plane's lifecycle edges — the ask queue, the host pool's close, the connect-only
+floor, the scrub, the grace timer, and the emission boundary.* Home-set reconstructed from D1–D6,
+the floors and the residuals:
+
+| home | disposition |
+|---|---|
+| `src/interactive.ts` (the ask queue: FIFO, one window per ask, honest `timeout` settlements, close draining) and `src/session-api.ts` (the non-sideband fallback's serialized readlines) | changed — D1 |
+| `src/agent-pool.ts` (the drain-point close with the start body's post-factory guard; hostOf-after-close loud; checkAgentBins' connect-only skip) | changed — D2/D3 |
+| `src/agent/env.ts` (scrubDriverEnv, reaching the pool through the opencode entry's re-export — the D8-legal crossing) and `src/agent/opencode/server.ts` (the grace timer held, cleared, unref'd, inert past a successful start) | changed — D4/D5 |
+| `src/engine/spine.ts` (the emission boundary: post-finish emissions dropped at execution time, whole) | changed — D6 |
+| `src/loop-preflight.ts` (the preflight caller passing `opts.server` into the bin check) | changed — D3 |
+| Hygiene: `src/routing.ts`'s fused comment, `src/stuck.ts`'s stale concern pointer, `src/format.ts`'s formatClientError contract, `test/import-direction.test.ts`'s stale-name comment | changed |
+| Single-ask flows, happy-path closes, spawn-checked profiles, the spawn error paths, the pre-boundary raise (each D's empty case) | held, untouched — the floors |
+| The queued ask behind a hard wait; the probe sessions' sideband attachment (harmless, standing); the claude adapter's unbounded model-change await | held, untouched — the named residuals (the last deferred, needs its own P20-ceiling ruling) |
+| Test homes: `test/interactive.test.ts` (the ask-queue describe), `test/agent-pool.test.ts` (the close-drain, connect-only, X1 scrub), `test/agent-server.test.ts` (the detached-grandchild exit), `test/turn-arbitration.test.ts` (the emission-boundary describe) | changed |
+
 Tests: `test/interactive.test.ts` — the ask queue describe (the FIFO order with each ask
 its own window; the dequeued ask's timeout its own — timer armed at dequeue, observed
 with a fractional-minute window; the hard-wait composition; close's drain and the

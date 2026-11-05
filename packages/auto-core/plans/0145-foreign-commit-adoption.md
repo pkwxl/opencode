@@ -114,6 +114,23 @@ adoption, with §3.1③'s no-reuse and §3.3's rollback refusal both standing). 
 **mechanism** — core (`src/resume-gate.ts`, `src/git.ts`, dead branches in `src/runner.ts` and
 `src/artifact.ts`) and the shell README's interruption-recovery paragraph.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit a6c392034)
+
+Family: *interruption recovery's foreign-commit verdict — what a resume does when the person has
+committed into the recorded range.* Home-set reconstructed from D1–D4:
+
+| home | disposition |
+|---|---|
+| `src/resume-gate.ts` (the adoption rung; the `dirty` verdict kind retired from the ladder) | changed — D1 |
+| `src/git.ts` (baselineIntact's factual line naming the repository and count) | changed — D2 |
+| `src/runner.ts` and `src/artifact.ts` (runTask's and requireArtifact's dead drift branches removed — the step caller inherits the ruling in one lockstep) | changed — D1 |
+| `packages/auto/README.md` (the interruption-recovery paragraph) | changed |
+| The beginUnit clean gate for a non-active record (graceful-exit rerun still requires the clean tree) | held, untouched — D3 |
+| The rollback machinery and its foreign-commit refusal (`rollbackUnit`, `rollbackRefused` — dead session, intact baseline still stashes, resets, redoes cold) | held, untouched — D3 |
+| The reuse bar (foreign commits bar reuse forever) and the non-strict floor | held, untouched — D3 |
+| The audit family's shared "non-driver commit" scan wording (`unitViolations`, land's foreign-commit refusal) | held, untouched — D2 |
+| Test homes: `test/resume-gate.test.ts` (the adoption pin over a seeded temp repository), `test/artifact.test.ts` (the strict-suite drift case rewritten to the adoption) | changed; `test/git.test.ts`'s baselineIntact pins held by the substring ("non-driver commit") |
+
 Tests: `test/resume-gate.test.ts` — the adoption pin with a seeded temp repository (a live
 session and an eligible model, adoption winning anyway: the fresh verdict's exact why string
 naming the repository and count); `test/artifact.test.ts` — the strict-suite drift case rewritten

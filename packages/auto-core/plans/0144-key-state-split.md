@@ -158,6 +158,22 @@ the restart-churn floor it protected is held by the failure-trigger, not by the 
 **mechanism** — core (`src/router.ts`, `src/keyring.ts`, comments in `src/session.ts`) and the
 shell README's key-ring paragraph.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit dc8aca6a4)
+
+Family: *the model registry's key failure state — what a bare key failure holds, how the rotation
+search walks the ring, and who resets it.* Home-set reconstructed from D1–D4:
+
+| home | disposition |
+|---|---|
+| `src/keyring.ts` (the skip flag beside the `until` mark; isKeyDown reads both; ringRotation's order-first decide/commit search; consumeFailback's rewind) | changed — D1/D2/D3 |
+| `src/router.ts` (clearDownMarks stops touching key state; the model half keeps its scope semantics) | changed — D1 |
+| The boundary-hook call sites in `src/attempt.ts`, `src/loop-task.ts`, `src/loop-phase.ts`, `src/runner.ts` and comments in `src/session.ts` | changed — comments only; the router method's signature kept (D1) |
+| `packages/auto/README.md` (the key-ring paragraph) | changed |
+| The `until` half's behavior (mark, boundary survival, instant expiry, late extension) and the floors (`ringsActive`/`hasActiveRing`, single-key refusal) | held, untouched — D4; every existing `until` pin stands |
+| `.auto/windows.json` (learned windows never block, still time the recovery wait) and the recovery probe's ring half (clearRingMarks, markCurrentKeyDown, the position never moves) | held, untouched — D4 |
+| The spawn config, the key labels, the run-start block, the escalation ladder (key → model → wait) | held, untouched — D4 |
+| Test homes: `test/keyring.test.ts` (the rotation describe re-pinned), `test/failback.test.ts` (the key-state shapes, `/failback`), `test/agent-fake.test.ts` (the refusing-ring fall-through, the one-shot healing case) | changed |
+
 Tests: `test/keyring.test.ts` — the rotation describe rewritten to the new pins (the order-first
 sequence A→B→C→A with the refusal naming its `passed` pair and the apply consuming them, the
 position unmoved; the flag skipped by the search that passes it and consumed at its apply,

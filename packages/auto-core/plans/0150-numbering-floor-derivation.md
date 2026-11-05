@@ -119,6 +119,23 @@ ruling and the floor scan itself stand.
 Tier: mechanism (src/numbering.ts and the allocation sites; the vocabulary surfaces; tests; the shell
 help row and README).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 4fc4c2337)
+
+Family: *task-number allocation — the floor as the whole mechanism, and the record/recovery family
+it retires.* Home-set reconstructed from D1–D5:
+
+| home | disposition |
+|---|---|
+| `src/numbering.ts` (taskNumberFloor the entire allocation; readNextTask/writeNextTask/advanceNextTask/ensureNumbering retire) | changed — D1 |
+| The allocation sites: `src/formulate.ts` (formulationNumber), `src/loop-plan.ts` (appendPlan's numberStart), `src/task-add.ts` (addTask), `src/runner.ts` (the collect validates, advances nothing) | changed — D1 |
+| The recovery session's deletion — the template `templates/prompts/number-recovery.md` and its wiring across `src/artifact.ts`, `src/close.ts`, `src/git.ts`, `src/config.ts`, `src/plan.ts`, `src/plan-input.ts`, `src/prompt.ts`, `src/prompt-plan.ts`, `src/tasks.ts`, `prompts/plan-append.md` (deleted, not disabled) | changed — D1 |
+| The vocabulary lockstep: `src/template.ts` (the embedded registry), `src/roles/registry.ts` (the MODEL_ROLES word), `src/switches.ts`, `src/opts.ts` (the retired SessionSites) | changed — D2 |
+| `src/loop-preflight.ts` (removeRetiredNumberingRecord — the leftover record self-heals, one log line, no commit) | changed — D3 |
+| `packages/auto/src/index.ts` and `packages/auto/README.md` (the help row, the README rows) | changed |
+| The `--no-auto-number` floor (undefined numberStart, the prompt fallback, collision-only validation) and the `autoNumber` constitutional key (init/amend/fix unchanged; what it gates narrows) | held, untouched — D4 |
+| The retry-fork shape (a worktree re-derives its own numbers; bring-back plain git, the person's act — 0128) | held, untouched — D4/D5 |
+| Test homes: `test/numbering.test.ts`, `test/task-add.test.ts`, `test/formulate.test.ts`, `test/plan-loop.test.ts`, `test/loop-preflight.test.ts`, `test/prompt-phase.test.ts`, `test/golden.test.ts`, `test/template.test.ts`, `test/roles-registry.test.ts`, `test/tier.test.ts`, `test/session-opts.test.ts`, `test/models.test.ts`, `test/models-describe.test.ts`, `test/prompt-template.test.ts`, the fixtures, the shell's e2e and fake-claude branch | changed — D2's lockstep (`test/golden/number-recovery.golden.md` retired with its template) |
+
 ## Tests
 
 - test/numbering.test.ts: the record/advance/ensure describes retire; the floor describes keep; a new

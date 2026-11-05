@@ -228,6 +228,24 @@ the core plans corpus (this document, the INDEX row) and the shell-contract
 §A row — no core src change (the core bent for no shell; every semantic
  mismatch was absorbed shell-side).**
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 6c344f9d8)
+
+Family: *the auto-server service shell's absorption — its config/run vocabularies brought onto the
+core's current semantics, the advance command made real, and the suite made green.* Home-set
+reconstructed from D1–D5, the hygiene and the deferrals:
+
+| home | disposition |
+|---|---|
+| `packages/auto-server/src/worker.ts` (runOptions mirroring the CLI's threading key for key; the transfer payload; the `transfer <dir>` subcommand) | changed — D2/D4 |
+| `packages/auto-server/src/ops.ts` and `packages/auto-server/src/request.ts` (the brief-stub retirement; the four keys with the CLI's own validation; the scanExempt merge fix; fix filtered to the 0135 semantics; the transfer operation; the run vocabulary's repair/stopAfter/boundary) | changed — D1/D2/D3/D4 |
+| `packages/auto-server/src/daemon.ts`, `packages/auto-server/src/store.ts`, `packages/auto-server/src/question-journal.ts` (the server profile at startDaemon; register's not-a-directory refusal; the timing-safe secret; compactJournal's first-raise survival) | changed — D5/hygiene |
+| `packages/auto-server/web/api.ts`, `packages/auto-server/web/ops.ts`, `packages/auto-server/web/render.ts` and `packages/auto-server/src/web/client.ts` (the config form's three new fields) | changed — D2 |
+| `packages/auto-server/README.md` and `packages/auto-server/docs/daemon.md` (the docs' truth pass: the honestly-absent surfaces stated once, the reserved maxSessions call named) | changed — D4 |
+| `docs/shell-contract.md` (the §A row gains transfer; the one-process-per-run rule covers the advance) | changed — the amend |
+| Core `src/` (no core change — every semantic mismatch absorbed shell-side; the core bent for no shell) | held, untouched |
+| Run-registry eviction in a long-lived daemon; the CLI-side surfaces (clarify, sync, land, fork, driver-helper); the web start form's minimalism | held, untouched — deferred, named |
+| Test homes: `packages/auto-server/test/worker.test.ts`, `test/daemon.test.ts`, `test/ops.test.ts`, `test/plan-e2e.test.ts`, `test/service-e2e.test.ts`, `test/ws-protocol.test.ts`, `test/interactive-ws.test.ts`, `test/question-queue.test.ts`, `test/status-events.test.ts`, `test/web-write.test.ts`, the fixtures `packages/auto-server/test/fixtures/fake-claude.ts` and `project.ts` (the suite 43/22/13 before → 132 pass / 0 fail after) | changed — D5 |
+
 Tests: `test/worker.test.ts` — the four keys' frozen refusals with their
 amend hints, the lanes hand-edited refusal, the transfer-payload vocabulary
 (plan/transfer exclusion, the run-side widths refused under both payloads,

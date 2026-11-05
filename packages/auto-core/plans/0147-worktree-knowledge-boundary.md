@@ -112,6 +112,23 @@ ordering adapts to the boundary's deny). Tier touched: **mechanism** — core
 (`templates/opencode.json`, `src/external-dirs.ts`, `src/config-fix.ts`) and the docs' restatements
 (structure.md, AGENTS.md, the shell README's fix table).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit fc84aec40)
+
+Family: *the session's external-directory knowledge boundary — the opencode.json posture a project
+ships, the stamps that write it, and its interplays with the wall and the person's own keys.* Home-set
+reconstructed from D1–D3 and the floors:
+
+| home | disposition |
+|---|---|
+| `templates/opencode.json` (the boundary pair ships: `/**` deny first, `/tmp/**` allow) | changed — D1 |
+| `src/external-dirs.ts` (stampKnowledgeBoundary; the root-symlink read-only composite; externalAllowsStatus/applyExternalAllows composing both layers) | changed — D1/D2 |
+| `src/config-fix.ts` (the fixable finding carrying the pair to standing projects) | changed — D1/D2 |
+| `src/wall.ts` (the interplay: a /tmp-resident reference cannot seal — the allowance beats the per-target deny, the close refuses and teaches the move; the boundary's keys re-derivable, never retired) | changed — the floors |
+| `packages/auto/src/index.ts` and `packages/auto/README.md` (init's stamp; the fix table's restatement) | changed |
+| The spawn config (`OPENCODE_CONFIG_CONTENT` — stays the provider-keys channel, no permission floor) and `fork`'s pure-git floor (0128) | held, untouched — D1's rejected alternatives, recorded |
+| The no-root-symlink floor (nothing stamped beyond the boundary; 0122's byte-identical floor held) and every person key's order-and-tie win | held, untouched — the floors |
+| Test homes: `test/external-dirs.test.ts`, `test/config-fix.test.ts`, `test/wall.test.ts`, `packages/auto/test/e2e.test.ts` (the wall fixture's corpus moved out of /tmp) | changed |
+
 Tests: `test/external-dirs.test.ts` — the boundary stamps (the canonical order, the idempotence,
 the person's own `/**` wall never inserted over, the absent-permission apply), the read-only edit
 stamps (the bare-action materialization preserving the effective default, the object insertion

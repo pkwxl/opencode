@@ -100,6 +100,21 @@ active-record case moves from out-of-scope to ruled). Tier touched: **mechanism*
 (`src/loop-preflight.ts`, `src/driver-helper.ts`) and the shell README's interruption-recovery
 paragraph.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit f695ac278)
+
+Family: *the run-start clean gate — what an active progress record does to the uncommitted-changes
+block, and who teaches the resume.* Home-set reconstructed from D1–D4:
+
+| home | disposition |
+|---|---|
+| `src/loop-preflight.ts` (the active-record exemption line; the housekeeping close-out commit skipping with it; the tracker/watcher close on the gate's exit) | changed — D1 |
+| `src/driver-helper.ts` (the person-proxy brief's dirty-tree row teaching the resume) | changed — D2 |
+| `packages/auto/README.md` (the interruption-recovery paragraph) | changed |
+| The unit-start gates (already exempt an active record) and beginUnit's driver-state carryover self-heal | held, untouched — D3 |
+| The recovery ladder (reuse/fresh/adoption, 0145) and the non-active shapes (the round-start gate's review teaching, the person-dirt block) | held, untouched — D3 |
+| dryrun and the lane workers' preflight (own worktree, same predicate) | held, untouched — D3 |
+| Test homes: `test/loop-preflight.test.ts` (the exemption describe), `test/driver-helper.test.ts` (the row-11 companion) | changed |
+
 Tests: `test/loop-preflight.test.ts` — the exemption describe (the exempt pass: one teaching line,
 the batch still uncommitted, no PLAN commit; the summarized-record rerun still blocking with the
 person's teaching; the no-record block standing; the silent pass over a clean tree); 

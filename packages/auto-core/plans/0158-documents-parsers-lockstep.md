@@ -179,6 +179,24 @@ for exact heads alone). Tier touched: **mechanism** — core (`src/tasks.ts`, `s
 comment) + templates (`templates/intents/default.md`) + prompts (`prompts/run-task.md`,
 `prompts/run.md`).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 11f2a9109)
+
+Family: *the document parsers and their lockstep surfaces — one view of each grammar between the
+runtime reader and the release scan, and the two vocabulary completions carried with it.* Home-set
+reconstructed from D1–D5, the hygiene, the floors and the residuals:
+
+| home | disposition |
+|---|---|
+| `src/tasks.ts` and `src/roadmap.ts` (normalizeNewlines at entry — subtasks, roadmapRounds) with `src/analysis.ts`'s nearMissHeads reading the same view | changed — D1 |
+| `src/agents-block.ts` (the collapse only when a legacy block was removed; a replaced block rewrites its own slice) | changed — D2 |
+| `src/analysis.ts`'s roundBriefNearMissNote and its wiring in `src/transfer.ts` and `src/plan.ts` (the ℹ line at the round's open, bounded by the brief-still-stub condition) | changed — D3 |
+| `templates/intents/default.md` (the scaffold re-keyed to the standing surfaces — the 0109 completion) | changed — D4 |
+| `prompts/run-task.md` and `prompts/run.md` (the lane-log dir named as the 0151 seam — the manual-twin completion) | changed — D5 |
+| The hygiene: `src/intent/test-lanes.ts`'s comment, `src/phases.ts`'s directory check, `src/brief.ts`'s comment stripping, `src/status.ts`'s one construction point, `src/provenance.ts`'s direction-honest notice, `src/sync.ts`'s diff-gated sidecar rewrite and `src/tasks.ts`'s syncChecklistTicks first direct test home | changed |
+| LF documents everywhere, ensurePointer's branches, exact `### R-NN` heads, the bundles' scaffolds, `_partials.md`, the person-edited stamp entries | held, untouched — the floors |
+| The near-miss heading naming no round, the other unit-document CRLF readers, the driver-helper free-content scan | held, untouched — the named residuals (the last deferred to its own small ruling) |
+| Test homes: `test/tasks.test.ts`, `test/analysis.test.ts`, `test/protect.test.ts`, `test/phases.test.ts`, `test/config-fix.test.ts`, `test/provenance.test.ts`, `test/sync.test.ts`, `test/intent.test.ts`, `test/manual-prompts-ratchet.test.ts` | changed |
+
 Tests: `test/tasks.test.ts` — the CRLF checklist describe (the parser, the readChecklist
 composition) and `syncChecklistTicks`' first direct home (the stale-tick re-derivation over
 S<nn> state files, idempotence, the no-checklist floor); `test/analysis.test.ts` — the CRLF

@@ -255,6 +255,27 @@ touched: **mechanism** — core (`src/loop-preflight.ts`, `src/tasks.ts`, `src/r
 `src/loop.ts`, `src/loop-plan.ts`, `src/execute.ts`, `src/lanes.ts`, `src/script.ts`,
 `src/wrapup.ts`, `src/loop-task.ts`, `src/loop-phase.ts`) and AGENTS.md's repair line.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 9597a19aa)
+
+Family: *the loop/execute composition — eight seams where the phase loop, its lanes and the
+verification loop disagreed with the documents and records they judge by.* Home-set reconstructed
+from D1–D8, the floors and the residuals:
+
+| home | disposition |
+|---|---|
+| `src/tasks.ts` and `src/loop-preflight.ts` (resetInProgress' keep-set; the doc-eligible in_progress marks surviving preflight) | changed — D1 |
+| `src/runner.ts` (the compose-side handover read gated on `switches.steer`, execute's own key) | changed — D2 |
+| `src/lanes.ts` (laneReportOf reading the owning task's documents; the split/parked re-persistence hoisted before the landing-sync commit) | changed — D3/D6 |
+| `src/loop-plan.ts` (the per-iteration freshen of the planning input and the brief in planPhase and appendPlan) | changed — D4 |
+| `src/execute.ts` (HandoverScope's `handoff` — every surface naming the judged document names the same one) | changed — D5 |
+| `src/script.ts` (the bounded SIGTERM → grace → SIGKILL escalation, single watchdog and batch) | changed — D7 |
+| `src/wrapup.ts` (verifySession's PASS return consuming the dead marker through the 0142 seam) | changed — D8 |
+| The carried hygiene: `src/loop.ts`, `src/loop-phase.ts`, `src/loop-task.ts`, `src/testrun.ts` (progress/watcher closes on preflight's exits, the serial degrade's regressionBoundary, the repair-confinement restatement, the dead exports) | changed |
+| Each D's floor (empty keep-set; steer off; plain task units' reports; the never-blocking step; the task-level handoff for serial scopes; the settled landing; the TERM-honoring child; the FAIL paths) | held, untouched — the floors, named per mechanism |
+| `formulationParts`' entry-time capture (the digest half books the session's sizes — a per-pass re-read would double-book) | held, untouched — D4's named residual |
+| `dispatchLane`'s booking attempts before its failure points and lane receipt races | held, untouched — deferred, standing (bounded, loud; none found) |
+| Test homes: `test/agent-fake.test.ts` (the D1 composition scene), `test/resume.test.ts` (the D2 pair), `test/lanes-scheduler.test.ts` (the D3 orphan, the D6 landing-sync failure), `test/blockage-diagnosis.test.ts` (the D4 remediation), `test/execute-handover.test.ts` (the D5 feedback), `test/script.test.ts` (the D7 pair), `test/verify-loop.test.ts` (the D8 consumption) | changed |
+
 Tests: `test/agent-fake.test.ts` — the D1 composition scene (the killed doc-lane driven through
 preflight then the doc loop: the kept marks, the teaching line, the 0149 exemption holding, the
 rollback refusal firing while the sibling's dirt stays) beside the two standing direct-call tests;

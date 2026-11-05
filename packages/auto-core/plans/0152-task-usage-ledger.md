@@ -128,6 +128,20 @@ buckets, the depreciation discipline and the never-a-source-of-truth posture
 all stand). Tier touched: **mechanism** — core only
 (`src/stats-schema.ts`, `src/stats.ts`).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit bb9421d35)
+
+Family: *the cumulative-stats store — what happens to a closed task stint's per-session history at
+the task-switch reset.* Home-set reconstructed from D1–D4:
+
+| home | disposition |
+|---|---|
+| `src/stats-schema.ts` (TaskStintRecord + the pure taskStintRecord assembly, following 0102 D7's store/schema split) | changed — D1 |
+| `src/stats.ts` (the best-effort ledger append at statsTask's id-change seam; SessionStat's optional `model`/`tier` at the booking seam) | changed — D2/D3 |
+| `run-status.jsonl`, its rotation, the daemon's tail, and the dormant vocabulary scopes | held, untouched — D2 |
+| The working document `stats.json`'s mechanics (only the two optional fields; the cumulative buckets, depreciation, never-a-source-of-truth posture) | held, untouched — D4 |
+| No person-facing surface (the ledger a `.auto/` runtime file under the 0138 ignore set; no gitignore, README or shell change) | held — D4's floor |
+| Test homes: `test/stats.test.ts` (the task-usage-ledger describe) | changed |
+
 Tests: `test/stats.test.ts` — the "the task-usage ledger" describe: the
 self-contained line with the unnamed pre-task bracket pinned beside the
 task's own (figures, usage sum, models/tiers, the ordered session log with

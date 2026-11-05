@@ -161,6 +161,24 @@ front" now "after any existing `/**` key, else the front"). Tier touched: **mech
 (`src/git.ts`, `src/wall.ts`, `src/external-dirs.ts`, `src/land.ts`, `src/git-land.ts`,
 `src/git-worktree.ts`).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 374129a14)
+
+Family: *the git service layer's failure direction — every uncertain read resolving toward
+dirty/conflict/refused, never a quiet clean.* Home-set reconstructed from D1–D4, the floors and the
+residuals:
+
+| home | disposition |
+|---|---|
+| `src/git.ts` (hasChanges' undefined; statusEntriesRead the strict read; commitTree/stashTree/rollbackUnit/pendingChanges classified per caller; unitViolations' unreadable-HEAD line; landBranch's guarded edges) | changed — D1/D4 |
+| `src/wall.ts` (the any-declared-door-missing recovery gate; sealedChannelCheck exported and blocking; stampWallClosure's standing deny) | changed — D2/D3 |
+| `src/external-dirs.ts` (stampKnowledgeBoundary through externalWithAllows — after any `/**` key, else the front) | changed — D3 |
+| `src/land.ts` and `src/git-land.ts` (the unrelated-histories merge-base refusal; abortToLandResult/squashFailure judged over the merged repository alone) | changed — D4 |
+| `src/git-worktree.ts` (beginUnit's and isolateRound's strict in-scope gates) | changed — D1 |
+| `statusEntries`' legacy signature and its behavior over readable repositories; `changedFiles`/`untrackedFiles` and every consumer outside this change's files | held, untouched — the floors |
+| The loop-side clean gates and `release`'s clean-tree check (consume the legacy-typed read; their loud stops land at beginUnit, the close-out and unitViolations) | held, untouched — the named residual, their owning plans' to move |
+| The no-fill wall shape's all-or-nothing recovery, the wall record's grammar, the landBranch happy path and the true own-file conflict | held, untouched — the floors |
+| Test homes: `test/git.test.ts` (the 0155 describe, the two landBranch cases), `test/wall.test.ts` (the two-door scene, the blocking sealed-channel finding), `test/external-dirs.test.ts`, `test/land.test.ts` (the unrelated-histories refusal) | changed |
+
 Tests: `test/git.test.ts` — the 0155 describe (the corrupt-index anomaly: `statusEntries`' ⚠ and
 empty answer beside `statusEntriesRead`'s undefined, `commitTree`'s refusal failure line,
 `stashTree`'s refusal, `rollbackUnit`'s untouched-with-failure, `pendingChanges` counting

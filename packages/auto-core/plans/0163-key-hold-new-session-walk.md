@@ -94,6 +94,21 @@ follows a failure or a passed hold, never a bare session). Tier touched: **mecha
 (`src/keyring.ts`, `src/router.ts`, `src/attempt.ts`, `src/session.ts`, the boundary-clear comment in
 `src/runner.ts`) and the shell README's key-ring paragraph.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 358be4003)
+
+Family: *the model registry's key failure state — the hold and the new-session walk that supersede
+0144's skip-flag split.* Home-set reconstructed from D1–D3:
+
+| home | disposition |
+|---|---|
+| `src/keyring.ts` (the state collapses to its `until` half — the flag becomes the five-minute hold; the walk's decide/commit pair) | changed — D1/D2 |
+| `src/attempt.ts` (walkProviderKey ahead of the agent client resolving) | changed — D2 |
+| `src/router.ts` and `src/session.ts` (the rotation's mechanics; the boundary clears), the boundary-clear comment in `src/runner.ts` | changed |
+| `packages/auto/README.md` (the key-ring paragraph) | changed |
+| The floors: no registry, an external server, unactivated or ringless providers; the stated-reset half's every pin; `.auto/windows.json`; `accountOf` and the labels; the escalation ladder (key → model → wait) and the spawn config's shape | held, untouched — D3 |
+| The diagnostic one-shots (classifier, plan-verifier, synthesis) creating sessions outside `attempt` — they still do not walk | held, untouched — D2's stated boundary, recorded for the next reader |
+| Test homes: `test/keyring.test.ts` (the rotation describe re-pinned to the hold; the walk describe), `test/failback.test.ts` (the one-mark shapes, the boundary matrix), `test/agent-fake.test.ts` (the refusing ring; the field-scenario pin on a manual clock), `test/routing.test.ts` | changed |
+
 Tests: `test/keyring.test.ts` — the rotation describe rewritten to the hold (the order-first sequence over
 held keys, the refusal marking the current key and moving nothing, the boundary clear leaving position and
 marks alone, the single-key refusal, the unstated hold's extent), a new walk describe (decide mutates

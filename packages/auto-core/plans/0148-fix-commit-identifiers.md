@@ -96,6 +96,22 @@ touched: **mechanism** — core (`src/wrapup.ts`, `src/git.ts`, the subject site
 `loop-task.ts`, `lanes.ts`, `work-order.ts`, `session.ts`, `git-worktree.ts`), the manual suite
 (`prompts/run.md`, `prompts/run-verify.md`, its ratchet), and the docs' restatements.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 676056468)
+
+Family: *the driver's git subject grammars — the fix round's per-session commit numbering and the
+short-title rule every driver subject obeys.* Home-set reconstructed from D1–D3 and the floors:
+
+| home | disposition |
+|---|---|
+| `src/wrapup.ts` (the round's per-session commits at handover-safe boundaries; nextFixSession's log-derived ordinal) | changed — D1 |
+| `src/git.ts` (shortTitle beside commitTitle — the commit-title family) | changed — D2 |
+| The subject sites across `src/execute.ts`, `src/loop-task.ts`, `src/lanes.ts`, `src/work-order.ts`, `src/session.ts`, `src/git-worktree.ts` | changed — D2 |
+| `prompts/run.md` and `prompts/run-verify.md` (the manual suite's mirror of both grammars) | changed — D3 |
+| The `[<k>]` exec share ordinal (0094) and `commitTitle`/`suffixedTitle` semantics (the truncation backstop) | held, untouched — the floors |
+| `src/attempt.ts`'s `[auto] <id> <title>` session-title fallback (not a git subject — keeps the full title) | held, untouched — D2 |
+| The 0143 boundary order (the boundary fires first, batches commit after), the 0142 dead-channel order, the SHA-baseline audit's driver-only range | held, untouched — D1 |
+| Test homes: `test/verify-loop.test.ts` (the handover-split pin flipped; the re-opened-round pin), `test/git.test.ts` (shortTitle, nextFixSession), `test/manual-prompts-ratchet.test.ts` (the lockstep pins) | changed |
+
 Tests: `test/verify-loop.test.ts` — the handover-split pin deliberately flipped (the handing-over
 session commits `fix 1.1` carrying the handoff document, the continuation's natural end commits
 `fix 1.2` — the round's session shape readable in git by its indices); the re-opened-round pin (a

@@ -128,6 +128,23 @@ never a progress claim). Amends: **0083 D5** (the constant-two budget is re-rule
 `templates/prompts/fix.md`) and the docs' restatements (structure.md, principles.md,
 templates/README.md, AGENTS.md).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 7401fe7b5)
+
+Family: *the verification loop's fix budget — how many fix rounds a task may spend, measured how,
+and what the block teaches.* Home-set reconstructed from D1–D5 and the floors:
+
+| home | disposition |
+|---|---|
+| `src/wrapup.ts` (the countable-gap grammar teaching, the progress rule, the 2+N block condition, the stage persist's `noProgress`/`gaps`) | changed — D1/D2/D3/D4 |
+| `src/resume.ts` (sanitizePhaseRound validating `round`, `noProgress`, `gaps`) | changed — D4 |
+| `src/runner.ts` (the loop's state threading) | changed — D2 |
+| `templates/prompts/wrapup.md` and `templates/prompts/fix.md` (the countable `### Gap N —` grammar and the round's gap-boundary handover teaching) | changed — D1/D5 |
+| `docs/principles.md` and `templates/README.md` (the progress-based budget's restatements) | changed |
+| The `--repair` ladder (the block's repair fact, `--repair`'s consumption, bookAttempt's once-it-opens) | held, untouched — the floors |
+| The 0142 unbooked round (rewind, skip, teach — the state drops with the round) and the `--no-wrapup` closeout read | held, untouched — the floors |
+| The handoff document's `Status: continue\|done` protocol and the continuation loop's no-session-cap posture (0130 D2) | held, untouched — D5 rides them unchanged |
+| Test homes: `test/verify-loop.test.ts`, `test/repair-loop.test.ts`, `test/incident-regression.test.ts`, `test/agent-fake.test.ts`, `test/prompt-exec.test.ts`, the goldens `test/golden/wrapup.golden.md`, `test/golden/wrapup-testlanes.golden.md`, `test/golden/fix.golden.md` | changed |
+
 Tests: `test/verify-loop.test.ts` — the fixtures moved to the countable grammar; the resume pin
 seeded with the progress state (round 1, one no-progress round, baseline 1 — blocking at round 2
 with the stalled-count message and the record `{round:2, noProgress:2, gaps:1}`); new —

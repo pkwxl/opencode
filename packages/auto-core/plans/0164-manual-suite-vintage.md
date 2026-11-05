@@ -105,6 +105,23 @@ Tier touched: **prompt copy** (run.md, run-verify.md) + the installer and
 the CLI shell (one flag, one emitted file, no lock, no git); no core loop
 code.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit d579016b2)
+
+Family: *the manual-driver suite's operational trust — vintage provable from the target, drift
+checked read-only, the lock diagnosed, and the run's end bounded.* Home-set reconstructed from
+D1–D5:
+
+| home | disposition |
+|---|---|
+| `src/install-prompts.ts` (installPrompts writes `prompts/MANIFEST`; checkPrompts' read-only drift gate) | changed — D1/D2 |
+| `packages/auto/src/index.ts` (the `install-prompts --check` row — one option, an OWNED_FLAGS row, the refusal naming the whole surface) | changed — D2 |
+| `prompts/run.md` (the preflight lock diagnosis — stale or live, clearing stays the person's; the `stop-after: T-NNN` hand-over phrase; the heredoc exception retired for the report shape) | changed — D3/D4/D5 |
+| `prompts/run-verify.md` (the report-file fallback folded upstream — the session's own deliverable, the heredoc when the host refuses the file-write tool) | changed — D5 |
+| `packages/auto/README.md` and `packages/auto/MANUAL.md` (the command rows) | changed |
+| The mutual-exclusion rule (0093 D3 — the session never deletes or edits under `.auto/`); the registry-vs-directory guard arm (the source `prompts/` stays the ten files, the manifest installer output, never a suite file) | held, untouched — D1/D3's floors |
+| The core loop (no loop code, no lock, no git in this change) | held, untouched |
+| Test homes: `test/install-prompts.test.ts` (grown to eleven: the manifest's determinism, checkPrompts' five shapes, both formatters), `packages/auto/test/e2e.test.ts` (the --check exit pair, the drift wording, the option refusal, the owned-flag line) | changed |
+
 Tests: `test/install-prompts.test.ts` grown to eleven — the manifest's
 determinism and extras exclusion, `checkPrompts` clean / drifted / missing
 / stale / never-installed, both formatters — and the auto e2e

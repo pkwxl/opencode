@@ -247,7 +247,7 @@ Conventions: one step = one worker session = one committed unit; the findings co
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 001 | init — Program initialization: status table, coverage ledger, current position (this step) | program | — | [001](./0166-remediation/001-init.md) | **done** 2026-11-05 | 5d5e427bf | completeness script OK; typecheck clean |
 | 002 | w0-index-navigation — INDEX grammar/order repair, stale code homes, AGENTS.md navigation R4 reduction | W0-governance | 060 061 065 176 | [002](./0166-remediation/002-w0-index-navigation.md) | **done** 2026-11-05 | 9e61f6e0b | probe P1+P2 empty; arrows/pointers zero-loss; typecheck clean |
-| 003 | w0-category-scope — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164) | W0-governance | 066 F9 | [003](./0166-remediation/003-w0-category-scope.md) | todo | — | — |
+| 003 | w0-category-scope — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164) | W0-governance | 066 F9 | [003](./0166-remediation/003-w0-category-scope.md) | **done** 2026-11-05 | 8f2dca4a8 | family-check 22/22 ok; probe P4 empty; typecheck clean |
 | 004 | w0-0132-enactment — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked | W0-governance | 067 F10 | [004](./0166-remediation/004-w0-0132-enactment.md) | todo | — | — |
 | 005 | w0-premise-guard — Premise-drift guard line ('premises this ruling changes') + SERVER_ENV drift ratchet | W0-governance | 201 F22 | [005](./0166-remediation/005-w0-premise-guard.md) | todo | — | — |
 | 006 | w0-constitution-wording — Constitution wording: PLAN_VERIFY kill-switch line, security-family statement vs code | W0-governance | 101 132 | [006](./0166-remediation/006-w0-constitution-wording.md) | todo | — | — |
@@ -398,7 +398,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-063 | S3 | WB-test | 072 | — |
 | 0165-064 | S3 | WA-docs | 067 | — |
 | 0165-065 | S3 | W0-governance | 002 | fixed (step 002) |
-| 0165-066 | S3 | W0-governance | 003 | — |
+| 0165-066 | S3 | W0-governance | 003 | fixed (step 003) |
 | 0165-067 | S3 | W0-governance | 004 | — |
 | 0165-068 | S3 | WA-docs | 065 | — |
 | 0165-069 | S3 | WA-docs | 065 | — |
@@ -557,7 +557,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-222 | S4 | WA-docs | 067 | — |
 | 0165-223 | S4 | WB-test | 073 | — |
 | 0165-224 | S4 | WC-hygiene | 075 | — |
-| F9 | S3 | W0-governance | 003 | — (twin 0165-066) |
+| F9 | S3 | W0-governance | 003 | fixed (step 003, twin 0165-066) |
 | F10 | S3 | W0-governance | 004 | — (twin 0165-067) |
 | F11 | S3 | WA-docs | 065 | — (twin 0165-068) |
 | F12 | S3 | WA-docs | 065 | — (twin 0165-069) |
@@ -574,9 +574,9 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 
 ## Current position
 
-- **Active step**: none — step 002 (w0-index-navigation) **done** 2026-11-05, committed with its record; the commit's short sha recoverable from git history.
-- **Completed this step**: INDEX grammar repaired (27 rows → all 6-cell, the two unescaped pipes escaped, 0147/0148 order restored), the 11 stale code homes annotated across 22 rows (dispositions git-derived), the AGENTS.md navigation diet (67 bullets, avg 485 → 181 chars, zero arrows/pointers lost; the maintaining rule encodes the diet), the probe's P2 taught to hold the annotated-homes line.
-- **Modified/created files**: modified `plans/INDEX.md`, `AGENTS.md`, `plans/0165-review/tools/probe.ts`, `plans/0166-three-package-remediation.md`; created `plans/0166-remediation/002-w0-index-navigation.md`.
-- **Commands and results**: `bun plans/0165-review/tools/probe.ts` — P1 empty (was 27 broken rows), P2 empty (was 11 stale paths), P3 at the triaged baseline; `bun plans/0165-review/tools/family-check.ts` — unchanged outside step 003's scope; `bun typecheck` clean (exit 0). Docs + evidence-tooling change; no product test suite due.
+- **Active step**: none — step 003 (w0-category-scope) **done** 2026-11-05, committed with its record; the commit's short sha recoverable from git history.
+- **Completed this step**: all 22 lapsed rulings (0142–0161, 0163, 0164) regained a `## Category scope` section — placed between the final Derives paragraph and the Tests paragraph, reconstructed from each ruling's own D-blocks with every `changed` home grounded in its landing-commit chain; the register's remedy ("reconstruct home-sets where S32 finds family drift") discharged with S32 confirming practice drift, not enactment drift.
+- **Modified/created files**: modified the 22 `plans/0142…0164-*.md` documents; created `plans/0166-remediation/003-w0-category-scope.md`; this program's status table, ledger rows (0165-066, F9) and current position updated. No src, no templates, no INDEX, no AGENTS.md change.
+- **Commands and results**: `bun plans/0165-review/tools/family-check.ts` — all 22 now compute, every one `ok` (before: 22 × "no Category scope section"); `bun plans/0165-review/tools/probe.ts` — P4 zero flags (before: the 22 missing-section lines); table-grammar awk check — every new row exactly 2 cells; `bun typecheck` clean (exit 0). Docs-only change; no product suite due.
 - **Unresolved problems**: none.
-- **Next action**: the next orchestrator invocation schedules a worker for step **003 (w0-category-scope)** — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164); findings 0165-066, F9. Evidence: `plans/0165-review/S02-corpus-audit.md`, the probe's P4 output and the family-check tool.
+- **Next action**: the next orchestrator invocation schedules a worker for step **004 (w0-0132-enactment)** — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked; findings 0165-067, F10. Evidence: `plans/0165-review/S20-isolation.md` (S20's verdict decides whether code follows), `plans/0132-sealed-reference-wall.md` (Category scope), commit 5b5b52fcd.

@@ -102,6 +102,22 @@ person's fork arms and the driver-side workflow). Amends: none — 0153's duties
 with the widened diff; 0085's and 0121's floors stand. Tier touched: **policy** —
 `templates/bundles/cleanroom/` duty text + the shipped-text pin.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 6906f534b)
+
+Family: *the cleanroom bundle's consistency gate and spec-read verification duties — what a survey
+pair diffs, when the pair resolves, and what a spec entry re-checks before it stands.* Home-set
+reconstructed from D1–D4 and the floors:
+
+| home | disposition |
+|---|---|
+| `templates/bundles/cleanroom/phases/survey.md` (the widened pair diff: catalog rows by id, decision records by subject, the closed anchor set; the close-time resolution duty) | changed — D1/D2 |
+| `templates/bundles/cleanroom/phases/spec-read.md` (the sampled re-read of the riskiest distilled contracts; the specification pair clause) | changed — D3/D4 |
+| The 0085 decision discipline (how `Fork:`/`Settled:` lines are recorded and ruled — the widened diff only reads them) | held, untouched — the floors |
+| The 0121 compliance gates and the 0132 wall (the sampled verification rides the existing in-tree/out-of-tree evidence split) | held, untouched — the floors |
+| 0153's rulings (anchors, catalog, status semantics, completeness criterion, delta rule) and the faithful postures' shapes | held, untouched — the floors |
+| The phase-document grammar (duty text alone, no new artifact) | held, untouched — the floors |
+| Test homes: `test/bundle.test.ts` (the 0154 pin — cleanroom-only, wrap-insensitive) | changed |
+
 Tests: `test/bundle.test.ts` — the 0154 pin test (cleanroom-only, wrap-insensitive:
 the decisions-by-subject and closed-anchor-set clauses, the close-time binding, the
 riskiest-contracts and silent-failure clauses, the spec-read pair rule).

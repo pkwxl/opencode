@@ -139,6 +139,23 @@ unservable-wait exception, D2). Tier touched: **mechanism** — core (`src/testr
 `src/exec-session.ts`, `src/wrapup.ts`, `src/agents-block.ts`) and the shell banner line, with the
 AGENTS-block ratchet and the verify-loop suite re-pinned in the same change.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 28236bcf7)
+
+Family: *the driver-run test channel's marker lifecycle — who serves a `tmp/test.sh` request, what
+becomes of one no machinery will ever serve, and where the phase boundary is taught.* Home-set
+reconstructed from D1–D4:
+
+| home | disposition |
+|---|---|
+| `src/testrun.ts` (testChannelOffFor, consumeDeadTestMarker — the marker protocol's own home) | changed — D1 |
+| `src/exec-session.ts` (the degenerate branch's consume after the plain runSession) | changed — D1 |
+| `src/wrapup.ts` (runFixRound's blocked unbooked stop; runWrapup's entry consume) | changed — D1/D2 |
+| `src/agents-block.ts` (TEST_PRINCIPLE's phase-type boundary, both sides) | changed — D3 |
+| `packages/auto/src/index.ts` (logRunBanner's scope clause) | changed — D3 |
+| `packages/auto/README.md` (the test-execution section: the phase scope, the fix rounds in the channel's session set, the unbooked block) | changed — D3 |
+| The channel's derivation itself (0083 D9's condition; `src/prompt.ts`'s test-protocol render fact) | held, untouched — D4; the design-phase spike consumer recorded as the reopen trigger |
+| Test homes: `test/verify-loop.test.ts` (the unservable-request describe), `test/constitution-ratchet.test.ts` (the TEST_PRINCIPLE pins), `test/golden/work-order.golden.md` (the principle line) | changed |
+
 Tests: test/verify-loop.test.ts's unservable-request describe (the design-phase fix round that
 leaves `tmp/test.sh` → blocked with the teaching, the round unbooked — attempts and the progress
 round unchanged, the marker consumed; the config-off variant of the same block; the exec-scope

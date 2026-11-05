@@ -78,6 +78,22 @@ stability rule's scope unchanged.
 Tier: mechanism (src/script.ts `laneLogDir`; src/lanes.ts `laneBranch` + the four derivation sites;
 src/loop-preflight.ts's two; tests).
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks, its landing commit dd98c7288 and the two 0151 lockstep-completion commits)
+
+Family: *the sandbox's two tool-side seams — where lane logs land, and how lane branches namespace
+one object store's concurrent arms.* Home-set reconstructed from D1–D3 and the lockstep commits:
+
+| home | disposition |
+|---|---|
+| `src/script.ts` (laneLogDir — the `OPENCODE_AUTO_LANE_LOG_DIR` seam replacing the LANE_LOG_DIR constant) | changed — D1 |
+| `src/lanes.ts` (laneBranch's digest grammar) and the derivation sites the lockstep completed: `src/regression.ts`, `src/git-worktree.ts`, `src/intent/test-lanes.ts`, `src/loop-preflight.ts`, `src/run-status-schema.ts` | changed — D2 |
+| `templates/prompts/_partials.md` and the goldens `test/golden/whole-testlanes.golden.md`, `test/golden/whole-testlanes-plain.golden.md`, `test/golden/subtask-testlanes.golden.md` (the teaching and its pins on the new names) | changed — the lockstep |
+| `docs/shell-contract.md` and `packages/auto/README.md` (the restatements) | changed |
+| The sandbox itself (no wrapper, no container layer, no path list — the workspace consumer's own confinement) | held, never shipped — D3 (P16/P21) |
+| The receipts default (an environment exporting nothing keeps the prescribed behavior; 0147's `/tmp` allowance) | held, untouched — D3 |
+| Fork's `auto-fork/<target>` family with its `-2` suffixing (0129) and land's `auto-lane/`-prefix original-branch derivation | held, untouched — D2/D3 |
+| Test homes: `test/script.test.ts`, `test/lanes-scheduler.test.ts`, `test/loop-isolation.test.ts`, `packages/auto/test/e2e.test.ts` (the twelve laneBranch site moves, the two exact-name pins) | changed |
+
 ## Tests
 
 - test/script.test.ts: the `laneLogDir` describe (the prescribed default; the redirect; empty counts

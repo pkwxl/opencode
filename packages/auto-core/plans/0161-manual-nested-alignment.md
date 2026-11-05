@@ -65,6 +65,18 @@ to read it).
 Tier touched: **prompt copy** — the five commit-making companions + the
 ratchet's new arm; no core code changed.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks and landing commit 25c95576d)
+
+Family: *the manual-driver suite's commit-message grammar — the mirrors of the driver's
+`Auto-Nested` alignment trailers.* Home-set reconstructed from D1–D2:
+
+| home | disposition |
+|---|---|
+| `prompts/run.md` (the full rule at the canonical add + commit pass: this repository's commit alone carries the lines, one per nested repository, read fresh at commit time) | changed — D1 |
+| `prompts/run-verify.md`, `prompts/run-handover.md`, `prompts/run-as-subtasks.md`, `prompts/resume-subtasks.md` (the compact form in the four siblings' commit blocks) | changed — D1 |
+| `src/git.ts` (message()/nestedHeads() — the grammar's owning home) | held, untouched — the mirror moves, never the owner |
+| Test homes: `test/manual-prompts-ratchet.test.ts` (the Auto-Nested arm: the src producer literal + the grammar literal in all five files) | changed — D2 |
+
 Tests: `test/manual-prompts-ratchet.test.ts` — the Auto-Nested arm (the src
 producer literal + the grammar literal in run.md, run-verify.md,
 run-handover.md, run-as-subtasks.md, resume-subtasks.md); the suite 24 pass /

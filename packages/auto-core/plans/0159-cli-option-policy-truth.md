@@ -125,6 +125,21 @@ the cheap bracket). Tier touched: **mechanism** — shell (`packages/auto/src/in
 `packages/auto/README.md`, `packages/auto/MANUAL.md`, `packages/auto/test/e2e.test.ts`) + the
 core's `AGENTS.md` exit-codes line.
 
+## Category scope (0123 D1's discipline — reconstructed 2026-11-05 by 0166 step 003 from this ruling's D-blocks, landing commit 8e138e3f6 and its residual commit)
+
+Family: *the CLI's option-policy truth — the refusal grammar, the enumeration guard that holds it,
+and the user documentation that states it.* Home-set reconstructed from D1–D3 and the residuals:
+
+| home | disposition |
+|---|---|
+| `packages/auto/src/index.ts` (refuseLaneValueFlags widened to plan; the `--from-bundle`/`--probe` owned-flag rows; probe a boolean; the source-derived enumeration guard and the COMMANDS/OPTION_HELP table check) | changed — D1/D2 |
+| `packages/auto/README.md` and `packages/auto/MANUAL.md` (exit 3 in the vocabulary; the brief-stub, amend and compatibility stories corrected) | changed — D3 |
+| `AGENTS.md` (the core exit-codes operational line gains the exit-3 clause — one vocabulary across help, README, MANUAL and the invariants line) | changed — D3 |
+| `packages/auto/AGENTS.md` (the transfer row's pre-0137 amend wording — the named residual, landed by the follow-up commit) | changed |
+| The verified-accurate documentation rows (parallel lanes/tiers, lane-log-dir, interruption recovery, key rings `/failback`, auto-number, clarify, sync, release) | held, untouched — D3 |
+| Extra positionals silently ignored; `fix --dryrun`'s exit-1 deviation | held, untouched — the named residuals, deferred to their own rulings |
+| Test homes: `packages/auto/test/e2e.test.ts` (the enumeration-guard describe; the clarify/driver-helper/install-prompts describe; the extended lane-flag and models tests) | changed |
+
 Tests: `packages/auto/test/e2e.test.ts` — the enumeration-guard describe (the source-derived
 vocabulary, the consumed-or-refused matrix over run/plan/transfer, the COMMANDS/OPTION_HELP table
 check), the clarify/driver-helper/install-prompts describe (clarify's exit mapping and refusals,
