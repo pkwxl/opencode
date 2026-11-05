@@ -1,12 +1,14 @@
 # 0166 — The three-package remediation: a committed, resumable idle-time program
 
-Status: **active**. Initialized 2026-11-05 (step 001); execution in progress — see Program status below.
+Status: **active**. Initialized 2026-11-05 (step 001); protocol amended the same day at the maintainer's instruction — a worker completes consecutive committed steps until its time budget runs low, not one. See Program status below.
 
 This document carries the executable prompt for completing the fix program proposed by
 [0165](./0165-three-package-review.md). The work runs as a sequence of independent,
 single-worker steps: an orchestrating invocation schedules one idle-time task only when
-subsequent work exists, and that task recovers any unclean predecessor state, completes one
-proper step, and commits it. The program's durable position lives in this document and under
+subsequent work exists, and that task recovers any unclean predecessor state, then completes
+consecutive proper steps — each individually verified and committed before the next begins —
+until its time budget no longer safely admits another step or the program has no subsequent
+work. The program's durable position lives in this document and under
 [`0166-remediation/`](./0166-remediation/), never in conversation history alone.
 
 ## Derivation and Category scope
@@ -36,9 +38,9 @@ This protocol has two distinct roles:
 - The ORCHESTRATOR is the invocation reading this prompt directly. It checks
   for remaining work, serializes idle-time execution, and creates at most one
   idle-time task.
-- The WORKER is that idle-time task. It continues the current work, performs
-  and commits exactly one proper step, and never creates another idle-time
-  task.
+- The WORKER is that idle-time task. It continues the current work, performing and committing
+  one proper step at a time for as long as its time budget safely allows, and never creates
+  another idle-time task.
 
 Do not use subagents, Agent, CreateWorkflow, background agents, or other child
 working sessions in either role. Ordinary build, test and git subprocesses are
@@ -85,12 +87,17 @@ Perform this part before any scheduling or remediation work.
 6. After successful creation, reply with only a brief confirmation. The
    created idle-time task, not this orchestrator, proceeds with Part B.
 
-PART B — WORKER: ONE COMMITTED, RECOVERABLE STEP
+PART B — WORKER: CONSECUTIVE COMMITTED, RECOVERABLE STEPS
 
 The current worker can run for at most 180 minutes and may be forcefully
-terminated at timeout. Write recovery state early and often, reserve time for
-verification and the commit, and never call OffPeakCreate or schedule a
-successor. A later orchestrator invocation schedules the next worker.
+terminated at timeout. It completes whole proper steps one at a time — each
+recovered, executed, verified and committed before the next begins — and keeps
+accepting further steps while the remaining budget safely covers one more; when
+the budget runs low, or no subsequent work exists, it stops beginning new work
+and finishes with the report below. Write recovery state early and often, always
+reserve a time margin for verification and the commit, and never call
+OffPeakCreate or schedule a successor. A later orchestrator invocation schedules
+the next worker.
 
 DURABLE PROGRAM
 
@@ -124,9 +131,10 @@ initialization step. Initialization must create:
    the exact next action. Disk and git state, not chat history, are the
    recovery authority.
 
-Split work into steps small enough to finish, verify and commit within one
-180-minute worker. If a wave is too large, give it explicitly scoped steps
-while preserving requirement-family completeness.
+Split work into steps small enough to finish, verify and commit well inside one
+180-minute worker — a worker completes several steps per session. If a wave is
+too large, give it explicitly scoped steps while preserving requirement-family
+completeness.
 
 WORKER STARTUP AND UNCLEAN-STATE RECOVERY
 
@@ -184,6 +192,9 @@ EXECUTION RULES
 - If the step cannot be completed before the worker's time limit, leave it
   `doing` with its changes intact and a precise recovery record. Do not make a
   WIP commit and do not schedule a successor.
+- Time budget: do not begin a new step unless at least 30 minutes remain and
+  the step plausibly fits them; prefer ending the session with a clean report
+  over rushing a step's verification into a forced termination.
 
 VERIFICATION AND COMMIT PROTOCOL
 
@@ -206,14 +217,21 @@ green. When the step is complete:
 4. If the commit fails, record the error and exact recovery action. Leave the
    verified changes intact for the next worker rather than weakening checks
    or discarding work.
-5. After a successful commit, inspect the tree and report the commit SHA and
+5. After a successful commit, inspect the tree and note the commit SHA and
    any remaining unrelated changes. Do not create a second bookkeeping-only
    commit merely to write that SHA into the program; recover it from git
    history instead.
+6. Check the remaining time budget. If at least 30 minutes remain and
+   subsequent work exists, accept the next step: update the current-position
+   section, select the first `todo` in table order, mark it `doing`, record
+   the date and starting HEAD, create its durable step record, and run it
+   under these same rules. Otherwise stop beginning new work and finish with
+   the report below.
 
 Finish the worker with:
 
-- the step and wave worked on;
+- each step worked this session — one line per step: wave, findings
+  dispositioned, commit SHA;
 - whether interrupted work was recovered;
 - findings dispositioned;
 - files and ruling documents changed;
