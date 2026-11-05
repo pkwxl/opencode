@@ -271,7 +271,7 @@ Conventions: one step = one worker session = one committed unit; the findings co
 | 001 | init — Program initialization: status table, coverage ledger, current position (this step) | program | — | [001](./0166-remediation/001-init.md) | **done** 2026-11-05 | 5d5e427bf | completeness script OK; typecheck clean |
 | 002 | w0-index-navigation — INDEX grammar/order repair, stale code homes, AGENTS.md navigation R4 reduction | W0-governance | 060 061 065 176 | [002](./0166-remediation/002-w0-index-navigation.md) | **done** 2026-11-05 | 9e61f6e0b | probe P1+P2 empty; arrows/pointers zero-loss; typecheck clean |
 | 003 | w0-category-scope — Category scope resumption for the 22 lapsed rulings (0142–0161, 0163, 0164) | W0-governance | 066 F9 | [003](./0166-remediation/003-w0-category-scope.md) | **done** 2026-11-05 | 8f2dca4a8 | family-check 22/22 ok; probe P4 empty; typecheck clean |
-| 004 | w0-0132-enactment — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked | W0-governance | 067 F10 | [004](./0166-remediation/004-w0-0132-enactment.md) | todo | — | — |
+| 004 | w0-0132-enactment — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked | W0-governance | 067 F10 | [004](./0166-remediation/004-w0-0132-enactment.md) | **done** 2026-11-05 | 1cb15639a | family-check 0132 ok; probe P1–P4 clean; typecheck clean |
 | 005 | w0-premise-guard — Premise-drift guard line ('premises this ruling changes') + SERVER_ENV drift ratchet | W0-governance | 201 F22 | [005](./0166-remediation/005-w0-premise-guard.md) | todo | — | — |
 | 006 | w0-constitution-wording — Constitution wording: PLAN_VERIFY kill-switch line, security-family statement vs code | W0-governance | 101 132 | [006](./0166-remediation/006-w0-constitution-wording.md) | todo | — | — |
 | 007 | w0-handover-bound — Context-handover chain bound + advisory (execute.ts) | W0-governance | 018 | [007](./0166-remediation/007-w0-handover-bound.md) | todo | — | — |
@@ -422,7 +422,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-064 | S3 | WA-docs | 067 | — |
 | 0165-065 | S3 | W0-governance | 002 | fixed (step 002) |
 | 0165-066 | S3 | W0-governance | 003 | fixed (step 003) |
-| 0165-067 | S3 | W0-governance | 004 | — |
+| 0165-067 | S3 | W0-governance | 004 | fixed (step 004) |
 | 0165-068 | S3 | WA-docs | 065 | — |
 | 0165-069 | S3 | WA-docs | 065 | — |
 | 0165-070 | S3 | WA-docs | 070 | — |
@@ -581,7 +581,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-223 | S4 | WB-test | 073 | — |
 | 0165-224 | S4 | WC-hygiene | 075 | — |
 | F9 | S3 | W0-governance | 003 | fixed (step 003, twin 0165-066) |
-| F10 | S3 | W0-governance | 004 | — (twin 0165-067) |
+| F10 | S3 | W0-governance | 004 | fixed (step 004, twin 0165-067) |
 | F11 | S3 | WA-docs | 065 | — (twin 0165-068) |
 | F12 | S3 | WA-docs | 065 | — (twin 0165-069) |
 | F13 | S4 | W0-governance | 008 | — (twin 0165-178) |
@@ -597,9 +597,9 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 
 ## Current position
 
-- **Active step**: none. Steps 001–003 are `done` (init; w0-index-navigation @8f2dca4a8 — 0165-060/061/065/176 `fixed`; w0-category-scope @2d02f8bfa — 0165-066, F9 `fixed`). The first `todo` in table order is step 004.
-- **Latest session (2026-11-05, maintainer-instructed)**: protocol amended — a worker now completes consecutive proper steps (each verified and committed before the next begins) while its budget safely covers one more (≥30-minute acceptance margin), ending with a per-step report; worker startup hardened to re-read the durable position from disk at every session start and after any pause (conversation memory is never the position authority). Recovery: a mistaken step-002 reopen by a stale session (c38161ba1) had overwritten the done step-002 record — restored verbatim from 2d02f8bfa @9b0c52981, no commit rewritten; the premature `doing` mark on step 004 reverted. No remediation step was executed in that session.
-- **Modified/created files**: `plans/0166-three-package-remediation.md` (protocol + this section), `plans/INDEX.md` (0166 row synced), `plans/0166-remediation/002-w0-index-navigation.md` (restored).
-- **Commands and results**: governance only — no code, no suites due; step records of 001–003 carry their own verification lines.
-- **Unresolved problems**: none.
-- **Next action**: the next orchestrator invocation schedules a worker for step **004 (w0-0132-enactment)** — 0132 enactment completion: config-fix.ts and document/roles.ts homes the ruling marked; findings 0165-067, F10. Evidence: `plans/0165-review/S20-isolation.md` (S20-02's reproduction decides whether code follows), `plans/0132-sealed-reference-wall.md` (Category scope), commit 5b5b52fcd. Under the amended protocol that worker then continues with steps 005+ while its budget allows.
+- **Active step**: none. Steps 001–004 are `done` (init; w0-index-navigation @8f2dca4a8 — 0165-060/061/065/176 `fixed`; w0-category-scope @2d02f8bfa — 0165-066, F9 `fixed`; w0-0132-enactment — 0165-067, F10 `fixed`, the step's commit recoverable by subject "0166: step 004 done"). The first `todo` in table order is step 005.
+- **Latest session (2026-11-05, worker)**: step 004 executed — 0132's Category scope enumeration corrected in place (parser home phases/custom.ts; external-dirs.ts alone carries the stamping row; protect.ts alone the sealed-set row), 0132's INDEX row annotated with the corrected enumeration and the named deferral (the wall-blind fix sync → step 029 under 0165-038's family), and family-check's held-row classifier fixed (the `/^\s*held\b/` skip — 0132's audit.md row was a tool artifact). Verification: family-check 0132 ok (0126/0138 flags remain, out of scope), probe P1–P4 clean, typecheck clean.
+- **Modified/created files**: `plans/0166-three-package-remediation.md` (this section + row 004 + ledger), `plans/0166-remediation/004-w0-0132-enactment.md` (created), `plans/0132-sealed-reference-wall.md` (three Category scope rows), `plans/INDEX.md` (0132 row tail), `plans/0165-review/tools/family-check.ts` (held-row skip).
+- **Commands and results**: `bun plans/0165-review/tools/family-check.ts` — 0132 ok, 0126/0138 flagged (owned/dangling, see step record); `bun plans/0165-review/tools/probe.ts` — P1–P4 empty; `bun typecheck` — exit 0.
+- **Unresolved problems**: none blocking. Standing observations for later steps (recorded in the step-004 record): 0126's golden.test.ts enumeration imprecision is unregistered (final audit, step 080, should catch it); 0138's family-check flags and `/opencode.json` spellings reconcile at step 030 (0165-147).
+- **Next action**: step **005 (w0-premise-guard)** — Premise-drift guard line ('premises this ruling changes') + SERVER_ENV drift ratchet; findings 0165-201, F22. Evidence: the register rows and the S32/S29 records named there. Under the amended protocol the worker continues with steps 006+ while its budget allows.

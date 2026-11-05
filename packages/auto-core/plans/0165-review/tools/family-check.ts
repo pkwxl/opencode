@@ -34,7 +34,7 @@ for (const f of files) {
   for (const row of rows) {
     const cells = row.split("|").slice(1, -1)
     const disp = (cells.at(-1) ?? "").toLowerCase()
-    if (!/\bchanged\b/.test(disp) || /\bunchanged\b/.test(disp)) continue
+    if (!/\bchanged\b/.test(disp) || /\bunchanged\b/.test(disp) || /^\s*held\b/.test(disp)) continue
     const paths = [...(cells[0] ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1].split(" ")[0]).filter((p) => /[./]/.test(p) && /\.(ts|md|json)$|\/$/.test(p))
     for (const p of paths.flatMap(expand)) {
       changed++
