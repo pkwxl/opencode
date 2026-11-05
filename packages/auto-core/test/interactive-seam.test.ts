@@ -63,7 +63,10 @@ const REPORT = [
 // wrap-up prompt names the report path and the turn writes the report the
 // wrap-up gate reads.
 const questionTurn = (dir: string): TurnScript => (ctx) => {
-  if (ctx.text.includes("docs/T-001/report.md")) {
+  // The wrap-up prompt (plans/0170 D1's reservation sentence names the
+  // report path in the work prompt too, so the wrap-up's own marker keys
+  // this branch).
+  if (ctx.text.includes("only performs the wrap-up")) {
     writeFileSync(join(dir, "docs", "T-001", "report.md"), REPORT)
     return undefined
   }

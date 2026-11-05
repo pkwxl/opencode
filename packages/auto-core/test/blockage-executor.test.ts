@@ -13,6 +13,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { executeBlockageChoices, executionLines, planInputPhase } from "../src/blockage-execute"
 import { appendExecuted } from "../src/blockage-execute"
+import { executedMark } from "../src/blockage"
 import { planPrelude } from "../src/plan"
 import { establishRound } from "../src/phases"
 import { autoSwitches, clampSwitches } from "../src/switches"
@@ -257,6 +258,41 @@ describe("the executor's write ratchet (plans/0082 §5 D7, the chain-writes patt
     expect(planInputPhase("docs/R-01/round.md")).toBeUndefined()
     expect(executionLines({ type: "none" })).toEqual([])
     expect(executionLines({ type: "reblocked", landed: [], reason: "r" })).toEqual(["⏸ remediation re-blocked: r"])
+  })
+
+  test("the execution record lands under the Decision region's Choice, never under a session's verbatim line (plans/0170 D3)", () => {
+    // A document whose Analysis quotes a session's `Choice: B` line verbatim
+    // while the person answered A under Decision: the record follows the
+    // person's line (the region's parsers then read it — the session line
+    // receives nothing).
+    const doc = [
+      "## Analysis",
+      "",
+      "Choice: B is what the session wanted.",
+      "",
+      "## Options",
+      "",
+      "### A Amend by hand",
+      "Channel: advice",
+      "Advice: fix it by hand",
+      "Consequences: none",
+      "Recommendation: A",
+      "",
+      "## Decision",
+      "",
+      "Choice: <one option letter>",
+      "Notes: <optional>",
+      "",
+      "Choice: A",
+      "",
+      "## Execution protocol",
+      "",
+      "1. …",
+      "",
+    ].join("\n")
+    const recorded = appendExecuted(doc, "A", ["sha1"])
+    expect(recorded).toMatch(/## Decision\n\nChoice: <one option letter>\nNotes: <optional>\n\nChoice: A\nExecuted: A \(sha1\)/)
+    expect(executedMark(recorded)).toMatchObject({ option: "A", shas: "sha1" })
   })
 })
 

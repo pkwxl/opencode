@@ -25,7 +25,7 @@ import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from 
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus, parkDirective } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec, taskArtifactSpecs } from "./document/spec"
-import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
+import { checklistPrerequisites, checklistProblems, renameTodoToDone, restoreTodoFromDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { formatTokens } from "./format"
 import { headText, nestedRepoPrefixes, removeIfUntracked, shortTitle, taskChangedPaths, type UnitBaseline, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles } from "./git"
@@ -1139,6 +1139,15 @@ export async function runSubtask(
       if (decision.type === "coldstart") continue
       if (decision.type === "stop") return decision.stop
       if (decision.type === "blocked") return decision
+      // A session-made close of this own subtask is restored before
+      // anything else judges the session (plans/0170 D2): done.md was absent
+      // at dispatch (the entry short-circuit skips a closed subtask's
+      // session entirely), so one present now is the session's write — left
+      // standing it would short-circuit the next entry past a failed shape
+      // check, closing the subtask on the session's self-report (P3).
+      if (await restoreTodoFromDone(planDir, task.id, index)) {
+        log(`  ⚠ ${task.id} S${subtaskId(index)}: a session renamed the subtask's todo.md to done.md — restored; the rename is DRIVER-exclusive (the close-out performs it past the shape checks)`)
+      }
       // Ending = the subtask session finished naturally (the planned
       // pipeline's subtasks have no context handover, plans/0056; a session
       // over the usage cap hits the provider-side compression / cap errors

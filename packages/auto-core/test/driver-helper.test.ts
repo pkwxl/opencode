@@ -354,8 +354,9 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(lines.some((line) => line.startsWith("- docs/R-01/blockage-1.md — the blockage dossier awaiting the person's decision"))).toBe(true)
     expect(lines.some((line) => line.includes("the next advance's remediation executor applies it"))).toBe(true)
     // A Choice'd document closes the channel (the mark's grammar: one
-    // lettered option).
-    write(dir, "docs/R-01/blockage-1.md", "# Blockage 1\n\nChoice: A\n")
+    // lettered option, inside the document's Decision section — the region
+    // the driver reads, plans/0170 D3).
+    write(dir, "docs/R-01/blockage-1.md", "# Blockage 1\n\n## Decision\n\nChoice: A\n")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "choice made")
     const answered = await renderHelperBrief(dir, { phases: "mt" })

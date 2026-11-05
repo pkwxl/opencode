@@ -60,7 +60,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Standalone work orders (`plan --export`/`--adopt`) → `src/work-order.ts` + `src/plan.ts` + the shell's plan block (0076)
 - Append planning (`plan --append`) → `src/loop-plan.ts` + `src/plan.ts` (0053)
 - No-session task add (`plan --new-task`) → `src/task-add.ts` + `src/plan.ts` (0058)
-- Completion side (`Result: PASS|FAIL` the only verdict) → `src/wrapup.ts` + `src/runner.ts` (0044); the driver script runner (watchdog, output capture, side-effect guard) → `src/script.ts`
+- Completion side (`Result: PASS|FAIL` the only verdict; the verification's report.md/gaps.md removed at each round's dispatch, the verdict keyed on that session's writes — 0170) → `src/wrapup.ts` + `src/runner.ts` (0044); the driver script runner (watchdog, output capture, side-effect guard) → `src/script.ts`
 - Task verification loop and test-channel contract (the progress-based fix budget, per-session fix commits, the unservable-marker consume) → `src/wrapup.ts` + `src/testrun.ts` + `src/exec-session.ts` + `src/phases/registry.ts` + `src/git.ts`/`src/script.ts` + `templates/prompts/wrapup.md`/`fix.md` + `test/verify-loop.test.ts` (0083; 0142; 0146; 0148)
 - Test lanes, the dependency park, tiered parallelism → `src/intent/test-lanes.ts` + `src/script.ts` + `src/wrapup.ts` + `src/git.ts` + `src/execute.ts` + `src/lanes.ts` (0096)
 - The regression lane, two-level pass → `src/regression.ts` + `src/intent/test-lanes.ts` + `src/script.ts` + `src/wrapup.ts` + `src/loop-task.ts` + `src/loop-phase.ts` + `src/loop-preflight.ts` (0098)
@@ -73,7 +73,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Bundle provenance, sync, and charter key ids → `src/provenance.ts` + `src/sync.ts` + `src/bundle.ts` + `src/intent/guarantees.ts` + the shell's `sync` row (0100; 0158)
 - Bounded repair (`run --repair <n>`) → `src/loop-task.ts` + `src/loop-phase.ts` (0079; 0099; 0156)
 - Intent guarantees and the plan-step verifier (`OPENCODE_AUTO_PLAN_VERIFY` default off) → `src/intent/guarantees.ts` + `src/prompt-verify.ts` + `src/prompt-plan.ts` + `src/switches.ts` (0080; 0113)
-- Blockage prevention and consented remediation → `src/blockage.ts` + `src/blockage-diagnose.ts` + `src/blockage-execute.ts` + `src/charter-clamp.ts` + `src/loop-plan.ts` (0082; 0156)
+- Blockage prevention and consented remediation (the person's marks read from the Decision region alone — 0170) → `src/blockage.ts` + `src/blockage-diagnose.ts` + `src/blockage-execute.ts` + `src/charter-clamp.ts` + `src/loop-plan.ts` (0082; 0156; 0170)
 - Agent domain (`AgentClient` — no driver file imports `@opencode-ai/sdk`) → `src/agent/types.ts` (0037; 0039; 0055; 0057); opencode adapter → `src/agent/opencode/` (0039; 0055); env isolation (X1) → `src/agent/env.ts` (0059)
 - Agent-neutral driver tests (the `AgentClient` double) → `test/fixtures/agent.ts` + `test/agent-fake.test.ts` (0042)
 - claude headless adapter and the agent choice → `src/agent/claude/` + `src/agent-choice.ts` (0041; 0055)
@@ -84,7 +84,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Agent pool (one host per profile, drained close) → `src/agent-pool.ts` + `src/opts.ts` (0055; 0157)
 - Test-handover front-loading (--handover-test) → `src/testrun.ts` + `src/engine/concerns/test.ts` + `src/exec-session.ts` (0023; 0126)
 - Session context handover (OPENCODE_AUTO_STEER, standing for every whole-task session and fix round; the continuation chain's advisory and person-facing bound) → `src/testrun.ts` + `src/engine/concerns/usage.ts` + `src/execute.ts` + `src/wrapup.ts` + `templates/prompts/usage-note-*.md` + `templates/prompts/{whole,subtask,fix}.md` (the chain advisory) (0056; 0130; 0143; 0156; 0168)
-- Unified commit and the unit commit boundary → `src/git.ts` + `src/git-worktree.ts` + `src/git-land.ts` + `src/git-ops.ts` + `src/unit-commit.ts` + `src/artifact.ts` (0021; the 0102 splits); interruption recovery and the unit-ownership gate → `src/resume.ts` + `src/resume-gate.ts` (0018; 0022; 0145; 0149; 0156)
+- Unified commit and the unit commit boundary (a session-made unit close restored before the commit — 0170) → `src/git.ts` + `src/git-worktree.ts` + `src/git-land.ts` + `src/git-ops.ts` + `src/unit-commit.ts` + `src/artifact.ts` (0021; 0170; the 0102 splits); interruption recovery and the unit-ownership gate → `src/resume.ts` + `src/resume-gate.ts` (0018; 0022; 0145; 0149; 0156)
 - Auto numbering (the floor derivation over the surviving task artifacts) → `src/numbering.ts` (0001; 0150)
 - Stuck-loop detection (OPENCODE_AUTO_STUCK) → `src/stuck.ts` (0016)
 - Staged model routing and quota failover (the single routing path) → `src/switches.ts` + `src/chain.ts` + `src/router.ts` + `src/session.ts` + `src/failback.ts` (0017; 0055; 0061)

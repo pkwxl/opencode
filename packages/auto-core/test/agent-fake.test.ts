@@ -3694,8 +3694,8 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
   // unit (its document named, the verification clause absent) and its
   // wrap-up prompt.
   const execAt = (agent: FakeAgent, id: string): number =>
-    agent.prompts.findIndex((prompt) => prompt.text.includes(`docs/${id}/todo.md`) && !prompt.text.includes("verification session"))
-  const wrapAt = (agent: FakeAgent, id: string): number => agent.prompts.findIndex((prompt) => prompt.text.includes("verification session") && prompt.text.includes(`docs/${id}/`))
+    agent.prompts.findIndex((prompt) => prompt.text.includes(`docs/${id}/todo.md`) && !prompt.text.includes("only performs the wrap-up"))
+  const wrapAt = (agent: FakeAgent, id: string): number => agent.prompts.findIndex((prompt) => prompt.text.includes("only performs the wrap-up") && prompt.text.includes(`docs/${id}/`))
 
   test("two disjoint doc units run side by side: both land, each commit stays inside its scope, the tick rides the done commit, the charter range is path-limited", async () => {
     const { dir: repo, phase } = await docRepo([
@@ -3711,7 +3711,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     const t2Dispatched = new Promise<void>((resolve) => (release = resolve))
     const plain = agent.client.prompt.bind(agent.client)
     agent.client.prompt = async (input, signal) => {
-      const exec = !input.text.includes("verification session")
+      const exec = !input.text.includes("only performs the wrap-up")
       if (exec && input.text.includes("docs/T-002/todo.md")) release()
       if (exec && input.text.includes("docs/T-001/todo.md")) await t2Dispatched
       return plain(input, signal)
@@ -3785,7 +3785,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     // refusal just ends the turn (the session has nothing to add).
     const agent = make({
       turn: docTurns(repo, (ctx) => {
-        if (ctx.text.includes("docs/T-001/todo.md") && !ctx.text.includes("verification session")) {
+        if (ctx.text.includes("docs/T-001/todo.md") && !ctx.text.includes("only performs the wrap-up")) {
           mkdirSync(join(repo, "tmp"), { recursive: true })
           writeFileSync(join(repo, "tmp", "test.sh"), "test/nothing.sh\n")
         }
@@ -3836,7 +3836,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
       turn: docTurns(repo, (ctx) => {
         // T-002's execution writes a stray source file beside its scoped
         // note — past its declaration.
-        if (!ctx.text.includes("verification session") && ctx.text.includes("docs/T-002/todo.md")) {
+        if (!ctx.text.includes("only performs the wrap-up") && ctx.text.includes("docs/T-002/todo.md")) {
           mkdirSync(join(repo, "src"), { recursive: true })
           writeFileSync(join(repo, "src", "stray.ts"), "stray\n")
         }
@@ -3864,7 +3864,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     let parkedOnce = false
     const agent = make({
       turn: docTurns(repo, (ctx) => {
-        if (!parkedOnce && !ctx.text.includes("verification session") && ctx.text.includes("docs/T-002/todo.md")) {
+        if (!parkedOnce && !ctx.text.includes("only performs the wrap-up") && ctx.text.includes("docs/T-002/todo.md")) {
           parkedOnce = true
           writeFileSync(join(repo, "docs", "T-002", "handoff.md"), "T-002 waits on T-003's mapping table.\n\nStatus: park T-003\n")
         }

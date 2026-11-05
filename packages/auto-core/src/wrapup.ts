@@ -121,8 +121,10 @@ function gapsShapeProblems(text: string, rel: string): string[] {
 // the report's own result line; FAIL is either an explicit `Result: FAIL`
 // line (wherever the session wrote one — a report it should not have written
 // on FAIL, or the gap list's own closing line) or, with the report carrying
-// no verdict, a non-empty gap list. A passing report wins over a stale gap
-// list of an earlier round — the PASS close-out deletes the file right after.
+// no verdict, a non-empty gap list. Since plans/0170 D1 both files are this
+// session's writes alone — the round's dispatch removed them (see
+// verifySession) — so no file of an earlier round or of a work/fix session
+// can participate in the order below; the order is intra-round only.
 // "none" keeps today's behavior: no verdict, no stop (the pack's own rule
 // lets a non-acceptance task that met its goal omit the line).
 async function verifyVerdict(dir: string, task: Task): Promise<{ kind: "pass" } | { kind: "fail"; reason: string } | { kind: "none" }> {
@@ -189,6 +191,16 @@ async function verifySession(
   // copy already holds the full prompt and all wrap-up context, and resending
   // the whole prompt only invites a redo from scratch.
   let shapeForked = false
+  // The verifier's documents are the round's alone (plans/0170 D1, enacting
+  // 0165-006 / S11-01): both reserved files are removed before the round's
+  // first dispatch, so the verdict below keys on this session's writes
+  // exactly — a report.md a work or fix session left behind can never
+  // outrank a FAIL, and a stale gaps.md of an earlier round never feeds one.
+  // The removal lands in this round's wrap-up commit (the PASS close-out or
+  // the FAIL's gap commit); the shape re-prompt's fork stays inside the loop
+  // and never re-runs this.
+  await rm(join(dir, taskDoc(task.id, "report")), { force: true })
+  await rm(join(dir, taskDoc(task.id, "gaps")), { force: true })
   for (let i = 0; ; i++) {
     const brief = shapeForked
     shapeForked = false

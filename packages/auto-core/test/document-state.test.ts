@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { checklistProblems, effectiveDone, nextChecklistIndex, renameTodoToDone, scanSubtaskStates, subtaskId } from "../src/document/state"
+import { checklistProblems, effectiveDone, nextChecklistIndex, renameTodoToDone, restoreTodoFromDone, scanSubtaskStates, subtaskId } from "../src/document/state"
 
 let dir: string
 
@@ -111,6 +111,24 @@ describe("renameTodoToDone", () => {
   test("protocol inactive (no todo.md): silently skipped, no error", async () => {
     await renameTodoToDone(dir, "T-001", 1)
     expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(false)
+  })
+})
+
+describe("restoreTodoFromDone (the session-made close restore, plans/0170 D2)", () => {
+  test("a session-made close is reversed: done.md back to todo.md, the content verbatim", async () => {
+    await put("docs/T-001/S01/done.md", "# S01\n")
+    expect(await restoreTodoFromDone(dir, "T-001", 1)).toBe(true)
+    expect(await Bun.file(join(dir, "docs/T-001/S01/todo.md")).text()).toBe("# S01\n")
+    expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(false)
+  })
+
+  test("no restore without a close to reverse: done absent → false; both present (the illegal state) → left for the scans", async () => {
+    expect(await restoreTodoFromDone(dir, "T-001", 1)).toBe(false)
+    await put("docs/T-001/S01/todo.md", "todo\n")
+    await put("docs/T-001/S01/done.md", "done\n")
+    expect(await restoreTodoFromDone(dir, "T-001", 1)).toBe(false)
+    expect(await Bun.file(join(dir, "docs/T-001/S01/todo.md")).text()).toBe("todo\n")
+    expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).text()).toBe("done\n")
   })
 })
 

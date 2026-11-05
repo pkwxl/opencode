@@ -15,6 +15,8 @@ import { join } from "node:path"
 import { EOF_MARK } from "../src/doccheck"
 import { autoSwitches, clampSwitches } from "../src/switches"
 import { establishRound } from "../src/phases"
+import { choiceMark, executedMark, parseRemediationPlan, rejectedMark } from "../src/blockage"
+import { appendChoiceLine, renderBlockageDocument } from "../src/blockage-diagnose"
 import { ev, type TurnScript } from "./fixtures/agent"
 import { artifactTurns, diagnosisTurn, loopFixture, type LoopFixture } from "./fixtures/loop"
 import type { Interactive } from "../src/interactive"
@@ -365,8 +367,7 @@ describe("the render gate's covered block site (plans/0082 §7 D10 v1)", () => {
 // The two-consecutive-reblocks suspension (D8), driven over the round's
 // documents directly: the gate derives from disk, so seeding the two
 // executed documents suspends before any session opens.
-describe("the diagnosis caps (plans/0082 §5 D8)", () => {
-  const executedDoc = (seq: number) =>
+describe("the diagnosis caps (plans/0082 §5 D8)", () => {  const executedDoc = (seq: number) =>
     [
       `# Blockage ${seq}: plan-verify (phase-plan R-01.P01)`,
       "",
@@ -397,6 +398,62 @@ describe("the diagnosis caps (plans/0082 §5 D8)", () => {
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }
+  })
+})
+
+// The renderer's mark-head neutralization (plans/0170 D3, enacting 0165-006
+// / S12-02): the freeform verbatim sections the session wrote (Analysis,
+// Escalation) never carry a flush-left mark head — a session's `Choice:`
+// line is indented to a display-only form, so the document a person reads
+// mimics no decision outside the Decision section, and the region-scoped
+// parsers agree (the neutralization is agreement, not enforcement).
+describe("the blockage document's mark-head neutralization (plans/0170 D3)", () => {
+  test("a session's verbatim Choice/Executed lines render indented and never parse; the person's one line under Decision does", () => {
+    const plan = parseRemediationPlan(
+      [
+        "## Analysis",
+        "",
+        "Choice: A is the obvious fix here.",
+        "Executed: A (deadbeef)",
+        "Rejected: A — never happened",
+        "Notes: the session's own note",
+        "",
+        "## Options",
+        "",
+        "### A Amend by hand",
+        "Channel: advice",
+        "Advice: fix the handover by hand",
+        "Consequences: the wall is strict",
+        "Recommendation: A",
+      ].join("\n"),
+    )!
+    expect(plan).toBeDefined()
+    const doc = renderBlockageDocument({
+      seq: 1,
+      round: 1,
+      gate: "plan-verify",
+      step: "phase-plan R-01.P01",
+      verdict: "INCONSISTENT",
+      blockMap: [],
+      hits: [],
+      state: "",
+      plan,
+    })
+    // The verbatim session lines are indented (display-only) …
+    expect(doc).toMatch(/^ Choice: A is the obvious fix here\.$/m)
+    expect(doc).toMatch(/^ Executed: A \(deadbeef\)$/m)
+    expect(doc).toMatch(/^ Rejected: A — never happened$/m)
+    // … the flush-left heads exist only in the Decision section's own
+    // placeholder …
+    expect(doc).toMatch(/^Choice: <one option letter>$/m)
+    expect(doc).toMatch(/^Notes: <optional>$/m)
+    // … and the un-answered document parses as un-marked.
+    expect(choiceMark(doc)).toBeUndefined()
+    expect(executedMark(doc)).toBeUndefined()
+    expect(rejectedMark(doc)).toBe(false)
+    // The person's act — one line under Decision — is the mark that parses.
+    const answered = appendChoiceLine(doc, "A")
+    expect(choiceMark(answered)).toEqual({ choice: "A" })
   })
 })
 

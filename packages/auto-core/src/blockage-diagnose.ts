@@ -298,7 +298,22 @@ export function appendChoiceLine(text: string, option: string): string {
 
 // The final document (D6): header + verbatim sections + Decision + the
 // execution protocol. The options render in exactly the parser's grammar so
-// the executor re-parses what the person approved.
+// the executor re-parses what the person approved. The two freeform verbatim
+// sections (the Analysis, the Escalation body) carry the mark heads
+// neutralized (plans/0170 D3): a session line that happens to start
+// `Choice:`/`Notes:`/`Executed:`/`Rejected:` is indented one space — a
+// display-only change, so no line outside the Decision section can mimic a
+// decision to the person reading the document (the mark parsers read the
+// Decision region alone, so this is agreement, not enforcement). An option's
+// edit text is never touched: the executor re-parses it literally as the
+// replacement to apply.
+const MARK_HEAD = /^(Choice|Notes|Executed|Rejected):/
+const neutralizeMarkHeads = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => (MARK_HEAD.test(line) ? ` ${line}` : line))
+    .join("\n")
+
 export function renderBlockageDocument(input: {
   seq: number
   round: number
@@ -336,12 +351,12 @@ export function renderBlockageDocument(input: {
     "",
     "## Analysis",
     "",
-    input.plan.analysis,
+    neutralizeMarkHeads(input.plan.analysis),
     "",
   ]
   const body =
     input.plan.kind === "escalation"
-      ? ["## Escalation", "", input.plan.escalation, ""]
+      ? ["## Escalation", "", neutralizeMarkHeads(input.plan.escalation), ""]
       : [
           "## Options",
           "",

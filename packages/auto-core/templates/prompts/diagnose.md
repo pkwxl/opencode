@@ -40,6 +40,8 @@ one section, mutually exclusive with them:
 <this is a tool defect / a substantive decision only the person can make — no safe edit exists>
 
 End the session as soon as the plan is complete. The person will answer with one `Choice:` line; the
-marked text becomes their words.
+marked text becomes their words. The `Choice:`, `Notes:`, `Executed:` and `Rejected:` line heads are the
+person's and the driver's alone — never write them yourself, not even as an example, quoted or indented:
+the driver reads them from the document's Decision section only, and yours never count.
 
 <!-- auto: eof -->

@@ -37,7 +37,7 @@
 // the top of S<nn>/todo.md (a subtask scope file has no title line), and
 // selection is nextReady over the positional ids; without fields the default
 // serial order is the old "first unticked item".
-import { nextReady, renameUnitDone, resolveDepends, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
+import { nextReady, renameUnitDone, resolveDepends, restoreUnitPending, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
 
 type SubtaskState = { index: number; todo: boolean; done: boolean }
 
@@ -123,4 +123,13 @@ export function effectiveDone(scan: SubtaskStateScan, items: { done: boolean }[]
 // already landed (done.md present — interruption between rename and commit).
 export async function renameTodoToDone(dir: string, taskId: string, index: number): Promise<void> {
   await renameUnitDone(dir, subtaskRef(taskId, index))
+}
+
+// The session-made close restore (plans/0170 D2): runSubtask calls this after
+// a session ended and before the driver's own rename — done.md absent at
+// dispatch (the entry short-circuit) means one appearing by the session's end
+// is the session's write, and letting it stand would close the subtask past
+// the shape checks on the next entry's short-circuit.
+export async function restoreTodoFromDone(dir: string, taskId: string, index: number): Promise<boolean> {
+  return restoreUnitPending(dir, subtaskRef(taskId, index))
 }

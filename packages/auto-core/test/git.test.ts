@@ -41,7 +41,7 @@ import {
   removeWorktree,
   WORKTREE_TEARDOWN,
 } from "../src/git-worktree"
-import { noCommitGit } from "../src/git-ops"
+import { afterSession, noCommitGit } from "../src/git-ops"
 import { captureRun } from "./fixtures/capture"
 import { git } from "./fixtures/runner"
 
@@ -82,6 +82,88 @@ async function fresh() {
 }
 
 const task = { id: "T-001", title: "implement the migration" }
+
+// The session-made unit-close restore (plans/0170 D2, enacting 0165-006 /
+// S12-01): a todo.md → done.md rename is driver-exclusive, and the unified
+// commit must not land one the driver never made — the confirmed defect had
+// a work session rename its own todo.md, the rename ride the session's
+// boundary commit, and every later load read the task done past a FAIL
+// verdict. The three shapes below pin the boundary's behavior: the own
+// task's task-level close restored at every stage, the stage's own subtask
+// close exempt (the driver's rename precedes its afterSession), another
+// subtask index restored, and another task's close deliberately untouched
+// (an interrupted driver close rides beginUnit's carryover self-heal).
+describe("afterSession's session-made unit-close restore (plans/0170 D2)", () => {
+  test("a session's own todo→done rename is restored before the commit and never lands", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "task planned")
+      // The session's act: the rename (nothing else dirty).
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      const settled = await afterSession(dir, {}, task, { stage: "execute", subject: "T-001 execute" })
+      expect(settled).toEqual({ type: "ok" })
+      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toBe("# T-001\n")
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(false)
+      expect(await pendingChanges(dir)).toBe(false)
+      expect(await git(dir, "log", "--name-only", "--format=", "--", "docs/T-001/done.md")).not.toContain("done.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the subtask stage's own index is exempt (the driver's rename precedes its afterSession); any other index is restored", async () => {
+    const dir = await fresh()
+    try {
+      for (const sub of ["S01", "S02"]) {
+        await mkdir(join(dir, "docs/T-001", sub), { recursive: true })
+        await Bun.write(join(dir, "docs/T-001", sub, "todo.md"), `# ${sub}\n`)
+      }
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "subtasks planned")
+      // The driver's own close of S01 (renameTodoToDone's output), then its
+      // afterSession: the close commits, never restored.
+      await rename(join(dir, "docs/T-001/S01/todo.md"), join(dir, "docs/T-001/S01/done.md"))
+      const own = await afterSession(dir, {}, task, { stage: "subtask 1", subject: "T-001 S01" })
+      expect(own).toEqual({ type: "ok" })
+      expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(true)
+      // A session closing a different subtask's state (S02, seen at S01's
+      // boundary): restored before the commit.
+      await rename(join(dir, "docs/T-001/S02/todo.md"), join(dir, "docs/T-001/S02/done.md"))
+      const other = await afterSession(dir, {}, task, { stage: "subtask 1", subject: "T-001 S01 again" })
+      expect(other).toEqual({ type: "ok" })
+      expect(await Bun.file(join(dir, "docs/T-001/S02/todo.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/T-001/S02/done.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("another task's close is deliberately untouched (the interrupted driver close rides the carryover, never this restore)", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await mkdir(join(dir, "docs/T-002"), { recursive: true })
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001\n")
+      await Bun.write(join(dir, "docs/T-002/todo.md"), "# T-002\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "tasks planned")
+      // T-002's close sits in the tree (an interrupted driver close of
+      // another unit): T-001's boundary commits it as-is (P20 — a
+      // legitimate driver write is never destroyed by another unit's
+      // restore).
+      await rename(join(dir, "docs/T-002/todo.md"), join(dir, "docs/T-002/done.md"))
+      const settled = await afterSession(dir, {}, task, { stage: "execute", subject: "T-001 execute" })
+      expect(settled).toEqual({ type: "ok" })
+      expect(await Bun.file(join(dir, "docs/T-002/done.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe("commitTree", () => {
   test("non-git directory: a no-op without error, pendingChanges false", async () => {

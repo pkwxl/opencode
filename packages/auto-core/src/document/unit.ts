@@ -125,6 +125,23 @@ export async function renameUnitDone(dir: string, ref: UnitRef): Promise<void> {
   await rename(todo, done)
 }
 
+// The rename's reverse (plans/0170 D2): restore a unit's pending state when
+// the done.md sitting in the tree is not the driver's close — a session made
+// the rename. Renames done.md back to todo.md (the content survives; only
+// the transition reverts), skipped when todo.md already exists (that shape is
+// the illegal both-present state, the state scans' own finding, never
+// silently resolved here) or done.md is absent. Returns whether it restored,
+// so the callers surface their detection lines.
+export async function restoreUnitPending(dir: string, ref: UnitRef): Promise<boolean> {
+  const paths = unitStatePaths(ref)
+  const todo = join(dir, paths.pending)
+  const done = join(dir, paths.complete)
+  if (await Bun.file(todo).exists()) return false
+  if (!(await Bun.file(done).exists())) return false
+  await rename(done, todo)
+  return true
+}
+
 // —— Index files (U3) ——
 
 export type IndexEntry = { id: string; title: string; ticked: boolean; line: number }

@@ -215,7 +215,10 @@ describe("the subscriber e2e (one fixture run through typed events only)", () =>
   test("a run with a question: run-start, the unit/task transitions, the question pair, run-end with the code — all typed, no prose parsed", async () => {
     const dir = await freshRepo()
     const turn: TurnScript = (ctx) => {
-      if (ctx.text.includes("docs/T-001/report.md")) {
+      // The wrap-up prompt (plans/0170 D1's reservation sentence names the
+      // report path in the work prompt too, so the wrap-up's own marker keys
+      // this branch).
+      if (ctx.text.includes("only performs the wrap-up")) {
         writeFileSync(join(dir, "docs", "T-001", "report.md"), REPORT)
         return undefined
       }

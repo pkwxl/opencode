@@ -35,6 +35,7 @@ import {
   driverStateFile,
   unitBaseline,
   unitViolations,
+  untrackedFiles,
   withinScopes,
   type CommitResult,
   type GitOps,
@@ -42,11 +43,58 @@ import {
   type UnitGate,
 } from "./git"
 import { addWorktree, landBranch, pruneWorktrees, removeWorktree } from "./git-worktree"
+import { restoreUnitPending, type UnitRef } from "./document/unit"
 import { clampRecordedResolves } from "./charter-clamp"
 import { log, vlog } from "./log"
 import { currentRound } from "./phases"
 import type { PhaseKey } from "./phases/registry"
 import { collectAgentResolves } from "./resolve"
+
+// The session-made unit-close restore (plans/0170 D2, enacting 0165-006 /
+// S12-01): a todo.md → done.md rename is a driver-exclusive write, and the
+// unified commit must not land one the driver never made — the confirmed
+// defect had a work session rename its own docs/T-NNN/todo.md, the rename
+// ride the session's boundary commit, and every later load read the task
+// done past a FAIL verdict (done.md's existence outranks the runtime
+// status). Runs at the session's commit boundary, before the commit: every
+// done.md new in the tree (untracked — beginUnit's clean start makes
+// untracked mean this unit's write) of the commit's OWN task, task level or
+// subtask level, with todo.md absent, is renamed back (the content
+// survives; only the transition reverts), one detection line per file (P8).
+// The two driver shapes are exempt by construction: the task-level rename
+// (markDone) runs after the wrap-up boundary and lands in the terminal
+// `done` commit — a task-level close in the tree here is never the driver's
+// — and the subtask close-out's own rename (execute.ts) precedes its
+// `subtask N` afterSession, so that one index is exempt by stage while every
+// other S<nn> of the task is a session's write (the own index is restored
+// at its own point, between the session's end and the driver's rename).
+// Another unit's leftover close is deliberately untouched: an interrupted
+// driver close of a different task rides beginUnit's carryover self-heal
+// (0021's driver-state leftovers), and restoring it here would destroy a
+// legitimate driver write (P20).
+async function restoreUnitCloses(dir: string, task: { id: string }, stage: string): Promise<void> {
+  const untracked = await untrackedFiles(dir)
+  if (!untracked.size) return
+  const own = /^subtask (\d+)$/.exec(stage)?.[1]
+  const ownSubtask = own === undefined ? undefined : `S${own.padStart(2, "0")}`
+  for (const rel of untracked) {
+    const path = rel.replaceAll("\\", "/")
+    // The unit state files' shapes (git.ts DRIVER_STATE's own spelling):
+    // docs/T-NNN/done.md and docs/T-NNN/S<nn>/done.md — the task unit and
+    // its subtask units, nothing deeper and no other task.
+    const match = /^docs\/([^/]+)\/(?:(S\d+)\/)?done\.md$/.exec(path)
+    // The stage's own subtask index is the one exemption (its driver rename
+    // precedes its afterSession); a task-level close is never exempt.
+    if (!match || match[1] !== task.id || (match[2] !== undefined && match[2] === ownSubtask)) continue
+    const ref: UnitRef =
+      match[2] === undefined ? { level: "task", id: task.id } : { level: "subtask", id: match[2], task: task.id }
+    if (await restoreUnitPending(dir, ref)) {
+      log(
+        `  ⚠ ${task.id}: a session renamed this unit's todo.md to done.md — restored; the todo.md → done.md rename is DRIVER-exclusive (the close-out performs it once the verification passes)`,
+      )
+    }
+  }
+}
 
 // Unified commit after a session (the AI's commit right withdrawn, see
 // src/git.ts): called once every session has ended and the driver finished
@@ -67,6 +115,7 @@ export async function afterSession(
   if (!dir) return { type: "ok" }
   await collectSessionMarks(dir, opts.phase, task, info.stage)
   if (opts.dryrun) return { type: "ok" }
+  await restoreUnitCloses(dir, task, info.stage)
   const result = await commitTree(dir, task, info)
   if (!result.ok) {
     return {
@@ -330,6 +379,10 @@ export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOp
       if (!dir) return { type: "ok" }
       await collectSessionMarks(dir, opts.phase, task, info.stage)
       if (opts.dryrun) return { type: "ok" }
+      // The session-made close restore rides the doc-lane boundary exactly
+      // as the serial one (plans/0170 D2): a doc session renaming its unit
+      // state must not land through the lane's queued commit either.
+      await restoreUnitCloses(dir, task, info.stage)
       const result = await commitDocTree(dir, task, info)
       if (!result.ok) {
         return {

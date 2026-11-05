@@ -117,7 +117,8 @@ Phase: R-01.P02
    explanatory task and state the reason in its task document; producing no valid task causes a blocked shutdown.
 
 Document placement rules: every document of a task (T-NNN) goes inside that task's own directory docs/T-NNN/ (digest context.md,
-shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md); subtask artifacts go to
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md — the verification session's alone, never a
+task session's write); subtask artifacts go to
 docs/T-NNN/S<two-digit index>/index.md, a subtask-level test handover to testhandoff.md beside it;
 do not create flat task files at the top level of docs/.
 

@@ -265,12 +265,27 @@ function appendRejected(text: string, option: string, reason: string): string {
   return appendMarkLine(text, `Rejected: ${option} — ${reason}`)
 }
 
+// The record lands under the Decision region's own Choice line (plans/0170
+// D3): a `Choice:` head outside the region — a session's verbatim line —
+// never receives the driver's execution record, exactly as the region's
+// parsers never read it. Without a Choice in the region the record appends
+// at the document's end (the caller already holds the person's Choice).
 function appendMarkLine(text: string, record: string): string {
   const lines = text.split("\n")
-  const at = lines.findLastIndex((line) => /^Choice:/.test(line))
-  if (at < 0) return `${text.trimEnd()}\n\n${record}\n`
-  lines.splice(at + 1, 0, record)
-  return lines.join("\n")
+  const decision = lines.findLastIndex((line) => line.trim() === "## Decision")
+  const protocol = lines.findIndex((line, i) => i > decision && line.trim() === "## Execution protocol")
+  const floor = decision < 0 ? 0 : decision + 1
+  const ceiling = protocol < 0 ? lines.length : protocol
+  // The last Choice in the region is the person's answer (the section's
+  // placeholder `Choice: <one option letter>` precedes it in an answered
+  // document).
+  for (let i = ceiling - 1; i >= floor; i--) {
+    if (/^Choice:/.test(lines[i]!)) {
+      lines.splice(i + 1, 0, record)
+      return lines.join("\n")
+    }
+  }
+  return `${text.trimEnd()}\n\n${record}\n`
 }
 
 // What the executor says it did (the prelude's log lines; pure).

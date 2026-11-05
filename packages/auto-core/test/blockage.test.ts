@@ -229,9 +229,53 @@ describe("locateEditSpan (the executor's guard and the diagnosis-time validation
 })
 
 describe("rejectedMark (the stale rejection's record, D7's continuation)", () => {
-  test("a Rejected line under a Choice marks the document; its absence does not", () => {
-    expect(rejectedMark("Choice: A\nRejected: A — the span went stale")).toBe(true)
-    expect(rejectedMark("Choice: A\nExecuted: A (sha)")).toBe(false)
+  test("a Rejected line in the Decision region marks the document; its absence does not", () => {
+    expect(rejectedMark("## Decision\n\nChoice: A\nRejected: A — the span went stale")).toBe(true)
+    expect(rejectedMark("## Decision\n\nChoice: A\nExecuted: A (sha)")).toBe(false)
+  })
+})
+
+describe("the Decision region (plans/0170 D3 — verdict-surface provenance, 0165-006/S12-02)", () => {
+  const doc = (decision: string, analysis = "") =>
+    [
+      "# Blockage 1: plan-verify (phase-plan R-01.P01)",
+      "",
+      "- Step: phase-plan R-01.P01",
+      "",
+      "## Analysis",
+      "",
+      analysis,
+      "",
+      "## Decision",
+      "",
+      decision,
+      "",
+      "## Execution protocol",
+      "",
+      "1. The next `run`/`plan` executes an un-executed `Choice:` mark mechanically.",
+      "",
+    ].join("\n")
+
+  test("a session's Choice line in the Analysis is not the person's; the Decision region's is", () => {
+    // The confirmed exploit: the diagnosis session's verbatim analysis
+    // carries `Choice: A is the obvious fix here.` — with the whole-text
+    // scan this parsed as the person's and the executor consumed it while
+    // the Decision section still showed the unanswered placeholder.
+    expect(choiceMark(doc("Choice: <one option letter>\nNotes: <optional>", "Choice: A is the obvious fix here."))).toBeUndefined()
+    expect(choiceMark(doc("Choice: <one option letter>\nNotes: <optional>\nChoice: B", "Choice: A is the obvious fix here."))).toEqual({ choice: "B" })
+  })
+
+  test("the mirrors never drop a pending document: Executed/Rejected lines in the Analysis are session text", () => {
+    const pending = doc("Choice: A", "Executed: A (deadbeef)\nRejected: A — the span went stale")
+    expect(choiceMark(pending)).toEqual({ choice: "A" })
+    expect(executedMark(pending)).toBeUndefined()
+    expect(rejectedMark(pending)).toBe(false)
+  })
+
+  test("a document without a Decision section reads as un-marked (the conservative direction: it re-blocks, never executes a guess)", () => {
+    expect(choiceMark("# Blockage 1\n\nChoice: A\n")).toBeUndefined()
+    expect(executedMark("Executed: A (sha)\n")).toBeUndefined()
+    expect(rejectedMark("Rejected: A — x\n")).toBe(false)
   })
 })
 
@@ -244,8 +288,8 @@ describe("the blockage document's marks and the caps (plans/0082 §5 D6 / D8)", 
   })
 
   test("the driver's Executed mark and the Step field (the suspension's key)", () => {
-    expect(executedMark("Executed: A (abc1234, def5678)")).toEqual({ option: "A", shas: "abc1234, def5678" })
-    expect(executedMark("Executed: B (no commits — advice recorded)")).toMatchObject({ option: "B" })
+    expect(executedMark("## Decision\n\nExecuted: A (abc1234, def5678)")).toEqual({ option: "A", shas: "abc1234, def5678" })
+    expect(executedMark("## Decision\n\nExecuted: B (no commits — advice recorded)")).toMatchObject({ option: "B" })
     expect(executedMark("nothing yet")).toBeUndefined()
     expect(blockageStep("- Step: phase-plan R-01.P03")).toBe("phase-plan R-01.P03")
   })
@@ -266,7 +310,10 @@ describe("the blockage document's marks and the caps (plans/0082 §5 D6 / D8)", 
   })
 
   test("the two-consecutive-reblocks suspension (D8): the last two executed documents of one step suspend; another step's or an unanswered one does not", () => {
-    const doc = (step: string, executed: boolean) => ({ seq: 0, text: `- Step: ${step}\n\n${executed ? "Executed: A (sha)" : ""}` })
+    const doc = (step: string, executed: boolean) => ({
+      seq: 0,
+      text: `- Step: ${step}\n\n## Decision\n\n${executed ? "Executed: A (sha)" : ""}`,
+    })
     expect(diagnosisSuspended([doc("s", true), doc("s", true)], "s")).toBe(true)
     expect(diagnosisSuspended([doc("s", true), doc("s", true), doc("s", false)], "s")).toBe(false)
     expect(diagnosisSuspended([doc("s", true), doc("other", true)], "s")).toBe(false)

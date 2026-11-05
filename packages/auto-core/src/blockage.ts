@@ -330,13 +330,33 @@ export function locateEditSpan(lines: readonly string[], edit: RemediationEdit):
 
 // —— the blockage document (D6) ——
 
+// The person's region of a blockage document (plans/0170 D3, enacting
+// 0165-006 / S12-02): the last `## Decision` section, bounded by
+// `## Execution protocol` (or the document's end). The renderer places
+// every verbatim session section (Analysis, Escalation, the options) above
+// the Decision section, so the last `## Decision` heading is the document's
+// own, and the marks — the person's `Choice:`/`Notes:`, the driver's
+// `Executed:`/`Rejected:` — are this region's alone: a line the diagnosis
+// session wrote into its verbatim text is not the person's act and never
+// parses (0082 D6's own wording — "one line … written into the document's
+// mark section"). A document without the section reads as un-marked (the
+// conservative direction, P12: it re-blocks for the person rather than
+// executing a guess).
+function decisionRegion(text: string): string {
+  const lines = text.split("\n")
+  const at = lines.findLastIndex((line) => line.trim() === "## Decision")
+  if (at < 0) return ""
+  const end = lines.findIndex((line, i) => i > at && line.trim() === "## Execution protocol")
+  return lines.slice(at + 1, end < 0 ? undefined : end).join("\n")
+}
+
 // The driver-parsed marks of one blockage document: the person's choice and
-// the driver's execution record (the last of each wins, like the other
-// protocol lines).
+// the driver's execution record (the last of each wins inside the Decision
+// region, like the other protocol lines).
 export function choiceMark(text: string): { choice: string; notes?: string } | undefined {
   let choice: string | undefined
   let notes: string | undefined
-  for (const line of text.split("\n")) {
+  for (const line of decisionRegion(text).split("\n")) {
     const mark = /^Choice:\s*([A-Z])\s*(.*)$/.exec(line)
     if (mark) {
       choice = mark[1]
@@ -355,7 +375,7 @@ export function choiceMark(text: string): { choice: string; notes?: string } | u
 
 export function executedMark(text: string): { option: string; shas: string } | undefined {
   let found: { option: string; shas: string } | undefined
-  for (const line of text.split("\n")) {
+  for (const line of decisionRegion(text).split("\n")) {
     const mark = /^Executed:\s*([A-Z])\s*\((.*)\)\s*$/.exec(line)
     if (mark) found = { option: mark[1]!, shas: mark[2]!.trim() }
   }
@@ -369,7 +389,9 @@ export function executedMark(text: string): { option: string; shas: string } | u
 // stays for the record; a person who re-decides on the same document removes
 // the Rejected line with their new Choice.
 export function rejectedMark(text: string): boolean {
-  return text.split("\n").some((line) => /^Rejected:\s*[A-Z]\b/.test(line))
+  return decisionRegion(text)
+    .split("\n")
+    .some((line) => /^Rejected:\s*[A-Z]\b/.test(line))
 }
 
 // The document's Step field (its diagnosis-suspension key, D8): the step

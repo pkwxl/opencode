@@ -184,6 +184,54 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
+  test("a work session's committed report.md PASS never outranks the verifier (plans/0170 D1): the FAIL is seen, the fix loop opens, the report is removed at dispatch", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      // The work session's own self-verdict, committed before the round —
+      // the confirmed defect's shape (0165-006 / S11-01): with the report
+      // read in place, every later FAIL read as PASS, the task closed done
+      // and the verifier's gap list was deleted uncommitted.
+      await Bun.write(join(dir, "docs/T-001/report.md"), `# Report\n\nDone, trust me.\n\nResult: PASS\n\n${EOF_MARK}\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "work session output")
+      // Every verify session writes the same one-gap FAIL; every fix round
+      // closes nothing: the loop blocks at the no-progress budget — never a
+      // pass, which is what the stale report used to produce. The session
+      // sequence: verify, fix, verify, fix, verify (the third FAIL's
+      // no-progress count reaches the two-round budget).
+      const { client } = scriptedClient([
+        async () => {
+          writeFileSync(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          writeFileSync(join(dir, "FIXES.md"), "fix round 1\n")
+        },
+        async () => {
+          writeFileSync(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+        async () => {
+          writeFileSync(join(dir, "FIXES.md"), "fix round 2\n")
+        },
+        async () => {
+          writeFileSync(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session" })
+      expect(result).toMatchObject({ type: "blocked" })
+      expect((result as { question: string }).question).toContain("the verification of T-001 concluded Result: FAIL")
+      // The work session's report is gone — removed at the round's dispatch,
+      // the deletion riding the round's wrap-up commit; the gap list stands.
+      expect(existsSync(join(dir, "docs/T-001/report.md"))).toBe(false)
+      expect(existsSync(join(dir, "docs/T-001/gaps.md"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("resume mid-round (D7): the persisted round is preserved — one fix round left, the spent one never re-runs", async () => {
     const dir = await freshRepo()
     try {
