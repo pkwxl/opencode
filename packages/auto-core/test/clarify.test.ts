@@ -347,6 +347,15 @@ describe("clarify: the survey release (plans/0116 D1/D4)", () => {
     expect(pendingOut.lines.some((line) => line.includes("still holds 1 pending task(s)"))).toBe(true)
     expect(pendingOut.lines.some((line) => line.includes("execute them first: opencode-auto run"))).toBe(true)
 
+    // A near-miss fork line (plans/0169 D3): the release accepts exactly the
+    // strict grammar's defaults, so a decision line the scan cannot read
+    // refuses until normalized — never silently skipped.
+    const nearMiss = await repo()
+    await surveyBoundary(nearMiss, ["# Survey", "", "The reference's map.", "", "1. Fork: scope — the journal too; Recommend: the core only.", "", "<!-- auto: eof -->", ""])
+    const nearMissOut = (await capture(() => clarifyGate(nearMiss, { phases: "survey,implement" }))).result
+    expect(nearMissOut.type).toBe("held")
+    expect(nearMissOut.lines.some((line) => line.includes("carries 1 near-miss Fork line(s)"))).toBe(true)
+    expect(nearMissOut.lines.some((line) => line.includes("normalize them to start with `Fork:`"))).toBe(true)
     // Nothing awaiting at all: the general refusal names the two moments.
     const empty = await repo()
     const emptyOut = (await capture(() => clarifyGate(empty, { phases: "mt" }))).result
@@ -355,3 +364,28 @@ describe("clarify: the survey release (plans/0116 D1/D4)", () => {
     expect(emptyOut.lines.some((line) => line.includes("releases exactly two moments"))).toBe(true)
   })
 })
+
+  test("a zero-fork survey proposing a brief is a release moment too (plans/0169 D3): the command writes the region and the gate passes", async () => {
+    const dir = await repo()
+    await surveyBoundary(dir, [
+      "# Survey",
+      "",
+      "The reference's map.",
+      "",
+      "## Project brief",
+      "",
+      "A clean-room reimplementation of the core.",
+      "",
+      "<!-- auto: eof -->",
+      "",
+    ])
+    const out = (await capture(() => clarifyGate(dir, { phases: "survey,implement" }))).result
+    expect(out.type).toBe("released")
+    expect(out.lines.some((line) => line.includes("approves the proposed `## Project brief`"))).toBe(true)
+    // The forward channel (plans/0169 D1): the command writes the trailing
+    // `## Release` region, the mark inside it — and the gate reads it.
+    const written = await Bun.file(join(dir, "docs/R-01/P01-survey/survey.md")).text()
+    expect(written).toContain("## Release\n\nClarified: yes\n\n<!-- auto: eof -->")
+    const state = (await readPhases(dir, 1))!
+    expect(await phaseGateProblems(dir, state.phases[0]!, phaseGates(state.phases[0]!))).toEqual([])
+  })

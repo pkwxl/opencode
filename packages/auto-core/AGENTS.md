@@ -50,7 +50,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - The clarify command (the person's release act as one command) → `src/clarify.ts` + `src/phases.ts` + the shell's clarify row (0116)
 - Planning input `docs/R-NN/P<nn>-<type>/plan-input.md` → `src/plan-input.ts` + `src/loop-plan.ts` (0053)
 - Round user report (retired to optional) → `src/docpaths.ts` + `src/document/roles.ts` + `src/driver-helper.ts` (0081; 0109)
-- Survey phase and the human gate (`Gate: human`, `Fork:` holding for `Clarified: yes`) → `src/phases/registry.ts` + `src/phases.ts` + `src/loop-phase.ts` + `src/analysis.ts` + `src/loop-plan.ts` + `templates/bundles/*/phases/survey.md` (0081; 0085)
+- Survey phase and the human gate (`Gate: human`, `Fork:` holding for the person's scoped `Clarified: yes` — the trailing `## Release` region or the legacy flush-left line; the brief install mark-gated; near-miss forks and unreleased proposals holding) → `src/phases/registry.ts` + `src/phases.ts` + `src/loop-phase.ts` + `src/analysis.ts` + `src/loop-plan.ts` + `src/clarify.ts` + `templates/bundles/*/phases/survey.md` (0081; 0085; 0169)
 - Planning-input scaffold (`plan --scaffold`) → `src/intent/types.ts`/`src/intent/load.ts` + the shell's plan block (0081; 0158)
 - The release gate (clean-tree check + destination scan, read-only) → `src/release.ts` + `src/document/process-refs.ts` + the shell's release row (0103; 0119)
 - The person-proxy brief (`driver-helper [dir]`) → `src/driver-helper.ts` + `src/plan.ts` + `src/phases.ts` + `src/round-close.ts` + the shell's row (0105; 0106; 0107; 0109)

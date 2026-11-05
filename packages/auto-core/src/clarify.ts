@@ -52,6 +52,7 @@ import {
   clarifiedMark,
   forkLines,
   forksWithoutRecommend,
+  nearMissForkLines,
   phaseGates,
   phaseSurveyDoc,
   readPhases,
@@ -142,6 +143,19 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
         lines: [`⏸ ${doc} is already released — the phase completes on the next advance: ${bin} transfer ${directory}`],
       }
     }
+    // Near-miss fork lines (plans/0169 D3): the release accepts exactly the
+    // strict grammar's defaults, so a near-miss decision line must be
+    // normalized before the release — never silently skipped.
+    const nearMiss = nearMissForkLines(text)
+    if (nearMiss.length > 0) {
+      return {
+        type: "held",
+        lines: [
+          `⏸ ${doc} carries ${nearMiss.length} near-miss Fork line(s) the release scan cannot read — normalize them to start with \`Fork:\` (or remove them), then re-run: ${bin} clarify ${directory}`,
+          ...nearMiss.map((line) => `  ${line.trim().slice(0, 120)}`),
+        ],
+      }
+    }
     if (surveyForks(text) > 0) {
       const bare = forksWithoutRecommend(text)
       if (bare > 0) {
@@ -166,8 +180,24 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
         `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
       )
     }
-    // Zero forks: the gate passes by itself (an ungated completion) — not a
-    // clarification moment; the general refusal below names the state.
+    // Zero forks with a proposed brief (plans/0169 D3): the proposal's
+    // approval is a release moment too — the mark installs it (the sibling
+    // channel's shape: the analysis release is mark-gated whatever its fork
+    // count). Zero forks and no proposal: the gate passes by itself (an
+    // ungated completion) — not a clarification moment; the general refusal
+    // below names the state.
+    if (surveyForks(text) === 0 && briefProposal(text) !== undefined) {
+      return await release(
+        directory,
+        doc,
+        text,
+        [
+          `the release of ${doc} approves the proposed \`${BRIEF_PROPOSAL_HEADING}\` section — it installs as the project brief on the next advance:`,
+        ],
+        `PLAN clarify ${phaseRefText(route.phase)} (release the proposed brief)`,
+        `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
+      )
+    }
   } else if (route.type === "execute") {
     const pending = route.plan.tasks.filter((task) => task.status !== "done").length
     return {
@@ -258,14 +288,18 @@ async function release(
   return { type: "released", lines: [...lines, `committed: ${subject}`, ...foldedLines, next] }
 }
 
-// The document with the release line added: before the eof terminator when
-// the text ends with one, else appended at the end — one blank line of
-// separation either way. Reached only when no mark is present.
+// The document with the release region added (plans/0169 D1): a trailing
+// `## Release` section holding the mark, before the eof terminator when the
+// text ends with one, else appended at the end — the person's region, a
+// shape no session template carries (the legacy flush-left mark a person
+// hand-wrote keeps counting; this is the channel the command writes).
+// Reached only when no mark is present.
 function withMark(raw: string): string {
+  const region = `## Release\n\n${CLARIFIED_MARK}`
   const text = raw.trimEnd()
   if (text.endsWith(EOF_MARK)) {
     const body = text.slice(0, text.length - EOF_MARK.length).trimEnd()
-    return `${body}\n\n${CLARIFIED_MARK}\n\n${EOF_MARK}\n`
+    return `${body}\n\n${region}\n\n${EOF_MARK}\n`
   }
-  return `${text}\n\n${CLARIFIED_MARK}\n`
+  return `${text}\n\n${region}\n`
 }

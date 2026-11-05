@@ -99,9 +99,20 @@ const turn = (dir: string, surveyDir: { path?: string }, analysisBlocks: string[
   return artifactTurns(dir)(ctx)
 }
 
-async function fixture(analysisBlocks: string[] = []): Promise<LoopFixture> {
+async function fixture(analysisBlocks: string[] = [], surveyDoc: string = SURVEY_DOC): Promise<LoopFixture> {
   const surveyDir: { path?: string } = {}
-  const f = await loopFixture("survey,implement", (dir): FakeAgentOptions => ({ turn: turn(dir, surveyDir, analysisBlocks) }))
+  const writesSurvey = surveyDoc
+  const f = await loopFixture("survey,implement", (dir): FakeAgentOptions => ({
+    turn: (ctx) => {
+      // The variant document (the 0169 regressions): the survey task's
+      // session writes the parameterized survey instead of the default.
+      if (!ctx.text.includes("only performs the wrap-up") && ctx.text.includes("# T-002: task T-002\n") && surveyDir.path !== undefined && writesSurvey !== SURVEY_DOC) {
+        writeFileSync(join(dir, surveyDir.path, "survey.md"), writesSurvey)
+        return undefined
+      }
+      return turn(dir, surveyDir, analysisBlocks)(ctx)
+    },
+  }))
   made.push(f)
   await mkdirSync(join(f.dir, ".opencode/auto/phases"), { recursive: true })
   await Bun.write(join(f.dir, ".opencode/auto/phases/survey.md"), SURVEY_TYPE)
@@ -277,5 +288,65 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
     expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
+  })
+})
+
+// The survey's person marks (plans/0169, findings 0165-001/0165-002): the
+// install is gated by the person's release mark, the gate holds wherever a
+// person decision is pending (a proposed brief with zero forks, a near-miss
+// fork line), and the mark counts only as the person's own whole line or
+// inside their trailing `## Release` section — a session's indented or
+// fenced example is never the person's release.
+describe("the survey's person marks (plans/0169)", () => {
+  const ZERO_FORK_PROPOSAL = SURVEY_DOC.replace("Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.\n\n", "")
+
+  test("a zero-fork survey proposing a brief holds for the person; unmarked, nothing installs (0165-001)", async () => {
+    const f = await fixture([], ZERO_FORK_PROPOSAL)
+    const held = await f.run()
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("proposes a `## Project brief` — awaiting the person"))).toBe(true)
+    expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
+    // The person's release installs the proposal (the legacy whole-line
+    // shape the person hand-writes).
+    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
+    await f.commit("clarify the survey")
+    const advanced = await f.run({ stopBefore: "formulate" })
+    expect(advanced.code).toBe(0)
+    const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
+    expect(brief).toContain("a clean-room reimplementation of the core")
+  })
+
+  test("near-miss fork lines hold the gate — a decision line the scan cannot read never passes unread (0165-001)", async () => {
+    const nearMiss = SURVEY_DOC.replace(
+      "Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
+      "1. Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
+    )
+    const f = await fixture([], nearMiss)
+    const held = await f.run()
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("carries 1 near-miss Fork line(s)"))).toBe(true)
+    expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
+  })
+
+  test("a session's indented example mark never releases; the person's `## Release` region does (0165-002)", async () => {
+    const forged = SURVEY_DOC.replace(
+      "<!-- auto: eof -->",
+      "To release, the person writes:\n\n    Clarified: yes\n\n<!-- auto: eof -->",
+    )
+    const f = await fixture([], forged)
+    const held = await f.run()
+    // Still held: the indented example is not the person's release.
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
+    expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
+    // The person's region releases it (the forward channel clarify writes).
+    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "## Release\n\nClarified: yes\n\n<!-- auto: eof -->"))
+    await f.commit("clarify the survey")
+    const advanced = await f.run({ stopBefore: "formulate" })
+    expect(advanced.code).toBe(0)
+    const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
+    expect(brief).toContain("a clean-room reimplementation of the core")
   })
 })

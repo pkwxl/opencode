@@ -76,8 +76,12 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // the domain's flat published files once the flat provider files joined the
   // entry rule: docpaths = the single path-construction point (plans/0010),
   // round-brief = the round brief stub and section readers (M4.2) — both
-  // always were document surface other domains build on.
-  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs", "document/unit", "docpaths", "round-brief"],
+  // always were document surface other domains build on. brief joins as an
+  // entry by plans/0169: the `## Project brief` proposal reader is the one
+  // home of that grammar (P5), and the phases domain's human gate consumes
+  // it — the surface its own classification comment names as shared by the
+  // survey release and the pre-round analysis release.
+  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs", "document/unit", "docpaths", "round-brief", "brief"],
   // agent: types = the frozen interface (MA.1); opencode/server = the opencode
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that

@@ -55,7 +55,7 @@ location and wall kind (under rule separation, the platform boundary), the targe
 constraints that bind every round, and the scope posture with every settled decision and each
 fork's recommended default. The survey decides what the person's approved decisions already
 decide and records the derivation for the person to veto; the person disposes only of the
-genuine forks — never write the person's `Clarified:` line.
+genuine forks — never write the person's `Clarified:` line, not even as an example (indented or fenced): the release counts it only as the person's own whole line or inside their trailing `## Release` section, and a survey carrying a proposed `## Project brief` holds for the person's release too.
 
 The capability catalog — `docs/capability-catalog.md`, the project's standing enumeration
 baseline. One row per capability: its stable id and anchor, level, contract strength,

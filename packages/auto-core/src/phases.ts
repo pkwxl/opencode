@@ -27,6 +27,7 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { PHASE_ACCEPTANCE_NAME, roundBriefPath, roundDir, roundDirName } from "./docpaths"
 import { acceptanceMark, ACCEPTED_MARK, CLARIFIED_MARK, parseResult } from "./document/roles"
+import { briefProposal } from "./brief"
 import {
   nextReady,
   parseIndex,
@@ -341,6 +342,17 @@ export function forkLines(text: string): string[] {
   return text.split("\n").filter((line) => /^\s*(?:[-*]\s*)?Fork:/.test(line))
 }
 
+// Near-miss fork lines (plans/0169 D3): a line whose first word, after list
+// markers, emphasis or a number, is `Fork` with a colon — `1. Fork: …`,
+// `**Fork:** …` — reads as a fork decision to a person but never parses as
+// one, so the gate holds it until normalized to the `Fork:` grammar or
+// removed. A decision line the scan cannot read must not pass unread.
+export function nearMissForkLines(text: string): string[] {
+  return text.split("\n").filter(
+    (line) => /^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?\*{0,2}Fork\*{0,2}\s*[:：]/.test(line) && !/^\s*(?:[-*]\s*)?Fork:/.test(line),
+  )
+}
+
 // The count of the survey's `Fork:` lines (the gate's open-fork check).
 export function surveyForks(text: string): number {
   return forkLines(text).length
@@ -354,10 +366,34 @@ export function forksWithoutRecommend(text: string): number {
   return forkLines(text).filter((line) => !line.includes("Recommend:")).length
 }
 
-// Whether the person released the survey (D14.3): at least one whole-line
-// `Clarified: yes`.
+// Whether the person released the document (D14.3, scoped by plans/0169 D1):
+// the mark counts as a whole line inside a trailing `## Release` section —
+// the forward channel, `clarify` writes it, a region no session template
+// carries — or as the legacy flush-left whole line the analysis stub and the
+// driver-helper brief teach the person to hand-write and commit (kept
+// counting so already-released documents stay released). Indented and fenced
+// lines never count, anywhere: a session's "the person writes:" example —
+// indented or inside a fence — is not the person's release.
 export function clarifiedMark(text: string): boolean {
-  return text.split("\n").some((line) => line.trim() === CLARIFIED_MARK)
+  let region = false
+  let fence = false
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      fence = !fence
+      continue
+    }
+    if (fence) continue
+    if (/^##\s+Release\s*$/.test(line)) {
+      region = true
+      continue
+    }
+    // The legacy flush-left shape: no leading whitespace (an indented
+    // example is never the person's release), the trailing \r of a CRLF
+    // document tolerated like every trim-based protocol read.
+    if (line.trim() === CLARIFIED_MARK && !/^\s/.test(line)) return true
+    if (region && line.trim() === CLARIFIED_MARK) return true
+  }
+  return false
 }
 
 // The gates a phase must pass before it is marked done (plans/0049 G7): its
@@ -401,9 +437,24 @@ export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: rea
       problems.push(`clarification: ${doc} is missing — the survey must exist before the phase can complete`)
     } else {
       const forks = surveyForks(text)
-      if (forks > 0 && !clarifiedMark(text)) {
+      const nearMiss = nearMissForkLines(text).length
+      const proposal = briefProposal(text)
+      // The person-pending shapes (plans/0169 D2/D3): open forks, a proposed
+      // brief (whatever the fork count — the release mark approves both in
+      // one act, D15.2), and near-miss fork lines the scan cannot read. All
+      // hold awaiting the person; none completes the phase unread.
+      if (nearMiss > 0 && !clarifiedMark(text)) {
         problems.push(
-          `clarification: ${doc} records ${forks} open Fork: line(s) — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase; it accepts every line's \`Recommend:\` default, overrides go beside the lines)`,
+          `clarification: ${doc} carries ${nearMiss} near-miss Fork line(s) (\`1. Fork:\`, \`**Fork:**\`) the scan cannot read — normalize them to start with \`Fork:\` (or remove them) before the release; the release accepts exactly the strict lines' \`Recommend:\` defaults`,
+        )
+      }
+      if ((forks > 0 || proposal !== undefined) && !clarifiedMark(text)) {
+        problems.push(
+          forks > 0 && proposal === undefined
+            ? `clarification: ${doc} records ${forks} open Fork: line(s) — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase; it accepts every line's \`Recommend:\` default, overrides go beside the lines)`
+            : forks > 0
+              ? `clarification: ${doc} records ${forks} open Fork: line(s) and proposes a \`## Project brief\` — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase; it accepts every line's \`Recommend:\` default and installs the proposed brief, overrides go beside the lines)`
+              : `clarification: ${doc} proposes a \`## Project brief\` — awaiting the person (add \`${CLARIFIED_MARK}\` to release the phase; the release installs the proposal as the project brief)`,
         )
         const bare = forksWithoutRecommend(text)
         if (bare > 0) {

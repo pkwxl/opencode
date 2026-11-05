@@ -23,6 +23,7 @@ import { repairRoundAppend, runTaskLoop, type LoopCtx } from "./loop-task"
 import {
   CLARIFIED_MARK,
   completePhase,
+  clarifiedMark,
   phaseAcceptanceDoc,
   phaseFlowBlockedLine,
   phaseGateProblems,
@@ -440,6 +441,10 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 async function installApprovedBrief(ctx: LoopCtx, phase: PhaseUnit): Promise<void> {
   const survey = phaseSurveyDoc(phase)
   const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
+  // Mark-gated (plans/0169 D2): the install — and its "approved" log line —
+  // runs only when the person's release mark holds, never on a gate that
+  // passed without the person's act.
+  if (!clarifiedMark(text)) return
   const proposal = briefProposal(text)
   if (proposal === undefined) return
   for (const line of await installBriefProposal(ctx.directory, survey, proposal, ctx.git.commitTree)) log(line)

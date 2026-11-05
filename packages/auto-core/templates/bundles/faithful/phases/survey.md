@@ -46,6 +46,6 @@ target's own terms, where the reference lives, where the deliverable goes, the c
 that bind every round, and the scope posture with every settled decision and each fork's
 recommended default. The survey decides what the person's approved decisions already decide
 and records the derivation for the person to veto; the person disposes only of the genuine
-forks — never write the person's `Clarified:` line.
+forks — never write the person's `Clarified:` line, not even as an example (indented or fenced): the release counts it only as the person's own whole line or inside their trailing `## Release` section, and a survey carrying a proposed `## Project brief` holds for the person's release too.
 
 <!-- auto: eof -->
