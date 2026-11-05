@@ -125,4 +125,6 @@ Thirteen rulings since v0.2.0 ship together. A minor release — new opt-in mech
 
 **Findings disposition.** None new. F1–F8 remain closed (v0.1.0/v0.2.0); **F5 fully consumed** — 0112 is the routed landing the v0.2.0 record named. The family-consistency check accrues with future rulings from this release forward.
 
+**Tag anchor — recorded missing 2026-11-05 (0165's audit, 0165-178/F13).** The v0.3.0 git tag was never created (`git tag -l`: v0.1.0, v0.2.0). The cut commit `07036c2b5` (2026-10-25) is the anchor its own message names — "the v0.3.0 git tag the maintainer's act at this commit, as with v0.1.0 and v0.2.0". Disposition (0166 step 008): the tag stays the maintainer's explicitly instructed act, never a worker's — the maintainer tags `07036c2b5` as v0.3.0, or the tag rides the next explicitly instructed cut alongside it.
+
 **Version practice.** Documentation-layer record; the package version stays untouched (the spine is the design axis); the `v0.3.0` git tag is the maintainer's act at this release's commit, as with v0.1.0 and v0.2.0.
