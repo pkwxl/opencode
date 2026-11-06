@@ -34,6 +34,8 @@ import {
   writeLocalIdentity,
   scriptGuardSnapshot,
   scriptGuardCheck,
+  workTree,
+  rangeChangedFiles,
 } from "../src/git"
 import {
   addWorktree,
@@ -1644,6 +1646,303 @@ describe("the audited range (plans/0173 D3, 0165-141)", () => {
       } finally {
         await rm(dir2, { recursive: true, force: true })
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// plans/0174 (0165-035/036/110/138/204): the target-inside-a-larger-
+// repository layout gets its first test home, the work-tree probe reads
+// three states (a refused read never idles the commit boundary), a receipt
+// that names fewer roots than the tree vouches for nothing, and the
+// straggler verdict sites resolve toward loud.
+describe("the subdirectory target (plans/0174 — the target inside a larger repository)", () => {
+  // A repository whose target directory is the subdirectory pkg/: the
+  // person's files live outside the target subtree too.
+  async function subdirTarget(): Promise<{ repo: string; pkg: string }> {
+    const repo = await mkdtemp(join(tmpdir(), "auto-subdir-"))
+    await git(repo, "init", "-q")
+    await writeLocalIdentity(repo, { name: "auto", email: "auto@example.com" })
+    await mkdir(join(repo, "pkg", "src"), { recursive: true })
+    await mkdir(join(repo, "other"), { recursive: true })
+    await writeFile(join(repo, "pkg", "src", "a.ts"), "// baseline\n")
+    await writeFile(join(repo, "other", "keep.txt"), "person\n")
+    await git(repo, "add", "-A")
+    await git(repo, "commit", "-qm", "init")
+    return { repo, pkg: join(repo, "pkg") }
+  }
+
+  test("commitTree confines the commit to the target subtree: the person's staged work outside stays staged", async () => {
+    const { repo, pkg } = await subdirTarget()
+    try {
+      // The session writes inside the target; the person stages their own
+      // work outside it — a bare `git commit` takes the whole index and the
+      // person's staging would ride the driver's trailer.
+      await writeFile(join(pkg, "src", "a.ts"), "// session work\n")
+      await writeFile(join(repo, "other", "keep.txt"), "person wip\n")
+      await git(repo, "add", "other/keep.txt")
+      const result = await commitTree(pkg, task, { stage: "implement", subject: "T-001 implement the migration" })
+      expect(result.ok).toBe(true)
+      expect((await git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).trim()).toBe("pkg/src/a.ts")
+      // The person's staged file is untouched: still staged, never committed.
+      expect((await git(repo, "status", "--porcelain")).trim()).toBe("M  other/keep.txt")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("stashTree stashes only the target subtree: the person's WIP outside stays in their tree", async () => {
+    const { repo, pkg } = await subdirTarget()
+    try {
+      await writeFile(join(pkg, "src", "a.ts"), "// session wip\n")
+      await writeFile(join(repo, "other", "keep.txt"), "person wip\n")
+      const result = await stashTree(pkg, "close stash")
+      expect(result.failures).toEqual([])
+      expect(result.stashes.length).toBe(1)
+      expect(await Bun.file(join(pkg, "src", "a.ts")).text()).toBe("// baseline\n")
+      expect(await Bun.file(join(repo, "other", "keep.txt")).text()).toBe("person wip\n")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("the script guard works under the layout: a tracked mutation is caught and restored (the toplevel anchoring, 0165-035)", async () => {
+    const { repo, pkg } = await subdirTarget()
+    try {
+      const shots = await scriptGuardSnapshot(pkg)
+      expect(shots.length).toBe(1)
+      // The 'script' rewrites a tracked file inside the target; porcelain
+      // paths are toplevel-relative, so cwd-relative pathspecs would match
+      // nothing and the guard would read clean over the mutation.
+      await writeFile(join(pkg, "src", "a.ts"), "// SCRIPT MUTATION\n")
+      const violation = await scriptGuardCheck(pkg, shots)
+      expect(violation).toEqual({ kind: "tracked", restored: ["src/a.ts"], unrestorable: [] })
+      expect(await Bun.file(join(pkg, "src", "a.ts")).text()).toBe("// baseline\n")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("beginUnit and the close-out certify the layout: the baseline covers the enclosing repository, the person's WIP outside is not the unit's dirt", async () => {
+    const { repo, pkg } = await subdirTarget()
+    try {
+      const gate = await beginUnit(pkg, {}, task)
+      expect(gate.type).toBe("ok")
+      if (gate.type !== "ok") return
+      expect(gate.baseline?.length).toBe(1)
+      await writeFile(join(pkg, "src", "a.ts"), "// session work\n")
+      const committed = await commitTree(pkg, task, { stage: "implement", subject: "T-001 implement the migration" })
+      expect(committed.ok).toBe(true)
+      // The person edits outside the subtree after the session: the unit's
+      // close-out stays clean (the pathspec `.` keeps the scope inside it).
+      await writeFile(join(repo, "other", "keep.txt"), "person wip\n")
+      expect(await unitViolations(pkg, gate.baseline!)).toEqual([])
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the work-tree probe (plans/0174 D1, 0165-036 — a refused read never idles the commit boundary)", () => {
+  test("a refused work tree (dubious ownership) blocks the gates: no roots, beginUnit dirty, commitTree failed, bootstrap refused", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "auto-owned-"))
+    const pkg = join(repo, "pkg")
+    const hadKey = "GIT_TEST_ASSUME_DIFFERENT_OWNER" in process.env
+    const was = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER
+    try {
+      await git(repo, "init", "-q")
+      await writeLocalIdentity(repo, { name: "auto", email: "auto@example.com" })
+      await mkdir(pkg, { recursive: true })
+      await writeFile(join(pkg, "a.ts"), "// baseline\n")
+      await git(repo, "add", "-A")
+      await git(repo, "commit", "-qm", "init")
+      // git 2.43's knob for the ownership check: the same refusal a
+      // different-uid checkout (a container mount, CI) produces.
+      process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1"
+      // The three states: inside is false with a problem carried — the old
+      // boolean read this as "not a repository" and the whole boundary
+      // idled in silence (roots [], gates ok, nothing committed).
+      const read = await workTree(pkg)
+      expect(read.inside).toBe(false)
+      expect(read.problem).toContain("dubious ownership")
+      expect(await repoRoots(pkg)).toEqual([])
+      const gate = await beginUnit(pkg, {}, task)
+      expect(gate.type).toBe("dirty")
+      const committed = await commitTree(pkg, task, { stage: "implement", subject: "T-001 implement the migration" })
+      expect(committed.ok).toBe(false)
+      expect(committed.failures[0]!.error).toContain("refuses the work tree")
+      const boot = await bootstrapRepository(pkg)
+      expect(boot.type).toBe("failed")
+    } finally {
+      if (hadKey) process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = was
+      else delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("the plain non-git directory keeps the floor: no roots, no problem, init bootstraps", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-nongit-"))
+    try {
+      expect(await workTree(dir)).toEqual({ inside: false })
+      expect(await repoRoots(dir)).toEqual([])
+      const boot = await bootstrapRepository(dir)
+      expect(boot.type).toBe("created")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("rangeChangedFiles grown roots (plans/0174 D4, 0165-110 — a receipt covers the tree it recorded)", () => {
+  test("a nested repository that appeared after the green receipt: no carry; the identical tree diffs on", async () => {
+    const dir = await fresh()
+    try {
+      await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const heads = [{ root: ".", sha: (await git(dir, "rev-parse", "--short", "HEAD")).trim() }]
+      expect(await rangeChangedFiles(dir, heads)).toEqual([])
+      // A task vendors a dependency: a repository root the receipt never
+      // recorded — its changes are invisible to the recorded-HEADs diff, so
+      // the receipt vouches for less than the tree and carry is off.
+      await mkdir(join(dir, "vendor"), { recursive: true })
+      await git(join(dir, "vendor"), "init", "-q")
+      await writeLocalIdentity(join(dir, "vendor"), { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "vendor", "v.txt"), "v\n")
+      await git(join(dir, "vendor"), "add", "-A")
+      await git(join(dir, "vendor"), "commit", "-qm", "vendored")
+      expect(await rangeChangedFiles(dir, heads)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the straggler verdict sites (plans/0174 D5, 0165-204)", () => {
+  test("nestedHeads: an empty nested repository is absent from the alignment record (no empty-sha Auto-Nested line)", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "pkg"))
+      await git(join(dir, "pkg"), "init", "-q")
+      await writeFile(join(dir, "pkg", "inner.txt"), "i")
+      await writeFile(join(dir, "root.txt"), "r")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: inner repository init" })
+      // An empty nested repository joins the tree after the first round; the
+      // root's next commit is scoped away from it (an unscoped add over an
+      // unborn repository fatals — the shape is only reachable scoped).
+      await mkdir(join(dir, "empty"))
+      await git(join(dir, "empty"), "init", "-q")
+      await writeFile(join(dir, "root.txt"), "r2")
+      const committed = await commitTree(dir, task, { stage: "wrapup", subject: "T-001: wrap-up" }, ["root.txt"])
+      expect(committed.ok).toBe(true)
+      const pkgHead = (await git(join(dir, "pkg"), "rev-parse", "--short", "HEAD")).trim()
+      const body = await git(dir, "log", "-1", "--pretty=%B")
+      expect(body).toMatch(new RegExp(`Auto-Nested: pkg @ ${pkgHead}`))
+      expect(body).not.toMatch(/Auto-Nested: empty @/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("rollbackUnit over an unreadable HEAD with a recorded baseline fails the repository (never a silent ok)", async () => {
+    const dir = await fresh()
+    try {
+      await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "a.txt"), "a\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const baseline = await unitBaseline(dir)
+      // The unreadable-HEAD shape: the branch ref deleted (HEAD unborn) and
+      // the worktree left clean — `rev-parse --short HEAD` fails while
+      // `git status` succeeds, the exact combination the old silent path
+      // stashed or skipped with no line and reported ok.
+      const branch = (await git(dir, "symbolic-ref", "--short", "HEAD")).trim()
+      await git(dir, "update-ref", "-d", `refs/heads/${branch}`)
+      await rm(join(dir, ".git", "index"), { force: true })
+      await rm(join(dir, "a.txt"))
+      const rolled = await rollbackUnit(dir, baseline, { task: "T-001", unit: "T-001" })
+      expect(rolled.ok).toBe(false)
+      expect(rolled.failures[0]!.error).toContain("HEAD unreadable")
+      expect(rolled.stashes).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("taskChangedPaths: the nested corpus bounded by the alignment record — an old-lineage nested commit excluded after a restart", async () => {
+    const dir = await fresh()
+    const vendor = join(dir, "vendor")
+    const plan = { id: "PLAN", title: "formulation" }
+    try {
+      await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "root.txt"), "root\n")
+      await mkdir(vendor, { recursive: true })
+      await git(vendor, "init", "-q")
+      await writeLocalIdentity(vendor, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(vendor, "v.txt"), "v\n")
+      await git(vendor, "add", "-A")
+      await git(vendor, "commit", "-qm", "vendor init")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "root")
+      // The OLD corpus: a driver formulation commit (its Auto-Nested record
+      // aligns the tree), then the old lineage's task commit inside vendor.
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await writeFile(join(dir, "docs", "T-001", "todo.md"), "# T-001\n")
+      await commitTree(dir, plan, { stage: "formulate", subject: "PLAN formulate T-001" })
+      await writeFile(join(vendor, "old.txt"), "old\n")
+      await commitTree(vendor, task, { stage: "implement", subject: "T-001 old lineage" })
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "old lineage landed")
+      // The restart: the corpus wiped over retained history (the deletion
+      // committed — the re-created document is a true add), the id re-issued.
+      await rm(join(dir, "docs"), { recursive: true, force: true })
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "restart: the corpus wiped")
+      // The CURRENT corpus: formulated again (a fresh alignment record),
+      // its task commit inside vendor.
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await writeFile(join(dir, "docs", "T-001", "todo.md"), "# T-001 again\n")
+      await commitTree(dir, plan, { stage: "formulate", subject: "PLAN formulate T-001 again" })
+      await writeFile(join(vendor, "new.txt"), "new\n")
+      await commitTree(vendor, task, { stage: "implement", subject: "T-001 new lineage" })
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "new lineage landed")
+      // The nested lineage's old commit falls outside the corpus the
+      // boundary's alignment record bounds; the new one is the surface.
+      expect(await taskChangedPaths(dir, "T-001")).toEqual(["vendor/new.txt"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("taskChangedPaths: a person-committed boundary (no alignment record) keeps the whole-log floor for the nested repository", async () => {
+    const dir = await fresh()
+    const vendor = join(dir, "vendor")
+    try {
+      await writeLocalIdentity(dir, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(dir, "root.txt"), "root\n")
+      await mkdir(vendor, { recursive: true })
+      await git(vendor, "init", "-q")
+      await writeLocalIdentity(vendor, { name: "auto", email: "auto@example.com" })
+      await writeFile(join(vendor, "v.txt"), "v\n")
+      await git(vendor, "add", "-A")
+      await git(vendor, "commit", "-qm", "vendor init")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "root")
+      // The formulation is a person commit (adopted work): no Auto-Nested
+      // record at the boundary, so the nested corpus cannot be bounded and
+      // the whole-log scan stands — the byte-identical floor.
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await writeFile(join(dir, "docs", "T-001", "todo.md"), "# T-001\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-001 formulated")
+      await writeFile(join(vendor, "one.txt"), "one\n")
+      await commitTree(vendor, task, { stage: "implement", subject: "T-001 implement the migration" })
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "landed")
+      expect(await taskChangedPaths(dir, "T-001")).toEqual(["vendor/one.txt"])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

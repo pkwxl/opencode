@@ -90,13 +90,22 @@ export function shortTitle(title: string): string {
 // first dispatch is <n>+1, never a second <n>). Scans every repository root
 // (a round's commits may land in any of them) for the highest
 // `<id> fix <round>.<n>` subject; 1 when none exists (the fresh round, and
-// the no-git floor — a failed read is just an empty history).
+// the no-git floor — a failed read keeps the floor ordinal but logs its ⚠,
+// plans/0174 D5).
 export async function nextFixSession(dir: string, taskId: string, round: number): Promise<number> {
   const prefix = `${taskId} fix ${round}.`
   let max = 0
   for (const root of await repoRoots(dir)) {
-    const log = await git(root, ["log", "--format=%s"]).catch(() => undefined)
-    for (const subject of (log?.out ?? "").split("\n")) {
+    const listed = await git(root, ["log", "--format=%s"]).catch(() => undefined)
+    if (listed === undefined || listed.code !== 0) {
+      // The failed read is surfaced, never answered silently (plans/0174 D5,
+      // 0165-204): the ordinal floor stays 1 — nothing gates on it, the
+      // numbering is 0148 D1's session naming — but a history this process
+      // could not read may hold sessions the floor would duplicate.
+      log(`  ⚠ fix-session numbering could not read the history (${relative(dir, root) || "."}): ${listed === undefined ? "git unavailable" : firstLine(listed.err || listed.out) || `git log exit code ${listed.code}`} — the ordinal may duplicate an unread session`)
+      continue
+    }
+    for (const subject of listed.out.split("\n")) {
       if (!subject.startsWith(prefix)) continue
       const n = Number.parseInt(subject.slice(prefix.length), 10)
       if (Number.isFinite(n) && n > max) max = n
@@ -157,12 +166,25 @@ export async function commitTree(
   info: { stage: string; subject: string; body?: string; allowEmpty?: boolean },
   paths?: readonly string[],
 ): Promise<CommitResult> {
+  // A work tree git refuses to open never idles the commit boundary
+  // (plans/0174 D1, 0165-036): an empty root set over a refused read would
+  // answer ok with nothing committed — P4's completion condition silently
+  // absent for every unit. The block line carries git's own first line.
+  const refused = (await workTree(dir)).problem
+  if (refused) {
+    const error = `git refuses the work tree (${refused}); cannot judge what to commit`
+    log(`  ⚠ git commit failed (.): ${error}`)
+    return { ok: false, failures: [{ rel: ".", error }] }
+  }
   const roots = await repoRoots(dir)
   const subject = commitTitle(info.subject)
   const failures: { rel: string; error: string }[] = []
   for (const root of roots) {
     const rel = relative(dir, root) || "."
     const spec = root === dir ? paths : undefined
+    // The pathspec the commit re-states below (plans/0174 D2): starts as the
+    // add's, and narrows with the did-not-match tolerance's survivors.
+    let live = spec ?? ["."]
     try {
       const changes = await hasChanges(root, spec)
       if (changes === undefined) {
@@ -178,7 +200,7 @@ export async function commitTree(
       if (!changes && !(root === dir && info.allowEmpty === true)) continue
       let added = { code: 0, out: "", err: "" }
       if (changes) {
-        added = await git(root, ["add", "-A", "--", ...(spec ?? ["."])])
+        added = await git(root, ["add", "-A", "--", ...live])
         if (added.code !== 0 && spec !== undefined) {
           // The pathspec tolerance (plans/0099 D4): `git status` beside the
           // add tolerates a pathspec matching nothing, `git add` fatals on it
@@ -195,6 +217,7 @@ export async function commitTree(
             drop = drop.filter((entry) => !named.includes(entry))
             added = drop.length ? await git(root, ["add", "-A", "--", ...drop]) : { code: 0, out: "", err: "" }
           }
+          if (drop.length) live = drop
         }
       }
       if (added.code !== 0) {
@@ -215,6 +238,15 @@ export async function commitTree(
         ...(!changes && info.allowEmpty ? ["--allow-empty"] : []),
         "-m",
         message(subject, task, info.stage, nested, info.body),
+        // The subtree confinement's commit half (plans/0174 D2, 0165-138):
+        // a bare `git commit` takes the whole index, and the person's staged
+        // work elsewhere in an enclosing repository would ride the driver's
+        // trailer — the commit takes the same pathspec the add staged with
+        // (`git commit -- <paths>` commits exactly those paths, the person's
+        // staging outside them left untouched). At the floor (`.` over the
+        // whole repository) the committed tree is byte-identical.
+        "--",
+        ...live,
       ])
       if (committed.code !== 0) {
         const error = firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`
@@ -236,12 +268,19 @@ export async function commitTree(
 // read one by one when the root repository commits, so Auto-Nested records
 // both the repositories "committed this round" and those "untouched this
 // round" (the latter at their baseline SHA, unless an external commit
-// happened in between — that is caught by unitViolations).
+// happened in between — that is caught by unitViolations). A repository with
+// no readable HEAD sha (an empty one, an unreadable one) is simply absent
+// from this commit's alignment record (plans/0174 D5, 0165-204): the
+// `Auto-Nested: <rel> @ ` line an unchecked read emitted was malformed and
+// no alignment reader ever parsed it — absent is the record's own floor
+// ("the state it was at", unborn included).
 async function nestedHeads(dir: string, roots: string[]): Promise<{ rel: string; sha: string }[]> {
   const heads: { rel: string; sha: string }[] = []
   for (const root of roots) {
     if (root === dir) continue
-    heads.push({ rel: relative(dir, root) || ".", sha: (await git(root, ["rev-parse", "--short", "HEAD"])).out.trim() })
+    const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
+    const sha = got?.code === 0 ? got.out.trim() : ""
+    if (sha) heads.push({ rel: relative(dir, root) || ".", sha })
   }
   return heads
 }
@@ -290,7 +329,11 @@ export async function stashTree(
       continue
     }
     if (!read) continue
-    const pushed = await git(root, ["stash", "push", "--include-untracked", "-m", message])
+    // The subtree pathspec (plans/0174 D2, amending 0053 D20 — rollbackUnit's
+    // own shape): the target directory may sit inside a larger repository,
+    // and the close's stash owns the target's tree alone — the person's
+    // unrelated WIP outside the subtree stays in their worktree.
+    const pushed = await git(root, ["stash", "push", "--include-untracked", "-m", message, "--", "."])
     if (pushed.code !== 0) {
       const error = firstLine(pushed.err || pushed.out) || `git stash exit code ${pushed.code}`
       log(`  ⚠ git stash failed (${relative(dir, root) || "."}): ${error}`)
@@ -350,34 +393,60 @@ export async function scriptGuardCheck(dir: string, shots: readonly ScriptGuardS
   if (!shots.length) return undefined
   const moved: { root: string; from: string; to: string }[] = []
   const changed: { root: string; source: string; paths: string[] }[] = []
+  // A read the verdict rides on that itself failed (plans/0174 D3,
+  // 0165-035/204): "untouched" over a failed status/toplevel/diff read is
+  // the quiet-clean direction P12 forbids — the failure rides the violation
+  // channel the callers already print.
+  const unreadable: { root: string; error: string }[] = []
   for (const shot of shots) {
+    const rel = relative(dir, shot.root) || "."
     const head = (await git(shot.root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim() ?? ""
-    if (head !== shot.head) moved.push({ root: relative(dir, shot.root) || ".", from: shot.head, to: head })
+    if (head !== shot.head) moved.push({ root: rel, from: shot.head, to: head })
     // The tracked-changed paths of this repository (porcelain paths are
-    // root-relative under -C; untracked entries are not git-managed content
-    // and stay, D11's residual).
+    // toplevel-relative under -C; untracked entries are not git-managed
+    // content and stay, D11's residual).
     const status = await git(shot.root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."]).catch(() => undefined)
-    const tracked = (status?.out ?? "")
+    if (!status || status.code !== 0) {
+      unreadable.push({ root: rel, error: !status ? "git unavailable" : firstLine(status.err || status.out) || `git status exit code ${status.code}` })
+      continue
+    }
+    const tracked = status.out
       .split("\0")
       .filter((entry) => entry && !entry.startsWith("?? "))
       .map((entry) => entry.slice(3))
     if (!tracked.length) continue
+    // The repository's toplevel: the porcelain paths above are toplevel-
+    // relative, so the diff and the restore's checkout below must read their
+    // pathspecs against the same origin — shot.root may be a subdirectory of
+    // the toplevel (the target inside a larger repository), where
+    // cwd-relative pathspecs match nothing and the guard reads clean over
+    // real mutations (plans/0174 D3, 0165-035).
+    const top = await git(shot.root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+    const toplevel = top?.code === 0 ? top.out.trim() : ""
+    if (!toplevel) {
+      unreadable.push({ root: rel, error: top ? firstLine(top.err || top.out) || `git rev-parse exit code ${top.code}` : "git unavailable" })
+      continue
+    }
     // The snapshot to compare against and restore from: the stash commit, or
     // HEAD when the worktree was clean before the run.
     const source = shot.stash || "HEAD"
     // Only paths the script actually changed (a session-WIP path the script
     // never touched compares equal against the snapshot and drops out — the
     // byte-identical residual). One diff per repository over the tracked set.
-    const diff = await git(shot.root, ["diff", "--name-only", "-z", "--ignore-submodules=all", source, "--", ...tracked]).catch(() => undefined)
-    const differs = (diff?.out ?? "")
+    const diff = await git(toplevel, ["diff", "--name-only", "-z", "--ignore-submodules=all", source, "--", ...tracked]).catch(() => undefined)
+    if (!diff || diff.code !== 0) {
+      unreadable.push({ root: rel, error: !diff ? "git unavailable" : firstLine(diff.err || diff.out) || `git diff exit code ${diff.code}` })
+      continue
+    }
+    const differs = diff.out
       .split("\0")
       .filter(Boolean)
-    if (differs.length) changed.push({ root: shot.root, source, paths: differs })
+    if (differs.length) changed.push({ root: toplevel, source, paths: differs })
   }
   if (moved.length) return { kind: "head", moved }
-  if (!changed.length) return undefined
+  if (!changed.length && !unreadable.length) return undefined
   const restored: string[] = []
-  const unrestorable: { path: string; error: string }[] = []
+  const unrestorable: { path: string; error: string }[] = unreadable.map((read) => ({ path: read.root, error: `the guard cannot judge this repository (${read.error}); investigate the repository state` }))
   for (const repo of changed) {
     const checkout = await git(repo.root, ["checkout", repo.source, "--", ...repo.paths])
     if (checkout.code === 0) {
@@ -868,6 +937,16 @@ export async function rollbackUnit(
       const entry = baseline.find((line) => line.root === root)
       const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
       const head = got?.code === 0 ? got.out.trim() : ""
+      // An unreadable HEAD with a recorded baseline (plans/0174 D5,
+      // 0165-204): the range cannot be judged, and the old silent path
+      // stashed the scene, skipped every check and reported ok — the
+      // repository goes to the human like every other shape the rollback
+      // cannot certify. An empty baseline (the repository had no commits
+      // when the unit started) is the unborn floor, not this case.
+      if (entry?.sha && !head) {
+        result.failures.push({ rel, error: "HEAD unreadable (repo missing or history corrupt); this repo is not rolled back, please handle manually" })
+        continue
+      }
       // External commits mixed in: this repository is not rolled back
       // (rollback reclaims only the driver's own within-unit changes). The
       // same judgment holds for a range that cannot be judged at all and
@@ -974,6 +1053,18 @@ export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { ty
 // authority over git state stays with the human).
 export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate> {
   if (opts.dryrun) return { type: "ok", baseline: undefined }
+  // A work tree git refuses to open blocks the gate (plans/0174 D1,
+  // 0165-036): the probe's three states replace the old boolean — under a
+  // refused read (dubious ownership, a corrupt config) the old path found no
+  // roots, passed with an empty baseline and every unit closed with nothing
+  // committed, P4's completion condition silently absent for the whole run.
+  const refused = (await workTree(dir)).problem
+  if (refused) {
+    return {
+      type: "dirty",
+      files: [`.: git refuses the work tree (${refused}) — the tree's cleanliness cannot be judged; run the same git command directly to see its remedy (an ownership refusal teaches its safe.directory fix)`],
+    }
+  }
   // An unreadable status over any repository root blocks the gate (plans/
   // 0155 D1): the clean question cannot be answered, and a gate that passed
   // would hand the unit a tree whose close-out commit is already doomed —
@@ -1175,6 +1266,29 @@ export type GitOps = {
   landBranch(dir: string, branch: string, task: { id: string; title: string }, own?: readonly string[]): Promise<LandResult>
 }
 
+// The target directory's work-tree state (plans/0174 D1, 0165-036): one
+// probe answering three states. `git rev-parse --is-inside-work-tree` exits
+// 0 only inside a work tree; its failures are two different facts git's
+// exit code does not separate (both 128) — "not a git repository" (the
+// genuine non-git floor: init bootstraps, the commit side idles by design)
+// and everything else (dubious ownership — the container-mount/CI/sudo
+// shape; a corrupt config; a vanished directory), which is an anomaly a
+// verdict must never ride over silently. problem carries git's first line;
+// the spawn-throw (git unavailable) stays the non-git floor. One home: the
+// family's other reads (repoRoots below, the strict gates) consult this
+// probe, never their own rev-parse.
+export type WorkTreeRead = { inside: boolean; problem?: string }
+
+export async function workTree(dir: string): Promise<WorkTreeRead> {
+  const got = await git(dir, ["rev-parse", "--is-inside-work-tree"]).catch(() => undefined)
+  if (got === undefined) return { inside: false }
+  if (got.code === 0) return { inside: true }
+  if (/not a git repository/i.test(got.err)) return { inside: false }
+  const problem = firstLine(got.err) || `git rev-parse exit code ${got.code}`
+  log(`  ⚠ git refuses the work tree (${dir}): ${problem} — the tree's state cannot be judged; run the same git command directly to see its remedy (an ownership refusal teaches its safe.directory fix)`)
+  return { inside: false, problem }
+}
+
 // The repository containing the target directory plus every nested repository
 // root under the tree that holds a .git (node_modules excluded; the descent
 // continues inside a nested repository, and a nested-of-nested one takes part
@@ -1190,10 +1304,8 @@ export type GitOps = {
 // Auto-Nested lines. The park is gitignored with the rest of `.auto/`, so
 // skipping its subtree changes nothing else.
 export async function repoRoots(dir: string): Promise<string[]> {
-  const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
-    .then((out) => out.code === 0)
-    .catch(() => false)
-  const roots = new Set<string>(inRepo ? [dir] : [])
+  const read = await workTree(dir)
+  const roots = new Set<string>(read.inside ? [dir] : [])
   const park = join(dir, ".auto", "worktrees")
   const pending = [dir]
   while (pending.length) {
@@ -1406,10 +1518,15 @@ export type BootstrapResult = { type: "existing" } | { type: "created"; branch: 
 // the empty repository the bootstrap leaves behind is `rm -rf .git` away from
 // undone (plans/0073 §4's mitigation).
 export async function bootstrapRepository(dir: string): Promise<BootstrapResult> {
-  const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
-    .then((out) => out.code === 0)
-    .catch(() => false)
-  if (inRepo) return { type: "existing" }
+  // The three-state probe (plans/0174 D1, 0165-036): a refused read is not
+  // "outside any work tree" — the old boolean here would `git init` a nested
+  // repository INSIDE the person's monorepo, the one shape init must never
+  // produce. The refusal carries git's own first line.
+  const read = await workTree(dir)
+  if (read.inside) return { type: "existing" }
+  if (read.problem) {
+    return { type: "failed", error: `git refuses the directory's work tree (${read.problem}) — refusing to nest a repository inside a repository git cannot read; run the same git command directly to see its remedy (an ownership refusal teaches its safe.directory fix)` }
+  }
   // init.defaultBranch decides when the person set it (global/system/whatever
   // git reads in this environment); its absence is the -b main fallback.
   const setting = await git(dir, ["config", "--get", "init.defaultBranch"]).catch(() => undefined)
@@ -1539,6 +1656,15 @@ export function firstLine(text: string): string {
 // never a guess.
 export async function rangeChangedFiles(dir: string, heads: readonly { root: string; sha: string }[]): Promise<string[] | undefined> {
   if (!heads.length) return undefined
+  // A tree the receipt does not cover vouches for nothing (plans/0174 D4,
+  // 0165-110): a repository root that appeared after the green receipt (a
+  // task vendoring a dependency, a sub-crate split out as its own
+  // repository) contributes changed paths the loop below never diffs — the
+  // recorded-HEADs diff is carry's whole claim, so a grown root set means
+  // the receipt covers less than the tree and the answer is undefined (no
+  // carry). The vanished-root direction already read undefined.
+  const named = new Set(heads.map((head) => head.root))
+  if ((await repoRoots(dir)).some((root) => !named.has(relative(dir, root) || "."))) return undefined
   const phys = await physicalDir(dir)
   const files = new Set<string>()
   for (const { root, sha } of heads) {
@@ -1553,7 +1679,7 @@ export async function rangeChangedFiles(dir: string, heads: readonly { root: str
   return [...files]
 }
 
-// The changed paths of one task's own commits (plans/0096 D7, the release
+// The changed paths of this task's own commits (plans/0096 D7, the release
 // note's re-merge surface): every commit whose message carries the task's
 // `Auto-Task: <id>` trailer line — the same unit marker the close-out check
 // and the suite's range grammar read — contributes its diff (a merge against
@@ -1561,15 +1687,28 @@ export async function rangeChangedFiles(dir: string, heads: readonly { root: str
 // runtime's landing merges carry the trailer like every driver commit).
 // Commits of an earlier corpus under a re-issued id fall outside the task's
 // corpus set (plans/0140, the same bound taskFirstCommit reads) so a
-// wipe-and-restart never blends lineages into this surface either. Paths
-// come back target-directory-relative; an unreadable repository
-// contributes nothing (the surface is advisory steer, never a gate).
+// wipe-and-restart never blends lineages into this surface either — and the
+// bound reaches the NESTED repositories through the alignment record
+// (plans/0174 D5): a nested root's corpus starts at the Auto-Nested sha the
+// root boundary commit recorded for it. Paths come back
+// target-directory-relative; an unreadable repository contributes nothing
+// (the surface is advisory steer, never a gate).
 export async function taskChangedPaths(dir: string, taskId: string): Promise<string[]> {
   const phys = await physicalDir(dir)
   const files = new Set<string>()
   const trailer = `Auto-Task: ${taskId}`
-  for (const root of await repoRoots(dir)) {
-    const corpus = await taskCorpusCommits(root, taskId)
+  const roots = await repoRoots(dir)
+  // The corpus boundary of the root repository (the newest commit that added
+  // the task's unit document): the nested roots' corpora derive from its
+  // Auto-Nested alignment record below. A target outside any work tree has
+  // no root repository and no record — the whole-log floor everywhere.
+  const bound = roots.includes(dir) ? await taskCorpusBound(dir, taskId) : ""
+  for (const root of roots) {
+    const corpus = root === dir
+      ? derivableBound(bound)
+        ? await corpusSince(root, bound)
+        : undefined
+      : await nestedTaskCorpus(root, dir, bound, relative(dir, root) || ".")
     const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
     if (!log || log.code !== 0) continue
     // -z separates commits with NUL (not whitespace — trim keeps it), so
@@ -1614,13 +1753,47 @@ export async function taskChangedPaths(dir: string, taskId: string): Promise<str
 // whose document no history commit added; a boundary at the repository's
 // initial commit, where nothing exists before it): nothing separates
 // lineages there and the whole-log scan stands.
-async function taskCorpusCommits(root: string, taskId: string): Promise<Set<string> | undefined> {
+// The boundary itself is split out (plans/0174 D5): taskChangedPaths'
+// nested corpora read it from the root repository's alignment record, so
+// the sha is derived once and both corpus forms build on it.
+function derivableBound(bound: string): boolean {
+  return /^[0-9a-f]{40}$/.test(bound)
+}
+
+async function taskCorpusBound(root: string, taskId: string): Promise<string> {
   const added = await git(root, ["log", "-n", "1", "--diff-filter=A", "--format=%H", "--", join(taskDir(taskId), "todo.md")]).catch(() => undefined)
-  const bound = added?.code === 0 ? added.out.trim() : ""
-  if (!/^[0-9a-f]{40}$/.test(bound)) return undefined
+  return added?.code === 0 ? added.out.trim() : ""
+}
+
+// The commits `bound^..HEAD` names in root — one corpus set; undefined when
+// the rev-list cannot be read (the whole-log floor).
+async function corpusSince(root: string, bound: string): Promise<Set<string> | undefined> {
   const listed = await git(root, ["rev-list", `${bound}^..HEAD`]).catch(() => undefined)
   if (!listed || listed.code !== 0) return undefined
   return new Set(listed.out.split("\n").filter(Boolean))
+}
+
+// The corpus of a NESTED repository (plans/0174 D5, 0165-204): nested roots
+// hold no unit documents, so their own history derives no 0140 boundary —
+// the alignment record does: the Auto-Nested line the ROOT repository's
+// corpus boundary commit carries for this repository names the sha its
+// corpus started from, and the commits above it are this corpus's. No
+// record (a boundary commit that is not a driver commit and carries no
+// lines, a repository the record does not name, history rewritten past the
+// sha) floors to the unbounded whole-log scan — the same floor an
+// underivable root boundary takes.
+async function nestedTaskCorpus(root: string, dir: string, bound: string, rel: string): Promise<Set<string> | undefined> {
+  if (!derivableBound(bound)) return undefined
+  const sha = (await nestedShasAt(dir, bound)).get(rel)
+  if (!sha) return undefined
+  const listed = await git(root, ["rev-list", `${sha}..HEAD`]).catch(() => undefined)
+  if (!listed || listed.code !== 0) return undefined
+  return new Set(listed.out.split("\n").filter(Boolean))
+}
+
+async function taskCorpusCommits(root: string, taskId: string): Promise<Set<string> | undefined> {
+  const bound = await taskCorpusBound(root, taskId)
+  return derivableBound(bound) ? corpusSince(root, bound) : undefined
 }
 
 // The task-first derivation fork reads (plans/0128, the corpus bound
