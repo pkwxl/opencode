@@ -137,6 +137,11 @@ export type Router = {
   currentKey(provider: string): ModelReference | undefined
   hasActiveRing(provider: string): boolean
   ringHasUsableKey(provider: string, now: number): boolean
+  // The exhausted ring's return instant (plans/0179 D1, 0165-126): the
+  // earliest `until` over the provider's key marks — selection schedules the
+  // wait-and-probe round's sleep on it instead of polling. undefined = no
+  // mark carries an instant (the withholding floor).
+  ringBack(provider: string): number | undefined
   ringRotation(provider: string, now: number): RingRotation | undefined
   commitRotation(rotation: RingRotation, until: number): void
   // The new-session walk (plans/0163 D2): the order-first search with the
@@ -332,8 +337,9 @@ export type Router = {
   // dispatches through selection like any other — this method runs the
   // selection (waiting through `site.waitWindow` while only the windows
   // block), then realizes the mark-clearing by clearing the probe
-  // candidate's mark before the dispatch (and its provider's key state,
-  // flags and `until` marks alike, with it), so the probe runs on the
+  // candidate's mark before the dispatch (and its provider's key marks,
+  // every one carrying its `until` since plans/0163 D1, with it), so the
+  // probe runs on the
   // first in-window candidate ignoring the marks; a successful probe
   // leaves it cleared. undefined = a non-probe decision (nothing usable —
   // the caller's dispatch answers the rest). The re-mark on a failed
@@ -591,8 +597,8 @@ export function createRouter(): Router {
     downModels.delete(model)
   }
   // The recovery probe's ring half (§6.3): the probe candidate ignores the
-  // down marks, the ring and the cap, so the provider's key state — skip
-  // flags and `until` marks alike — clears for the probe while the
+  // down marks, the ring and the cap, so the provider's key marks — each an
+  // `until` mark since plans/0163 D1 — clear for the probe while the
   // position stays where it is. Hoisted for the probeSelection fence; the
   // object exposes it verbatim.
   const clearRingMarks = (provider: string): void => {
@@ -688,9 +694,9 @@ export function createRouter(): Router {
     // The key-mark reader; isKeyDown reads the instant.
     keyDownMark: (provider, key) => downKeys.get(provider)?.get(key),
     isKeyDown,
-    // Clears one provider's key state, both kinds: the recovery probe's
-    // ring half (the probe candidate ignores the down marks and the ring).
-    // The ring position lives beside the state and never moves.
+    // Clears one provider's key marks wholesale: the recovery probe's ring
+    // half (the probe candidate ignores the down marks and the ring). The
+    // ring position lives beside the state and never moves.
     clearKeyDownMarks,
     clearDownMarks,
 
@@ -718,6 +724,17 @@ export function createRouter(): Router {
       const keys = rings?.get(provider)
       if (!ringsActive() || keys === undefined) return true
       return keys.some((key) => !isKeyDown(provider, key.ref, now))
+    },
+    // The earliest key-mark `until` of the provider's ring (plans/0179 D1):
+    // the instant an unusable ring's first key comes back — every mark
+    // carries its instant since plans/0163 D1, so this is known evidence,
+    // undefined only when no mark does (the withholding floor).
+    ringBack: (provider) => {
+      const marks = downKeys.get(provider)
+      if (marks === undefined) return undefined
+      let soonest: number | undefined
+      for (const mark of marks.values()) if (mark.until !== undefined && (soonest === undefined || mark.until < soonest)) soonest = mark.until
+      return soonest
     },
     hasActiveRing,
     currentKey,

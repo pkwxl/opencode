@@ -69,6 +69,13 @@ export type SelectContext = {
   // (true for every provider without an active ring); absent = every ring
   // has one.
   ringUsable?: (provider: string, now: number) => boolean
+  // The exhausted ring's return instant (plans/0179 D1, 0165-126): the
+  // earliest `until` over the provider's key marks — every mark carries its
+  // instant since plans/0163 D1, so an unusable ring's recovery time is
+  // known evidence recoveryAt schedules on, not the "instant unknown" of
+  // 0057 S4's skip-flag era. undefined = no mark carries an instant (the
+  // floor that still withholds it); absent = no ring reader wired.
+  ringBack?: (provider: string) => number | undefined
   // Known context windows by model id, in tokens (contextLimits() data).
   limits?: ReadonlyMap<string, number>
 }
@@ -166,6 +173,7 @@ export function selectContextOf(
       failbackOverride(): { wildcard: string; fallback: string[] } | undefined
       downMarks(): ReadonlyMap<string, DownMark>
       ringHasUsableKey(provider: string, now: number): boolean
+      ringBack(provider: string): number | undefined
     }
   },
   switches: Switches,
@@ -181,6 +189,7 @@ export function selectContextOf(
     override: facts.router.failbackOverride(),
     marks: facts.router.downMarks(),
     ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
+    ringBack: (provider) => facts.router.ringBack(provider),
     ...(limits !== undefined ? { limits } : {}),
   }
 }
@@ -274,14 +283,17 @@ export function select(ctx: SelectContext, call: SelectCall): Selection {
 }
 
 // The earliest instant a list with nothing usable becomes usable again by
-// waiting alone, and the candidate usable then (plans/0057 §6): the
-// wait-and-probe loop sleeps to it instead of polling. A candidate in play
-// comes back when its down mark's `until` has passed and its window is open —
-// the next opening at or after that instant; one below the cap never comes
-// back by waiting and is passed over, as is one whose window never opens.
-// undefined when no such instant is known: a candidate is down with no end
-// (a mark without `until`, or a ring with no usable key — when a ring's keys
-// come back is not an input here), so only a probe can tell when it
+// waiting alone, and the candidate usable then (plans/0057 §6, its ring half
+// re-ruled by plans/0179 D1): the wait-and-probe loop sleeps to it instead
+// of polling. A candidate in play comes back when its down mark's `until`
+// has passed, its ring's earliest key `until` has passed (every key mark
+// carries its instant since plans/0163 D1 — an exhausted ring's return is
+// known evidence, never 0057 S4's skip-flag-era "instant unknown") and its
+// window is open — the next opening at or after the latest of those; one
+// below the cap never comes back by waiting and is passed over, as is one
+// whose window never opens. undefined when no such instant is known: a
+// candidate is down with no end (a mark without `until`, or a ring whose
+// marks carry no readable instant), so only a probe can tell when it
 // recovers, and the loop keeps its polled interval — or nothing ever comes
 // back.
 // AUTO-DECISION: one candidate down with no known end withholds the instant for the whole list, rather than the soonest known instant being taken anyway (the loop's probe is the only way such a candidate returns, and sleeping past the polled interval to another candidate's reset would stop probing it — the scheduled wait may only lengthen a sleep where every way back has an instant)
@@ -290,12 +302,19 @@ export function recoveryAt(ctx: SelectContext, call: SelectCall): { at: number; 
   for (const candidate of candidatesOf(ctx, call).candidates.filter((item) => passesFilter(ctx, item))) {
     const [, down, ring, small] = faultsOf(ctx, call, candidate)
     if (small) continue
-    if (ring) return undefined
     let at = call.now
     if (down) {
       const until = ctx.marks?.get(candidateKey(candidate))?.until
       if (until === undefined) return undefined
       at = until
+    }
+    if (ring) {
+      // The ring's return instant beside the mark's (plans/0179 D1): the
+      // candidate needs both clear, so the later of the two — the old shape
+      // withheld the whole instant the moment a ring was involved.
+      const ringUntil = candidate.kind === "entry" && candidate.entry.provider !== undefined ? ctx.ringBack?.(candidate.entry.provider) : undefined
+      if (ringUntil === undefined) return undefined
+      at = Math.max(at, ringUntil)
     }
     if (candidate.kind === "entry") {
       const opens = nextOpening([candidate.entry], ctx.registry.tz, at)

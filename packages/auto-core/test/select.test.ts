@@ -327,12 +327,24 @@ describe("the recovery instant (plans/0057 §6)", () => {
     expect(recoveryAt(context({}, { marks }), call())).toBeUndefined()
   })
 
-  test("a ring with no usable key leaves the instant unknown; a cap-excluded candidate is not waited for", () => {
+  test("an exhausted ring's return is scheduled on its earliest key instant (plans/0179 D1, 0165-126); a cap-excluded candidate is not waited for", () => {
     const key: ModelReference = { kind: "env", name: "MOONSHOT_KEY_A", ref: "{env:MOONSHOT_KEY_A}", label: "MOONSHOT_KEY_A" }
     const ringed = MODELS.map((item) =>
       item.name === "k3" ? { ...item, provider: "moonshotai", keys: [key] } : item,
     )
     const marks = until({ opus: "15:00", "opus-b": "13:00" })
+    // Every key mark carries its instant since 0163 D1: the ring's earliest
+    // (14:30) is known evidence — the sleep schedules on it, taking the
+    // later of the mark and the ring when both hold a candidate.
+    const ringed14 = recoveryAt(context({ models: ringed }, { marks: until({ opus: "15:00", "opus-b": "14:45" }), ringUsable: () => false, ringBack: () => AT("14:30") }), call())
+    expect(at(ringed14)).toEqual([AT("14:30"), "k3"])
+    // Both hold k3 (a model mark at 14:00, the ring's keys at 14:30): the
+    // later of the two is the return — still sooner than opus-b's 15:45.
+    const both = recoveryAt(context({ models: ringed }, { marks: until({ opus: "16:00", "opus-b": "15:45", k3: "14:00" }), ringUsable: () => false, ringBack: () => AT("14:30") }), call())
+    expect(at(both)).toEqual([AT("14:30"), "k3"])
+    // No readable ring instant (the withholding floor): the whole instant is
+    // withheld — the loop keeps its polled interval.
+    expect(recoveryAt(context({ models: ringed }, { marks, ringUsable: () => false, ringBack: () => undefined }), call())).toBeUndefined()
     expect(recoveryAt(context({ models: ringed }, { marks, ringUsable: () => false }), call())).toBeUndefined()
     expect(at(recoveryAt(context({ models: ringed }, { marks, ringUsable: () => true }), call()))).toEqual([NOW, "k3"])
     // opus-b's known 32k window is below the cap: its sooner end is ignored.
