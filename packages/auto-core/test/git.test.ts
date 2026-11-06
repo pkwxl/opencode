@@ -24,6 +24,7 @@ import {
   statusEntries,
   statusEntriesRead,
   stashTree,
+  charterBaseline,
   suffixedTitle,
   taskChangedPaths,
   unitBaseline,
@@ -833,6 +834,78 @@ describe("baselineIntact (baseline verification at recovery)", () => {
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "manual commit")
       expect((await baselineIntact(dir, baseline)).foreign[0]).toContain("non-driver commit")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the foreign line names each adopted commit, and ranUntil flags the while-the-driver-ran ones with the P4 judgment (plans/0184 D2, 0165-024)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "b.txt"), "b")
+      await git(dir, "add", "-A")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "agent commit")
+      const sha = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      // Without ranUntil (the non-ladder callers): the name, never the flag.
+      const plain = await baselineIntact(dir, baseline)
+      expect(plain.foreign).toHaveLength(1)
+      expect(plain.foreign[0]).toContain(`(no Auto-Stage trailer): ${sha} `)
+      expect(plain.foreign[0]).not.toContain("made while the driver ran")
+      // With ranUntil after the commit (the record's last write postdates it —
+      // the commit was made while the driver ran): the P4 flag and remedy.
+      const flagged = await baselineIntact(dir, baseline, Date.now() + 60_000)
+      expect(flagged.foreign[0]).toContain("[made while the driver ran")
+      expect(flagged.foreign[0]).toContain(`git revert ${sha}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("charterBaseline (the verification charter's true start — plans/0184 D1, 0165-023)", () => {
+  test("a blocked-then-rerun task's charter range contains the execute commit: the start is the commit before the task's first unit commit, not the re-anchored HEAD", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await git(dir, "add", "-A")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "person seed")
+      const before = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "work.txt"), "w")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 exec sample" })
+      await writeFile(join(dir, "more.txt"), "m")
+      await commitTree(dir, task, { stage: "wrapup", subject: "T-001 wrapup sample" })
+      // The re-run re-anchors at the current HEAD; the charter derives the
+      // true start and the range holds the task's own execute commit.
+      const rerunHead = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      const charter = await charterBaseline(task.id, [{ root: dir, sha: rerunHead }])
+      expect(charter).toEqual([{ root: dir, sha: before }])
+      const range = await git(dir, "log", "--format=%s", `${charter[0]!.sha}..HEAD`)
+      expect(range).toContain("T-001 exec sample")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a repository where the task has no unit commit keeps the given sha; an empty input passes through (the no-range floor)", async () => {
+    const dir = await fresh()
+    try {
+      expect(await charterBaseline("T-009", [{ root: dir, sha: "abc1234" }])).toEqual([{ root: dir, sha: "abc1234" }])
+      expect(await charterBaseline("T-009", [])).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the task's first unit commit at the repository root renders the whole-history shape", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 root sample" })
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      expect(await charterBaseline(task.id, [{ root: dir, sha: head }])).toEqual([{ root: dir, sha: "" }])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

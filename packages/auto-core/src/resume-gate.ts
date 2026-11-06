@@ -212,7 +212,7 @@ export async function recoveryLadder(record: Progress, run: LadderRun): Promise<
     // by committing and by re-running, so the current committed state is
     // adopted as the scene and a fresh session continues from it, the why
     // naming what was adopted (the detection record — P8's line, not a block).
-    const drift = await baselineIntact(run.dir, record.baseline)
+    const drift = await baselineIntact(run.dir, record.baseline, record.at)
     // A failed read is not drift (plans/0183 D3, 0165-114): 0145's adoption
     // covered the person's committed state, and a repository whose baseline
     // cannot be read is neither that nor anything the rollback could reclaim

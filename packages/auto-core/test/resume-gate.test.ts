@@ -225,12 +225,42 @@ describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
       await git(dir, ["add", "-A"])
       await git(dir, ["commit", "-qm", "human commit"])
       // The session is alive and the model eligible — adoption wins anyway:
-      // a live session is never continued across foreign commits.
+      // a live session is never continued across foreign commits. The line
+      // names each adopted commit (plans/0184 D2, 0165-024).
+      const sha = (await git(dir, ["rev-parse", "--short", "HEAD"])).out.trim()
       const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline }), run({ switches: STRICT, strict: true, dir, probe: healthy }))
-      expect(verdict).toEqual({
-        kind: "fresh",
-        why: "foreign commits since the recorded baseline adopted as the current state (.: 1 non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)); the interrupted session's context is stale",
-      })
+      expect(verdict.kind).toBe("fresh")
+      if (verdict.kind === "fresh") {
+        expect(verdict.why).toContain("foreign commits since the recorded baseline adopted as the current state")
+        expect(verdict.why).toContain(`(no Auto-Stage trailer): ${sha} `)
+        expect(verdict.why).not.toContain("made while the driver ran")
+        expect(verdict.why).toContain("the interrupted session's context is stale")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("strict: an adopted commit made while the driver ran (its committer time before the record's last write) carries the P4 flag and the revert remedy — adoption proceeds, the person judges (plans/0184 D2, 0165-024)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ladder-while-ran-"))
+    try {
+      await git(dir, ["init", "-q"])
+      await writeFile(join(dir, "seed.txt"), "s")
+      await git(dir, ["add", "-A"])
+      await git(dir, ["commit", "-qm", "seed"])
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "agent.txt"), "an agent's own commit")
+      await git(dir, ["add", "-A"])
+      await git(dir, ["commit", "-qm", "agent commit"])
+      const sha = (await git(dir, ["rev-parse", "--short", "HEAD"])).out.trim()
+      // The record's last write postdates the commit: the driver was running
+      // when it was made — not the person's post-kill act.
+      const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline, at: Date.now() + 60_000 }), run({ switches: STRICT, strict: true, dir, probe: healthy }))
+      expect(verdict.kind).toBe("fresh")
+      if (verdict.kind === "fresh") {
+        expect(verdict.why).toContain(`(no Auto-Stage trailer): ${sha} `)
+        expect(verdict.why).toContain(`[made while the driver ran — P4: the commit right is the driver's; judge whether to keep it, git revert ${sha} reclaims it]`)
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -49,7 +49,7 @@ import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { handoffFile, taskDoc, taskDocPaths } from "./docpaths"
 import { handoffStatus, parseResult, type ReportResult } from "./document/roles"
-import { nextFixSession, shortTitle, type UnitBaseline } from "./git"
+import { charterBaseline, nextFixSession, shortTitle, type UnitBaseline } from "./git"
 import { gitOf } from "./git-ops"
 import { acceptanceSection, anchorLaneOf, parseTestLanes } from "./intent/test-lanes"
 import { ledgerSection } from "./formulate-synthesis"
@@ -610,7 +610,12 @@ export async function runWrapup(
 ): Promise<Outcome | undefined> {
   const dir = opts.dir ?? plan.dir
   const git = gitOf(opts)
-  const commitRange = commitRangeText(dir, input.baseline ?? [], input.scope)
+  // The charter's range is the task's TRUE start (plans/0184 D1, 0165-023):
+  // the commit before the task's first unit commit, derived here — the
+  // re-anchored HEAD the callers hand in (the foreign-commit question's
+  // baseline) would hand a re-run's verifier an empty range over the work
+  // the task's own sessions committed before the interruption.
+  const commitRange = commitRangeText(dir, await charterBaseline(task.id, input.baseline ?? []), input.scope)
   // The progress rule's state (plans/0146 D2): lastGaps = the count the
   // previous FAIL measured (undefined before this loop's first FAIL — that
   // one only seeds, no round preceded it), noProgress = the consecutive

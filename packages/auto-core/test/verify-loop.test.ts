@@ -184,6 +184,42 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
+  test("the charter's commit range is the task's true start, not the re-anchored baseline (plans/0184 D1, 0165-023): a blocked-then-rerun task's range contains the execute commit", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const before = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      // The task's own work commits (the unified-commit shape, Auto-Task:
+      // T-001) — then the re-run's callers hand runWrapup the re-anchored
+      // HEAD, the shape a blocked-then-rerun task or a wrap-up kill produces.
+      await Bun.write(join(dir, "src.ts"), "export const x = 1\n")
+      await git(dir, "add", "-A")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "T-001 exec sample\n\nAuto-Stage: execute\nAuto-Task: T-001")
+      await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001"))
+      await git(dir, "add", "-A")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "T-001 fix 1 sample\n\nAuto-Stage: execute\nAuto-Task: T-001")
+      const reanchored = [{ root: dir, sha: (await git(dir, "rev-parse", "--short", "HEAD")).trim() }]
+      const { client, calls } = scriptedClient([
+        async () => {
+          writeFileSync(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session", baseline: reanchored })
+      expect(result).toBeUndefined()
+      // The verify prompt's range starts at the commit before the task's
+      // first unit commit — the execute commit sits inside the range, where
+      // the re-anchored HEAD alone would have handed the verifier HEAD..HEAD.
+      expect(promptText(calls.prompts[0]!)).toContain(`in its commit range ${before}..HEAD`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a work session's committed report.md PASS never outranks the verifier (plans/0170 D1): the FAIL is seen, the fix loop opens, the report is removed at dispatch", async () => {
     const dir = await freshRepo()
     try {

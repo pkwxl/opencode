@@ -940,22 +940,37 @@ export function driverStage(body: string): string | undefined {
   return trailerBlock(body)?.get("Auto-Stage")
 }
 
-// The count of commits without the driver witness inside the `sha..<to>`
-// range (= the number of external commits; to defaults to HEAD, the unit
-// close-out and recovery callers' shape). An empty-string sha means the
-// repository had no commits when the range started — check the full history.
-// undefined = the log itself failed (an unresolvable baseline, a corrupt
-// repository — plans/0173 D3, 0165-141): the range cannot be judged, and the
-// callers surface it as a problem line, never as zero (P12). Shared by
-// unitViolations, the recovery-fidelity baseline check / rollback, and
+// One non-driver commit inside a judged range, named (plans/0184 D2,
+// 0165-024): the short sha, the author, the committer's ISO date — the
+// adoption line's facts, and the while-the-driver-ran comparison's input
+// (a committer time before the record's last write was made while the driver
+// ran, not by the person after the kill).
+export type ForeignCommit = { sha: string; author: string; date: string }
+
+// The non-driver commits inside the `sha..<to>` range (= the external
+// commits; to defaults to HEAD, the unit close-out and recovery callers'
+// shape), each named. An empty-string sha means the repository had no commits
+// when the range started — check the full history. undefined = the log itself
+// failed (an unresolvable baseline, a corrupt repository — plans/0173 D3,
+// 0165-141): the range cannot be judged, and the callers surface it as a
+// problem line, never as zero (P12).
+export async function foreignCommitRecords(root: string, sha: string, to: string = "HEAD"): Promise<ForeignCommit[] | undefined> {
+  const log = await git(root, ["log", "-z", "--format=%h%x1f%an%x1f%cI%x1f%B%x1e", ...(sha ? [`${sha}..${to}`] : [to])])
+  if (log.code !== 0) return undefined
+  return log.out
+    .split("\x1e")
+    .map((entry) => entry.replaceAll("\0", ""))
+    .map((entry) => entry.split("\x1f"))
+    .filter(([id, author, date, body]) => Boolean(id?.trim()) && Boolean(body?.trim()) && driverStage(body) === undefined)
+    .map(([id, author, date]) => ({ sha: id!.trim(), author: (author ?? "").trim(), date: (date ?? "").trim() }))
+}
+
+// The count front over the same walk (the unit close-out's and rollback's
+// criterion — one walk, one driver-witness test, the count the named list's
+// length). Shared by unitViolations, the recovery-fidelity rollback, and
 // `land`'s foreign-commit refusal over the round branch (plans/0074 §2.3).
 export async function foreignCommits(root: string, sha: string, to: string = "HEAD"): Promise<number | undefined> {
-  const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..${to}`] : [to])])
-  if (bodies.code !== 0) return undefined
-  return bodies.out
-    .split("\0")
-    .filter((body) => body.trim())
-    .filter((body) => driverStage(body) === undefined).length
+  return (await foreignCommitRecords(root, sha, to))?.length
 }
 
 // Whether a unit baseline sha is still an ancestor of HEAD (plans/0173 D3,// 0165-141): false means HEAD was rewound to or below the baseline (an
@@ -1042,7 +1057,16 @@ export async function driverBaseline(root: string): Promise<string> {
 // (0155 D1's direction). Both lists empty = baseline intact.
 export type BaselineProblems = { foreign: string[]; unreadable: string[] }
 
-export async function baselineIntact(dir: string, baseline: UnitBaseline): Promise<BaselineProblems> {
+// ranUntil (plans/0184 D2, 0165-024): the progress record's last write, epoch
+// ms — a foreign commit whose committer time precedes it was made while the
+// driver ran (the record is rewritten at every dispatch and boundary, so a
+// live person's mid-run commit can postdate it only by landing between the
+// act and the next write — the window the flag honestly admits). Those
+// commits carry the P4 flag in the line: adoption still proceeds (the
+// committed state is the scene either way — 0145 D1), but the person reads
+// which commits the driver never made and judges them with the revert
+// remedy. Absent = the names without the flag (the non-ladder callers).
+export async function baselineIntact(dir: string, baseline: UnitBaseline, ranUntil?: number): Promise<BaselineProblems> {
   const problems: BaselineProblems = { foreign: [], unreadable: [] }
   for (const { root, sha } of baseline) {
     const rel = relative(dir, root) || "."
@@ -1071,18 +1095,35 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
         continue
       }
     }
-    const foreign = await foreignCommits(root, sha)
+    const foreign = await foreignCommitRecords(root, sha)
     if (foreign === undefined) {
       problems.unreadable.push(`${rel}: the baseline..HEAD range cannot be judged (git log failed), baseline check failed`)
       continue
     }
-    if (foreign > 0) {
+    if (foreign.length > 0) {
       // Factual line only; the interpretation (adoption, no reuse, no
-      // rollback) is the recovery ladder's (plans/0145 D1).
-      problems.foreign.push(`${rel}: ${foreign} non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)`)
+      // rollback) is the recovery ladder's (plans/0145 D1). Each commit
+      // named (plans/0184 D2, 0165-024): the person reads exactly what was
+      // adopted — an agent's own commit is no longer laundered as "the
+      // person's commits" (bounded at five, the count naming the rest).
+      problems.foreign.push(`${rel}: ${foreign.length} non-driver commit(s) since the recorded baseline (no Auto-Stage trailer): ${namedForeignCommits(foreign, ranUntil)}`)
     }
   }
   return problems
+}
+
+// The named-commit list of an adoption line: `<short sha> <author>, <committer
+// date>` per commit, the while-the-driver-ran ones flagged with the P4
+// judgment and its remedy (plans/0184 D2).
+function namedForeignCommits(commits: readonly ForeignCommit[], ranUntil: number | undefined): string {
+  const named = commits.slice(0, 5).map((commit) => {
+    const whileDriverRan = ranUntil !== undefined && commit.date !== "" && !Number.isNaN(Date.parse(commit.date)) && Date.parse(commit.date) < ranUntil
+    return (
+      `${commit.sha} ${commit.author}, ${commit.date}` +
+      (whileDriverRan ? ` [made while the driver ran — P4: the commit right is the driver's; judge whether to keep it, git revert ${commit.sha} reclaims it]` : "")
+    )
+  })
+  return commits.length > 5 ? `${named.join("; ")}; … +${commits.length - 5} more` : named.join("; ")
 }
 
 // Rollback result (design 3.3): non-empty failures = some repository could
@@ -2048,6 +2089,35 @@ export async function taskFirstCommit(root: string, taskId: string): Promise<Tas
     else older = true
   }
   return { first, older }
+}
+
+// The verification charter's true start (plans/0184 D1, 0165-023): per
+// repository, the commit before the task's first unit commit —
+// taskFirstCommit's corpus-bounded scan over the Auto-Task trailer — so a
+// resume's or re-run's re-anchored HEAD (kept for the close-out audit's
+// foreign-commit question) does not hand the verifier an empty HEAD..HEAD
+// range over work the task's own sessions committed before the interruption
+// (the re-run after a FAIL block, the kill during the wrap-up). A repository
+// where the task has no unit commit yet keeps the given sha (nothing
+// committed there — today's range); the corpus bound is the lineage's own (a
+// re-issued id is a new lineage, 0140, and the charter of the restart never
+// spans the wiped corpus); the first commit's parent is the state before the
+// unit began, and a root first commit (no parent) renders the whole-history
+// shape (""). An empty input baseline (non-git / the no-commit double) passes
+// through — the charter words the inspection without a range, as today.
+export async function charterBaseline(taskId: string, reanchored: UnitBaseline): Promise<UnitBaseline> {
+  if (!reanchored.length) return reanchored
+  const out: UnitBaseline = []
+  for (const { root, sha } of reanchored) {
+    const first = await taskFirstCommit(root, taskId)
+    if (first?.first) {
+      const parent = await git(root, ["rev-parse", "--short", `${first.first}^`]).catch(() => undefined)
+      out.push({ root, sha: parent?.code === 0 ? parent.out.trim() : "" })
+    } else {
+      out.push({ root, sha })
+    }
+  }
+  return out
 }
 
 // The nested-repository alignment one root-repository commit records: the
