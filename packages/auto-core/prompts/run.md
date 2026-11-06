@@ -522,10 +522,13 @@ next phase and every phase after it without the stops.
      nested repository as `<path>=<sha>` — equal to the HEADs you read now. A lane without such a receipt
      runs now, one lane at a time: launch the row's command as a background process writing a log under
      the lane-log dir (/tmp/opencode/ by default) (append the exit code), poll in short sleep steps reading `date`, take the verdict
-     from the log tail, and write the receipt `docs/R-NN/regression/<seq>-<lane id>.md` (`<seq>` one past
+     from the log's exit-code line (the wrapper's own line; for a row with an `Evidence:` channel
+     read no other line of the log), and write the receipt `docs/R-NN/regression/<seq>-<lane id>.md` (`<seq>` one past
      the round's highest receipt number) — the `Lane:` line, `Heads:`, `Start:`, `End:`, `Verdict: green`
-     or `Verdict: red`, `Log:` the log path, and for a red lane the bounded failure region from the log
-     tail, the terminator its last body line — then land the receipts as their own commit (the same add +
+     or `Verdict: red`, `Log:` the log path, and for a red lane the bounded failure region — from the
+     lane's declared `Evidence:` file when the row carries one (source-free lines the command writes
+     beside its raw log; the raw log itself never lands in the receipt), else from the log tail, the
+     terminator its last body line — then land the receipts as their own commit (the same add +
      commit pass, the receipts alone staged), message:
 
         PLAN regression R-NN <receipt file names>

@@ -44,14 +44,21 @@ export type TestLane = {
   // wave/phase-scoped standard (the background invariant + the phase-close
   // hold).
   strict?: true
+  // The lane's source-safe evidence channel (plans/0177 D2, 0165-052): the
+  // repository-relative file the command writes beside its raw log — the
+  // red receipt's evidence quotes this file alone and never the raw log,
+  // which a compliance lane's may lawfully hold dirty (reference paths,
+  // identifiers, exact scores). A declared capability, never a code-side
+  // lane name (P16); absent = today's bounded raw-log tail (the floor).
+  evidence?: string
 }
 
 // The suite-header line (`lint:`); a field line (`Command: …`). A header with
-// content after the colon matches neither and is malformed. Strict is the
-// one optional field, and only a regression row may carry it.
+// content after the colon matches neither and is malformed. Strict and
+// Evidence are the optional fields; Strict only on a regression row.
 const SUITE_HEAD = /^([a-z][a-z0-9-]*):\s*$/
-const FIELD_LINE = /^(Command|Cost|Surfaces|Exclusive|Strict):[ \t]*(.*)$/
-const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor|regression, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no, [regression rows only] Strict: yes|no — one block per suite"
+const FIELD_LINE = /^(Command|Cost|Surfaces|Exclusive|Strict|Evidence):[ \t]*(.*)$/
+const GRAMMAR = "grammar: <suite>: then Command:, Cost: cheap|anchor|regression, Surfaces: <comma-separated repository-relative paths>, Exclusive: yes|no, [regression rows only] Strict: yes|no, [optional] Evidence: <repository-relative path> — one block per suite"
 
 // Parse the active pack's lane table; undefined when the pack declares none
 // (or the section holds comments only — the zero-intent floor). Throws
@@ -81,7 +88,16 @@ export function parseTestLanes(pack: IntentPack): TestLane[] | undefined {
       if (cost !== "regression") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Strict is a regression-row option (plans/0098 D7), but this row's Cost is ${cost}`)
       if (strict !== "yes" && strict !== "no") throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Strict must be yes or no, got: ${strict || "(empty)"}`)
     }
-    lanes.push({ name: block.name, command, cost, surfaces: parseSurfaces(pack.name, block.name, block.fields.get("Surfaces")!), exclusive: exclusive === "yes", ...(strict === "yes" ? { strict: true } : {}) })
+    // The source-safe evidence channel (plans/0177 D2): the Surfaces path
+    // discipline — repository-relative, never absolute, never `..`.
+    const evidence = block.fields.get("Evidence")
+    if (evidence !== undefined) {
+      if (!evidence) throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Evidence must name a path when the line is present`)
+      if (evidence.startsWith("/") || evidence.split("/").includes("..")) {
+        throw new Error(`intent pack "${pack.name}" test-lanes suite "${block.name}" Evidence must be a repository-relative path (no absolute paths, no ..), got: ${evidence}`)
+      }
+    }
+    lanes.push({ name: block.name, command, cost, surfaces: parseSurfaces(pack.name, block.name, block.fields.get("Surfaces")!), exclusive: exclusive === "yes", ...(strict === "yes" ? { strict: true } : {}), ...(evidence !== undefined ? { evidence } : {}) })
     block = undefined
   }
   for (const raw of text.split("\n")) {

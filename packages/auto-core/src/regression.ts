@@ -42,7 +42,7 @@ import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
 import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, commitLaneReceipts, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, readLogTail, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, commitLaneReceipts, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, redLaneEvidence, readLaneVerdict, readLogTail, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
@@ -222,7 +222,8 @@ export async function runRegressionLane(
     start: started.toISOString(),
     end: end.toISOString(),
     ...(timedOut ? { timedOut: true, ...(timeoutReason ? { timeoutReason } : {}) } : {}),
-    ...(verdict === "red" ? { evidence: text.trimEnd().split("\n").slice(-LANE_EVIDENCE_LINES) } : {}),
+    // The declaring lane's channel, else the bounded raw-log tail (plans/0177 D2).
+    ...(verdict === "red" ? { evidence: await redLaneEvidence(dir, lane, text) } : {}),
     ...(violation ? { violation } : {}),
   }
   await writeLaneReceipt(dir, run, heads)

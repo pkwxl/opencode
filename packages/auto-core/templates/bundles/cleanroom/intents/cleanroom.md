@@ -65,11 +65,15 @@ behavior maps to a stated contract or a recorded deferral
 # implementation lives driver-side and holds the corpus location, and the worktree carries at
 # most a bare stub that invokes it and names no corpus path. The tool's configured scope
 # includes the specification notes, so the spec-read close runs the scan like any phase close.
+# The row declares its `Evidence:` channel — the source-free summary the tool writes
+# beside its raw log; the receipt quotes the channel alone, the raw log (scores, corpus
+# paths) staying driver-side for the monitor.
 # divergence:
 # Command: divergence-scan
 # Cost: regression
 # Surfaces: .
 # Exclusive: no
+# Evidence: tmp/divergence-evidence.md
 
 # acceptance — the black-box acceptance anchor.
 # acceptance:
@@ -363,7 +367,11 @@ any of the reference's private identifiers in a note is a hard finding — publi
 specification names are the notes' lawful vocabulary; the spec-read room may be
 told the colliding identifier outright, for it reads the reference lawfully; and
 the committed receipt carries counts and note ids alone — a reference identifier
-never persists in any session-readable document.
+never persists in any session-readable document. The lane row's `Evidence:` channel is
+that rule's mechanism: a lane declaring it has the receipt's failure evidence read from
+the declared file alone — the source-free summary the tool writes beside its raw log —
+and the raw log (the scores, the corpus paths) is never quoted into any session-readable
+record; the compliance monitor reads it on the driver side.
 
 A divergence score is screening, never a verdict: a risk flag that triggers
 adjudication, never an automatic plagiarism verdict — similarities can originate
@@ -454,8 +462,9 @@ from these — never invent criteria. The plan is an item-by-item adjudication, 
 summary: each compliance dimension — coverage of the MUST requirements, behavioral
 conformance, public interface conformance, scope discipline, spec hygiene, clean-room
 independence, paradigm conformance, contract coverage — is its own audit task with its
-findings written to audit.md, and no criterion is accepted on prose, merged, or
-silently dropped. Explicitly address:
+findings written to its own findings document (`docs/T-NNN/findings.md`, the phase's
+declared task artifact), the closing task consolidating the findings documents into
+audit.md, and no criterion is accepted on prose, merged, or silently dropped. Explicitly address:
 
 - **Negative scope** — the plan's first deliverable states what this round does not deliver:
   every deferred, descoped or postponed item with the record that owns it, so a passing

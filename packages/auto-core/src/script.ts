@@ -560,7 +560,7 @@ async function runLaneBatch(
   } finally {
     clearInterval(timer)
   }
-  return Promise.all(live.map(({ run }) => laneOutcome(taskId, run)))
+  return Promise.all(live.map(({ run }) => laneOutcome(taskId, run, dir)))
 }
 
 // The verdict read mechanically from the log tail (D1): the last LANE_RC line
@@ -574,9 +574,26 @@ export function readLaneVerdict(text: string, timedOut: boolean): { code: number
   return { code, verdict: !timedOut && codes.length && code === 0 ? "green" : "red" }
 }
 
-async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; start: number; timedOut: boolean; timeoutReason?: "idle" | "max" }): Promise<LaneRun> {
+// A red lane's evidence lines (plans/0177 D2, 0165-052): a lane that declares
+// an `Evidence:` channel keeps its raw log out of every session-readable
+// record — the receipt, the synthesized gap list and the regression run
+// record quote the channel file alone (the command's source-free summary);
+// a missing or empty channel on a red run is itself the evidence line, the
+// absence surfaced and the monitor named as the log's reader, never papered
+// over with the log's tail. An undeclared lane keeps today's bounded
+// raw-log tail (the byte-identical floor).
+export async function redLaneEvidence(dir: string, lane: { evidence?: string }, logTail: string): Promise<string[]> {
+  if (lane.evidence === undefined) return logTail.trimEnd().split("\n").slice(-LANE_EVIDENCE_LINES)
+  const channel = (await readLogTail(join(dir, lane.evidence))).trim()
+  if (!channel) return [`(the lane's declared evidence channel ${lane.evidence} wrote nothing; its raw log stays out of session-readable records — the compliance monitor reads it)`]
+  return channel.split("\n").slice(-LANE_EVIDENCE_LINES)
+}
+
+async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; start: number; timedOut: boolean; timeoutReason?: "idle" | "max" }, dir: string): Promise<LaneRun> {
   // The bounded tail (plans/0175 D3): the verdict line is the log's last and
-  // the evidence is its end region — neither needs the whole file.
+  // the evidence is its end region — neither needs the whole file. A
+  // declaring lane's evidence comes from its channel instead (plans/0177
+  // D2), the log tail only the verdict's input.
   const text = await readLogTail(run.log)
   const { code, verdict } = readLaneVerdict(text, run.timedOut)
   const end = Date.now()
@@ -584,7 +601,7 @@ async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; s
   log(
     `  ${verdict === "green" ? "✓" : "⚠"} ${taskId} lane ${run.lane.name} ${verdict}${run.timedOut ? ` (timed out: ${run.timeoutReason === "max" ? "absolute duration cap exceeded" : "no output for too long"})` : ` (LANE_RC=${code})`}, took ${ms}ms, log: ${run.log}`,
   )
-  const evidence = verdict === "red" ? text.trimEnd().split("\n").slice(-LANE_EVIDENCE_LINES) : undefined
+  const evidence = verdict === "red" ? await redLaneEvidence(dir, run.lane, text) : undefined
   return {
     lane: run.lane.name,
     verdict,

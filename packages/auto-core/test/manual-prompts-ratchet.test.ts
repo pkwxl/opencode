@@ -503,6 +503,11 @@ describe("manual-driver prompt ratchet", () => {
     expect(run, "run.md").toContain("the driver's `transfer`")
     // The task/master split: regression rows are the driver's alone.
     expect(task, "run-task.md").toContain("A `Cost: regression` row is never one of your lanes")
+    // plans/0177 D2 (0165-052): a row declaring an Evidence channel keeps
+    // its raw log out of the manual receipt — the verdict from the wrapper's
+    // exit-code line alone, the failure region from the channel file.
+    expect(run, "run.md").toContain("declared `Evidence:` file")
+    expect(run, "run.md").toContain("read no other line of the log")
     // The P16 line: the holds speak the field/lane grammar alone, never an
     // intent family's vocabulary.
     expect(run, "run.md").not.toContain("cleanroom")

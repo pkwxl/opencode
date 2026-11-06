@@ -66,6 +66,21 @@ describe("the lane-table grammar (parseTestLanes / testLanesProblem, plans/0096 
   // the row the driver's background slot owns — parsed by the same grammar,
   // excluded from the wrap-up's set and the anchor resolution below. The
   // strict option (D7) is the one optional field, regression rows only.
+  test("the Evidence channel (plans/0177 D2): parses with the Surfaces path discipline, the undeclared floor keeps no key", () => {
+    const withChannel = parseTestLanes(
+      lanePack(["scan:", "Command: scanner", "Cost: regression", "Surfaces: .", "Exclusive: no", "Evidence: tmp/scan-evidence.md"].join("\n")),
+    )!
+    expect(withChannel[0]!.evidence).toBe("tmp/scan-evidence.md")
+    // The floor: a row without the line keeps no key (today's raw-log tail).
+    expect(parseTestLanes(lanePack(ROWS))!.every((lane) => lane.evidence === undefined)).toBe(true)
+    // The path discipline: never absolute, never `..` — the Surfaces rule.
+    for (const bad of ["/tmp/evidence.md", "../outside.md"]) {
+      const rows = ["scan:", "Command: scanner", "Cost: regression", "Surfaces: .", "Exclusive: no", `Evidence: ${bad}`].join("\n")
+      expect(() => parseTestLanes(lanePack(rows))).toThrow(/Evidence must be a repository-relative path/)
+    }
+    expect(() => parseTestLanes(lanePack(["scan:", "Command: scanner", "Cost: regression", "Surfaces: .", "Exclusive: no", "Evidence:"].join("\n")))).toThrow(/Evidence must name a path/)
+  })
+
   test("a regression-cost row parses beside its peers, its Strict option with it", () => {
     const rows = [ROWS, "", "regress:", "Command: bash test/verify_full.sh", "Cost: regression", "Surfaces: src/, include/, test/", "Exclusive: yes", "Strict: yes"].join("\n")
     const parsed = parseTestLanes(lanePack(rows))
@@ -568,6 +583,44 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       clean([dir, scratch, logDir])
     }
   })
+  test("a red lane with a declared Evidence channel: the receipt quotes the channel alone, never the raw log (plans/0177 D2, 0165-052)", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      mkdirSync(join(dir, "tmp"), { recursive: true })
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The command's raw log holds the dirty detail (a reference path, an
+      // exact score); the channel file holds the source-free summary.
+      const dirty: TestLane[] = [{
+        name: "scan",
+        command: "echo 'reference/private.c:42 copied_symbol exact score: 0.93'; echo 'flagged: unit u-07, risk band high, 3 note ids' > tmp/channel.md; exit 1",
+        cost: "cheap",
+        surfaces: ["src/"],
+        exclusive: false,
+        evidence: "tmp/channel.md",
+      }]
+      const result = await runTestLanes(dir, "T-001", dirty, { logDir })
+      expect(result.runs[0]!.verdict).toBe("red")
+      expect(result.runs[0]!.evidence).toEqual(["flagged: unit u-07, risk band high, 3 note ids"])
+      const receipt = await Bun.file(join(dir, laneReceiptDoc("T-001", "scan"))).text()
+      expect(receipt).toContain("flagged: unit u-07, risk band high, 3 note ids")
+      // The raw log's dirty line never reaches the session-readable receipt.
+      expect(receipt).not.toContain("reference/private.c")
+      expect(receipt).not.toContain("0.93")
+      // A declaring lane whose channel wrote nothing: the loud absence line,
+      // never the log's tail.
+      const silent: TestLane[] = [{ name: "quiet", command: "echo 'reference/secret.c' ; exit 1", cost: "cheap", surfaces: ["src/"], exclusive: false, evidence: "tmp/absent.md" }]
+      const quiet = await runTestLanes(dir, "T-001", silent, { logDir })
+      expect(quiet.runs[0]!.evidence?.[0]).toContain("declared evidence channel tmp/absent.md wrote nothing")
+      const quietReceipt = await Bun.file(join(dir, laneReceiptDoc("T-001", "quiet"))).text()
+      expect(quietReceipt).not.toContain("reference/secret.c")
+    } finally {
+      clean([dir, logDir])
+    }
+  })
+
   test("a timed-out lane's command dies with the group: no survivor, no late write into the tree (plans/0175 D1, 0165-020)", async () => {
     const dir = await freshRepo()
     const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))

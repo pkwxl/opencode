@@ -279,6 +279,17 @@ describe("bundle sources", () => {
     const audit = bundle.types.find((entry) => entry.type === "audit")!
     expect(audit.phaseArtifacts.map((spec) => spec.path)).toEqual(["audit.md", "verdict.md"])
     expect(audit.taskArtifacts.map((spec) => spec.path)).toEqual(["findings.md"])
+    // plans/0177 D1 (0165-051): the charter's audit-plan text joins the
+    // declared owners — the per-dimension findings document, the closing
+    // consolidation — never the shared audit.md wording that contradicted
+    // the phase's declaration. And D2 (0165-052): the source-free receipt
+    // rule's mechanism is taught (the Evidence channel) and declared by the
+    // divergence example row.
+    const charter = files!["intents/cleanroom.md"]!
+    expect(charter).toContain("its own findings document (`docs/T-NNN/findings.md`")
+    expect(charter).not.toContain("with its findings written to audit.md")
+    expect(charter).toContain("`Evidence:` channel")
+    expect(charter).toContain("# Evidence: tmp/divergence-evidence.md")
     const specRead = bundle.types.find((entry) => entry.type === "spec-read")!
     expect(specRead.phaseArtifacts.map((spec) => spec.path)).toEqual(["spec-notes.md"])
     expect(specRead.taskArtifacts.map((spec) => spec.path)).toEqual(["notes.md"])
