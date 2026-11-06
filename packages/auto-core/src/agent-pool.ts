@@ -299,7 +299,16 @@ function poolOf(
       await (await hostOf(agent ?? fallbackProfile)).syncContext()
     },
     async restart(reason, agent) {
-      return await (await hostOf(agent ?? fallbackProfile)).restart(reason)
+      const name = agent ?? fallbackProfile
+      // An absent host has no spawned server to re-key (plans/0178 D5,
+      // 0165-057's S17-10 half): starting one just to kill it is the double
+      // spawn — the next spawn reads the router's current key position
+      // itself, so the caller's "applies at its next spawn" path is exactly
+      // right. A start in flight still gets the restart (its spawn may have
+      // read the pre-rekey config — the wait-then-restart heals a stale
+      // start).
+      if (!hosts.has(name) && !starting.has(name)) return false
+      return await (await hostOf(name)).restart(reason)
     },
     // One ring state, one config content: the next spawn config reaches
     // every started host at once (a host that has not started picks the

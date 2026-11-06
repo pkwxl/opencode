@@ -89,11 +89,24 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
 // session tries the keys in order", so a recovered earlier key is
 // re-preferred without waiting for the current key to fail. Nothing
 // recovered answers undefined and costs one small map read; the caller
-// runs this before the agent client resolves, so a host that has not
-// started yet spawns directly on the walked key. The restart logs its own
-// ↻ line; under an external server the rings are inactive and the walk
-// never fires.
-async function walkProviderKey(
+// runs this before the agent client resolves, and the pool's restart is a
+// no-op over a host that has not started (the next spawn reads the walked
+// position directly, plans/0178 D5). The restart logs its own ↻ line;
+// under an external server the rings are inactive and the walk never
+// fires.
+//
+// The shared-host gates (plans/0178 D2/D3/D4, 0165-057 — S32-04's union):
+// the walk is a non-failure act, so it may only re-key at a safe boundary —
+// a doc-lane session never does (the shared managed server's restart would
+// kill the sibling lanes' in-flight sessions; the recovered key waits for a
+// serial moment or the rotation path), and a consumed fork never does (the
+// fork rides the key path its seeding act chose — walking immediately
+// after a rotation undoes it under a short stated reset, the measured
+// restart-per-failure oscillation). The /failback rewind's owed re-key
+// rides the same moment: the positions were rewound at the boundary, and
+// the flag the rewind set is consumed only here, where the restart
+// actually runs. Exported for the walk's unit tests.
+export async function walkProviderKey(
   opts: Opts,
   router: Router,
   provider: string | undefined,
@@ -101,14 +114,22 @@ async function walkProviderKey(
   agent: string | undefined,
 ): Promise<void> {
   if (provider === undefined) return
+  // The doc-lane gate (plans/0178 D3, S17-02): under the concurrent
+  // pipeline the shared host stays — no commit, no restart, the position
+  // keeps the serving key.
+  if (opts.docLane) return
   const walk = router.ringWalk(provider, now)
-  if (walk === undefined) return
+  const owed = router.rekeyOwed()
+  if (walk === undefined && !owed) return
   const host = opts.server
   if (host === undefined || host.setConfig === undefined) return
-  router.commitWalk(walk)
+  if (walk !== undefined) router.commitWalk(walk)
+  if (owed) router.consumeRekeyOwed()
   host.setConfig(router.spawnKeyConfig())
   await host.restart(
-    `an earlier key's hold passed; rotating the provider ${walk.provider} key ring to key ${ringKeyLabel(walk.to)} for the new session`,
+    walk !== undefined
+      ? `an earlier key's hold passed; rotating the provider ${walk.provider} key ring to key ${ringKeyLabel(walk.to)} for the new session`
+      : "/failback applied: re-keying the managed server onto the rewound key rings",
     agent,
   )
 }
@@ -237,8 +258,11 @@ export async function attempt(
   // The new-session key-ring walk (plans/0163 D2), before the agent client
   // resolves: a forked session's next provider call rides the spawn
   // config's current key exactly a created one's does.
-  if (!resumed)
-    await walkProviderKey(opts, router, pick?.entry?.provider, clockNow(), pickAgent ?? (forked !== undefined ? chain.agent : undefined))
+  // A consumed fork skips the walk (plans/0178 D2, S17-03): the fork rides
+  // the key path its seeding act chose — a rotation's fork would have the
+  // walk undo the rotation under a short stated reset.
+  if (!resumed && forked === undefined)
+    await walkProviderKey(opts, router, pick?.entry?.provider, clockNow(), pickAgent)
   // The client this dispatch runs on (§8.1): the pick's agent, the chain's
   // for a consumed fork or a takeover (the same agent the pick kept).
   const dispatchClient: AgentClient = await clientOf(client, pickAgent ?? (resumed || forked !== undefined ? chain.agent : undefined))

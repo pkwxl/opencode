@@ -615,3 +615,22 @@ describe("singleHost (the managed/no-registry wrapper)", () => {
     expect(host.closed()).toBe(1)
   })
 })
+
+// plans/0178 D5 (0165-057's S17-10 half): an absent host has no spawned
+// server to re-key — restart must not start one just to kill it (the double
+// spawn); the caller's "applies at its next spawn" path is exactly right.
+describe("restart over an un-started host (plans/0178 D5)", () => {
+  test("restart without a started host answers false and spawns nothing", async () => {
+    const { hosts, pool } = await fleet(undefined)
+    try {
+      expect(await pool.restart("rekey the rings")).toBe(false)
+      expect(hosts.a.starts() + hosts.b.starts()).toBe(0)
+      // A started host still restarts as before.
+      await pool.client("a")
+      expect(await pool.restart("rekey again", "a")).toBe(true)
+      expect(hosts.a.starts()).toBe(1)
+    } finally {
+      pool.close()
+    }
+  })
+})

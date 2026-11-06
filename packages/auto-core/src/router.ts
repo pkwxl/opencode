@@ -150,6 +150,14 @@ export type Router = {
   // restarts the managed server onto the landed key.
   ringWalk(provider: string, now: number): RingWalk | undefined
   commitWalk(walk: RingWalk): void
+  // The owed re-key of a /failback rewind (plans/0178 D4, 0165-057/S16-01):
+  // consumeFailback rewinds every ring's position but cannot restart the
+  // running managed server itself (the router owns positions, not hosts) —
+  // the owed flag is the pending act the next new session's pre-first-call
+  // moment applies (a serial, safe boundary; the walk's own path). Consumed
+  // only by the path that restarts.
+  rekeyOwed(): boolean
+  consumeRekeyOwed(): void
   // The managed server's spawn config content: the active rings' current
   // keys as apiKey references, plus the streaming-timeout floor for every
   // registry provider (plans/0127); undefined sends no config at all.
@@ -355,6 +363,10 @@ export function createRouter(): Router {
   // Single-run state (each run builds its own holder; tests get a fresh
   // instance from the preload, so no reset hook exists):
   let pending: { order?: string[] } | undefined
+  // The /failback rewind's owed re-key (plans/0178 D4): set when
+  // consumeFailback rewound active rings, consumed by the walk moment that
+  // re-keys the managed server.
+  let failbackRekeyOwed = false
   let override: FailbackOverride | undefined
 
   // Model down marks: by the model's internal name (a raw override value by
@@ -519,16 +531,20 @@ export function createRouter(): Router {
     }
     return { provider, from: { ref: keys[from]!, index: from, total: keys.length } }
   }
-  // The new-session walk (plans/0163 D2): the same order-first search with
-  // the current key included, landing on the first key that carries a mark
-  // whose instant has passed — nothing failed, so nothing is rotated away
-  // from; the walk re-preferences a recovered earlier key (the maintainer's
-  // "every new session tries the keys in order"). A key with no mark never
-  // triggers one: the ring landed on it or started at it, and the probe's
-  // clear (§6.3) leaves exactly that shape — the probe's session must test
-  // the current key, not walk. undefined = no recovered earlier key (the
-  // common case — no restart), the recovered key already current, no ring,
-  // or inactive rings (a held-everything ring answers undefined too: the
+  // The new-session walk (plans/0163 D2, its bound restored by plans/0178
+  // D1, 0165-057/S17-01): the order-first search over the keys BEFORE the
+  // current position, landing on the first that carries a mark whose
+  // instant has passed — nothing failed, so nothing is rotated away from;
+  // the walk only ever re-preferences a recovered earlier key (the
+  // maintainer's "every new session tries the keys in order"), never walks
+  // forward off a healthy current key onto a later key whose hold passed
+  // (the exhausted-ring shape the unbounded scan produced: a restart-and-
+  // fail cycle per hold for the length of the later key's window). A key
+  // with no mark never triggers one: the ring landed on it or started at
+  // it, and the probe's clear (§6.3) leaves exactly that shape — the
+  // probe's session must test the current key, not walk. undefined = no
+  // recovered earlier key (the common case — no restart), no ring, or
+  // inactive rings (a held-everything ring answers undefined too: the
   // session proceeds on the current key and the escalation ladder owns
   // that case). Mutates nothing. The object exposes it verbatim; the
   // session start (src/attempt.ts) decides, then commits and restarts.
@@ -537,10 +553,9 @@ export function createRouter(): Router {
     if (!ringsActive() || keys === undefined) return undefined
     const from = (positions.get(provider) ?? 0) % keys.length
     const marks = downKeys.get(provider)
-    for (let index = 0; index < keys.length; index++) {
+    for (let index = 0; index < from; index++) {
       const mark = marks?.get(keys[index]!.ref)
       if (mark?.until === undefined || mark.until > now) continue
-      if (index === from) return undefined
       return {
         provider,
         from: { ref: keys[from]!, index: from, total: keys.length },
@@ -623,7 +638,9 @@ export function createRouter(): Router {
       positions = new Map()
       const order = pending.order
       pending = undefined
-      const rewind = ringsActive() && rings !== undefined && rings.size > 0 ? "; key rings rewound to their first key" : ""
+      const rewound = ringsActive() && rings !== undefined && rings.size > 0
+      if (rewound) failbackRekeyOwed = true
+      const rewind = rewound ? "; key rings rewound to their first key" : ""
       if (order !== undefined) {
         override = { wildcard: order[0]!, fallback: order.slice(1) }
         log(`⇄ /failback applied: primary model redefined as ${override.wildcard}, fallback order ${override.fallback.join(", ") || "(none)"}; fallback state reset${rewind}`)
@@ -712,6 +729,10 @@ export function createRouter(): Router {
     // managed server before the session's first call.
     commitWalk: (walk) => {
       positions.set(walk.provider, walk.to.index)
+    },
+    rekeyOwed: () => failbackRekeyOwed,
+    consumeRekeyOwed: () => {
+      failbackRekeyOwed = false
     },
     // Applies a decided search (§7 step 1): the from key's failure is
     // written — the caller's `until`, a stated reset held to its instant,

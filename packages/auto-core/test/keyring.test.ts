@@ -9,6 +9,8 @@
 // labels the logs show. The ring run state lives in the router service;
 // every test reads the fresh instance the preload installed.
 import { describe, expect, test } from "bun:test"
+import { walkProviderKey } from "../src/attempt"
+import type { Opts } from "../src/opts"
 import { buildRings, ringKeyLabel, UNSTATED_KEY_HOLD_MS, type RingRotation } from "../src/keyring"
 import type { ModelEntry, ModelReference, ModelRegistry } from "../src/models-schema"
 import { createServices, installServices, services } from "../src/services"
@@ -281,6 +283,93 @@ describe("the new-session walk (plans/0163 D2)", () => {
     router().activateRings(registry(), true)
     expect(router().ringWalk("zhipuai", NOW)).toBeUndefined()
     expect(freshRouter().ringWalk("zhipuai", NOW)).toBeUndefined()
+  })
+
+  test("the walk never walks FORWARD: a passed hold on a later key with the current key unmarked answers nothing (plans/0178 D1, 0165-057/S17-01)", () => {
+    router().activateRings(registry(), false)
+    // The exhausted-ring shape the unbounded scan mishandled: A failed and
+    // rotated to B; the recovery probe cleared every mark (position kept);
+    // B failed again and the rotation landed on the unmarked A. B carries
+    // the newer mark, and once its hold passes a new session must STAY on
+    // the working A — the old scan walked forward onto B and bought a
+    // failure-and-two-restarts cycle per hold.
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    router().clearRingMarks("zhipuai")
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
+    expect(router().ringWalk("zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1)).toBeUndefined()
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
+  })
+
+  test("/failback's rewind owes a re-key: the consume sets the flag over active rings and the walk moment consumes it (plans/0178 D4, 0165-057/S16-01)", () => {
+    router().activateRings(registry(), false)
+    router().requestFailback()
+    expect(router().consumeFailback()).toBe(true)
+    expect(router().rekeyOwed()).toBe(true)
+    router().consumeRekeyOwed()
+    expect(router().rekeyOwed()).toBe(false)
+    // Without rings the rewind never applies — nothing owed.
+    const bare = freshRouter()
+    bare.requestFailback()
+    bare.consumeFailback()
+    expect(bare.rekeyOwed()).toBe(false)
+  })
+})
+
+describe("the walk's act (plans/0178 D2/D3/D4 — the shared-host gates)", () => {
+  const hostDouble = () => {
+    const state = { configs: [] as (Record<string, unknown> | undefined)[], restarts: [] as string[] }
+    const server = {
+      setConfig: (config: Record<string, unknown> | undefined) => void state.configs.push(config),
+      restart: async (reason: string) => {
+        state.restarts.push(reason)
+        return true
+      },
+    }
+    return { server, state }
+  }
+  const optsOf = (server: unknown, docLane = false) => ({ server, docLane }) as unknown as Opts
+
+  test("a recovered earlier key restarts the managed host onto the landed key", async () => {
+    const { server, state } = hostDouble()
+    router().activateRings(registry(), false)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    await walkProviderKey(optsOf(server), router(), "zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1, undefined)
+    expect(state.restarts.length).toBe(1)
+    expect(state.restarts[0]).toContain("an earlier key's hold passed")
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
+    expect(state.configs.length).toBe(1)
+  })
+
+  test("a doc-lane session never re-keys the shared host: the walk defers, the position keeps the serving key (plans/0178 D3, S17-02)", async () => {
+    const { server, state } = hostDouble()
+    router().activateRings(registry(), false)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    await walkProviderKey(optsOf(server, true), router(), "zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1, undefined)
+    expect(state.restarts).toEqual([])
+    expect(state.configs).toEqual([])
+    expect(router().currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
+  })
+
+  test("the failback rewind's owed re-key rides the walk moment: the restart names it and the debt is consumed", async () => {
+    const { server, state } = hostDouble()
+    router().activateRings(registry(), false)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    router().requestFailback()
+    router().consumeFailback()
+    expect(router().rekeyOwed()).toBe(true)
+    await walkProviderKey(optsOf(server), router(), "zhipuai", NOW, undefined)
+    expect(state.restarts).toEqual(["/failback applied: re-keying the managed server onto the rewound key rings"])
+    expect(router().rekeyOwed()).toBe(false)
+  })
+
+  test("a host without setConfig (an external server shape) answers nothing", async () => {
+    const state = { restarts: [] as string[] }
+    const server = { restart: async (reason: string) => void state.restarts.push(reason) }
+    router().activateRings(registry(), false)
+    router().commitRotation(router().ringRotation("zhipuai", NOW)!, NOW + UNSTATED_KEY_HOLD_MS)
+    await walkProviderKey(optsOf(server), router(), "zhipuai", NOW + UNSTATED_KEY_HOLD_MS + 1, undefined)
+    expect(state.restarts).toEqual([])
   })
 })
 
