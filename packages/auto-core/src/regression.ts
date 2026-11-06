@@ -42,7 +42,7 @@ import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
 import { shellProfile } from "./shell"
 import { promptFacts } from "./prompt-facts"
-import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, commitLaneReceipts, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
+import { DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, LANE_EVIDENCE_LINES, commitLaneReceipts, laneLogDir, newestGreenReceipt as scanGreenReceipts, receiptCovered, readLaneVerdict, readLogTail, watchProcess, writeLaneReceipt, type GreenReceipt, type LaneRun } from "./script"
 import { autoSwitches } from "./switches"
 
 // What the boundary and the hold need from the run's opts — the lane gate's
@@ -203,9 +203,12 @@ export async function runRegressionLane(
     cwd: copy ?? dir,
     stdout: "ignore",
     stderr: "ignore",
+    // Its own process group (plans/0175 D1): the watchdog's group-directed
+    // kill reaches the subshell'd command, not only the wrapper bash.
+    detached: true,
   })
   const { timedOut, timeoutReason } = await watchProcess({ proc, logPath, start: started.getTime(), maxMs, idleMs, pollMs })
-  const text = await Bun.file(logPath).text().catch(() => "")
+  const text = await readLogTail(logPath)
   const { code, verdict } = readLaneVerdict(text, timedOut)
   const violation = opts.isolate ? undefined : await scriptGuardCheck(dir, guard)
   const end = new Date()

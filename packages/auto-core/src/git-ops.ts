@@ -376,25 +376,16 @@ export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOp
   return {
     records: base.records,
     commitTree: commitDocTree,
-    // D5's relaxed gate. Byte-identical to the base gate over an empty
-    // registry: no tolerated scope survives the filter, so `rest` is the
-    // full dirty set, the driver-state-only shape heals through the same
-    // carryover subject, and anything else returns the same dirty files.
-    beginUnit: async (dir, opts, task): Promise<UnitGate> => {
-      if (opts.dryrun) return { type: "ok", baseline: undefined }
-      const dirty = await base.changedFiles(dir)
-      if (!dirty.length) return { type: "ok", baseline: await base.unitBaseline(dir) }
-      const rest = dirty.filter((rel) => !withinScopes(rel, siblingScopes(task.id)))
-      if (!rest.length) return { type: "ok", baseline: await base.unitBaseline(dir) }
-      if (rest.every(driverStateFile)) {
-        const healed = await commitDocTree(dir, task, { stage: "carryover", subject: `${task.id} carryover driver-state posting` })
-        if (healed.ok) {
-          log(`  ✓ driver state files not posted (${rest.join(", ")}), self-healed with a catch-up commit`)
-          return { type: "ok", baseline: await base.unitBaseline(dir) }
-        }
-      }
-      return { type: "dirty", files: rest }
-    },
+    // D5's relaxed gate, now the free gate itself carrying the relaxation
+    // parameter (plans/0175 D4, 0165-139): the strict per-root read (0155
+    // D1), the workdir filter (0141 D1), the refusal block (0174 D1) and
+    // the carryover heal have exactly one home, and the decorator
+    // contributes exactly its three deltas — the sibling scopes it
+    // tolerates, the wrapped base its reads go through, and the queued
+    // commit core that heals. Byte-identical to the base gate over an empty
+    // registry (pinned by the ratchet test), and the amendments the hand
+    // copy had missed now hold under doc lanes too.
+    beginUnit: (dir, opts, task) => beginUnit(dir, opts, task, { tolerate: siblingScopes(task.id), reads: base, commit: commitDocTree }),
     // The named-files rule unchanged (D4: the files are outside every live
     // scope by D6's guard, or the guard has already blocked); the backfill
     // commit itself routes through the queued, scoped core.

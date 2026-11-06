@@ -356,11 +356,14 @@ export async function stashTree(
 // (session work-in-progress included) touching nothing on disk and storing
 // no ref, so the stash list and the worktree are exactly as they were — plus
 // the HEAD sha, recursively over nested repositories as the unified commit
-// walks them. The post-run read restores tracked mutations from the snapshot
-// (`git checkout <stash-sha> -- <paths>`, pre-run content, session WIP
-// included) and hard-blocks on a moved HEAD. Named residuals (D11): a
-// mutation that lands byte-identical to the snapshot is undetectable and
-// harmless; untracked files are not git-managed content and stay.
+// walks them. The post-run read diffs the snapshot against the worktree
+// directly (`git diff <stash-sha>`, both directions — a mutation AND a
+// revert of the session's WIP to HEAD, plans/0175 D2), restores tracked
+// deltas from the snapshot (`git checkout <stash-sha> -- <paths>`, pre-run
+// content, session WIP included) and hard-blocks on a moved HEAD. Named
+// residuals (D11): a mutation that lands byte-identical to the snapshot is
+// undetectable and harmless; untracked files are not git-managed content and
+// stay.
 
 // One repository's pre-run snapshot. stash is the `git stash create` commit
 // sha, or the empty string when the worktree was clean (the snapshot then is
@@ -377,14 +380,17 @@ export async function scriptGuardSnapshot(dir: string): Promise<ScriptGuardShot[
   return shots
 }
 
-// The violation the post-run read found: tracked = the script modified or
-// deleted tracked files (already restored from the snapshot — restored lists
-// the paths, target-directory-relative; unrestorable lists paths the restore
-// could not put back, with git's error); head = the script moved a
-// repository's HEAD (a commit/rebase/reset ran) — no auto-undo, the caller
-// hard-blocks for the human, the corrupted-baseline family.
+// The violation the post-run read found: tracked = the script moved tracked
+// content away from the pre-run snapshot — a mutation OR a revert (already
+// restored from the snapshot — restored lists the paths, target-directory-
+// relative; unrestorable lists paths the restore could not put back, with
+// git's error; snapshots carries each repository's pre-run stash sha, the
+// recovery handle — `git stash create` leaves no ref, plans/0175 D2); head =
+// the script moved a repository's HEAD (a commit/rebase/reset ran) — no
+// auto-undo, the caller hard-blocks for the human, the corrupted-baseline
+// family.
 export type ScriptGuardViolation =
-  | { kind: "tracked"; restored: string[]; unrestorable: { path: string; error: string }[] }
+  | { kind: "tracked"; restored: string[]; unrestorable: { path: string; error: string }[]; snapshots: { root: string; sha: string }[] }
   | { kind: "head"; moved: { root: string; from: string; to: string }[] }
 
 // The post-run read over every snapshotted repository. Returns undefined
@@ -394,33 +400,25 @@ export async function scriptGuardCheck(dir: string, shots: readonly ScriptGuardS
   const moved: { root: string; from: string; to: string }[] = []
   const changed: { root: string; source: string; paths: string[] }[] = []
   // A read the verdict rides on that itself failed (plans/0174 D3,
-  // 0165-035/204): "untouched" over a failed status/toplevel/diff read is
-  // the quiet-clean direction P12 forbids — the failure rides the violation
+  // 0165-204): "untouched" over a failed toplevel/diff read is the
+  // quiet-clean direction P12 forbids — the failure rides the violation
   // channel the callers already print.
   const unreadable: { root: string; error: string }[] = []
   for (const shot of shots) {
     const rel = relative(dir, shot.root) || "."
     const head = (await git(shot.root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim() ?? ""
     if (head !== shot.head) moved.push({ root: rel, from: shot.head, to: head })
-    // The tracked-changed paths of this repository (porcelain paths are
-    // toplevel-relative under -C; untracked entries are not git-managed
-    // content and stay, D11's residual).
-    const status = await git(shot.root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."]).catch(() => undefined)
-    if (!status || status.code !== 0) {
-      unreadable.push({ root: rel, error: !status ? "git unavailable" : firstLine(status.err || status.out) || `git status exit code ${status.code}` })
-      continue
-    }
-    const tracked = status.out
-      .split("\0")
-      .filter((entry) => entry && !entry.startsWith("?? "))
-      .map((entry) => entry.slice(3))
-    if (!tracked.length) continue
-    // The repository's toplevel: the porcelain paths above are toplevel-
-    // relative, so the diff and the restore's checkout below must read their
-    // pathspecs against the same origin — shot.root may be a subdirectory of
-    // the toplevel (the target inside a larger repository), where
-    // cwd-relative pathspecs match nothing and the guard reads clean over
-    // real mutations (plans/0174 D3, 0165-035).
+    // The empty-repository floor (plans/0175 D2): a repository with no
+    // commits at the snapshot and none now (both HEAD reads empty) has no
+    // snapshot source to diff against and nothing tracked to differ — the
+    // unborn shape the baselines and audits keep. A repository whose HEAD
+    // was readable at the snapshot and no longer is still reaches the diff
+    // and fails into unreadable (P12).
+    if (!shot.stash && !head && !shot.head) continue
+    // The repository's toplevel: the diff below reports toplevel-relative
+    // paths, and the restore's checkout must read the same origin — shot.root
+    // may be a subdirectory of the toplevel (the target inside a larger
+    // repository, plans/0174 D3).
     const top = await git(shot.root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
     const toplevel = top?.code === 0 ? top.out.trim() : ""
     if (!toplevel) {
@@ -428,12 +426,20 @@ export async function scriptGuardCheck(dir: string, shots: readonly ScriptGuardS
       continue
     }
     // The snapshot to compare against and restore from: the stash commit, or
-    // HEAD when the worktree was clean before the run.
+    // HEAD when the worktree was clean before the run. The comparison is the
+    // snapshot's tree against the WORKTREE, directly and over the whole
+    // repository (plans/0175 D2, 0165-021): the pre-run `git stash create`
+    // covered the whole repository (it takes no pathspec), the whole-repo
+    // diff is the faithful comparison, and it catches BOTH directions — a
+    // mutation the script wrote AND a revert it performed (`git checkout -- .`
+    // , `git stash`: the path reads clean under status, so the old
+    // status-then-diff enumeration never compared it and the session's WIP
+    // was lost with the guard reading clean). A session-WIP path the script
+    // never touched compares equal against the snapshot and drops out (the
+    // byte-identical residual); untracked files are in neither tree and stay
+    // (D11's residual).
     const source = shot.stash || "HEAD"
-    // Only paths the script actually changed (a session-WIP path the script
-    // never touched compares equal against the snapshot and drops out — the
-    // byte-identical residual). One diff per repository over the tracked set.
-    const diff = await git(toplevel, ["diff", "--name-only", "-z", "--ignore-submodules=all", source, "--", ...tracked]).catch(() => undefined)
+    const diff = await git(toplevel, ["diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=all", source]).catch(() => undefined)
     if (!diff || diff.code !== 0) {
       unreadable.push({ root: rel, error: !diff ? "git unavailable" : firstLine(diff.err || diff.out) || `git diff exit code ${diff.code}` })
       continue
@@ -456,7 +462,10 @@ export async function scriptGuardCheck(dir: string, shots: readonly ScriptGuardS
     }
   }
   if (!restored.length && !unrestorable.length) return undefined
-  return { kind: "tracked", restored, unrestorable }
+  // The recovery handle (plans/0175 D2): the pre-run stash shas — an empty
+  // stash (a clean pre-run tree) left no object to name.
+  const snapshots = shots.filter((shot) => shot.stash).map((shot) => ({ root: relative(dir, shot.root) || ".", sha: shot.stash }))
+  return { kind: "tracked", restored, unrestorable, snapshots }
 }
 
 // —— Unit commit boundary (plans/0021-commit-boundary-design.md) ——
@@ -1046,12 +1055,28 @@ export async function rollbackUnit(
 // self-heal, hand it to a human.
 export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { type: "dirty"; files: string[] }
 
+// The doc-lane seam decorator's relaxation of the unit start gate (plans/
+// 0099 D5, made a parameter of the free gate by plans/0175 D4, 0165-139 —
+// the decorator's hand copy had already missed two amendments to the base
+// gate): tolerate names scopes whose dirt is sibling lanes' in-flight
+// writes, filtered out of the dirty set before the judgments; reads names
+// the seam members the gate reads through (the wrapped base, so the
+// decorator keeps the seam's switchability over the double and recording
+// fakes); commit replaces the free gate's own carryover heal with the
+// caller's (the decorator's serialized, scoped commit queue). Absent = the
+// free gate, byte-identical.
+export type BeginUnitRelaxation = {
+  tolerate: readonly string[]
+  reads: Pick<GitOps, "changedFiles" | "unitBaseline">
+  commit: (dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }) => Promise<CommitResult>
+}
+
 // Unit start gate: a clean worktree → record the baseline and pass; a dirty
 // area entirely of driver-exclusive state files → self-heal with a carryover
 // backfill commit then pass; any other dirty area → dirty (the caller blocks
 // and halts, writing no state files and making no sweeping commit — the
 // authority over git state stays with the human).
-export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }): Promise<UnitGate> {
+export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: { id: string; title: string }, relaxed?: BeginUnitRelaxation): Promise<UnitGate> {
   if (opts.dryrun) return { type: "ok", baseline: undefined }
   // A work tree git refuses to open blocks the gate (plans/0174 D1,
   // 0165-036): the probe's three states replace the old boolean — under a
@@ -1090,30 +1115,28 @@ export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: {
   // git, and the driver's every rewrite would dirty later units — and still
   // blocks.
   const untracked = await untrackedFiles(dir)
-  const dirty = (await changedFiles(dir)).filter((file) => !(untracked.has(file) && workdirEntry(file)))
+  const dirty = (await (relaxed?.reads.changedFiles ?? changedFiles)(dir))
+    .filter((file) => !(untracked.has(file) && workdirEntry(file)))
+    .filter((file) => !withinScopes(file, relaxed?.tolerate ?? []))
   if (dirty.length) {
     if (dirty.every(driverStateFile)) {
-      // The carryover stages with the workdir roots excluded from its
-      // pathspec: this one commit can run before preflight's ignore-set
-      // repair (the run-start gate is ahead of it), and an unqualified
-      // add -A would absorb the workdir into git — tracked runtime state
-      // the driver then rewrites every run, the 2026-09-17 H5 shape. Once
-      // the set is on disk the exclusion is a no-op (ignored files never
-      // stage).
-      const healed = await commitTree(
-        dir,
-        task,
-        { stage: "carryover", subject: `${task.id} carryover driver-state posting` },
-        [".", ...WORKDIR_ROOTS.map((root) => `:(exclude)${root}`)],
-      )
+      const info = { stage: "carryover", subject: `${task.id} carryover driver-state posting` }
+      // The relaxation's own heal (plans/0175 D4): the decorator's queued,
+      // scoped commit core instead of the free carryover (whose pathspec
+      // excludes the workdir roots — this one commit can run before
+      // preflight's ignore-set repair, and an unqualified add -A would
+      // absorb the workdir into git).
+      const healed = relaxed?.commit
+        ? await relaxed.commit(dir, task, info)
+        : await commitTree(dir, task, info, [".", ...WORKDIR_ROOTS.map((root) => `:(exclude)${root}`)])
       if (healed.ok) {
         log(`  ✓ driver state files not posted (${dirty.join(", ")}), self-healed with a catch-up commit`)
-        return { type: "ok", baseline: await unitBaseline(dir) }
+        return { type: "ok", baseline: await (relaxed?.reads.unitBaseline ?? unitBaseline)(dir) }
       }
     }
     return { type: "dirty", files: dirty }
   }
-  return { type: "ok", baseline: await unitBaseline(dir) }
+  return { type: "ok", baseline: await (relaxed?.reads.unitBaseline ?? unitBaseline)(dir) }
 }
 
 // The ③ backfill commit of a hidden task's idempotent entry: any of the

@@ -23,7 +23,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { tickIndexLine } from "../src/document/unit"
-import { changedFiles, commitTree, unitAddedLines, unitBaseline, unitChangedFiles, unitViolations, type GitOps } from "../src/git"
+import { changedFiles, commitTree, unitAddedLines, unitBaseline, unitChangedFiles, unitViolations, type GitOps, type UnitGate } from "../src/git"
 import { createDocLaneGit, createGitOps, createDocLaneRegistry, noCommitGit } from "../src/git-ops"
 import { docEligible, docScheduler, docScope, scopesDisjoint } from "../src/lanes"
 import { loadPlan, renderTaskIndex, taskStatePaths, UNITS_FILE } from "../src/tasks"
@@ -364,6 +364,61 @@ describe("the git seam's doc-lane decorator (plans/0099 stage B, D4–D6)", () =
     const laneGit = createDocLaneGit(fake.base, registry)
     const failed = await laneGit.afterSession(dir, {}, { id: "T-001", ...one }, { stage: "execute", subject: "s" })
     expect(failed).toEqual({ type: "failed", question: expect.stringContaining("src/foo.ts") })
+  })
+
+  // plans/0175 D4 (0165-139): the relaxation is a parameter of the free gate,
+  // and the decorator contributes exactly its three deltas — the
+  // byte-identical claim is pinned here, not asserted in a comment.
+  test("the ratchet: over an empty registry the decorated gate answers what the free gate answers on the same scenes", async () => {
+    // Twin scenes: identical shapes in two repositories; the answers are
+    // compared modulo the repository-specific shas (the verdict shape and
+    // the baseline's roots are the pinned identity).
+    const scene = async (repo: string) => {
+      await Bun.write(join(repo, "src.ts"), "// baseline\n")
+      await git(repo, "add", "-A")
+      await git(repo, "commit", "-qm", "init")
+    }
+    const shape = (gate: UnitGate, repo: string) =>
+      gate.type === "ok"
+        ? { type: "ok", roots: (gate.baseline ?? []).map((entry) => (entry.root === repo ? "." : entry.root)) }
+        : { type: "dirty", files: gate.files }
+    const free = createGitOps()
+    const decorated = createDocLaneGit(free, createDocLaneRegistry())
+    const taskOne = { id: "T-001", ...one }
+    const a = await freshRepo()
+    const b = await freshRepo()
+    try {
+      await scene(a)
+      await scene(b)
+      // Clean tree: both pass with the same baseline shape.
+      expect(shape(await decorated.beginUnit(b, {}, taskOne), b)).toEqual(shape(await free.beginUnit(a, {}, taskOne), a))
+      // Driver-state dirt: both self-heal through a carryover and pass.
+      for (const repo of [a, b]) await Bun.write(join(repo, "docs/R-01/phases.md"), "- [ ] P01-implement\n")
+      expect(shape(await decorated.beginUnit(b, {}, taskOne), b)).toEqual(shape(await free.beginUnit(a, {}, taskOne), a))
+      // Any other dirt: both block naming the same files.
+      for (const repo of [a, b]) await Bun.write(join(repo, "src/human.txt"), "person\n")
+      expect(shape(await decorated.beginUnit(b, {}, taskOne), b)).toEqual(shape(await free.beginUnit(a, {}, taskOne), a))
+    } finally {
+      await rm(a, { recursive: true, force: true })
+      await rm(b, { recursive: true, force: true })
+    }
+  })
+
+  test("the decorator's gate blocks on an unreadable repository (0155 D1 held under doc lanes, plans/0175 D4)", async () => {
+    const repo = await freshRepo()
+    try {
+      await Bun.write(join(repo, "src.ts"), "// baseline\n")
+      await git(repo, "add", "-A")
+      await git(repo, "commit", "-qm", "init")
+      // A corrupt index: the old hand copy read base.changedFiles' legacy
+      // empty answer and passed; the shared gate's strict read blocks.
+      await Bun.write(join(repo, ".git", "index"), "not an index")
+      const laneGit = createDocLaneGit(createGitOps(), createDocLaneRegistry())
+      const gate = await laneGit.beginUnit(repo, {}, { id: "T-001", ...one })
+      expect(gate.type).toBe("dirty")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
   })
 })
 

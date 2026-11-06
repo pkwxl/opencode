@@ -51,9 +51,6 @@ type ScriptRunResult = {
   // Timeout reason: idle = killed after producing no output for too long;
   // max = killed after exceeding the absolute run-time cap.
   timeoutReason?: "idle" | "max"
-  // Whole content of the merged stdout+stderr output file (see runScript).
-  // Kept for logs and debugging; sessions read the file on disk.
-  out: string
   // The side-effect guard's finding (plans/0083 D11): tracked = the script
   // modified or deleted tracked files and the driver restored them from the
   // pre-run snapshot; head = the script moved a repository's HEAD and no
@@ -61,6 +58,40 @@ type ScriptRunResult = {
   // git-managed content alone. Outside git (no repository roots) the guard
   // idles and this stays undefined.
   violation?: ScriptGuardViolation
+}
+
+// The bounded log tail (plans/0175 D3, 0165-108): the last ≤ limit bytes of a
+// log file, the leading partial line dropped — a verbose or looping test's
+// output is never read whole into memory (past the engine's string limit the
+// whole-file read throws and the unit dies on an exception instead of a red
+// verdict). The verdict line (LANE_RC, the log's last) and the red evidence
+// (the end region) both live in the tail; a log under the bound is
+// byte-identical to today's whole read.
+export const LOG_TAIL_BYTES = 64 * 1024
+
+export async function readLogTail(path: string, limit = LOG_TAIL_BYTES): Promise<string> {
+  const file = Bun.file(path)
+  const size = file.size
+  if (size <= limit) return await file.text().catch(() => "")
+  const text = await file.slice(size - limit).text().catch(() => "")
+  const firstNewline = text.indexOf("\n")
+  return firstNewline === -1 ? text : text.slice(firstNewline + 1)
+}
+
+// A signal delivered to the child's whole process group (plans/0175 D1,
+// 0165-020): every driver-run script wrapper spawns detached (its own group),
+// so the group kill reaches the subshell'd lane command and any backgrounded
+// grandchild the direct signal never touched — a survivor would keep writing
+// into the tree after the guard concluded. The fallback keeps the helper safe
+// over a non-detached proc; a group that already exited (ESRCH) is not an
+// error — the child is gone, which is all the caller asks.
+function killGroup(proc: { pid: number | null; kill: (signal?: "SIGTERM" | "SIGKILL") => void }, signal: "SIGTERM" | "SIGKILL"): void {
+  if (proc.pid === null) return
+  try {
+    process.kill(-proc.pid, signal)
+  } catch {
+    proc.kill(signal)
+  }
 }
 
 // Runs a driver-managed script in the target directory. stdout and stderr are
@@ -72,8 +103,9 @@ type ScriptRunResult = {
 // progress watchdog, not a fixed duration: every pollMs the output size is
 // polled, growth counts as progress and resets the idle clock, and only idleMs
 // without growth kills the script (idle). maxMs > 0 adds an absolute cap (max).
-// Only the direct child is killed; the grandchild tree is not guaranteed to be
-// cleaned up (known limitation).
+// The wrapper spawns as its own process group and the kills are
+// group-directed (plans/0175 D1): the whole child tree dies on a timeout, a
+// backgrounded grandchild included — 0025 H1's recorded limitation retired.
 export async function runScript(
   dir: string,
   script: string,
@@ -97,21 +129,20 @@ export async function runScript(
   // no shell quoting is needed; the inner redirection merges the script's own
   // stdout/stderr into the output file and the outer bash prints nothing. Both
   // branches exec over the outer bash (an executable script runs directly,
-  // anything else via exec bash): a timeout kill only reaches the direct child,
-  // and without exec only the outer bash would die while the script kept
-  // running as an orphan, still writing the output file.
+  // anything else via exec bash): a timeout kill reaches the direct child
+  // cleanly, and the group-directed signals take the rest of the tree.
   const exec = await isExecutable(script)
   const proc = Bun.spawn({
     cmd: ["bash", "-c", `${exec ? 'exec "$0"' : 'exec bash "$0"'} > "$1" 2>&1`, script, outPath],
     cwd: dir,
     stdout: "ignore",
     stderr: "ignore",
+    detached: true,
   })
   const { timedOut, timeoutReason } = await watchProcess({ proc, logPath: outPath, start, maxMs, idleMs, pollMs, killGraceMs })
-  const out = await Bun.file(outPath).text()
   const violation = await scriptGuardCheck(dir, guard)
   if (violation) logGuardViolation("a driver-run script", violation)
-  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, out, ...(violation ? { violation } : {}) }
+  return { code: timedOut || proc.exitCode === null ? 124 : proc.exitCode, ms: Date.now() - start, timedOut, timeoutReason, ...(violation ? { violation } : {}) }
 }
 
 // The single-process idle-progress watchdog runScript and the regression
@@ -123,7 +154,9 @@ export async function runScript(
 // the caller's run-start epoch (max). Resolves once the process exited and
 // the timer cleared, with the timeout fact the caller's result carries. The
 // multi-lane batch form (runLaneBatch) keeps its own single timer over many
-// logs. Only the direct child is killed (the runScript limitation).
+// logs. The kills are group-directed (plans/0175 D1): the callers spawn
+// detached, and the TERM and the SIGKILL escalation reach the whole child
+// tree, not only the direct child.
 export async function watchProcess({
   proc,
   logPath,
@@ -153,10 +186,10 @@ export async function watchProcess({
   const timeoutKill = (reason: "idle" | "max"): void => {
     timedOut = true
     timeoutReason = reason
-    proc.kill()
+    killGroup(proc, "SIGTERM")
     grace = setTimeout(() => {
       log(`⚠ the timed-out child ignored SIGTERM for ${killGraceMs}ms; escalating to SIGKILL`)
-      proc.kill("SIGKILL")
+      killGroup(proc, "SIGKILL")
     }, killGraceMs)
   }
   const timer = setInterval(() => {
@@ -189,7 +222,11 @@ function logGuardViolation(subject: string, violation: ScriptGuardViolation): vo
   if (violation.kind === "head") {
     log(`  ⚠ ${subject} moved HEAD (${violation.moved.map((m) => `${m.root}: ${m.from} → ${m.to}`).join("; ")}); no auto-undo — blocking for the human`)
   } else {
-    log(`  ⚠ ${subject} changed tracked files; restored from the pre-run snapshot: ${violation.restored.join(", ")}${violation.unrestorable.length ? `; unrestorable: ${violation.unrestorable.map((u) => `${u.path} (${u.error})`).join(", ")}` : ""}`)
+    // The pre-run snapshot shas ride the line (plans/0175 D2): a restore
+    // that failed — or a person reconstructing a scene — can reach the
+    // snapshot objects by them (git stash create leaves no ref).
+    const snapshots = violation.snapshots.length ? `; pre-run snapshots: ${violation.snapshots.map((snap) => `${snap.root}=${snap.sha}`).join(", ")}` : ""
+    log(`  ⚠ ${subject} changed tracked files; restored from the pre-run snapshot: ${violation.restored.join(", ")}${violation.unrestorable.length ? `; unrestorable: ${violation.unrestorable.map((u) => `${u.path} (${u.error})`).join(", ")}` : ""}${snapshots}`)
   }
 }
 
@@ -475,13 +512,13 @@ async function runLaneBatch(
       const timeoutKill = (reason: "idle" | "max"): void => {
         run.timedOut = true
         run.timeoutReason = reason
-        proc.kill()
+        killGroup(proc, "SIGTERM")
         // The bounded escalation (plans/0156 D7), the single watchdog's own:
         // cleared at this child's exit, so a lane that honors TERM never
         // reaches it.
         entry.grace = setTimeout(() => {
           log(`  ⚠ ${taskId} lane ${run.lane.name} ignored the timeout SIGTERM for ${opts.killGraceMs}ms; escalating to SIGKILL`)
-          proc.kill("SIGKILL")
+          killGroup(proc, "SIGKILL")
         }, opts.killGraceMs)
       }
       if (opts.maxMs > 0 && now - run.start >= opts.maxMs) {
@@ -502,12 +539,16 @@ async function runLaneBatch(
         // runs in a subshell (its own `exit` must not kill the wrapper before
         // the exit code lands), the inner redirection merges its stdout/stderr
         // into the log and the trailing echo appends the exit code — the lane
-        // protocol's own line, the same one the session-side lanes write.
+        // protocol's own line, the same one the session-side lanes write. The
+        // wrapper spawns as its own process group (plans/0175 D1): the
+        // subshell'd command is the direct child's descendant, and only the
+        // group-directed kill reaches it.
         const proc = Bun.spawn({
           cmd: ["bash", "-c", '( eval "$1" ) > "$2" 2>&1; echo LANE_RC=$? >> "$2"', lane.name, lane.command, logPath],
           cwd: dir,
           stdout: "ignore",
           stderr: "ignore",
+          detached: true,
         })
         const run = { lane, log: logPath, start: Date.now(), outSize: 0, lastProgress: Date.now(), timedOut: false }
         const entry: Live = { run, proc }
@@ -534,7 +575,9 @@ export function readLaneVerdict(text: string, timedOut: boolean): { code: number
 }
 
 async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; start: number; timedOut: boolean; timeoutReason?: "idle" | "max" }): Promise<LaneRun> {
-  const text = await Bun.file(run.log).text().catch(() => "")
+  // The bounded tail (plans/0175 D3): the verdict line is the log's last and
+  // the evidence is its end region — neither needs the whole file.
+  const text = await readLogTail(run.log)
   const { code, verdict } = readLaneVerdict(text, run.timedOut)
   const end = Date.now()
   const ms = end - run.start

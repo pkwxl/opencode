@@ -1413,7 +1413,7 @@ describe("scriptGuardSnapshot / scriptGuardCheck (the side-effect guard, plans/0
       const shots = await scriptGuardSnapshot(dir)
       await writeFile(join(dir, "src.ts"), "// mutated by the script\n")
       const violation = await scriptGuardCheck(dir, shots)
-      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [], snapshots: [] })
       expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       // `git stash create` on the clean tree stored no ref and touched nothing.
@@ -1430,7 +1430,7 @@ describe("scriptGuardSnapshot / scriptGuardCheck (the side-effect guard, plans/0
       await rm(join(dir, "src.ts"))
       await writeFile(join(dir, "scratch.out"), "script output\n")
       const violation = await scriptGuardCheck(dir, shots)
-      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [], snapshots: [] })
       expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
       expect(await Bun.file(join(dir, "scratch.out")).text()).toBe("script output\n")
     } finally {
@@ -1474,6 +1474,67 @@ describe("scriptGuardSnapshot / scriptGuardCheck (the side-effect guard, plans/0
       // The script rewrites the file with identical bytes.
       await writeFile(join(dir, "src.ts"), "// baseline\n")
       expect(await scriptGuardCheck(dir, shots)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an empty repository (no commits) reads clean — the unborn floor, no false unreadable (plans/0175 D2)", async () => {
+    const dir = await fresh()
+    try {
+      const shots = await scriptGuardSnapshot(dir)
+      expect(shots.length).toBe(1)
+      expect(shots[0]!.head).toBe("")
+      expect(shots[0]!.stash).toBe("")
+      // The 'script' leaves an untracked file: nothing tracked exists to
+      // differ and no HEAD exists to diff against — the guard reads clean,
+      // never an unreadable repository.
+      await Bun.write(join(dir, "scratch.txt"), "the script wrote an untracked file\n")
+      expect(await scriptGuardCheck(dir, shots)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a script that reverts the session's WIP to HEAD is caught and the WIP restored (the snapshot diffed directly, plans/0175 D2, 0165-021)", async () => {
+    const dir = await seeded()
+    try {
+      await writeFile(join(dir, "wip.ts"), "// committed\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "wip base")
+      await writeFile(join(dir, "wip.ts"), "// session wip\n")
+      const shots = await scriptGuardSnapshot(dir)
+      expect(shots[0]!.stash).toBeTruthy()
+      // The script's tree-cleaning preamble: the reverted path reads clean
+      // under status, so the old status-then-diff enumeration never compared
+      // it — the guard read clean and the session's WIP was lost.
+      await git(dir, "checkout", "--", ".")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation).toEqual({ kind: "tracked", restored: ["wip.ts"], unrestorable: [], snapshots: [{ root: ".", sha: shots[0]!.stash }] })
+      expect(await Bun.file(join(dir, "wip.ts")).text()).toBe("// session wip\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a script that stashes the tree away is caught the same way; the snapshots field carries the recovery handle", async () => {
+    const dir = await seeded()
+    try {
+      await writeFile(join(dir, "wip.ts"), "// committed\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "wip base")
+      await writeFile(join(dir, "wip.ts"), "// session wip\n")
+      const shots = await scriptGuardSnapshot(dir)
+      await git(dir, "stash", "push", "-q")
+      const violation = await scriptGuardCheck(dir, shots)
+      expect(violation?.kind).toBe("tracked")
+      if (violation?.kind === "tracked") {
+        expect(violation.restored).toEqual(["wip.ts"])
+        // The pre-run stash sha — `git stash create` left no ref, the line
+        // is the only place it is named.
+        expect(violation.snapshots).toEqual([{ root: ".", sha: shots[0]!.stash }])
+      }
+      expect(await Bun.file(join(dir, "wip.ts")).text()).toBe("// session wip\n")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1717,7 +1778,7 @@ describe("the subdirectory target (plans/0174 — the target inside a larger rep
       // nothing and the guard would read clean over the mutation.
       await writeFile(join(pkg, "src", "a.ts"), "// SCRIPT MUTATION\n")
       const violation = await scriptGuardCheck(pkg, shots)
-      expect(violation).toEqual({ kind: "tracked", restored: ["src/a.ts"], unrestorable: [] })
+      expect(violation).toEqual({ kind: "tracked", restored: ["src/a.ts"], unrestorable: [], snapshots: [] })
       expect(await Bun.file(join(pkg, "src", "a.ts")).text()).toBe("// baseline\n")
     } finally {
       await rm(repo, { recursive: true, force: true })

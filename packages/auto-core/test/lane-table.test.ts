@@ -518,7 +518,7 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       await git(dir, "commit", "-qm", "init")
       const mutate: TestLane[] = [{ name: "mut", command: "echo broken >> src.ts", cost: "cheap", surfaces: ["src/"], exclusive: false }]
       const restored = await runTestLanes(dir, "T-001", mutate, { logDir })
-      expect(restored.violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [] })
+      expect(restored.violation).toEqual({ kind: "tracked", restored: ["src.ts"], unrestorable: [], snapshots: [] })
       expect(await Bun.file(join(dir, "src.ts")).text()).toBe("// baseline\n")
       // A lane that moves HEAD: the corrupted-baseline family, no auto-undo.
       const commit: TestLane[] = [{ name: "sneaky", command: "git commit --allow-empty -qm sneaky", cost: "cheap", surfaces: ["src/"], exclusive: false }]
@@ -568,6 +568,28 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       clean([dir, scratch, logDir])
     }
   })
+  test("a timed-out lane's command dies with the group: no survivor, no late write into the tree (plans/0175 D1, 0165-020)", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // The wrapper's subshell puts the command below the spawned bash: the
+      // direct kill reached only the wrapper and the command kept running —
+      // writing into the tree after the set-level guard concluded. The group
+      // kill takes the subshell and the command.
+      const slow: TestLane[] = [{ name: "slow", command: "sleep 0.6 && echo late > late.txt", cost: "cheap", surfaces: ["src/"], exclusive: false }]
+      const result = await runTestLanes(dir, "T-001", slow, { logDir, idleMs: 150, pollMs: 25, killGraceMs: 300 })
+      expect(result.runs[0]!.verdict).toBe("red")
+      expect(result.runs[0]!.timedOut).toBe(true)
+      await Bun.sleep(800)
+      expect(await Bun.file(join(dir, "late.txt")).text().catch(() => "")).toBe("")
+    } finally {
+      clean([dir, logDir])
+    }
+  })
+
 })
 
 describe("rangeChangedFiles (the recorded-HEADs diff carry reads)", () => {

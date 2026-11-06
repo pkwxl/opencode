@@ -37,7 +37,7 @@ describe("runScript", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("runs the script, the exit code and merged output (single file) land on disk and are returned whole", async () => {
+  test("runs the script: the exit code and the merged output (single file) land on disk", async () => {
     const script = join(dir, "check.sh")
     await Bun.write(script, "#!/usr/bin/env bash\necho stdout-content\necho stderr-content >&2\nexit 7\n")
     await chmod(script, 0o755)
@@ -46,9 +46,9 @@ describe("runScript", () => {
     expect(run.timedOut).toBe(false)
     expect(run.ms).toBeGreaterThanOrEqual(0)
     // stdout/stderr merged into a single file, line order interleaves with
-    // the buffers: assert the two lines are each present
-    expect(run.out).toContain("stdout-content")
-    expect(run.out).toContain("stderr-content")
+    // the buffers: the two lines are each present in the file on disk (the
+    // result's dead whole-file field is gone, plans/0175 D3 — sessions read
+    // the file)
     const written = await Bun.file(outOf()).text()
     expect(written).toContain("stdout-content")
     expect(written).toContain("stderr-content")
@@ -62,7 +62,7 @@ describe("runScript", () => {
     // pwd reports the physical working directory (getcwd resolves symlinks,
     // e.g. macOS $TMPDIR → /private/var/…), so compare against the resolved
     // target directory — the same directory either way.
-    expect(run.out.trim()).toBe(await realpath(dir))
+    expect((await Bun.file(outOf()).text()).trim()).toBe(await realpath(dir))
   })
 
   test("truncates before running, no previous output survives", async () => {
@@ -70,8 +70,7 @@ describe("runScript", () => {
     const script = join(dir, "short.sh")
     await Bun.write(script, "#!/usr/bin/env bash\nexit 0\n")
     await chmod(script, 0o755)
-    const run = await runScript(dir, script, { out: outOf() })
-    expect(run.out).toBe("")
+    await runScript(dir, script, { out: outOf() })
     expect(await Bun.file(outOf()).text()).toBe("")
   })
 
@@ -80,7 +79,7 @@ describe("runScript", () => {
     await Bun.write(script, "echo from-bash\nexit 3\n")
     const run = await runScript(dir, script, { out: outOf() })
     expect(run.code).toBe(3)
-    expect(run.out).toBe("from-bash\n")
+    expect(await Bun.file(outOf()).text()).toBe("from-bash\n")
   })
 
   test("the timeout kill lands on the real script: a script without the executable bit must not keep writing output once killed (2026-09-17 review H1)", async () => {
@@ -94,7 +93,7 @@ describe("runScript", () => {
     await Bun.write(script, "echo first\nsleep 0.25\necho second\n")
     const run = await runScript(dir, script, { out: outOf(), idleMs: 120, pollMs: 15 })
     expect(run.code).toBe(124)
-    expect(run.out).toContain("first")
+    expect(await Bun.file(outOf()).text()).toContain("first")
     // Read the file past the script's sleep 0.25 point: had the script become
     // an orphan still running, second would have been appended
     await Bun.sleep(300)
@@ -108,8 +107,6 @@ describe("runScript", () => {
     const out = join(scriptTmpDir(dir), "test.1.out")
     const run = await runScript(dir, script, { out })
     expect(run.code).toBe(5)
-    expect(run.out).toContain("t-out")
-    expect(run.out).toContain("t-err")
     const written = await Bun.file(out).text()
     expect(written).toContain("t-out")
     expect(written).toContain("t-err")
@@ -140,7 +137,7 @@ describe("runScript", () => {
     const run = await runScript(dir, script, { out: outOf(), idleMs: 120, pollMs: 25 })
     expect(run.timedOut).toBe(false)
     expect(run.code).toBe(0)
-    expect(run.out).toContain("tick-12")
+    expect(await Bun.file(outOf()).text()).toContain("tick-12")
   })
 
   test("the absolute duration cap (max) triggers the kill independently of progress signals", async () => {
@@ -208,5 +205,19 @@ describe("runScript", () => {
     expect(run.code).toBe(124)
     expect(run.ms).toBeLessThan(5_000)
     expect(lines.some((line) => line.includes("escalating to SIGKILL"))).toBe(false)
+  }, 8_000)
+
+  test("a timeout kill reaches the script's backgrounded grandchild: no late write into the tree (plans/0175 D1, 0165-020)", async () => {
+    // The script backgrounds a subshell that writes past the kill point —
+    // the direct-child kill left exactly this orphan writing (0025 H1's
+    // recorded limitation); the group-directed kill takes the whole tree.
+    const script = join(dir, "bg.sh")
+    await Bun.write(script, "( sleep 0.4; echo late > late.txt ) &\necho started\nsleep 5\n")
+    await chmod(script, 0o755)
+    const run = await runScript(dir, script, { out: outOf(), idleMs: 150, pollMs: 25, killGraceMs: 300 })
+    expect(run.code).toBe(124)
+    // Past the grandchild's 0.4s write point: an orphan would have written.
+    await Bun.sleep(600)
+    expect(await Bun.file(join(dir, "late.txt")).text().catch(() => "")).toBe("")
   }, 8_000)
 })
