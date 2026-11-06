@@ -1,14 +1,15 @@
-# 0166 — The three-package remediation: a committed, resumable idle-time program
+# 0166 — The three-package remediation: a committed, resumable program
 
-Status: **active**. Initialized 2026-11-05 (step 001); protocol amended the same day at the maintainer's instruction — a worker completes consecutive committed steps until its time budget runs low, not one; amended again 2026-11-06 at the maintainer's instruction — a worker stops beginning new work only inside the last hour of its budget, and begins a next step even when it plausibly will not finish inside the budget, because the next run resumes unfinished work. See Program status below.
+Status: **active**. Initialized 2026-11-05 (step 001); protocol amended the same day at the maintainer's instruction — a worker completes consecutive committed steps until its time budget runs low, not one; amended again 2026-11-06 at the maintainer's instruction — a worker stops beginning new work only inside the last hour of its budget, and begins a next step even when it plausibly will not finish inside the budget, because the next run resumes unfinished work; amended again 2026-11-06 at the maintainer's instruction — the idle-time scheduling is removed: every invocation performs the work directly, the protocol is identical whether the session is an ordinary interactive run or any unattended task, and no invocation ever launches an idle-time task. See Program status below.
 
 This document carries the executable prompt for completing the fix program proposed by
 [0165](./0165-three-package-review.md). The work runs as a sequence of independent,
-single-worker steps: an orchestrating invocation schedules one idle-time task only when
-subsequent work exists, and that task recovers any unclean predecessor state, then completes
-consecutive proper steps — each individually verified and committed before the next begins —
-until its time budget no longer safely admits another step or the program has no subsequent
-work. The program's durable position lives in this document and under
+single-session steps: each invocation of the executable prompt recovers any unclean
+predecessor state, then completes consecutive proper steps — each individually verified
+and committed before the next begins — until its time budget no longer safely admits
+another step or the program has no subsequent work. The protocol does not know or care
+whether the invocation runs as an idle-time task, and it never launches one. The
+program's durable position lives in this document and under
 [`0166-remediation/`](./0166-remediation/), never in conversation history alone.
 
 ## Derivation and Category scope
@@ -26,26 +27,25 @@ tier, Category scope, code homes and test homes in the same change (0110 D5, 012
 
 ## Executable prompt
 
-Run the following prompt from `packages/auto-core`. The same orchestration text is used for
-every later invocation; the idle-time worker it creates performs the worker protocol rather
-than recursively scheduling another worker.
+Run the following prompt from `packages/auto-core`. The same text is used for every
+invocation; each invocation performs the whole protocol directly and never schedules
+another task.
 
 ```text
 Execute the next scheduled step of the post-0165 remediation program.
 
-This protocol has two distinct roles:
+You are the worker. This protocol has no role split and no scheduling: the
+invocation reading this prompt performs the work directly, and behaves
+identically whether it runs as an ordinary interactive session or any
+unattended task — it neither knows nor needs to know which.
 
-- The ORCHESTRATOR is the invocation reading this prompt directly. It checks
-  for remaining work, serializes idle-time execution, and creates at most one
-  idle-time task.
-- The WORKER is that idle-time task. It continues the current work, performing and committing
-  one proper step at a time for as long as its time budget safely allows, and never creates
-  another idle-time task.
-
-Do not use subagents, Agent, CreateWorkflow, background agents, or other child
-working sessions in either role. Ordinary build, test and git subprocesses are
-allowed. Do not ask the maintainer to select work or approve the next step.
-Do not push, tag, publish or create a release without an explicit instruction.
+Never call OffPeakCreate, OffPeakList, CronCreate or any other scheduling
+facility, and never launch an idle-time task; a later manual invocation of
+this same prompt resumes the program. Do not use subagents, Agent,
+CreateWorkflow, background agents, or other child working sessions. Ordinary
+build, test and git subprocesses are allowed. Do not ask the maintainer to
+select work or approve the next step. Do not push, tag, publish or create a
+release without an explicit instruction.
 
 AUTHORITATIVE INPUT
 
@@ -56,50 +56,35 @@ AUTHORITATIVE INPUT
   reproduction and proposed remedy.
 - AGENTS.md, docs/principles.md, docs/structure.md and plans/INDEX.md.
 
-PART A — ORCHESTRATOR: REMAINING-WORK GATE AND IDLE-TIME SCHEDULING
+PART A — REMAINING-WORK GATE
 
-Perform this part before any scheduling or remediation work.
+Perform this part before any remediation work.
 
 1. Read the program's status table, coverage ledger and current-position
    section. Determine whether subsequent work exists. Subsequent work means a
    `doing`, `todo` or recoverable incomplete step, an unfinished final audit,
    or an uninitialized program on the first invocation.
 2. If no subsequent work exists, terminate immediately with a short statement
-   that the remediation program is complete. Do not call OffPeakList or
-   OffPeakCreate, do not inspect findings, and do not make any edits.
-3. If subsequent work exists, call OffPeakList and check whether an idle task
-   for this program is still running in this project. If one is running, wait
-   for it to finish. Do not create a concurrent task and do not perform the
-   remediation work beside it. After it finishes, check the durable program
-   again; if no subsequent work remains, terminate immediately.
-4. Once no such idle task is still running and subsequent work remains, call
-   OffPeakCreate exactly once with these parameters:
-
-   title: auto-core
-   model: GLM-5.3
-   prompt: Continue the current work. Note that the current session can run for at most 180 minutes and will be forcefully terminated upon timeout.
-
-   `model` must be the bare ID `GLM-5.3`; do not add a provider prefix. Do not
-   omit `model`, because omission selects the default GLM-5.3-Flash instead.
-5. If OffPeakCreate returns a quota-exhausted error, forward that error to the
-   maintainer verbatim and stop. Do not retry automatically, change the model,
-   or perform the work in the orchestrator.
-6. After successful creation, reply with only a brief confirmation. The
-   created idle-time task, not this orchestrator, proceeds with Part B.
+   that the remediation program is complete. Do not inspect findings and do
+   not make any edits.
+3. If subsequent work exists, proceed directly to Part B in this same
+   session. Never schedule the work onto another task.
 
 PART B — WORKER: CONSECUTIVE COMMITTED, RECOVERABLE STEPS
 
-The current worker can run for at most 180 minutes and may be forcefully
-terminated at timeout. It completes whole proper steps one at a time — each
-recovered, executed, verified and committed before the next begins — and keeps
-accepting further steps while more than one hour of its budget remains: a next
-step is begun even when it plausibly will not finish inside the remaining
-budget, because an interrupted step is recoverable by the next worker. It stops
-beginning new work only inside the last hour, or when no subsequent work exists,
-and finishes with the report below. Write recovery state early and often, keep
-that last-hour margin for verifying and committing the in-flight step, and never
-call OffPeakCreate or schedule a successor. A later orchestrator invocation
-schedules the next worker.
+The session may run under a time budget and may be terminated at any point;
+treat every moment as a possible interruption. It completes whole proper
+steps one at a time — each recovered, executed, verified and committed
+before the next begins — and keeps accepting further steps while its budget
+safely allows: when a budget is known (for example a limit stated at
+invocation), a next step is begun while more than one hour of it remains,
+even when that step plausibly will not finish inside the remaining budget,
+because an interrupted step is recoverable by the next invocation; when no
+budget is known, continue step by step until the maintainer stops the
+session or no subsequent work exists. Write recovery state early and often,
+keep a closing margin for verifying and committing the in-flight step, and
+never schedule a successor — a later invocation of this same prompt resumes
+the program.
 
 DURABLE PROGRAM
 
@@ -134,7 +119,7 @@ initialization step. Initialization must create:
    recovery authority.
 
 Split work into steps small enough to finish, verify and commit well inside one
-180-minute worker — a worker completes several steps per session. If a wave is
+session — a session completes several steps per invocation. If a wave is
 too large, give it explicitly scoped steps while preserving requirement-family
 completeness.
 
@@ -144,13 +129,13 @@ WORKER STARTUP AND UNCLEAN-STATE RECOVERY
    detailed 0165 evidence needed for that step; do not re-review the corpus.
    Re-read the program's status table and current position from disk at the
    start of every session and again after any conversation pause — the program
-   may have advanced through another worker in the meantime, and conversation
+   may have advanced through another invocation in the meantime, and conversation
    memory is never the position authority (a resumed session once reopened a
-   step another worker had already completed).
+   step another invocation had already completed).
 2. Inspect `git status`, relevant diffs and recent commits. An unclean tree is
    expected after interruption and is not, by itself, a reason to stop.
 3. Select the first `doing` step in table order. If the tree contains work
-   from a previous worker but no step is marked `doing`, reconstruct the
+   from a previous invocation but no step is marked `doing`, reconstruct the
    owning step from the program, step records, diffs and commit history and
    restore that step to `doing` before continuing.
 4. Resume from the recorded next action, but verify against disk and git what
@@ -196,18 +181,21 @@ EXECUTION RULES
   meaningful edit, test run or discovered blocker. Before any long operation
   or anticipated stop, record the exact next action so forced termination at
   any point is recoverable.
-- If the step cannot be completed before the worker's time limit, leave it
+- If the step cannot be completed before the session ends, leave it
   `doing` with its changes intact and a precise recovery record. Do not make a
   WIP commit and do not schedule a successor.
 - Time budget (the maintainer's instruction of 2026-11-06, replacing the earlier
-  30-minute rule): when more than 1 hour remains before the 3-hour limit, do
-  not stop — proceed to the next step, even if it plausibly cannot be completed
-  in the remaining time, because unfinished work is resumable on the next run
-  (leave it `doing` with its changes intact and a precise recovery record, as
-  above). Stop beginning new work only inside the last hour, and use that
-  margin to verify and commit the in-flight step and write the closing report.
-  Never rush a step's verification to squeeze it inside the budget — an
-  honestly unfinished step is recoverable, a rushed verdict is not.
+  30-minute rule, made budget-agnostic the same day): if the session has a known
+  time limit, stop beginning new work inside its last hour and use that margin
+  to verify and commit the in-flight step and write the closing report; while
+  more than 1 hour remains, do not stop — proceed to the next step, even if it
+  plausibly cannot be completed in the remaining time, because unfinished work
+  is resumable on the next run (leave it `doing` with its changes intact and a
+  precise recovery record, as above). If no time limit is known, continue step
+  by step until the work is done or the maintainer stops the session, still
+  writing recovery state before any long operation. Never rush a step's
+  verification to squeeze it inside a budget — an honestly unfinished step is
+  recoverable, a rushed verdict is not.
 
 VERIFICATION AND COMMIT PROTOCOL
 
@@ -228,15 +216,16 @@ green. When the step is complete:
    concise summary. Include relevant 0165 finding ids in the body where that
    aids traceability.
 4. If the commit fails, record the error and exact recovery action. Leave the
-   verified changes intact for the next worker rather than weakening checks
+   verified changes intact for the next invocation rather than weakening checks
    or discarding work.
 5. After a successful commit, inspect the tree and note the commit SHA and
    any remaining unrelated changes. Do not create a second bookkeeping-only
    commit merely to write that SHA into the program; recover it from git
    history instead.
-6. Check the remaining time budget. If more than 1 hour remains before the
-   time limit and subsequent work exists, accept the next step — even when it
-   plausibly will not finish inside the remaining budget, since the next run
+6. Check the remaining budget. If it safely admits another step (more than
+   1 hour remains before a known time limit, or no limit is known) and
+   subsequent work exists, accept the next step — even when it plausibly will
+   not finish inside a known remaining budget, since the next invocation
    resumes it: update the current-position section, select the first `todo` in
    table order, mark it `doing`, record the date and starting HEAD, create its
    durable step record, and run it under these same rules. Otherwise stop
@@ -264,8 +253,7 @@ proper step. Prepare the release assessment last, respecting the W1/W6 release
 gate and requiring explicit instruction before tagging or publication.
 
 Once the final audit is committed and no subsequent work exists, later
-orchestrator invocations terminate immediately without listing or creating
-idle-time tasks.
+invocations terminate immediately at the Part A gate, without any scheduling.
 ```
 
 
@@ -273,7 +261,7 @@ idle-time tasks.
 
 Initialized 2026-11-05 at HEAD `5d5e427bf` by step 001. Prescribed order (the executable prompt's initialization clause): **W0 → W1 → W6 → W2 → W5 → W4 → W3 → W7 → W8 → W9 → WD → WE → WF → WA → WB/WC**, with every standalone bucket present in the register placed at a dependency-appropriate position: W-release and W-cleanroom-policy directly after W6 (their surfaces are W6's git/script family), W-secrets after W2 (the S17 keyring family), W-session and W-engine after W5 (runtime control first, then the layers it calls), W-fork and W-land after W4 (the isolation family), the manual-driver suite (W-manual-subtasks → W-manual-fix → W-manual-vocabulary → W-manual-ratchet) after W7 (it mirrors the verification loop W7 rules), W-round-docs after W8 (the round-brief grammar amends the surface W8 touches), W-provenance / W-config / W-template-copy after W9, W-server-trust immediately before WF, W-vocab after WA (its tombstone enactment consumes WA's deprecation-lifecycle ruling), W-tests beside WB.
 
-Conventions: one step = one committed unit (a worker completes several steps per session, and a step interrupted at the time limit is left `doing` and resumed by the next worker); the findings column uses bare numbers for `0165-NNN` and verbatim `F…` ids; the union finding `006` (∪15) is enacted jointly by steps 010+011; step 072 coordinates with step 064 (one test repair, two register rows: 058 and 223); steps 079/080 are program-level — the release assessment performs no act of the cut itself (explicit instruction only, after the W1/W6 gate). Step records live under [`0166-remediation/`](./0166-remediation/) and are created by their own step, not pre-created.
+Conventions: one step = one committed unit (a session completes several steps per invocation, and a step interrupted at a time limit or session end is left `doing` and resumed by the next invocation); the findings column uses bare numbers for `0165-NNN` and verbatim `F…` ids; the union finding `006` (∪15) is enacted jointly by steps 010+011; step 072 coordinates with step 064 (one test repair, two register rows: 058 and 223); steps 079/080 are program-level — the release assessment performs no act of the cut itself (explicit instruction only, after the W1/W6 gate). Step records live under [`0166-remediation/`](./0166-remediation/) and are created by their own step, not pre-created.
 
 | # | step | wave | findings | record | status | start HEAD | verification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -611,4 +599,4 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 - **Modified/created files**: ruling 0173 + INDEX row; the program + step record 013; `AGENTS.md` (two navigation lines); `src/{git,wall,land,release,loop-preflight}.ts`; `packages/auto/src/index.ts`; `test/{git,release,wall,loop-preflight,document-roles}.test.ts`.
 - **Commands and results**: `bun typecheck` exit 0 in both packages; full suite **2961 pass 0 fail** (152 files; was 2950 at step 012's close); fail-before proven by stashing src/ — exactly the new regressions fail on the pre-fix code (the 4 release-boundary tests, the 2 hooks tests, the wall prose-mention pin; the git.test.ts describes red at the new-export imports). Pre-existing family-check anomalies unchanged (0126 test/golden.test.ts, 0138 opencode.json).
 - **Unresolved problems**: none blocking. Standing: 0126's imprecision (step 080); 0138's flags (step 030); the security warning (step 020); the resumed-chain count restart (0168 D2); the v0.3.0 tag (the maintainer's act, step 081 surfaces it); 0169 D4's forged-mark residual (the commit-provenance guard); 0170 D4's and 0171 D8's named residuals (the kill-window rename and the subtask-file content edits → step 023's carryover family; the cross-task rename and ticks → the commit-provenance guard's family; the lane-landing receipt rewrite → one fail-safe re-run); S10-02's dedicated e2e regression deferred (the subtask-shape suite's recovery scenes); **0172's named residuals** (the combined interrupted-unit + pending-Choice state → step 023's carryover family; the chmod guardrail teaching nothing by itself → step 056's template-copy family); **0173's named residuals** (the deliberate-imitation door and the squash-imitation tail → the commit-provenance guard's family, 0169 D4; the hooks notice detection-only — a failing hook surfaces as a commit failure line).
-- **Next action**: step **014 (w6-failure-direction)** — Failure-direction stragglers: repoRoots unreadable, receipt nested-diff coverage, subtree confinement, nestedHeads empty sha (findings 035 036 110 138 204). Evidence: the register rows, the S19/S11 step files. Start at session open of the next worker.
+- **Next action**: step **014 (w6-failure-direction)** — Failure-direction stragglers: repoRoots unreadable, receipt nested-diff coverage, subtree confinement, nestedHeads empty sha (findings 035 036 110 138 204). Evidence: the register rows, the S19/S11 step files. Start at session open of the next invocation.
