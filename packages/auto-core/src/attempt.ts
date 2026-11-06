@@ -471,6 +471,16 @@ export async function attempt(
     // way — when statsTask has no current task set, usage/sessions still land
     // in the phase+round buckets.
     await statsSessionBegin(opts.dir, task.id)
+    // Claim the running session BEFORE the prompt POST is sent (plans/0185
+    // D2, 0165-027): the session id is known once create/fork returned, and
+    // opencode's synchronous POST resolves only at turn end (0037 D3) —
+    // claiming after it left a mid-turn kill on the stage's active:false
+    // record, so the re-run's start gate blocked with the manual teaching and
+    // the killed session was never reused. 0015 point 4's concern (a claimed
+    // session that never received the prompt) is met by the failure paths'
+    // restores: the dispatch-failure branch below and the retryable-error
+    // close-out both put the pre-dispatch snapshot (`prior`) back.
+    await remember()
     // Dispatch races the event stream (H7): when the sync POST hangs on a
     // half-open connection and never returns, watch's probe verdict comes
     // back first — if watch returns with an error first, the sentinel null
@@ -497,20 +507,17 @@ export async function attempt(
     // the pre-dispatch snapshot).
     const dispatchEcho = watchFailed
     if (prompt !== null && !prompt.ok && !dispatchEcho) {
-      // Failed at dispatch: the just-claimed nextSession is an empty session
-      // that received nothing, unfit as a recovery anchor — restore the
-      // pre-claim record (the same line as the 0-token error-stub restore
-      // below).
+      // Failed at dispatch: the claim above named an empty session that
+      // received nothing, unfit as a recovery anchor — restore the
+      // pre-dispatch record (the same snapshot the retryable-error close-out
+      // below restores).
       if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-      await remember()
+      if (opts.dir && chain.phase) {
+        if (prior) await saveProgress(opts.dir, prior)
+        else await forgetProgressOf(opts.dir, task.id)
+      }
       return { type: "blocked", question: `task dispatch failed: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
     }
-    // Claim the running session as soon as dispatch succeeds: if the process
-    // is killed / Ctrl+C'd at this moment, progress.json points at this
-    // session and the next run reuses it (the core of precise recovery — a
-    // mid-round session is not lost). After the round ends it is refreshed or
-    // restored per the result (see the retryable-error branch below).
-    if (prompt !== null && !dispatchEcho) await remember()
 
     const result = await watching
     // A session that stepped up in place (§4.5) keeps its step on the chain:

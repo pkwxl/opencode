@@ -15,7 +15,7 @@
 import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
-import { forkSources, retryOnFork, seedFromSources, setRoute, toAgent, toBlankSession } from "./chain-transitions"
+import { forkSources, overflowedToBlank, retryOnFork, seedFromSources, setRoute, toAgent, toBlankSession } from "./chain-transitions"
 import { attempt } from "./attempt"
 import { nextStep, type LadderFacts, type LadderState, type WaitCause } from "./engine/ladder"
 import { RESET_HORIZON_MS } from "./classify"
@@ -919,16 +919,19 @@ export async function runSession(
       // A host that cannot start (§8.1: a profile env reference that broke
       // since the run start) stops the run, exactly as the eager start would
       // have — the retry ladder must not turn a broken profile into hours of
-      // retries. Everything else a session throws (event stream drops,
-      // request timeouts) stays a session fault and enters the recovery
-      // machinery below.
+      // retries.
       if (error instanceof AgentStartError) throw error
-      // A session fault does not exit: exceptions thrown by SDK calls (event
-      // stream subscription dropped, request timed out and aborted, etc.)
-      // enter the retry/wait mechanisms through the same channel as returned
-      // errors — apart from a double Ctrl+C, no session fault ever terminates
-      // the run.
-      result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
+      // A throw out of attempt is a driver fault, not a session fault
+      // (plans/0185 D1, 0165-026): the agent domain's calls never reject
+      // (0037 D2 — the opencode adapter additionally catches its own
+      // rejections at the client seam), so what propagates is driver code —
+      // local I/O under .auto/, the sideband, a concern bug. The old
+      // catch-all wrapped it as a transient session error, and the
+      // wait-and-probe loop's probe (phase-less, so it skips the throwing
+      // path) answered "recovered" — the loop re-dispatched the whole task
+      // into the same throw forever, the person never the terminal. The run
+      // stops loudly instead, naming the unit and the cause.
+      throw new Error(`${task.id} driver fault (not a session fault — the run stops rather than retry a deterministic local failure): ${formatClientError(error)}`, { cause: error })
     }
     const account = accountOf(chain, run.routing)
     // The facts carry only what varies between dispatches (0069 §2.2 D2):
@@ -939,6 +942,12 @@ export async function runSession(
       waits: run.waits,
       server: opts.server !== undefined,
       account,
+      // The overflow's wall shape (plans/0185 D3): the failed session's
+      // usage reached the run's context window. attempt records the failed
+      // session (with its usage) before returning, so the fact is computable
+      // here — an overflow compacted away in place stays under the window
+      // and keeps the ladder.
+      overflowed: chain.failed !== undefined && chain.failed.used >= run.cap,
     }
     const step = nextStep(result, run.ladder, facts)
     switch (step.kind) {
@@ -963,6 +972,22 @@ export async function runSession(
         if (step.cause !== undefined && result.type === "blocked") await learnFailure(opts.dir, account, result, run.clock.now())
         await awaitRecovery(run, step.why, step.cause)
         continue
+      // Context overflow (plans/0185 D3, 0165-028): the one fresh non-forked
+      // retry — the overflowed context is never a fork source (forkSources'
+      // window filter below), so the chain opens a blank session with the
+      // worktree-check note; a second overflow is the person's block.
+      case "overflow-fresh":
+        if (result.type === "blocked") await learnFailure(opts.dir, account, result, run.clock.now())
+        log(`↻ ${task.id} context overflow (the session's context exceeded the window); retrying once in a fresh session — the overflowed context is never forked`)
+        run.ladder.i = 2
+        overflowedToBlank(chain, retryNote("The session's context overflowed the window; this fresh session starts from the worktree's current state."))
+        continue
+      // The person's terminal of the overflow path (a fresh session
+      // overflowed too): the blocked result flows to the task caller's
+      // blocked outcome, the question teaching the split.
+      case "block":
+        if (result.type === "blocked") await learnFailure(opts.dir, account, result, run.clock.now())
+        return { type: "blocked", question: step.question }
       // The three fault steps share one booking: a session fault records
       // its stated windows before the step's own effects (plans/0057 §8) —
       // a reset that outlives the process, booked for the account the

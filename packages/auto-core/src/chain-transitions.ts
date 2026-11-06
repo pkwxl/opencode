@@ -49,6 +49,13 @@ type ForkSource = { id: string; used: number; why: string }
 // nothing to do with the session's content, and the 100k+ of verified output
 // inside it is the round's most valuable asset; a caller that opened a blank
 // session instead would throw it away and hit the same wall from zero again.
+// window (plans/0185 D3, 0165-028, first drafted then withdrawn): filtering
+// sources by usage against the window proved wrong — a transient fault's
+// oversized session is still the round's asset (0069's pinned subtask shape:
+// fork the 168k session the stream broke). The overflow exclusion is the
+// overflow arm's own act instead: overflowedToBlank below drops the failed
+// record with the id, so no later path ever sees the overflowed context as a
+// source.
 export function forkSources(chain: SessionChain): ForkSource[] {
   const sources: ForkSource[] = []
   if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
@@ -183,6 +190,17 @@ function moveOnFork(chain: SessionChain, forked: string, source: ForkSource, not
 // caller arrives with it already consumed by the dispatch that just failed.
 export function toBlankSession(chain: SessionChain, note: string): void {
   chain.id = undefined
+  chain.pct = 100
+  chain.note = note
+}
+
+// The overflow arm's blank session (plans/0185 D3, 0165-028): unlike the
+// fork fallback above, the failed record is dropped too — the overflowed
+// context is never a fork source (the fault IS the content; a later fork of
+// it re-sends the wall), so the chain keeps neither the id nor the record.
+export function overflowedToBlank(chain: SessionChain, note: string): void {
+  chain.id = undefined
+  chain.failed = undefined
   chain.pct = 100
   chain.note = note
 }

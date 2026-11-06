@@ -172,6 +172,39 @@ describe("the ladder decision", () => {
     expect(nextStep(result, ladder(), facts({ server: true }))).toEqual({ kind: "retry", nth: 1, waitMinutes: 0, restartServer: false })
   })
 
+  test("the network faces Bun actually produces restart the managed server — the measured wordings, the restored econn literals and Node's undici face (plans/0185 D4, 0165-029)", () => {
+    for (const face of [
+      // Bun's fetch on a refused connection and a destroyed socket (the
+      // measured probe output).
+      "session error: Unable to connect. Is the computer able to access the url? (http://127.0.0.1:4096/session)",
+      "session error: The socket connection was closed unexpectedly. For more information, pass `verbose: true`.",
+      // The literals the T-057 move had broken an N in (econnrefused /
+      // econnreset), and Node's undici wording the old oracle pinned.
+      "session error: fetch failed: connect ECONNREFUSED 127.0.0.1:4096",
+      "session error: read ECONNRESET peer reset the connection",
+    ]) {
+      expect(nextStep(blocked(face), ladder(), facts({ server: true }))).toMatchObject({ kind: "retry", restartServer: true })
+    }
+  })
+
+  test("context overflow at the wall: one fresh non-forked retry, then the person's block — never the ladder, never a fork, whatever the retryability (plans/0185 D3, 0165-028)", () => {
+    const result = blocked("session error: ContextOverflowError: the context is too long", { errorClass: "overflow" })
+    expect(nextStep(result, ladder(1), facts({ overflowed: true }))).toEqual({ kind: "overflow-fresh" })
+    const again = nextStep(result, ladder(2), facts({ overflowed: true }))
+    expect(again.kind).toBe("block")
+    if (again.kind === "block") expect(again.question).toContain("context overflow")
+    // A non-retryable overflow routes the same way: the class is explicit.
+    const hard = blocked("session error: ContextOverflowError", { errorClass: "overflow", retryable: false })
+    expect(nextStep(hard, ladder(1), facts({ overflowed: true }))).toEqual({ kind: "overflow-fresh" })
+    expect(nextStep(hard, ladder(2), facts({ overflowed: true })).kind).toBe("block")
+  })
+
+  test("an overflow compacted away in place (usage back under the window) keeps the ladder — the 0055 §4.5 late-step-up shape (plans/0185 D3)", () => {
+    const result = blocked("session error: ContextOverflowError: context length exceeded, compacting", { errorClass: "overflow" })
+    expect(nextStep(result, ladder(1), facts())).toEqual({ kind: "retry", nth: 1, waitMinutes: 0, restartServer: false })
+    expect(nextStep(result, ladder(1), facts({ overflowed: false })).kind).toBe("retry")
+  })
+
   test("the decision writes nothing: the result and the ladder are inputs", () => {
     const result = blocked("session error: insufficient_quota", { errorClass: "quota" })
     const state = ladder(2)

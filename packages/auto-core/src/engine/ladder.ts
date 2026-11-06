@@ -50,7 +50,15 @@ export type LadderState = { i: number; tried: string[]; clipped: string[] }
 // `ringLength` field are deleted — dead in production since the implicit
 // registry (0061 F2) removed the no-registry path, where the call site
 // wrote the constants `registry: true` and the override ring's length.
-export type LadderFacts = { waits: number[]; server: boolean; account?: string }
+export type LadderFacts = { waits: number[]; server: boolean; account?: string
+  // overflowed (plans/0185 D3, 0165-028): the failing session's usage
+  // reached the run's context window — the overflow's wall shape, where
+  // forking the context re-sends the wall and the arm below routes the
+  // failure out of the ladder. An overflow the agent compacted away in
+  // place (usage back under the window, the 0055 §4.5 late-step-up shape)
+  // leaves this false and keeps today's ladder path.
+  overflowed?: boolean
+}
 
 // The step runSession executes:
 // - return: the outcome leaves the loop as-is (a live result, or an
@@ -81,13 +89,22 @@ type Step =
   | { kind: "escalate"; label: string; until?: number; classified?: boolean; cause: WaitCause }
   | { kind: "after-ladder"; why: string; cause: WaitCause }
   | { kind: "retry"; nth: number; waitMinutes: number; restartServer: boolean }
+  // Context overflow (plans/0185 D3, 0165-028): one fresh non-forked retry
+  // (the overflowed context is never a fork source), then the person's
+  // terminal block.
+  | { kind: "overflow-fresh" }
+  | { kind: "block"; question: string }
 
 // Signature strings marking a network/service failure inside session
 // errors; on a hit the executor restarts the managed server first (an
 // external server excepted — no managed server exists), then the retry
 // goes to a fresh session, avoiding repeated failures against the same
-// broken instance.
-const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econrefused|econreset|socket hang up/i
+// broken instance. The two econn literals lost an N in the T-057 move
+// (econnrefused→econrefused) and Bun's own faces matched neither version —
+// restored and widened to the measured Bun wordings (plans/0185 D4,
+// 0165-029: "Unable to connect. Is the computer able to access the url?" /
+// "The socket connection was closed unexpectedly.").
+const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up|unable to connect|socket connection was closed unexpectedly|connectionrefused/i
 
 // The question prefixes that mark a blocked result as a session fault (the
 // three faces of a failed dispatch: the error itself / session creation
@@ -133,6 +150,24 @@ export function nextStep(result: SessionResult, ladder: LadderState, facts: Ladd
   // directly are in-session blocking questions and permission denials —
   // those need a human reply and were never faults to begin with.
   if (!FAULT_FACES.some((prefix) => result.question.startsWith(prefix))) return { kind: "return", result }
+  // Context overflow at the wall (plans/0185 D3, 0165-028): the fault is the
+  // session's own content — the fork criterion's "most valuable session"
+  // would pick exactly the full context, and the recovery probe always
+  // "recovers", so the ladder and the wait-and-probe loop would re-send the
+  // wall forever. One fresh non-forked retry (a blank session: the
+  // compaction the session could not do in place starts over from the
+  // worktree), then the person. An overflow the agent compacted away in
+  // place (facts.overflowed false) keeps the ladder: its context is still
+  // the round's asset.
+  if (result.errorClass === "overflow" && facts.overflowed === true) {
+    if (ladder.i <= 1) return { kind: "overflow-fresh" }
+    return {
+      kind: "block",
+      question:
+        "context overflow: the session's context exceeded the window, and a fresh session overflowed too — the prompt or a single output is larger than the window; " +
+        "split the work (smaller units, or a handover document the sessions hand off through) and re-run",
+    }
+  }
   // The failure's wait cause: its class and stated reset, and the account
   // whose learned windows stand in when it states none (plans/0057 §8).
   const cause: WaitCause = { ...result, account: facts.account }

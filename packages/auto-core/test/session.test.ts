@@ -6,7 +6,8 @@
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -22,6 +23,8 @@ import { services } from "../src/services"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
 import { task, fakeClient, modelThenIdle, retryClient, type Outcome } from "./fixtures/runner"
+import { fakeAgent, ev } from "./fixtures/agent"
+import type { Opts } from "../src/opts"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
@@ -1014,5 +1017,80 @@ describe("ladder-exhaustion fallback → candidate failover: switch models and r
     expect(chain.model).toBeUndefined()
     expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     expect(calls.prompts[4]!.sessionID).toBe("ses_fork_3")
+  })
+})
+
+// ---- The fault-class boundaries (plans/0185): the driver fault, the claim's timing, overflow's routing ----
+
+describe("the fault-class boundaries (plans/0185)", () => {
+  const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
+
+  test("a driver-side throw rejects runSession instead of entering the ladder — the run stops loudly, zero probes (plans/0185 D1, 0165-026)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-driverfault-"))
+    try {
+      // The claim's record write fails (a read-only .auto/, the finding's
+      // own repro shape): driver-side I/O, deterministic — the shape the old
+      // catch-all wrapped as a transient session error and re-dispatched
+      // into forever.
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await chmod(join(dir, ".auto"), 0o555)
+      const agent = fakeAgent({})
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "whole" } }
+      await expect(runSession(agent.client, task, "prompt text", { dir } as Opts, chain, undefined, undefined, NO_WAIT)).rejects.toThrow("driver fault")
+      // The failure never entered the recovery machinery: one session
+      // created, no prompt dispatched (the claim precedes the POST), no
+      // probe sessions.
+      expect(agent.argsOf("prompt")).toEqual([])
+      expect(agent.argsOf("create")).toHaveLength(1)
+    } finally {
+      await chmod(join(dir, ".auto"), 0o755)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the in-flight claim is written before the POST — opencode resolves at turn end, and the turn already sees the active record claiming its session (plans/0185 D2, 0165-027)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-claim-"))
+    try {
+      const seen: { active?: boolean; session?: string }[] = []
+      const agent = fakeAgent({
+        resolve: "turn-end",
+        turn: (ctx) => {
+          // The turn runs while the POST is still pending — the kill window.
+          try {
+            seen.push(JSON.parse(readFileSync(join(dir, ".auto", "progress.json"), "utf8")))
+          } catch {
+            seen.push({})
+          }
+          return [ev.message(ctx.session, `m${ctx.n}`, 1000), ev.idle(ctx.session)]
+        },
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "whole" } }
+      const result = await runSession(agent.client, task, "prompt text", { dir } as Opts, chain, undefined, undefined, NO_WAIT)
+      expect(result.type).toBe("idle")
+      expect(seen[0]).toMatchObject({ task: task.id, active: true, session: "ses_1" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("context overflow: one fresh non-forked retry, then the person's block — the overflowed session is never forked (plans/0185 D3, 0165-028)", async () => {
+    const agent = fakeAgent({
+      errorPatterns: { overflow: /contextoverflowerror/i },
+      turn: (ctx) =>
+        ctx.n <= 2
+          ? [ev.message(ctx.session, `m${ctx.n}`, 190_000), ev.error(ctx.session, { name: "ContextOverflowError", message: "ContextOverflowError: the context is too long" }), ev.idle(ctx.session)]
+          : [ev.message(ctx.session, `m${ctx.n}`, 1000), ev.idle(ctx.session)],
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(agent.client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("blocked")
+    if (result.type === "blocked") {
+      expect(result.question).toContain("context overflow")
+      expect(result.question).toContain("split the work")
+    }
+    // Two dispatches only (the first and the one fresh retry), and the
+    // overflowed context never became a fork source.
+    expect(agent.prompts).toHaveLength(2)
+    expect(agent.argsOf("fork")).toEqual([])
   })
 })

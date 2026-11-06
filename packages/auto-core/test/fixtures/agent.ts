@@ -127,6 +127,11 @@ export type FakeAgentOptions = {
   retryPolicy?: AgentRetryPolicy
   // Script per turn; absent (or returning undefined) = defaultTurn.
   turn?: TurnScript
+  // "turn-end" = the prompt POST resolves only after the turn's events have
+  // been delivered (opencode's synchronous shape, 0037 D3) — the default
+  // resolves at once, before the events flush. The claim-timing tests
+  // (plans/0185 D2, 0165-027) key on the turn-end shape.
+  resolve?: "turn-end"
   // Events published on each steer; absent = none (the running turn goes on
   // with what it already queued).
   steer?: TurnScript
@@ -195,8 +200,9 @@ export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {
     options.fail && name in options.fail ? { ok: false, error: options.fail[name] ?? new Error(`${name} failed`) } : undefined
 
   // Publishes on the next tick, after the dispatching call returned (the
-  // order a real agent's transport gives).
-  const publish = (events: AgentEvent[]) =>
+  // order a real agent's transport gives); `after` runs once every event is
+  // out (the turn-end prompt's release).
+  const publish = (events: AgentEvent[], after?: () => void) =>
     setTimeout(() => {
       for (const event of events) {
         if (event.type === "message" && capabilities.history) {
@@ -208,6 +214,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {
         }
         for (const sub of subscribers) sub.push(event)
       }
+      after?.()
     }, 0)
 
   const client: AgentClient = {
@@ -228,7 +235,15 @@ export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {
       const fail = failed("prompt")
       if (fail) return fail
       const ctx: TurnContext = { session: input.session, text: input.text, kind: "prompt", n: ++turns }
-      publish(options.turn?.(ctx) ?? defaultTurn(ctx))
+      const events = options.turn?.(ctx) ?? defaultTurn(ctx)
+      if (options.resolve === "turn-end") {
+        let release!: () => void
+        const done = new Promise<void>((resolve) => (release = resolve))
+        publish(events, release)
+        await done
+        return { ok: true, value: undefined }
+      }
+      publish(events)
       return { ok: true, value: undefined }
     },
     async promptAsync(input) {
