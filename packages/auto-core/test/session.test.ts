@@ -330,6 +330,7 @@ describe("session error retry: isRetryable-driven fork-retry / wait-and-probe lo
     let asked = 0
     const silent: Interactive = {
       attach() {},
+      detach() {},
       question: async () => {
         asked++
         return undefined
@@ -538,6 +539,27 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
       // The in-flight handover record likewise claims the recovered continuation session: restart reuse forks back
       // through it, the target being the post-handover session.
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_5" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the sideband detaches with the dispatch's watch: attach at the dispatch, detach in the finally (plans/0181 D1, 0165-010)", async () => {
+    const { dir, tmp, handoffFile } = await makeDir("auto-sideband-detach-")
+    try {
+      const calls: string[] = []
+      const sideband: Interactive = {
+        attach: (id: string) => calls.push(`attach:${id}`),
+        detach: () => calls.push("detach"),
+        question: async () => undefined,
+        close: () => {},
+      }
+      const { client } = retryClient([], [], "")
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await attempt(client, task, "prompt text", { dir, git: noCommitGit(), interactive: sideband }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("idle")
+      expect(calls[0]).toMatch(/^attach:/)
+      expect(calls.at(-1)).toBe("detach")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -208,6 +208,7 @@ describe("the interactive fast path (plans/0082 §6 D9)", () => {
     return {
       asked,
       attach() {},
+      detach() {},
       question(prompt) {
         asked.push(prompt)
         return Promise.resolve(answers[n++] ?? "decline")

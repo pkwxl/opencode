@@ -255,6 +255,12 @@ export function startInteractive(
       sessionID = id
       sessionAgent = agent
     },
+    detach() {
+      // The between-turns state (plans/0181 D1): no session runs, so no
+      // free line may start one — the guard above answers the discard line.
+      sessionID = undefined
+      sessionAgent = undefined
+    },
     question(promptText, minutes) {
       // A closed channel answers at once (no answer); a second ask while one
       // pends joins the FIFO — it gets its own window when the current ask

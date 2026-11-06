@@ -261,6 +261,7 @@ export function gatedInteractive(): { interactive: Interactive; reply(text: stri
   return {
     interactive: {
       attach: () => {},
+      detach: () => {},
       close: () => {},
       question: async () => (early.length > 0 ? early.shift()! : await new Promise((resolve) => waiting.push(resolve))),
     },

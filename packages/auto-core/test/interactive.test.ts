@@ -46,6 +46,30 @@ describe("interactive", () => {
     repl = undefined
   })
 
+  test("a free line between turns is discarded after detach — no fresh unwatched turn starts on the idle session (plans/0181 D1, 0165-010)", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.repl.attach("s1")
+    ctx.input.write("while the turn runs\n")
+    await tick()
+    expect(ctx.sent.length).toBe(1)
+    // The dispatch's watch ended: the sideband detached, and a free line now
+    // answers 0014 §2's own rule — both adapters start a fresh, unwatched
+    // agent turn on the idle session otherwise, its edits riding whichever
+    // unit commits next.
+    ctx.repl.detach()
+    ctx.input.write("between turns\n")
+    await tick()
+    // No promptAsync — the discard line ("no active session, input
+    // discarded") goes to the run log, 0014 §2's own wording.
+    expect(ctx.sent.length).toBe(1)
+    // The next dispatch's attach re-binds the sideband.
+    ctx.repl.attach("s1")
+    ctx.input.write("rebound\n")
+    await tick()
+    expect(ctx.sent.length).toBe(2)
+  })
+
   test("/exit is not sent to the session; it sets the exit request", async () => {
     const ctx = setup()
     repl = ctx.repl
@@ -263,7 +287,7 @@ describe("interactiveChannel (the io/Interactive seam's resolver)", () => {
   })
 
   test("an injected Interactive is taken as is; an io factory runs once and its streams become the sideband's io", () => {
-    const impl: Interactive = { attach: () => {}, question: () => Promise.resolve(undefined), close: () => {} }
+    const impl: Interactive = { attach: () => {}, detach: () => {}, question: () => Promise.resolve(undefined), close: () => {} }
     expect(interactiveChannel(impl)).toEqual({ kind: "injected", interactive: impl })
     const input = new PassThrough()
     const output = new Writable({ write: (_chunk, _enc, cb) => cb() })

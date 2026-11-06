@@ -26,6 +26,14 @@ export type Interactive = {
   // on (plans/0055 §8.1): the sideband resolves the session's own host
   // through the pool.
   attach(sessionID: string, agent?: string): void
+  // Called when a dispatch's watch ends (plans/0181 D1, 0165-010): a free
+  // line typed between turns starts a FRESH unwatched agent turn on the
+  // still-attached idle session in both adapters — its edits ride whichever
+  // unit commits next, unseen by any watch — so the sideband detaches at
+  // the dispatch's end and the between-turns line answers 0014 §2's own
+  // rule ("no active session, input discarded"); the next dispatch's attach
+  // re-binds it.
+  detach(): void
   // Show the prompt and wait for one line of human input; minutes omitted =
   // no timeout (waiting on the input line or stdin closing); with a value set,
   // timeout or close falls back to undefined (the step-mode pause hard-waits

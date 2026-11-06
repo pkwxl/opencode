@@ -90,6 +90,7 @@ function recordingInteractive(answer: (ask: Asked) => string) {
     attach: (sessionID) => {
       attached.push(sessionID)
     },
+    detach: () => {},
     question: (promptText, minutes) => {
       asked.push({ promptText, minutes })
       return Promise.resolve(answer({ promptText, minutes }))

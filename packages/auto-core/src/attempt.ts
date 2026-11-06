@@ -686,6 +686,11 @@ export async function attempt(
       }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
+    // The sideband detaches with the dispatch's watch (plans/0181 D1,
+    // 0165-010): between turns no session runs, and a free line sent to the
+    // still-attached idle session would start a fresh unwatched agent turn
+    // whose edits ride whichever unit commits next.
+    opts.interactive?.detach()
     // Stats backstop (T-003): paths that never reached the normal segment
     // close (dispatch failure, exception, ...) close the segment too — with
     // no paired begin, thisAiMs=0 and a zero usage are still recorded

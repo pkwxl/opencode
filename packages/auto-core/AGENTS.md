@@ -41,7 +41,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Run services (`RunServices`, the `services()` allowlist) → `src/services.ts` + `src/router.ts` (0061)
 - Driver-status events and the run-events journal → `src/run-status-schema.ts` + `src/run-status.ts` + `src/engine/events.ts` (0067; 0061)
 - Fork decomposition and experiment switches → `src/execute.ts` + `src/session.ts` + `src/session-api.ts` + `src/switches.ts` (0003)
-- Step mode (OPENCODE_AUTO_STEP) → `src/step.ts` (0012); `/exit` graceful exit (the handover and wrap-up-entry boundaries) → `src/exit.ts` (0014; 0143); the control vocabulary (`Boundary`, the `Interactive` sideband) → `src/control-types.ts` (0061)
+- Step mode (OPENCODE_AUTO_STEP) → `src/step.ts` (0012); `/exit` graceful exit (the handover and wrap-up-entry boundaries) → `src/exit.ts` (0014; 0143); the control vocabulary (`Boundary`, the `Interactive` sideband — its lifetime the dispatch's watch, a between-turns line discarded — 0181) → `src/control-types.ts` (0061)
 - Hibernate windows (OPENCODE_AUTO_HIBERNATE) → `src/hibernate.ts` + `src/switches.ts` (0027)
 - Run lock `.auto/run.lock` (one driver per directory) → `src/lock.ts` (0053)
 - plan's prelude and stop condition → `src/plan.ts` + `src/loop-phase.ts` + `src/loop-plan.ts` (0053; 0095; 0101)

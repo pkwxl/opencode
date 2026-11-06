@@ -607,7 +607,7 @@ describe("proxy-answer ledger wiring (AUTO-RESOLVE, T-005)", () => {
 
   // Fake resident input line: a human really answered within --wait-answer.
   const fakeInteractive = (answer: string) =>
-    ({ attach: () => {}, question: async () => answer, close: () => {} }) as unknown as Interactive
+    ({ attach: () => {}, detach: () => {}, question: async () => answer, close: () => {} }) as unknown as Interactive
 
   const Q1 = "Should the third copy of formatTokens in prompt.ts be cleaned up as well?"
   const Q2 = "Should depreciation booking also go through the MAX_TICK clamp?"
