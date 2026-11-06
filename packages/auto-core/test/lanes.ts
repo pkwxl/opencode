@@ -236,6 +236,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/resume.test.ts",
   "test/run-status-schema.test.ts",
   "test/routing.test.ts",
+  "test/spawn-census.test.ts",
   "test/select.test.ts",
   "test/services.test.ts",
   "test/session-opts.test.ts",

@@ -88,7 +88,11 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // goes through the AgentClient/AgentHost types. claude/host = the claude
   // headless host factory (MA.5, plans/0041), same role: src/agent-choice.ts names it only
   // to construct the host when the project (or OPENCODE_AUTO_AGENT) picks claude.
-  agent: ["agent/types", "agent/opencode/server", "agent/claude/host"],
+  // agent/urls joined the entries at plans/0180 D1: the one server-URL
+  // display rule is a pure leaf both domains read (switches and
+  // models-describe may not reach the agent host — the one-way invariant
+  // below — so the leaf itself is the interface).
+  agent: ["agent/types", "agent/opencode/server", "agent/claude/host", "agent/urls"],
 }
 
 // Classification of flat src/ files (allowlist). Per plan §3 the provider

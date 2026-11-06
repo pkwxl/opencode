@@ -4,6 +4,7 @@
 // is the AgentClient adapter over a proxy that always targets the current
 // server instance. Logging is injected (`log`): a physically-placed agent
 // domain file must not import the driver (import-direction rule 6).
+import { displayUrl } from "../urls"
 //
 // The managed server is spawned here, not by the SDK's createOpencodeServer
 // (plans/0055 F14): that runs the fixed command `opencode` with the driver's
@@ -199,7 +200,7 @@ export async function manage(
     // an external server reuse, restarting is impossible and returns false.
     async restart(reason) {
       if (external) {
-        log(`⚠ ${reason}; but an external server (${external}) is being reused and is not managed by this tool, keeping the current instance`)
+        log(`⚠ ${reason}; but an external server (${displayUrl(external)}) is being reused and is not managed by this tool, keeping the current instance`)
         return false
       }
       log(`↻ ${reason}`)

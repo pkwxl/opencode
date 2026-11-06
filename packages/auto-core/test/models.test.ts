@@ -307,6 +307,15 @@ describe("parsing", () => {
 })
 
 describe("strict errors name the field and the layer", () => {
+  test("a .env line pasted whole as an env name fails quoting only the prefix, never the value (plans/0180 D2, 0165-131)", async () => {
+    await writeOperator({ ...EXAMPLE, agents: { ...EXAMPLE.agents, opencode: { ...EXAMPLE.agents.opencode, env: { "OPENAI_API_KEY=sk-live-PASTED-9f3a": null } } } })
+    const lines = await problems()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('"OPENAI_API_KEY=…" is not a variable name')
+    expect(lines[0]).not.toContain("sk-live")
+    expect(lines[0]).not.toContain("PASTED")
+  })
+
   test("bad JSON fails without quoting the offending token", async () => {
     await writeOperator('{ "models": { "glm": { "agent": "opencode", "keys": [sk-live-4f2a9c] } } }')
     const lines = await problems()

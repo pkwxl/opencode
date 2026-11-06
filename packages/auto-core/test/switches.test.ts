@@ -193,6 +193,12 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
   test("agent: opencode (default) | claude, a shell profile overrides it (MA.5, plans/0041)", () => {
     expect(parseSwitches({}).agent).toBeUndefined()
     expect(parseSwitches({ [SWITCH_ENV.agent]: "opencode" }).agent).toBe("opencode")
+    // plans/0180 D1 (0165-130): the run-start line shows a server URL
+    // without its user information — a password in the userinfo never lands
+    // in the run's first log line.
+    expect(nonDefaultSwitches(parseSwitches({}), { [SWITCH_ENV.server]: "http://ops:s3cr3t-pass@127.0.0.1:4096" })).toBe(
+      `OPENCODE_AUTO_SERVER=${"http://127.0.0.1:4096/"}`,
+    )
     expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.agent]: "opencode" }))).toBe("OPENCODE_AUTO_AGENT=opencode")
     expect(parseSwitches({ [SWITCH_ENV.agent]: "claude" }).agent).toBe("claude")
     expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.agent]: "claude" }))).toBe("OPENCODE_AUTO_AGENT=claude")

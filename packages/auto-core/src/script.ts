@@ -1,4 +1,5 @@
 import { access, constants, mkdir } from "node:fs/promises"
+import { scrubDriverEnv } from "./agent/opencode/server"
 import { statSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { laneReceiptDoc } from "./docpaths"
@@ -138,6 +139,11 @@ export async function runScript(
     stdout: "ignore",
     stderr: "ignore",
     detached: true,
+    // The project's own script runs over the scrubbed base (plans/0180 D3,
+    // X1's letter extended to every child the driver runs): a target whose
+    // tests drive a CLI that reads OPENCODE_AUTO_* would otherwise start
+    // real agent sessions — the W1 incident replayed through this channel.
+    env: scrubDriverEnv(),
   })
   const { timedOut, timeoutReason } = await watchProcess({ proc, logPath: outPath, start, maxMs, idleMs, pollMs, killGraceMs })
   const violation = await scriptGuardCheck(dir, guard)
@@ -549,6 +555,9 @@ async function runLaneBatch(
           stdout: "ignore",
           stderr: "ignore",
           detached: true,
+          // The lane command runs the project's own tooling: the scrubbed
+          // base, like every driver-run child (plans/0180 D3).
+          env: scrubDriverEnv(),
         })
         const run = { lane, log: logPath, start: Date.now(), outSize: 0, lastProgress: Date.now(), timedOut: false }
         const entry: Live = { run, proc }

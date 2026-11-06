@@ -11,6 +11,7 @@
 // (runTask) and turned into exit code 1 on the CLI side — same philosophy as the
 // config's "bad file fails strictly".
 import { log, vlog } from "./log"
+import { displayUrl } from "./agent/urls"
 import { PHASE_LETTERS, type PhaseLetter } from "./phases/registry"
 
 // Env-var names of the switches (parsing, startup log and tests reference one source).
@@ -728,7 +729,7 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.synthesisTimeout === SWITCH_DEFAULTS.synthesisTimeout ? undefined : `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     switches.regression === SWITCH_DEFAULTS.regression ? undefined : `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
     switches.docLanes === SWITCH_DEFAULTS.docLanes ? undefined : `${SWITCH_ENV.docLanes}=${switches.docLanes ? "on" : "off"}`,
-    env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
+    env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${displayUrl(env[SWITCH_ENV.server]!)}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }

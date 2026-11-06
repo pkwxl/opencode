@@ -32,6 +32,7 @@
 // plans/0053 D4). No state is written, so routing stays a pure function of
 // the files.
 import { join } from "node:path"
+import { scrubDriverEnv } from "./agent/opencode/server"
 import { roundBriefPath } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { nestedRepoPrefixes, repoRoots, unitAddedLines, driverBaseline, type UnitBaseline } from "./git"
@@ -100,7 +101,15 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
 
 // Run the build in the target directory; undefined = exit 0, else why not.
 async function runBuild(dir: string, command: string): Promise<string | undefined> {
-  const proc = Bun.spawn(["sh", "-c", command], { cwd: dir, stdout: "pipe", stderr: "pipe", stdin: "ignore" })
+  const proc = Bun.spawn(["sh", "-c", command], {
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "ignore",
+    // The round-close build runs the project's own tooling: the scrubbed
+    // base, like every driver-run child (plans/0180 D3).
+    env: scrubDriverEnv(),
+  })
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true

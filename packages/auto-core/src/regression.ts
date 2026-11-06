@@ -29,6 +29,7 @@
 // regression-cost rows is the byte-identical floor: nothing here launches,
 // gates or writes.
 import { existsSync } from "node:fs"
+import { scrubDriverEnv } from "./agent/opencode/server"
 import { mkdir, rm } from "node:fs/promises"
 import { basename, join, relative, resolve } from "node:path"
 import { latestRegressionSeq, regressionReceiptDoc } from "./docpaths"
@@ -206,6 +207,9 @@ export async function runRegressionLane(
     // Its own process group (plans/0175 D1): the watchdog's group-directed
     // kill reaches the subshell'd command, not only the wrapper bash.
     detached: true,
+    // The project's own regression tooling over the scrubbed base (plans/
+    // 0180 D3 — X1's letter over every child the driver runs).
+    env: scrubDriverEnv(),
   })
   const { timedOut, timeoutReason } = await watchProcess({ proc, logPath, start: started.getTime(), maxMs, idleMs, pollMs })
   const text = await readLogTail(logPath)

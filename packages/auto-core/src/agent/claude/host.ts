@@ -6,6 +6,7 @@
 // at idle. The host checks the CLI is there, and kills whatever still runs at
 // close.
 import type { AgentEnv, AgentHost, AgentHostFactory } from "../types"
+import { displayUrl } from "../urls"
 import { claudeAgent, claudeEnv, type ClaudeSpawn } from "./client"
 
 // The adapter's static capabilities, re-exported through this entry module so
@@ -33,7 +34,7 @@ export function createClaudeHost(host: ClaudeHostOptions = {}): AgentHostFactory
     const version = await (host.version ?? cliVersion)(bin, options.env)
     if (version === undefined) throw new Error(`claude CLI unavailable: \`${bin} --version\` failed (install Claude Code or put it on PATH)`)
     options.log(`◇ claude ${version}`)
-    if (options.server) options.log(`⚠ --server ${options.server} names an opencode server; the claude agent runs its own processes and ignores it`)
+    if (options.server) options.log(`⚠ --server ${displayUrl(options.server)} names an opencode server; the claude agent runs its own processes and ignores it`)
     const client = claudeAgent({
       directory,
       permission: options.permission,
@@ -63,7 +64,10 @@ export const claudeHost: AgentHostFactory = createClaudeHost()
 // sessions will get.
 async function cliVersion(bin: string, env?: AgentEnv): Promise<string | undefined> {
   try {
-    const child = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "ignore", stdin: "ignore", ...(env ? { env: claudeEnv(env) } : {}) })
+    // The version child scrubs unconditionally (plans/0180 D3, 0165-133 /
+    // S17-07): the no-env profile used to inherit the driver's
+    // OPENCODE_AUTO_* whole — claudeEnv(undefined) scrubs the base.
+    const child = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "ignore", stdin: "ignore", env: claudeEnv(env) })
     const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
     return code === 0 ? text.trim() : undefined
   } catch {

@@ -24,6 +24,7 @@
 // AUTO-DECISION: the models command's data lives in this sibling of src/models.ts rather than in it (the loader is already long, and this module needs git, the project config and the switches, which the loader must not depend on)
 // AUTO-RESOLVE: is a candidate whose context window is unknown before the run usable now? -> yes, with a note (the failover clamp in src/session.ts skips a candidate only when its window is known and below the cap; an unknown window never excluded one)
 import { CONFIG_DEFAULTS, CONFIG_FILE, loadProjectConfig, type ProjectConfig } from "./config"
+import { displayUrl } from "./agent/urls"
 import { resolveModel } from "./chain"
 import { fileTracked, gitIgnored } from "./git"
 import { candidateList } from "./model-route"
@@ -396,18 +397,9 @@ function agentRow(profile: RegistryAgentProfile): AgentRow {
     layer: profile.layer,
     adapter: profile.adapter,
     ...(profile.bin ? { bin: profile.bin } : {}),
-    ...(profile.server ? { server: withoutUserInfo(profile.server) } : {}),
+    ...(profile.server ? { server: displayUrl(profile.server) } : {}),
     env,
   }
-}
-
-// AUTO-DECISION: a profile server URL is shown without its user information (a URL may carry a password, and C4 keeps secrets out of everything the driver prints; a URL without one is shown as written)
-function withoutUserInfo(server: string): string {
-  const url = new URL(server)
-  if (!url.username && !url.password) return server
-  url.username = ""
-  url.password = ""
-  return url.toString()
 }
 
 function modelRow(entry: ModelEntry, ctx: StateContext): ModelRow {

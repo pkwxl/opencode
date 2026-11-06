@@ -473,10 +473,17 @@ class Validator {
     for (const [name, value] of Object.entries(raw)) {
       const at = `${where}.${name}`
       if (!ENV_NAME.test(name)) {
+        // The echo shows only the part before the first `=` (plans/0180 D2,
+        // 0165-131 / S17-05): the most natural misplaced secret is a .env
+        // line pasted whole as the name ("OPENAI_API_KEY=sk-…"), and the
+        // strict-failure line must not quote it back. Section names (the
+        // ${section}.${name} echo below) are the registry's own identifier
+        // positions — shown verbatim, never value positions.
+        const shown = name.includes("=") ? `${name.slice(0, name.indexOf("="))}=…` : name
         this.fail(
           layer,
           where,
-          `${JSON.stringify(name)} is not a variable name (letters, digits and "_", not starting with a digit)`,
+          `${JSON.stringify(shown)} is not a variable name (letters, digits and "_", not starting with a digit)`,
         )
         continue
       }
