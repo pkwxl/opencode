@@ -629,7 +629,7 @@ export async function preflight(
       const interrupted = await peekProgress(directory)
       if (interrupted?.active === true) {
         exemptResume = true
-        log(`↻ ${interrupted.task} was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them)`)
+        log(`↻ ${interrupted.task} was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them, or a strict-resume rollback stashes them and names the stash — git stash list shows where)`)
       } else {
         // The round-start gate (plans/0049 G1): the command that establishes
         // the round (plan; init and continue did before their round steps

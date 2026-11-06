@@ -136,6 +136,13 @@ type RecoveryVerdict =
   // (the task caller attaches the resume note and may flip the record under
   // --new-session; the step caller just resets and redispatches).
   | { kind: "fresh"; why: string }
+  // The recovery cannot be judged over this tree (plans/0183 D3, 0165-114): a
+  // repository whose baseline read failed (missing, corrupt) is neither
+  // adopted nor rolled back — the caller blocks the unit for the person
+  // naming the repository, instead of running a session toward a commit that
+  // cannot land (0155 D1's direction, restored over 0145's blanket
+  // adoption).
+  | { kind: "stop"; why: string }
 
 // The run's facts the ladder decides over. The task caller adds rerun and
 // handedOff (its own gates above); the step caller passes only role — a
@@ -206,10 +213,19 @@ export async function recoveryLadder(record: Progress, run: LadderRun): Promise<
     // adopted as the scene and a fresh session continues from it, the why
     // naming what was adopted (the detection record — P8's line, not a block).
     const drift = await baselineIntact(run.dir, record.baseline)
-    if (drift.length) {
+    // A failed read is not drift (plans/0183 D3, 0165-114): 0145's adoption
+    // covered the person's committed state, and a repository whose baseline
+    // cannot be read is neither that nor anything the rollback could reclaim
+    // — the run stops for the person at the unit, the unreadable lines
+    // naming the repository and its cause (P12: the uncertain read resolves
+    // toward stop, never toward continue).
+    if (drift.unreadable.length) {
+      return { kind: "stop", why: `the recovery baseline cannot be judged (${drift.unreadable.join("; ")})` }
+    }
+    if (drift.foreign.length) {
       return {
         kind: "fresh",
-        why: `foreign commits since the recorded baseline adopted as the current state (${drift.join("; ")}); the interrupted session's context is stale`,
+        why: `foreign commits since the recorded baseline adopted as the current state (${drift.foreign.join("; ")}); the interrupted session's context is stale`,
       }
     }
     // §10 item 11 (plans/0055): the recorded model is judged by eligibility —

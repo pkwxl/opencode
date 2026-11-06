@@ -422,8 +422,9 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     // The refusal teaching is gone; the brief sends the pen to run, never to
-    // a hand-commit of what the driver itself resumes
-    expect(lines).toContain("- ⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, its close commits the changes")
+    // a hand-commit of what the driver itself resumes — and the promise is
+    // conditional (0183 D5, 0165-115: a strict-resume rollback stashes, too)
+    expect(lines).toContain("- ⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, and its close commits the changes or a strict-resume rollback stashes them (git stash list shows where)")
     expect(lines.some((line) => line.startsWith("- the worktree — the interrupted unit's in-flight batch"))).toBe(true)
     expect(lines.some((line) => line.startsWith("- the worktree — commit or clean"))).toBe(false)
   })

@@ -287,7 +287,7 @@ Conventions: one step = one committed unit (a session completes several steps pe
 | 020 | w-secrets — Credentialed URL masking, env-overlay name echo, X1 scrub gaps (claude --version child) | W-secrets | 130 131 133 | [020](./0166-remediation/020-w-secrets.md) | **done** 2026-11-06 | 34c570655 | full suite 2991 pass; typecheck clean both packages; 3 pins + the census fail-before proven |
 | 021 | w5-sideband — The --interactive sideband detach family | W5-control | 010 | [021](./0166-remediation/021-w5-sideband.md) | **done** 2026-11-06 | 1492855d5 | full suite 2993 pass; typecheck clean both packages; both pins fail-before proven |
 | 022 | w5-sleeps-signals — /exit-wakeable sleeps, SIGTERM/SIGHUP handler, startup hibernate ordering, /exit-as-answer | W5-control | 087 088 091 092 | [022](./0166-remediation/022-w5-sleeps-signals.md) | **done** 2026-11-06 | 37dd96db0 | full suite 2996 pass; typecheck clean both packages; 3 pins fail-before proven; the suspend oracle re-pointed to sleepUnlessExit |
-| 023 | w5-lock-carryover-progress — Lock pid-space identity, carryover classification, progress-record atomic write, unreadable HEAD, run-start line truth | W5-control | 090 112 113 114 115 | [023](./0166-remediation/023-w5-lock-carryover-progress.md) | todo | — | — |
+| 023 | w5-lock-carryover-progress — Lock pid-space identity, carryover classification, progress-record atomic write, unreadable HEAD, run-start line truth | W5-control | 090 112 113 114 115 | [023](./0166-remediation/023-w5-lock-carryover-progress.md) | **done** 2026-11-06 | 12ce72c25 | full suite 3009 pass; typecheck clean both packages; 17 pins fail-before proven; the park-flow rename race caught by the suite |
 | 024 | w5-resume-reanchor — Resume re-anchor: charter commit-range truth, trailer-less commits inside the audit | W5-control | 023 024 | [024](./0166-remediation/024-w5-resume-reanchor.md) | todo | — | — |
 | 025 | w-session-fault-classes — Driver-fault reclassification, in-flight claim timing, overflow handover path, restart pattern match | W-session | 026 027 028 029 | [025](./0166-remediation/025-w-session-fault-classes.md) | todo | — | — |
 | 026 | w-session-ask-restart — askHuman closed-stdin, concurrent host restart serialization, session-driving hygiene | W-session | 116 117 196 | [026](./0166-remediation/026-w-session-ask-restart.md) | todo | — | — |
@@ -442,7 +442,7 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-087 | S3 | W5-control | 022 | fixed (step 022, ruling 0182 D1) |
 | 0165-088 | S3 | W5-control | 022 | fixed (step 022, ruling 0182 D2) |
 | 0165-089 | S3 | W3-shell-seam | 034 | — |
-| 0165-090 | S3 | W5-control | 023 | — |
+| 0165-090 | S3 | W5-control | 023 | fixed (step 023, ruling 0183 D4) |
 | 0165-091 | S3 | W5-control | 022 | fixed (step 022, ruling 0182 D3) |
 | 0165-092 | S3 | W5-control | 022 | fixed (step 022, ruling 0182 D4) |
 | 0165-093 | S3 | W1-person-marks | 012 | fixed (step 012, ruling 0172) |
@@ -464,10 +464,10 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 | 0165-109 | S3 | W7-verify | 039 | — |
 | 0165-110 | S3 | W6-git | 014 | fixed (step 014, ruling 0174 D4) |
 | 0165-111 | S3 | W7-verify | 039 | — |
-| 0165-112 | S3 | W5-control | 023 | — |
-| 0165-113 | S3 | W5-control | 023 | — |
-| 0165-114 | S3 | W5-control | 023 | — |
-| 0165-115 | S3 | W5-control | 023 | — |
+| 0165-112 | S3 | W5-control | 023 | fixed (step 023, ruling 0183 D1) |
+| 0165-113 | S3 | W5-control | 023 | fixed (step 023, ruling 0183 D2 — handover.json in the same change) |
+| 0165-114 | S3 | W5-control | 023 | fixed (step 023, ruling 0183 D3 — the composed 0155 residual closed) |
+| 0165-115 | S3 | W5-control | 023 | fixed (step 023, ruling 0183 D5) |
 | 0165-116 | S3 | W-session | 026 | — |
 | 0165-117 | S3 | W-session | 026 | — |
 | 0165-118 | S3 | W-engine | 027 | — |
@@ -594,9 +594,9 @@ Every finding of the 0165 register (`0165-001`…`0165-224`) and every release-a
 
 ## Current position
 
-- **Active step**: none. Steps 001–022 are `done` — step 022 landed ruling **0182** (the planned sleeps wake on /exit through the control's sleepUnlessExit, the content-free pause recognizes /exit while an ask keeps every line, SIGTERM/SIGHUP run the force-terminate body as 143/129, and the SIGINT handler precedes the startup window; findings 087/088/091/092 dispositioned). The first `todo` in table order is step 023 (w5-lock-carryover-progress, findings 090 112 113 114 115).
-- **Latest session (2026-11-06, worker)**: one step — step 022 recovered (the interrupted predecessor had landed the implementation and the ruling but not run the suite nor written the bookkeeping) and completed; the full suite surfaced one miss the landing left (agent-fake's suspend oracle still modeled its overshoot on the clock's `sleep`, which D1's window wait no longer consumes — re-pointed to `sleepUnlessExit`); 0182 landed; four findings dispositioned.
-- **Modified/created files (the session's whole footprint)**: ruling 0182 + its INDEX row; the program + step record 022; `AGENTS.md` (the exit-code line); `packages/auto/README.md` (the force-quit note); `src/{hibernate,session,loop-phase,loop-task,runner,interactive,step,loop}.ts`; `test/{hibernate,interactive,step,agent-fake}.test.ts`.
-- **Commands and results**: `bun typecheck` exit 0 in both packages; auto-core full suite **2996 pass 0 fail** (153 files; 2993 at step 021's close); fail-before proven (exactly the three pins red on the pre-change sources; the ask pin green both ways by design); packages/auto suite 149 pass 8 skip 5 fail — the same pre-existing fork/remove-fork baseline proven at step 014 (step 031's wave).
-- **Unresolved problems**: none blocking. Standing: 0126's imprecision (step 080); 0138's flags (step 030); the resumed-chain count restart (0168 D2); the v0.3.0 tag (the maintainer's act, step 081 surfaces it); 0169 D4's forged-mark residual (the commit-provenance guard); 0170 D4's and 0171 D8's named residuals (→ step 023's carryover family and the commit-provenance guard's family; the lane-landing receipt rewrite → one fail-safe re-run); S10-02's dedicated e2e regression deferred; 0172's–0181's named residuals; **0182's named residuals** (the signal handlers carry no unit pin; auto-server's supervisor paths ride S29/S30's family).
-- **Next action**: step **023 (w5-lock-carryover-progress)** — lock pid-space identity, carryover classification, progress-record atomic write, unreadable HEAD, run-start line truth (findings 090 112 113 114 115). Evidence: the register rows, the S06 step file's remaining rows. Start at session open of the next invocation.
+- **Active step**: none. Steps 001–023 are `done` — step 023 landed ruling **0183** (the carryover admitting only the driver's own write shapes with the runtime-record distinction, the progress/handover records' atomic writes with the per-write ordinal, the ladder's typed baseline problems and its stop over unreadable roots, the run lock's pid-namespace/start-time identity, and the 0149 line's conditional truth; findings 090/112/113/114/115 dispositioned — 0170 D4(a)'s and 0171 D8's S12-07 residuals closed, 0145/0149 annotated). The first `todo` in table order is step 024 (w5-resume-reanchor, findings 023 024).
+- **Latest session (2026-11-06, worker)**: one step — step 023 executed whole (evidence → D1–D5 → ruling → bookkeeping); the full suite caught two integration shapes the unit pins could not (the shared-tmp rename race wedging the doc-lane park drain — fixed by the per-write ordinal; the shape check's seam bypass — fixed by the GitOps member) and the artifact leftover scene was re-shaped from the ruled-out over-trust to the driver's real leftover; 0183 landed; five findings dispositioned.
+- **Modified/created files (the session's whole footprint)**: ruling 0183 + its INDEX row; the 0145/0149 amendment annotations; the program + step record 023; `AGENTS.md` (three navigation lines); `src/{git,git-ops,resume,handover,resume-gate,runner,artifact,lock,loop-preflight,driver-helper}.ts`; `test/{git,resume,handover,resume-gate,lock,loop-preflight,driver-helper,artifact,doc-lanes}.test.ts`.
+- **Commands and results**: `bun typecheck` exit 0 in both packages; auto-core full suite **3009 pass 0 fail** (153 files; 2996 at step 022's close); fail-before proven (17 pins red on the pre-change sources; the conservation pin green both ways); the park-flow hang 0/6 pre-change, 2/3 mid-fix, 10/10 after; family-check exit 0; probe P1/P2/P4 clean (P3/P5/P6/P7 standing); packages/auto 149 pass 8 skip 5 fail — the pre-existing fork/remove-fork baseline (step 031's wave).
+- **Unresolved problems**: none blocking. Standing: 0126's imprecision (step 080); 0138's flags (step 030); the resumed-chain count restart (0168 D2); the v0.3.0 tag (the maintainer's act, step 081 surfaces it); 0169 D4's forged-mark residual (the commit-provenance guard); 0170 D4's cross-task/index-tick residuals (the commit-provenance guard's family); the lane-landing receipt rewrite (one fail-safe re-run); S10-02's dedicated e2e regression deferred; 0171 D8's D1/D2 residuals; 0172's–0182's named residuals; **0183's named residuals** (the driver's rename-before-updateTask kill window now blocking — conservative, the 0149 exemption its recovery; the hand tick riding as the redundant view; no boot_id; the lane orphan probe's bare pidAlive stays 0165-081).
+- **Next action**: step **024 (w5-resume-reanchor)** — charter commit-range truth, trailer-less commits inside the audit (findings 023 024). Evidence: the register rows, the S12 step file's remaining rows (S12-04/S12-05). Start at session open of the next invocation.

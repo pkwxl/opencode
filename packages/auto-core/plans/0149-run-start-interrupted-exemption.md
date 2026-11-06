@@ -36,6 +36,11 @@ or clean) and re-run"*.
 
 ## D1 — the ruling: the gate consults the record
 
+> Amended by [0183](./0183-lock-carryover-baseline.md) D5 (2026-11-06): the line's promise is
+> conditional — "the resumed unit's close commits them, or a strict-resume rollback stashes them
+> and names the stash" (0165-115: a dead or ineligible recorded session under strict resume takes
+> the rollback, which stashes exactly these changes). The exemption itself stands unchanged.
+
 The run-start clean gate (src/loop-preflight.ts) reads the progress record on a dirty verdict:
 an **active** record — a unit the last process left mid-flight (a kill, a crash, an `/exit`
 inside the recovery wait) — makes the uncommitted changes that unit's resumable progress. The

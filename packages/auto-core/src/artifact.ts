@@ -159,6 +159,17 @@ export async function requireArtifact<T>(
           `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${verdict.session} (context intact, ` +
             `${formatTokens(verdict.usage.used)}${verdict.usage.limit ? `/${formatTokens(verdict.usage.limit)} tokens, ${verdict.usage.pct}%` : " tokens"} used)`,
         )
+      } else if (verdict.kind === "stop") {
+        // A repository whose baseline read failed (plans/0183 D3, 0165-114):
+        // the step blocks for the person naming the repository — neither
+        // continued nor rolled back over a tree that will not read.
+        return {
+          type: "blocked",
+          question:
+            `${task.id} ${spec.kind} step resuming the interruption point: ${verdict.why}. ` +
+            `The step is neither continued nor rolled back over a repository that will not read; ` +
+            `investigate the named repository (its HEAD, its objects) and re-run`,
+        }
       } else if (verdict.kind === "rollback") {
         // Strict resume judged the step unfaithful: roll back to the unit
         // baseline and redo cold (plans/0053 D9's restart carries the same

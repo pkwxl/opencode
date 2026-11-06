@@ -389,6 +389,19 @@ export async function runTask(
           `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${verdict.session} to continue (context intact, ` +
             `${formatTokens(verdict.usage.used)} used${verdict.usage.limit ? `/${formatTokens(verdict.usage.limit)} tokens, ${verdict.usage.pct}%` : " tokens, limit unknown"})`,
         )
+      } else if (verdict.kind === "stop") {
+        // A repository whose baseline read failed (plans/0183 D3, 0165-114):
+        // neither adopted (0145's person-acted stance covers readable drift
+        // only) nor rolled back (the rollback refuses unreadable roots too,
+        // 0174 D5) — the unit blocks for the person naming the repository,
+        // its uncommitted changes left exactly as they are.
+        return {
+          type: "blocked",
+          question:
+            `${task.id} resume after interruption: ${verdict.why}. ` +
+            `The interrupted unit is neither continued nor rolled back over a repository that will not read; ` +
+            `investigate the named repository (its HEAD, its objects) and re-run`,
+        }
       } else if (verdict.kind === "rollback") {
         // Strict resume judged the record unfaithful: roll back to the unit
         // baseline and redo cold (no resume note attached); the record flips

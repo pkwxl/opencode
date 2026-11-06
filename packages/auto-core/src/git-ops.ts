@@ -35,6 +35,7 @@ import {
   commitTree,
   driverStateFile,
   headText,
+  personDirtOverStatePaths,
   unitBaseline,
   unitViolations,
   untrackedFiles,
@@ -212,6 +213,7 @@ export function createGitOps(): GitOps {
     afterSession,
     unitBaseline,
     changedFiles,
+    personDirtOverStatePaths,
     addWorktree,
     removeWorktree,
     pruneWorktrees,
@@ -261,6 +263,9 @@ export function noCommitGit(): GitOps {
     },
     unitBaseline: async () => [],
     changedFiles: async () => [],
+    // The shape read admits everything (the double's gate answers ok before
+    // the heal branch ever runs — the member exists so the type stays whole).
+    personDirtOverStatePaths: async () => [],
     addWorktree: async () => ({ ok: false, error: "the no-commit git double does not manage lane worktrees" }),
     removeWorktree: async () => ({ ok: true }),
     pruneWorktrees: async () => ({ ok: true }),
@@ -426,6 +431,7 @@ export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOp
     },
     unitBaseline: base.unitBaseline,
     changedFiles: base.changedFiles,
+    personDirtOverStatePaths: base.personDirtOverStatePaths,
     addWorktree: base.addWorktree,
     removeWorktree: base.removeWorktree,
     pruneWorktrees: base.pruneWorktrees,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, mkdir, readdir, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { handoffStatus } from "../src/document/roles"
@@ -37,6 +37,25 @@ describe("in-flight handover record read/write", () => {
       await saveHandover(dir, record)
       expect(await recallHandover(dir, "T-028", "docs/T-028/S03/testhandoff.md")).toEqual(record)
       expect(await peekHandover(dir, "T-028")).toEqual(record)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the in-flight record is written atomically — a read-only target is replaced by rename, never in place, leaving no .tmp behind (plans/0183 D2, 0165-113's family)", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      const file = join(dir, ".auto", "handover.json")
+      await Bun.write(file, JSON.stringify({ task: "T-000", scope: "s", unit: "u", n: 9 }))
+      await chmod(file, 0o444)
+      try {
+        await saveHandover(dir, record)
+        expect(await peekHandover(dir, "T-028")).toEqual(record)
+        expect((await readdir(join(dir, ".auto"))).sort()).toEqual(["handover.json"])
+      } finally {
+        await chmod(file, 0o644)
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

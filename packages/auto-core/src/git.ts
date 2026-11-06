@@ -493,6 +493,151 @@ export function driverStateFile(rel: string): boolean {
   return DRIVER_STATE.some((re) => re.test(path))
 }
 
+// The driver's own write shapes over dirty driver-state paths (plans/0183 D1,
+// 0165-112): the patterns above say where the driver writes, not what — a
+// person's (or a stray session's) content edit of a todo.md, a tasks.md or a
+// phases.md is person dirt on exactly those paths, and the carryover's old
+// path-only trust swept it into a catch-up commit under an unrelated task's
+// trailer. The carryover admits only three shapes: a deletion of the retired
+// CURRENT.md (preflight's own removal); an index file whose only change is
+// the driver's `[ ]`→`[x]` tick (tickIndexLine's write, parseIndex's shape —
+// a hand tick is the same harmless redundant view, 0170 D4(b)); and a
+// todo.md→done.md rename pair with byte-identical content for a unit whose
+// runtime entry is gone (markDone's third step drops it — 0170 D4(a)'s
+// runtime-record distinction: a done.md new while .auto/units.json still
+// carries the unit is a session's self-rename, never the driver's close).
+// Returns the dirty paths that are NOT one of those shapes (empty = all
+// leftovers are the driver's own). The other driverStateFile consumers are
+// attribution-by-construction or visibly-folding surfaces, ruled in 0183 D1:
+// the doc-lane decorator and the lane landing filter the live driver's own
+// writes (markDone moments before), and close/clarify fold state-path dirt
+// into commits that name every folded path in their bodies.
+export async function personDirtOverStatePaths(dir: string, dirty: readonly string[]): Promise<string[]> {
+  if (!dirty.length) return []
+  const phys = await physicalDir(dir)
+  // One status pass over every root: each dirty path's XY code and the
+  // repository (root + repo-relative spelling) its diff and blob reads need.
+  const found = new Map<string, { status: string; root: string; repoRel: string }>()
+  for (const root of await repoRoots(dir)) {
+    const top = await git(root, ["rev-parse", "--show-toplevel"])
+    if (top.code !== 0) continue
+    const toplevel = top.out.trim()
+    for (const entry of await statusEntries(dir, root)) {
+      found.set(entry.rel, { status: entry.status, root, repoRel: relative(toplevel, resolve(phys, entry.rel)) })
+    }
+  }
+  const off: string[] = []
+  const push = (rel: string) => {
+    if (!off.includes(rel)) off.push(rel)
+  }
+  const pendingState = /^docs\/(?:T-\d+|R-\d+\/P\d{2,}-[a-z][a-z0-9-]*)\/(?:todo|done)\.md$/
+  for (const rel of dirty) {
+    const path = rel.replaceAll("\\", "/")
+    const entry = found.get(rel)
+    if (entry === undefined) {
+      // Not in any status (an inconsistent read) — conservative, P12.
+      push(rel)
+      continue
+    }
+    if (path === "CURRENT.md") {
+      if (!entry.status.includes("D")) push(rel)
+      continue
+    }
+    if (pendingState.test(path)) {
+      // The rename pairs resolve as pairs, below.
+      continue
+    }
+    if (!(await tickOnlyDiff(entry.root, entry.repoRel))) push(rel)
+  }
+  // The rename pairs: todo.md deleted + its done.md sibling new, contents
+  // byte-identical to HEAD's todo.md, the owning unit's runtime entry gone.
+  // Both paths of a failed pair are person dirt; a done.md without its dirty
+  // todo sibling is never the driver's leftover (the driver's done.md only
+  // arrives by rename).
+  for (const rel of dirty) {
+    const path = rel.replaceAll("\\", "/")
+    if (!/\/todo\.md$/.test(path) || !pendingState.test(path)) continue
+    const done = path.replace(/\/todo\.md$/, "/done.md")
+    const todo = found.get(rel)
+    const next = found.get(done)
+    const unit = unitOfStatePath(path)
+    const admitted =
+      todo?.status.includes("D") === true &&
+      next?.status === "??" &&
+      dirty.includes(done) &&
+      unit !== undefined &&
+      (await runtimeEntryGone(dir, unit)) &&
+      (await headBlobEquals(todo.root, todo.repoRel, resolve(dir, done)))
+    if (!admitted) {
+      push(rel)
+      // The sibling joins the verdict only when it is itself dirty.
+      if (dirty.includes(done)) push(done)
+    }
+  }
+  for (const rel of dirty) {
+    const path = rel.replaceAll("\\", "/")
+    if (/\/done\.md$/.test(path) && pendingState.test(path) && !dirty.includes(path.replace(/\/done\.md$/, "/todo.md"))) push(rel)
+  }
+  return off
+}
+
+// An index file's diff is only the driver's tick: every changed line pair is
+// `- [ ] <id> …` → `- [x] <id> …` (tickIndexLine's exact write). Anything
+// else — a retitle, a reordered or added line, a mode-only change, an
+// unreadable diff, a staged-only tick the driver never stages — reads as not
+// the driver's shape.
+async function tickOnlyDiff(root: string, repoRel: string): Promise<boolean> {
+  const diff = await git(root, ["diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--ignore-submodules=all", "--", repoRel])
+  if (diff.code !== 0) return false
+  const removed: string[] = []
+  const added: string[] = []
+  for (const line of diff.out.split("\n")) {
+    if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("@@ ")) continue
+    if (line.startsWith("-")) removed.push(line.slice(1))
+    else if (line.startsWith("+")) added.push(line.slice(1))
+    // Under -U0 no context lines appear; "\ No newline at end of file"
+    // markers start with a backslash and fall through.
+  }
+  if (!removed.length || removed.length !== added.length) return false
+  return removed.every((line, i) => /^[-*] \[ \]\s+\S/.test(line) && line.replace("[ ]", "[x]") === added[i])
+}
+
+// The unit id owning a unit state path (T-NNN tasks and P<nn> phase units —
+// the two id shapes unitStatePaths spells), or undefined for a path that
+// matches neither.
+function unitOfStatePath(rel: string): string | undefined {
+  const task = /^docs\/(T-\d+)\/todo\.md$/.exec(rel)
+  if (task) return task[1]
+  const phase = /^docs\/R-\d+\/(P\d{2,})-[a-z][a-z0-9-]*\/todo\.md$/.exec(rel)
+  return phase?.[1]
+}
+
+// Whether the runtime record still carries the unit (the near-leaf read of
+// .auto/units.json — tasks.ts owns the file and imports this module, so the
+// spelling lives here like WORKDIR_ROOTS's, pinned by test). An absent or
+// hand-corrupted file reads as no entry, the same degradation tasks.ts's
+// readUnits gives every runtime field (the heal must not brick on
+// recoverable state).
+async function runtimeEntryGone(dir: string, unit: string): Promise<boolean> {
+  const raw = await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => undefined)
+  if (raw === undefined) return true
+  try {
+    const parsed = JSON.parse(raw) as { tasks?: Record<string, unknown> }
+    return parsed?.tasks === null || typeof parsed.tasks !== "object" || !(unit in parsed.tasks)
+  } catch {
+    return true
+  }
+}
+
+// Whether a worktree file's text equals HEAD's blob of another (repo-relative)
+// path — the rename pair's identical-content half.
+async function headBlobEquals(root: string, repoRel: string, file: string): Promise<boolean> {
+  const blob = await git(root, ["show", `HEAD:${repoRel}`])
+  if (blob.code !== 0) return false
+  const text = await Bun.file(file).text().catch(() => undefined)
+  return text !== undefined && text === blob.out
+}
+
 // The driver workdir's roots, spelled without the trailing slash for the
 // containment test below: gitignore.ts ENTRIES is the law (the ignore set is
 // tracked law since plans/0138 — git does not see these directories' files
@@ -886,10 +1031,19 @@ export async function driverBaseline(root: string): Promise<string> {
 // trailer) — only driver commits happened in between, so the session
 // context's view of the present still holds. Unlike unitViolations: **it does
 // not check uncommitted changes** — a half-finished session's dirty area is
-// precisely the thing being recovered. Returns the problem list (empty =
-// baseline intact).
-export async function baselineIntact(dir: string, baseline: UnitBaseline): Promise<string[]> {
-  const problems: string[] = []
+// precisely the thing being recovered. The problems are typed (plans/0183
+// D3, 0165-114): `foreign` holds every readable drift line (the person's
+// commits since the interruption — and a rewound history, a fact read off a
+// readable repository all the same), which the recovery ladder adopts as the
+// scene (plans/0145 D1); `unreadable` holds the lines whose cause is a read
+// that failed (a missing or corrupt repository, an unresolvable or
+// unjudgeable range) — 0145's adoption never covered them, and the ladder
+// stops on them instead of running a unit toward a commit that cannot land
+// (0155 D1's direction). Both lists empty = baseline intact.
+export type BaselineProblems = { foreign: string[]; unreadable: string[] }
+
+export async function baselineIntact(dir: string, baseline: UnitBaseline): Promise<BaselineProblems> {
+  const problems: BaselineProblems = { foreign: [], unreadable: [] }
   for (const { root, sha } of baseline) {
     const rel = relative(dir, root) || "."
     const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
@@ -898,7 +1052,7 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
       // HEAD unreadable: an empty baseline too (no commits when the unit
       // started, still none now) is normal; anything else is an anomaly.
       if (!sha) continue
-      problems.push(`${rel}: HEAD unreadable (repo missing or history corrupt), baseline check failed`)
+      problems.unreadable.push(`${rel}: HEAD unreadable (repo missing or history corrupt), baseline check failed`)
       continue
     }
     if (head === sha) continue
@@ -909,23 +1063,23 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
     if (sha) {
       const ancestry = await baselineAncestry(root, sha)
       if (ancestry !== true) {
-        problems.push(
-          ancestry === false
-            ? `${rel}: history rewritten below the unit baseline (HEAD ${head} does not contain ${sha})`
-            : `${rel}: the baseline ${sha} cannot be resolved against HEAD, baseline check failed`,
-        )
+        // A rewound history is a fact read off a readable repository —
+        // today's adoption stance keeps it (0145 D1's "the person acted");
+        // an unresolvable baseline is a failed read.
+        if (ancestry === false) problems.foreign.push(`${rel}: history rewritten below the unit baseline (HEAD ${head} does not contain ${sha})`)
+        else problems.unreadable.push(`${rel}: the baseline ${sha} cannot be resolved against HEAD, baseline check failed`)
         continue
       }
     }
     const foreign = await foreignCommits(root, sha)
     if (foreign === undefined) {
-      problems.push(`${rel}: the baseline..HEAD range cannot be judged (git log failed), baseline check failed`)
+      problems.unreadable.push(`${rel}: the baseline..HEAD range cannot be judged (git log failed), baseline check failed`)
       continue
     }
     if (foreign > 0) {
       // Factual line only; the interpretation (adoption, no reuse, no
       // rollback) is the recovery ladder's (plans/0145 D1).
-      problems.push(`${rel}: ${foreign} non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)`)
+      problems.foreign.push(`${rel}: ${foreign} non-driver commit(s) since the recorded baseline (no Auto-Stage trailer)`)
     }
   }
   return problems
@@ -1089,7 +1243,7 @@ export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { ty
 // free gate, byte-identical.
 export type BeginUnitRelaxation = {
   tolerate: readonly string[]
-  reads: Pick<GitOps, "changedFiles" | "unitBaseline">
+  reads: Pick<GitOps, "changedFiles" | "unitBaseline" | "personDirtOverStatePaths">
   commit: (dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }) => Promise<CommitResult>
 }
 
@@ -1142,18 +1296,33 @@ export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: {
     .filter((file) => !withinScopes(file, relaxed?.tolerate ?? []))
   if (dirty.length) {
     if (dirty.every(driverStateFile)) {
-      const info = { stage: "carryover", subject: `${task.id} carryover driver-state posting` }
-      // The relaxation's own heal (plans/0175 D4): the decorator's queued,
-      // scoped commit core instead of the free carryover (whose pathspec
-      // excludes the workdir roots — this one commit can run before
-      // preflight's ignore-set repair, and an unqualified add -A would
-      // absorb the workdir into git).
-      const healed = relaxed?.commit
-        ? await relaxed.commit(dir, task, info)
-        : await commitTree(dir, task, info, [".", ...WORKDIR_ROOTS.map((root) => `:(exclude)${root}`)])
-      if (healed.ok) {
-        log(`  ✓ driver state files not posted (${dirty.join(", ")}), self-healed with a catch-up commit`)
-        return { type: "ok", baseline: await (relaxed?.reads.unitBaseline ?? unitBaseline)(dir) }
+      // The admission shapes (plans/0183 D1, 0165-112): path membership alone
+      // trusted any diff on these paths and swept a person's content edit of
+      // a state file into the catch-up commit — only the driver's own write
+      // shapes heal; anything else is the person's uncommitted work. The
+      // shape read rides the same seam as changedFiles (the decorator's
+      // wrapped base, a test's double).
+      const notOurs = await (relaxed?.reads.personDirtOverStatePaths ?? personDirtOverStatePaths)(dir, dirty)
+      if (!notOurs.length) {
+        const info = { stage: "carryover", subject: `${task.id} carryover driver-state posting` }
+        // The relaxation's own heal (plans/0175 D4): the decorator's queued,
+        // scoped commit core instead of the free carryover (whose pathspec
+        // excludes the workdir roots — this one commit can run before
+        // preflight's ignore-set repair, and an unqualified add -A would
+        // absorb the workdir into git).
+        const healed = relaxed?.commit
+          ? await relaxed.commit(dir, task, info)
+          : await commitTree(dir, task, info, [".", ...WORKDIR_ROOTS.map((root) => `:(exclude)${root}`)])
+        if (healed.ok) {
+          log(`  ✓ driver state files not posted (${dirty.join(", ")}), self-healed with a catch-up commit`)
+          return { type: "ok", baseline: await (relaxed?.reads.unitBaseline ?? unitBaseline)(dir) }
+        }
+      } else {
+        log(
+          `  ⚠ driver-state paths hold changes beyond the driver's own write shapes (${notOurs.join(", ")}) — ` +
+            `the carryover admits only index ticks, a unit's todo→done rename with its runtime entry gone, and the retired CURRENT.md deletion; ` +
+            `the rest is uncommitted work for the person`,
+        )
       }
     }
     return { type: "dirty", files: dirty }
@@ -1299,6 +1468,11 @@ export type GitOps = {
   ): Promise<{ type: "ok" } | { type: "failed"; question: string }>
   unitBaseline(dir: string): Promise<UnitBaseline>
   changedFiles(dir: string): Promise<string[]>
+  // The carryover's admission shapes (plans/0183 D1): which dirty
+  // driver-state paths are NOT the driver's own write shapes — the read the
+  // gate's heal branch judges over, injected the same way as changedFiles so
+  // the doc-lane decorator's base and the test doubles own their copy.
+  personDirtOverStatePaths(dir: string, dirty: readonly string[]): Promise<string[]>
   // Lane worktrees and the landing merge (plans/0068 §6.5, D7): the dispatch
   // and landing choreography (src/lanes.ts) reaches these through the seam so
   // a test's holder can switch the whole lane machinery off with the double.

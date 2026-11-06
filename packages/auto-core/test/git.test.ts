@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -523,6 +523,100 @@ describe("beginUnit (unit start gate)", () => {
     }
   })
 
+  test("a content edit of a driver-state path is person dirt, never a carryover sweep — the path alone is not provenance (plans/0183 D1, 0165-112)", async () => {
+    const dir = await fresh()
+    const printed = spyOn(console, "log").mockImplementation(() => {})
+    try {
+      await mkdir(join(dir, "docs/T-002"), { recursive: true })
+      await writeFile(join(dir, "docs/T-002/todo.md"), "# T-002: sample\n\n## Acceptance\n\n- all 40 cases pass\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-002: seed" })
+      // The person's (or a stray session's) edit of another task's todo.md —
+      // its Acceptance weakened, the finding's repro scene.
+      await writeFile(join(dir, "docs/T-002/todo.md"), "# T-002: sample\n\n## Acceptance\n\n- the smoke case passes\n")
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate).toEqual({ type: "dirty", files: ["docs/T-002/todo.md"] })
+      // Nothing was committed; the edit stays exactly as it was, and the
+      // refusal teaches that only the driver's own write shapes heal.
+      expect(await changedFiles(dir)).toEqual(["docs/T-002/todo.md"])
+      const message = await git(dir, "log", "-1", "--pretty=%B")
+      expect(message).not.toContain("Auto-Stage: carryover")
+      expect(printed.mock.calls.map((call) => String(call[0])).some((line) => line.includes("beyond the driver's own write shapes (docs/T-002/todo.md)"))).toBe(true)
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a todo→done rename whose unit still sits in the runtime record blocks — 0170 D4(a)'s runtime-record distinction: done.md new while .auto/units.json carries the unit is a session's self-rename, never the driver's close", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: sample\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      // markDone's third step never ran: the runtime entry still says
+      // in_progress while done.md is new.
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await Bun.write(join(dir, ".auto/units.json"), JSON.stringify({ tasks: { "T-001": { status: "in_progress", attempts: 1 } } }, null, 2) + "\n")
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/T-001/todo.md", "docs/T-001/done.md"] })
+      expect(await fileTracked(dir, "docs/T-001/done.md")).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a runtime record that no longer names the unit admits the pair: the driver's own kill-window leftover (between markDone and the commit) still heals", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: sample\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      // markDone completed (the entry is gone — here beside an unrelated
+      // unit's live entry), the commit never ran.
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await Bun.write(join(dir, ".auto/units.json"), JSON.stringify({ tasks: { "T-009": { status: "in_progress" } } }, null, 2) + "\n")
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate.type).toBe("ok")
+      expect(await changedFiles(dir)).toEqual([".auto/units.json"])
+      expect(await fileTracked(dir, "docs/T-001/done.md")).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a rename pair with changed content blocks — an edited-then-renamed document is content work, not a state rename", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: sample\n\n## Acceptance\n\n- all cases pass\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      await writeFile(join(dir, "docs/T-001/done.md"), "# T-001: sample\n\n## Acceptance\n\n- one case passes\n")
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/T-001/todo.md", "docs/T-001/done.md"] })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an index edit beyond the tick blocks — a retitle is content, not state (the tick-only diff admits only `[ ]`→`[x]`)", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 sample\n- [ ] T-002 other\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 sample renamed\n- [x] T-002 other\n")
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/R-01/P01-implement/tasks.md"] })
+      // The tick alone (beside an unchanged line) still heals — the driver's
+      // own markDone leftover shape.
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 sample\n- [x] T-002 other\n")
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate.type).toBe("ok")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("any other dirty area (manual edits / half-finished AI output) → dirty, handed to a person, never swept automatically", async () => {
     const dir = await fresh()
     try {
@@ -682,42 +776,45 @@ describe("taskChangedPaths (the release note's re-merge surface, plans/0096 D7; 
 })
 
 describe("baselineIntact (baseline verification at recovery)", () => {
-  test("HEAD == baseline / a range of only driver commits → passes; an external commit is detected; **uncommitted dirty areas are not reported**", async () => {
+  test("HEAD == baseline / a range of only driver commits → passes; an external commit is detected as readable drift; **uncommitted dirty areas are not reported**", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
       // ① HEAD == baseline
-      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [], unreadable: [] })
       // ② baseline..HEAD is all driver commits (with the Auto-Stage trailer)
       await writeFile(join(dir, "b.txt"), "b")
       await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
-      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [], unreadable: [] })
       // ③ a mid-way dirty area is exactly what recovery handles: the check
       // ignores uncommitted changes (the key difference from unitViolations)
       await writeFile(join(dir, "c.txt"), "c")
-      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [], unreadable: [] })
       expect((await unitViolations(dir, baseline)).some((problem) => problem.includes("uncommitted changes"))).toBe(true)
       // ④ an external commit (no Auto-Stage trailer) mixed in → the recovered
-      // picture is wrong
+      // picture is wrong: a readable drift, the ladder's adoption class
+      // (plans/0183 D3, 0165-114)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "manual commit")
       const problems = await baselineIntact(dir, baseline)
-      expect(problems).toHaveLength(1)
-      expect(problems[0]).toContain("non-driver commit")
+      expect(problems.foreign).toHaveLength(1)
+      expect(problems.foreign[0]).toContain("non-driver commit")
+      expect(problems.unreadable).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("an empty baseline always passes; a baseline on record but an unreadable repository → HEAD unreadable", async () => {
+  test("an empty baseline always passes; a baseline on record but an unreadable repository → unreadable (the ladder's stop class, not adoption — 0183 D3)", async () => {
     const dir = await fresh()
     try {
-      expect(await baselineIntact(dir, [])).toEqual([])
+      expect(await baselineIntact(dir, [])).toEqual({ foreign: [], unreadable: [] })
       const problems = await baselineIntact(dir, [{ root: join(dir, "missing"), sha: "abc1234" }])
-      expect(problems).toHaveLength(1)
-      expect(problems[0]).toContain("HEAD unreadable")
+      expect(problems.unreadable).toHaveLength(1)
+      expect(problems.unreadable[0]).toContain("HEAD unreadable")
+      expect(problems.foreign).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -728,14 +825,14 @@ describe("baselineIntact (baseline verification at recovery)", () => {
     try {
       const baseline = await unitBaseline(dir)
       expect(baseline).toEqual([{ root: dir, sha: "" }])
-      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [], unreadable: [] })
       await writeFile(join(dir, "a.txt"), "a")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: first commit inside the unit" })
-      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [], unreadable: [] })
       await writeFile(join(dir, "b.txt"), "b")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "manual commit")
-      expect((await baselineIntact(dir, baseline))[0]).toContain("non-driver commit")
+      expect((await baselineIntact(dir, baseline)).foreign[0]).toContain("non-driver commit")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1660,7 +1757,9 @@ describe("the audited range (plans/0173 D3, 0165-141)", () => {
       const baseline = [{ root: dir, sha: base }]
       const line = `.: history rewritten below the unit baseline (HEAD ${head} does not contain ${base})`
       expect(await unitViolations(dir, baseline)).toEqual([line])
-      expect(await baselineIntact(dir, baseline)).toEqual([line])
+      // A readable drift the ladder keeps adopting (plans/0183 D3): the
+      // person's acted state, not a failed read.
+      expect(await baselineIntact(dir, baseline)).toEqual({ foreign: [line], unreadable: [] })
       const rolled = await rollbackUnit(dir, baseline, { task: "T-001", unit: "T-001" })
       expect(rolled.ok).toBe(false)
       expect(rolled.failures[0]!.error).toContain("history rewritten below the unit baseline")

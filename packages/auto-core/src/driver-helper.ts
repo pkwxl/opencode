@@ -506,7 +506,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // what the driver itself resumes.
   if (!uncommittedByDesign && (await changedFiles(dir)).length) {
     if ((await peekProgress(dir))?.active === true) {
-      facts.push("⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, its close commits the changes")
+      facts.push("⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, and its close commits the changes or a strict-resume rollback stashes them (git stash list shows where)")
       channels.push("the worktree — the interrupted unit's in-flight batch; no manual git work needed, run continues it")
       recovery.push(`${bin} run ${dir} — the start clean gate exempts an active record's unit and resumes it (plans/0149)`)
     } else {

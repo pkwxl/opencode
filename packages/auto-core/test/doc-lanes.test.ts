@@ -216,6 +216,11 @@ function fakeBase(staged: () => Promise<string[]> = async () => []) {
     afterSession: async () => ({ type: "ok" }),
     unitBaseline: async () => [],
     changedFiles: async () => staged(),
+    // The carryover's admission shapes ride the seam like changedFiles
+    // (plans/0183 D1): the fake admits every state-path dirt — these tests
+    // pin the decorator's delegation, never the shapes (git.test.ts's real
+    // repositories pin those).
+    personDirtOverStatePaths: async () => [],
     addWorktree: async () => ({ ok: true }),
     removeWorktree: async () => ({ ok: true }),
     pruneWorktrees: async () => ({ ok: true }),

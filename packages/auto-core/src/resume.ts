@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises"
+import { mkdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { UnitBaseline } from "./git"
 
@@ -150,9 +150,23 @@ export type Progress = {
 
 const FILE = join(".auto", "progress.json")
 
+// The recovery point itself is never written in place (plans/0183 D2,
+// 0165-113): the record is rewritten at every dispatch and pipeline boundary,
+// and a crash mid-write would leave an empty or truncated file that reads as
+// no record — losing the phase re-entry, the fix-round state and the 0149
+// exemption at once. The same .tmp → rename discipline as units.json
+// (tasks.ts) and the stats/ledger writers — with one widening: the record is
+// single-slot and written by every pipeline wholesale (a sibling's record is
+// never this unit's recovery point; recall mismatches degrade to a fresh
+// session — the accepted last-writer-wins of plans/0099 D8), so concurrent
+// writers cannot share one tmp name (the loser's rename would race away);
+// each write takes its own ordinal.
+let writeSeq = 0
 export async function saveProgress(dir: string, progress: Progress) {
   await mkdir(join(dir, ".auto"), { recursive: true })
-  await Bun.write(join(dir, FILE), JSON.stringify(progress))
+  const tmp = join(dir, `${FILE}.${process.pid}.${++writeSeq}.tmp`)
+  await Bun.write(tmp, JSON.stringify(progress))
+  await rename(tmp, join(dir, FILE))
 }
 
 // Deleted as soon as the task completes (completed under any Outcome); force

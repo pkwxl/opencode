@@ -211,7 +211,7 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
     expect("exit" in result).toBe(false)
     // The exemption line alone; the block and its file list are absent
     expect(lines).toEqual([
-      "↻ T-001 was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them)",
+      "↻ T-001 was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them, or a strict-resume rollback stashes them and names the stash — git stash list shows where)",
     ])
     // The batch stays uncommitted in the worktree: neither a gate block nor
     // the housekeeping sweep folded it into a PLAN commit

@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises"
+import { mkdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { handoffStatus } from "./document/roles"
 
@@ -74,9 +74,17 @@ export type Handover = {
 
 const FILE = join(".auto", "handover.json")
 
+// The same .tmp → rename discipline as the progress record (plans/0183 D2,
+// 0165-113's family): a crash mid-write over the in-flight handover record
+// must degrade to "no record" only through the old complete file, never
+// through a truncated one — and each write takes its own ordinal (the
+// progress record's concurrent-writers rule).
+let writeSeq = 0
 export async function saveHandover(dir: string, record: Handover): Promise<void> {
   await mkdir(join(dir, ".auto"), { recursive: true })
-  await Bun.write(join(dir, FILE), JSON.stringify(record))
+  const tmp = join(dir, `${FILE}.${process.pid}.${++writeSeq}.tmp`)
+  await Bun.write(tmp, JSON.stringify(record))
+  await rename(tmp, join(dir, FILE))
 }
 
 // Read the in-flight record belonging to this execution scope; returns

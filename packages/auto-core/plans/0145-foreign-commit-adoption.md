@@ -50,6 +50,12 @@ after the assessment with *OK, go ahead*.
 
 ## D1 — the ruling: drift → fresh with adoption
 
+> Amended by [0183](./0183-lock-carryover-baseline.md) D3 (2026-11-06): adoption covers *readable*
+> drift alone — the person's commits (this ruling's own case) and a rewound history read off a
+> readable repository. A repository whose baseline read failed (missing, corrupt, an unjudgeable
+> range) is not "the person acted": the ladder stops for the person naming the repository
+> (0165-114, 0155 D1's direction). Everything else here stands.
+
 The recovery ladder's drift branch (`recoveryLadder`, src/resume-gate.ts) no longer returns a
 run-stopping dirty verdict: it returns **fresh**, the current committed state adopted as the
 scene, and a fresh session continues from it. Three halves, each already owned by standing law:

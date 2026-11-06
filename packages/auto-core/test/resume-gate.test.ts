@@ -236,6 +236,32 @@ describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
     }
   })
 
+  test("strict: a baseline repository whose HEAD no longer reads → stop, never adoption — the failed read is not the person's acted state (plans/0183 D3, 0165-114)", async () => {
+    // The finding's repro shape: 0145's adoption branch treated every
+    // baselineIntact problem line as foreign commits, so a corrupt or missing
+    // repository was "adopted" and a fresh session ran the whole unit toward
+    // a commit that cannot land — while the log named the anomaly as the
+    // person's commits.
+    const dir = await mkdtemp(join(tmpdir(), "auto-ladder-unreadable-"))
+    try {
+      await git(dir, ["init", "-q"])
+      await writeFile(join(dir, "seed.txt"), "s")
+      await git(dir, ["add", "-A"])
+      await git(dir, ["commit", "-qm", "seed"])
+      const baseline = await unitBaseline(dir)
+      // HEAD pointed at a ref that no longer resolves (removed, corrupt).
+      await writeFile(join(dir, ".git/HEAD"), "ref: refs/heads/gone\n")
+      const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline }), run({ switches: STRICT, strict: true, dir, probe: healthy }))
+      expect(verdict.kind).toBe("stop")
+      if (verdict.kind === "stop") {
+        expect(verdict.why).toContain("the recovery baseline cannot be judged")
+        expect(verdict.why).toContain(".: HEAD unreadable")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("strict: --new-session → rollback naming the flag (the collapsed string both callers share)", async () => {
     const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ opts: { newSession: true } as Opts, switches: STRICT, strict: true, probe: healthy }))
     expect(verdict).toEqual({ kind: "rollback", why: "--new-session given" })

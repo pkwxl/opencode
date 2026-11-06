@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, readdir, rm, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { requireArtifact } from "../src/artifact"
@@ -28,6 +28,25 @@ describe("progress record", () => {
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
     await forgetProgress(dir)
     expect(await recallProgress(dir, "T-001")).toBeUndefined()
+  })
+
+  test("the recovery point is written atomically — a read-only target record is replaced (rename, not an in-place write), leaving no .tmp behind (plans/0183 D2, 0165-113)", async () => {
+    // A read-only progress.json defeats an in-place Bun.write (EACCES) but
+    // not a tmp-write + rename — the deterministic stand-in for the crash
+    // mid-write the finding names: with the old in-place writer this throws
+    // and the record stays the stale one.
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    const file = join(dir, ".auto", "progress.json")
+    await Bun.write(file, JSON.stringify({ task: "T-000", at: 1, active: false }))
+    await chmod(file, 0o444)
+    try {
+      const progress: Progress = { task: "T-001", session: "ses_abc", at: 2, active: true }
+      await saveProgress(dir, progress)
+      expect(await recallProgress(dir, "T-001")).toEqual(progress)
+      expect((await readdir(join(dir, ".auto"))).sort()).toEqual(["progress.json"])
+    } finally {
+      await chmod(file, 0o644)
+    }
   })
 
   test("recall checks neither liveness nor age (an arbitrarily old record is still returned; the liveness decision lives in runner)", async () => {

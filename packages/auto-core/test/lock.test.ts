@@ -1,11 +1,30 @@
-// The run lock .auto/run.lock (plans/0053 D1–D3): atomic creation, re-entry,
-// stale and foreign-host holders, an unparsable file, the exit handler, and
-// runAll taking the lock before preflight.
+// The run lock .auto/run.lock (plans/0053 D1–D3, identity by 0183 D4):
+// atomic creation, re-entry, stale and foreign-host/namespace holders, an
+// unparsable file, the exit handler, and runAll taking the lock before
+// preflight.
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine, RUN_LOCK_FILE, type LockHolder } from "../src/lock"
+
+// The identity reads the lock now records (Linux /proc; undefined elsewhere —
+// the same best-effort the writer applies).
+const ourNamespace = () => {
+  try {
+    return readlinkSync("/proc/self/ns/pid") || undefined
+  } catch {
+    return undefined
+  }
+}
+const startOf = (pid: number) => {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    return stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[19] || undefined
+  } catch {
+    return undefined
+  }
+}
 
 const dirs: string[] = []
 function tempDir() {
@@ -113,6 +132,87 @@ describe("acquire and release (D1–D2)", () => {
     expect(liveRunLock(dir)).toMatchObject({ host: "elsewhere-build-3" })
     const lock = acquireRunLock(dir, "run")
     expect(lock.ok).toBe(false)
+  })
+
+  test("a new lock records the identity beside the pid (namespace and start time — 0183 D4)", () => {
+    const ns = ourNamespace()
+    const start = startOf(process.pid)
+    const dir = tempDir()
+    const lock = acquireRunLock(dir, "run")
+    try {
+      expect(lock.ok).toBe(true)
+      const holder = readHolder(dir)
+      // On Linux both fields land; a kernel without /proc records neither
+      // (the fields drop out of the JSON) and every reading below floors to
+      // the hostname+pid form.
+      expect(holder.ns).toBe(ns)
+      expect(holder.start).toBe(start)
+    } finally {
+      if (lock.ok) lock.release()
+    }
+  })
+
+  test("a lock from another pid namespace counts as live even naming this pid — the own-pid shortcut never crosses namespaces, and the refusal names the namespace (0183 D4, 0165-090 repro A)", () => {
+    const ns = ourNamespace()
+    const dir = tempDir()
+    // A sibling host-network container's live driver: same hostname, this
+    // pid number, its own namespace.
+    plant(dir, { pid: process.pid, ns: ns === "pid:[1]" ? "pid:[999]" : "pid:[1]" })
+    expect(liveRunLock(dir)).toMatchObject({ pid: process.pid })
+    const lock = acquireRunLock(dir, "run")
+    expect(lock.ok).toBe(false)
+    if (lock.ok) return
+    expect(lockLines(dir, lock.holder)[0]).toContain("another pid namespace")
+    expect(lockLines(dir, lock.holder)[0]).toContain("delete .auto/run.lock by hand")
+    expect(readHolder(dir).pid).toBe(process.pid)
+  })
+
+  test("a lock in this namespace naming this pid with a different start time is stale (a reused pid); with our own start time it is this process's leftover — both removable", () => {
+    const ns = ourNamespace()
+    const start = startOf(process.pid)
+    if (ns === undefined || start === undefined) return
+    const dir = tempDir()
+    plant(dir, { pid: process.pid, ns, start: "1" })
+    expect(liveRunLock(dir)).toBeUndefined()
+    const reused = acquireRunLock(dir, "run")
+    expect(reused.ok).toBe(true)
+    if (reused.ok) reused.release()
+    plant(dir, { pid: process.pid, ns, start })
+    expect(liveRunLock(dir)).toBeUndefined()
+    const leftover = acquireRunLock(dir, "run")
+    expect(leftover.ok).toBe(true)
+    if (leftover.ok) leftover.release()
+  })
+
+  test("a live process at the recorded pid with its own start time keeps the lock; a differing start time exposes the reuse and the lock is stale (0165-090 repro B)", async () => {
+    const ns = ourNamespace()
+    const dir = tempDir()
+    const child = Bun.spawn(["sleep", "5"])
+    try {
+      const start = startOf(child.pid)
+      if (ns === undefined || start === undefined) return
+      // The holder is that live process: alive and started when recorded.
+      plant(dir, { pid: child.pid, ns, start })
+      expect(liveRunLock(dir)).toMatchObject({ pid: child.pid })
+      expect(acquireRunLock(dir, "run").ok).toBe(false)
+      // The pid was reused after the holder died: the process at the pid
+      // now started at a different time — the old reading kept this lock
+      // live forever.
+      plant(dir, { pid: child.pid, ns, start: `${Number(start) + 1}` })
+      expect(liveRunLock(dir)).toBeUndefined()
+      const lock = acquireRunLock(dir, "run")
+      expect(lock.ok).toBe(true)
+      if (lock.ok) lock.release()
+    } finally {
+      child.kill("SIGKILL")
+      await child.exited
+    }
+  })
+
+  test("status line carries the namespace when the holder recorded one", () => {
+    expect(lockStatusLine({ pid: 1234, host: "build-3", command: "plan", started: "2026-09-23T10:00:00.000Z", ns: "pid:[4026531836]" })).toBe(
+      "▶ plan in progress (pid 1234 on build-3, namespace pid:[4026531836], since 2026-09-23T10:00:00.000Z)",
+    )
   })
 
   test("an unparsable lock counts as live and asks for deletion by hand", () => {

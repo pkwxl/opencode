@@ -264,16 +264,23 @@ describe("requireArtifact standalone unit gate (spec.unitStart)", () => {
     }
   })
 
-  test("driver state file (phase index) left over → carryover self-heals, then the session opens and produces as usual", async () => {
+  test("driver state file (phase index tick) left over → carryover self-heals, then the session opens and produces as usual", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
       await writeFile(join(dir, "seed.txt"), "s")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "seed")
-      // Driver state left on disk by a failed previous commit: phase index only → self-healing backfill commit
+      // Driver state left on disk by a failed previous commit: the phase
+      // index's tick (markDone's write, committed nowhere — plans/0183 D1:
+      // the tick is one of the three shapes the carryover admits; a
+      // brand-new index file is the round-start setup, the person's review,
+      // and blocks instead).
       await mkdir(join(dir, "docs/R-01"), { recursive: true })
       await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round setup")
+      await writeFile(join(dir, "docs/R-01/phases.md"), "- [x] P01 implement\n")
       const { client, state } = unitClient()
       const value = await requireArtifact(client, planTask, "distillation prompt", { dir }, unitSpec)
       expect(value).toBe("output")
