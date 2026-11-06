@@ -70,6 +70,26 @@ describe("interactive", () => {
     expect(ctx.sent.length).toBe(2)
   })
 
+  test("the hard wait (a step pause, no timeout) recognizes /exit: the pause settles empty and the run requests the exit (plans/0182 D2, 0165-088)", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const answer = ctx.repl.question("⏸ step pause: press Enter", undefined)
+    ctx.input.write("/exit\n")
+    await tick()
+    expect(await answer).toBeUndefined()
+    expect(services().control.exitRequested()).toBe(true)
+    expect(ctx.sent).toEqual([])
+  })
+
+  test("an ask (a timeout armed) takes /exit as its answer — the hint says where it went (plans/0182 D2)", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    const answer = ctx.repl.question("❓ question:", 10)
+    ctx.input.write("/exit\n")
+    await tick()
+    expect(await answer).toBe("/exit")
+  })
+
   test("/exit is not sent to the session; it sets the exit request", async () => {
     const ctx = setup()
     repl = ctx.repl

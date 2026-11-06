@@ -452,7 +452,12 @@ async function waitForWindow(run: SessionRun, wait: WindowWait): Promise<void> {
     `⏸ ${run.task.id} ${roleOf(run.chain)} waits for a ${wait.tier} model: ${wait.model} ${wait.opens}` +
       `, resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
   )
-  await bookedSleep("window", sleep, { dir: run.opts.dir, sleep: (ms) => run.clock.sleep(ms) })
+  // /exit wakes the window wait and pauses here (plans/0182 D1, 0165-087 —
+  // awaitRecovery's own shape): the sleep runs through the control, and the
+  // injected form delegates to the run's clock so a fake clock still
+  // advances the wait in tests.
+  const paused = await bookedSleep("window", sleep, { dir: run.opts.dir, control: run.control, sleep: (ms) => run.clock.sleepUnlessExit(ms).then(() => {}) })
+  if (paused) await pauseForExit(run)
   log(`→ window wait over: continuing after ${wait.model} opened`)
 }
 

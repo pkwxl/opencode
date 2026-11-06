@@ -832,7 +832,9 @@ export async function runTask(
           // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
           // spot to check after check-off + unified commit; sleep until wake
           // inside the window before continuing (plans/0027-hibernate-design.md).
-          await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
+          await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir, ...(opts.control ? { control: opts.control } : {}) })
+          // /exit may have cut the window short (plans/0182 D1).
+          opts.control?.maybeExit("subtask", `${task.id} subtask ${index + 1}`)
           // failback retry (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): at
           // subtask/session granularity the subtask boundary clears the chain's
           // failover candidates and the next subtask fails back to the

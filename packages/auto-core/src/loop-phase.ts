@@ -490,7 +490,10 @@ async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // check after the handover (snapshot+completion+commit) completes; sleep
   // until wake inside the window before entering the next phase
   // (plans/0027-hibernate-design.md).
-  await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory })
+  await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory, control: ctx.control })
+  // /exit may have cut the window short (plans/0182 D1): the probe after the
+  // sleep takes it, the same checkpoint the boundary runs before it.
+  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} handover`)
   // failback retry (phase boundary): every scope resets at the phase
   // boundary; /failback requests are consumed at the same point. Registry
   // routing (plans/0055 §6.4): every scope covers the phase boundary, so

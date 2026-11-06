@@ -83,7 +83,7 @@ describe("stepPause (hard pause wait)", () => {
       close: () => {},
     } as unknown as Interactive
     await stepPause("subtask", "T-001 subtask 2", { interactive, step: "subtask" })
-    expect(questions).toEqual([`⏸ step pause (step=subtask): T-001 subtask 2 done, press Enter to continue: `])
+    expect(questions).toEqual([`⏸ step pause (step=subtask): T-001 subtask 2 done, press Enter to continue, /exit to stop here: `])
     // A boundary the level does not cover (zero behavior under interactive as
     // well): task does not cover subtask.
     await stepPause("subtask", "T-001 subtask 3", { interactive, step: "task" })

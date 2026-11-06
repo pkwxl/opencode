@@ -109,19 +109,15 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
   // services install; the shell starts nothing per run in the core, and a
   // shell-side hook would be a shell-visible surface).
   startRunEvents(directory)
-  // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
-  // inside the window, sleep until window end + random delay before continuing,
-  // so the first execution unit isn't wasted; dryrun permission preflight is
-  // exempt (not a token-spending path).
-  if (!opts.dryrun) await hibernatePause("startup", { dir: directory })
-  let server: AgentPool | undefined
-  // --interactive sideband input controller; created once the server is ready,
-  // closed in finally.
-  let repl: Interactive | undefined
   // A single Ctrl+C does not terminate (the event stream/subprocesses may
   // swallow or hang the default exit during a run); a second press within the
   // window force-terminates: best-effort restore file writability, close the
-  // server, exit.
+  // server, exit. The handler is installed BEFORE the startup hibernate sleep
+  // (plans/0182 D4, 0165-092): the window can run for hours, preflight has
+  // already protected the driver-owned files, and one Ctrl+C during it must
+  // find the handler — the 'twice' line the window prints then holds
+  // everywhere. The body tolerates server === undefined.
+  let server: AgentPool | undefined
   let sigintAt = 0
   const onSigint = () => {
     const now = Date.now()
@@ -131,12 +127,38 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       return
     }
     log("✋ consecutive Ctrl+C, force-terminating")
+    forceTerminate(130)
+  }
+  // SIGTERM and SIGHUP run the same force-terminate body (plans/0182 D3,
+  // 0165-091): a plain `kill`, a `timeout` wrapper or a supervisor's stop
+  // previously ended the driver with none of the double-Ctrl+C path's
+  // cleanup — the server left running, protected files left read-only. The
+  // conventional exit codes (128+signal) distinguish the shape in logs.
+  const forceTerminate = (code: number) => {
     server?.close()
-    void unprotect(directory).finally(() => process.exit(130))
+    void unprotect(directory).finally(() => process.exit(code))
     // Backstop: exit even if cleanup hangs.
-    setTimeout(() => process.exit(130), 1000).unref()
+    setTimeout(() => process.exit(code), 1000).unref()
+  }
+  const onTerm = () => {
+    log("✋ SIGTERM received, force-terminating")
+    forceTerminate(143)
+  }
+  const onHup = () => {
+    log("✋ SIGHUP received, force-terminating")
+    forceTerminate(129)
   }
   process.on("SIGINT", onSigint)
+  process.on("SIGTERM", onTerm)
+  process.on("SIGHUP", onHup)
+  // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
+  // inside the window, sleep until window end + random delay before continuing,
+  // so the first execution unit isn't wasted; dryrun permission preflight is
+  // exempt (not a token-spending path).
+  if (!opts.dryrun) await hibernatePause("startup", { dir: directory })
+  // --interactive sideband input controller; created once the server is ready,
+  // closed in finally.
+  let repl: Interactive | undefined
   try {
     // A missing or invalid phase or task index is an environment error
     // (section H); route once ahead of server startup so we don't bring the
@@ -386,6 +408,8 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     throw error
   } finally {
     process.off("SIGINT", onSigint)
+    process.off("SIGTERM", onTerm)
+    process.off("SIGHUP", onHup)
     repl?.close()
     watcher?.close()
     progress?.close()

@@ -336,7 +336,12 @@ async function taskBoundary(ctx: LoopCtx, label: string, exitProbe?: () => void)
   await stepPause("task", label, { interactive: repl, dir: directory })
   if (exitProbe === undefined) ctx.control.maybeExit("task", label)
   else if (ctx.control.exitRequested()) exitProbe()
-  await hibernatePause(`${label} boundary`, { dir: directory })
+  await hibernatePause(`${label} boundary`, { dir: directory, control: ctx.control })
+  // /exit may have cut the window short (plans/0182 D1): the same probe
+  // shape the boundary runs before the sleep (the lane's own probe where a
+  // caller passed one).
+  if (exitProbe === undefined) ctx.control.maybeExit("task", label)
+  else if (ctx.control.exitRequested()) exitProbe()
   ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
   ctx.router.consumeFailback()
 }

@@ -769,17 +769,22 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   // wakes past a short window simply waits for the next opening — the wait
   // never exits on its own (C5).
   test("a wake past the window (a suspend) waits again for the next opening instead of dispatching", async () => {
-    // The run's clock is hand-built: its sleep overshoots the first wake by
-    // seven hours, like a machine that suspended; the second wakes exactly
-    // on time.
+    // The run's clock is hand-built: its sleepUnlessExit overshoots the first
+    // wake by seven hours, like a machine that suspended (the window wait has
+    // slept through the clock's sleepUnlessExit since plans/0182 D1); the
+    // second wakes exactly on time.
     let wakes = 0
     const mc = manualClock(Date.parse("2026-09-25T12:00:00Z"))
     const suspended: Clock = {
       now: () => mc.at,
       sleep: async (ms) => {
-        mc.at += ms + (wakes++ === 0 ? 7 * 3_600_000 : 0)
+        mc.at += ms
       },
-      sleepUnlessExit: mc.clock.sleepUnlessExit,
+      sleepUnlessExit: async (ms) => {
+        if (services().control.exitRequested()) return true
+        mc.at += ms + (wakes++ === 0 ? 7 * 3_600_000 : 0)
+        return false
+      },
       timer: mc.clock.timer,
     }
     installServices(createServices({ clock: suspended }))

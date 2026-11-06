@@ -45,7 +45,7 @@ export async function stepPause(
 ): Promise<void> {
   const step = opts.step ?? autoSwitches().step
   if (!stepApplies(step, boundary)) return
-  const promptText = `⏸ step pause (step=${step}): ${label} done, press Enter to continue: `
+  const promptText = `⏸ step pause (step=${step}): ${label} done, press Enter to continue, /exit to stop here: `
   // Human-wait deduction: the segment closes during the wait (neither aiMs nor wallMs
   // grows), reopening when it ends; the exceptional path likewise pairs waitEnd via
   // finally, leaving no dangling closed segment.

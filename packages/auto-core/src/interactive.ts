@@ -149,6 +149,21 @@ export function startInteractive(
     // askHuman's empty-line fallback and waitBetween's empty-line-continues
     // semantics; the caller interprets an empty answer.
     if (pending) {
+      // The hard wait (a step-mode pause: no timeout armed) recognizes /exit
+      // (plans/0182 D2, amending 0014 §9 for the content-free shape): the
+      // request is set and the pause settles empty — the boundary's probe
+      // takes the exit from there.
+      if (text === "/exit" && pending.timer === undefined) {
+        settle(undefined)
+        services().control.requestExit()
+        log("🚪 /exit received at the pause: stopping here — progress is persisted, re-run to resume exactly")
+        rl.prompt()
+        return
+      }
+      // An ask (a timeout armed) takes EVERY line as its answer: a '/exit'
+      // typed here reaches the agent, not the run — one hint line says where
+      // it went (plans/0182 D2).
+      if (text === "/exit") log('ℹ this ask takes every line as its answer — the "/exit" went to the agent, not the run; type it again once the ask resolves')
       settle(text)
       return
     }

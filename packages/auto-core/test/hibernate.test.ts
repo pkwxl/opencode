@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test"
-import { HIBERNATE_JITTER_MS, hibernatePause, hibernateSleepMs } from "../src/hibernate"
+import { describe, expect, spyOn, test } from "bun:test"
+import { bookedSleep, HIBERNATE_JITTER_MS, hibernatePause, hibernateSleepMs } from "../src/hibernate"
+import { createControl } from "../src/exit"
 import type { HibernateWindow } from "../src/switches"
 
 // Fix a baseline of 00:00 UTC on some day; at(t) is the epoch ms t minutes
@@ -68,6 +69,36 @@ describe("hibernatePause (boundary / startup hook point)", () => {
       sleep: async (ms) => { slept = ms },
     })
     expect(slept).toBe(300 * 60_000 + HIBERNATE_JITTER_MS / 2)
+  })
+
+  test("/exit wakes the hibernate sleep through the control (plans/0182 D1, 0165-087): bookedSleep answers paused, the window returns without its over line", async () => {
+    const control = createControl()
+    control.requestExit()
+    // The already-requested flag answers at once; the injected sleep must
+    // never run.
+    const paused = await bookedSleep("hibernate", 1000, { control, sleep: async () => {
+      throw new Error("must not sleep")
+    } })
+    expect(paused).toBe(true)
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      await hibernatePause("test boundary", {
+        window: DAY_WINDOW,
+        now: at(300),
+        random: () => 0,
+        control,
+        sleep: async () => {
+          throw new Error("must not sleep")
+        },
+      })
+    } finally {
+      printed.mockRestore()
+    }
+    expect(lines.some((line) => line.includes("cut short by /exit"))).toBe(true)
+    expect(lines.some((line) => line.includes("hibernate over"))).toBe(false)
   })
 
   test("a sleep throw propagates normally (stat pairing is guaranteed by finally; without dir it is a no-op)", async () => {

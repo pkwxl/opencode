@@ -577,8 +577,9 @@ and the task report result line `Result: FAIL`); `3` `/exit` received under `--i
 exited at a safe boundary (no human attention needed — rerunning recovers fully); `130` force-terminated.
 
 During a run a single Ctrl+C does not terminate (it only prints a notice); pressing Ctrl+C again within 3
-seconds force-quits. Before exiting it best-effort restores write permissions on opencode.json, AGENTS.md and
-the like, and shuts down the opencode server.
+seconds force-quits. A SIGTERM or SIGHUP (`kill`, a `timeout` wrapper, a supervisor's stop) force-quits the
+same way (exit 143/129). Before exiting it best-effort restores write permissions on opencode.json, AGENTS.md
+and the like, and shuts down the opencode server.
 
 As each task and subtask starts, the output prints a prominent banner (an `=` rule for a task, a `-` rule
 for a subtask; a repeated-character line followed by the title):

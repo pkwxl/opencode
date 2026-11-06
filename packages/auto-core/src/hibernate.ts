@@ -10,6 +10,7 @@
 // double Ctrl+C force-quits (130) via the process-level SIGINT handler, and the wait
 // duration is deducted from time stats via statsWaitBegin/End.
 import { log } from "./log"
+import type { Control } from "./exit"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, formatHibernate, type HibernateWindow } from "./switches"
 
@@ -22,18 +23,24 @@ export const HIBERNATE_JITTER_MS = 600_000
 // The shared sleep body of planned waits (the hibernate window and the model-window
 // wait share it): the wait interval is deducted from time stats and recorded separately
 // as waitMs via statsWaitBegin/End (kind is the wait kind, see the kind list in
-// stats.ts); the exceptional path pairs the segment close via finally. During the wait
-// a double Ctrl+C force-quits (130) via runAll's process-level SIGINT handler, same as
-// every long wait — that is the only way out. sleep is injected for unit tests (to be
-// advanced with a fake clock).
+// stats.ts); the exceptional path pairs the segment close via finally. A double Ctrl+C
+// force-quits (130) via runAll's process-level SIGINT handler, same as every long wait.
+// control (plans/0182 D1, 0165-087 — one ruling closing 0057's named residual and
+// extending §11 item 9 to both planned waits): the sleep runs through the control's
+// /exit-wakeable form, and the return says whether /exit cut it short — the caller's
+// boundary probe or pause then takes the exit. Absent = the plain sleep (the startup
+// hibernate before the sideband exists needs nothing). sleep is injected for unit
+// tests (to be advanced with a fake clock).
 export async function bookedSleep(
   kind: string,
   ms: number,
-  opts: { dir?: string; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<void> {
+  opts: { dir?: string; sleep?: (ms: number) => Promise<void>; control?: Control } = {},
+): Promise<boolean> {
   await statsWaitBegin(opts.dir, kind)
   try {
+    if (opts.control !== undefined) return await opts.control.sleepUnlessExit(ms, opts.sleep)
     await (opts.sleep ?? Bun.sleep)(ms)
+    return false
   } finally {
     await statsWaitEnd(opts.dir)
   }
@@ -81,6 +88,7 @@ export async function hibernatePause(
     random?: () => number
     sleep?: (ms: number) => Promise<void>
     window?: HibernateWindow
+    control?: Control
   } = {},
 ): Promise<void> {
   const window = opts.window ?? autoSwitches().hibernate
@@ -97,6 +105,12 @@ export async function hibernatePause(
   // closed neither aiMs nor wallMs grows, waitMs is recorded separately; the
   // exceptional path pairs waitEnd via bookedSleep's finally, leaving no dangling
   // closed segment.
-  await bookedSleep("hibernate", sleepMs, { dir: opts.dir, sleep: opts.sleep })
+  const paused = await bookedSleep("hibernate", sleepMs, { dir: opts.dir, sleep: opts.sleep, ...(opts.control !== undefined ? { control: opts.control } : {}) })
+  if (paused) {
+    // /exit cut the window short (plans/0182 D1): the caller's boundary
+    // probe takes the exit — no "over" line for a window that did not end.
+    log(`→ hibernate cut short by /exit at ${label}`)
+    return
+  }
   log(`→ hibernate over: continuing after ${label}`)
 }
