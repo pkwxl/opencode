@@ -22,7 +22,7 @@ import { provenanceComparison } from "./bundle"
 import { executeBlockageChoices, executionLines } from "./blockage-execute"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { fileTracked, type GitOps } from "./git"
+import { fileTracked, hookReports, type GitOps } from "./git"
 import { deleteBranch, probeReflink, workingTreeMB } from "./git-worktree"
 import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
@@ -431,6 +431,13 @@ export async function preflight(
     const warning = loopbackProxyWarning(process.env)
     if (warning) log(warning)
   }
+  // The target's git hooks, surfaced once at run start (plans/0173 D4,
+  // 0165-142): the person's commit policy runs on the driver's commits too
+  // (the ruling — no bypass), and the driver's own variables are scrubbed
+  // from the hooks' environment (0059 X1's door closed). Detection only,
+  // read-only, hence under dryrun as well; a repository with no hooks
+  // (the ordinary target) stays silent — the floor.
+  for (const line of await hookReports(directory)) log(line)
   // A no-level width is legal and taught, never refused (plans/0125 D4,
   // amending 0068 D10/S3's usage error; the teaching reworded by plans/0126
   // D5 to the two-lane model): the declarations are the admission (P17 —

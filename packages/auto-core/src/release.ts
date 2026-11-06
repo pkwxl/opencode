@@ -15,16 +15,20 @@
 // repository, both read-only:
 //   1. a clean tree — an uncommitted state is not a certifiable release;
 //   2. the destination scan under the release posture — the same
-//      driver-written set the rounds record (git's modified view, plans/0119:
-//      the run of driver commits back from HEAD plus the uncommitted state,
-//      which check 1 already demands be empty), so every process-path
+//      driver-written set the rounds record (the driver boundary, plans/0173
+//      D1 over 0119's modified view: everything from the oldest boundary
+//      commit's parent — driver commit or landing subject — to the worktree,
+//      whoever committed it in between, plus the uncommitted state, which
+//      check 1 already demands be empty), so every process-path
 //      reference, task id and out-of-root path the migration wrote blocks,
 //      the same shapes the rounds recorded, now with removal wording.
 // AUTO-* marker lines are deliberately not demanded away (plans/0103 D3):
 // they are self-contained content, and stripping them would erase recorded
 // rationale — editorial work the person may do by choice, never a gate.
 // No state is written; routing stays a pure function of the tree.
-import { nestedRepoPrefixes, repoRoots, statusEntries, unitAddedLines, driverBaseline, git } from "./git"
+import { nestedRepoPrefixes, repoRoots, statusEntries, unitAddedLines, driverBoundary, git } from "./git"
+import { currentRound } from "./phases"
+import { roundDirName } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 
 export type ReleaseCheck = {
@@ -39,7 +43,12 @@ export type ReleaseCheck = {
 
 // scanExempt = config scanExempt (plans/0059 X2): deliverable paths whose
 // process-shaped strings are content, skipped here like at every scan site.
-export async function releaseCheck(dir: string, opts: { scanExempt?: readonly string[] } = {}): Promise<ReleaseCheck> {
+// isolate = config isolate (plans/0074): the nested repositories under
+// branch isolation — a destination of that set whose committed history
+// reaches no boundary commit is the unlanded-round shape (the writing sits
+// on the auto/R-NN branch), and release refuses naming it instead of
+// certifying over an empty range (plans/0173 D1, 0165-004).
+export async function releaseCheck(dir: string, opts: { scanExempt?: readonly string[]; isolate?: readonly string[] } = {}): Promise<ReleaseCheck> {
   const problems: string[] = []
   const certified: string[] = []
   const roots = (await repoRoots(dir)).filter((root) => root !== dir)
@@ -60,15 +69,34 @@ export async function releaseCheck(dir: string, opts: { scanExempt?: readonly st
       problems.push(`${prefix} has no commits to release (an empty repository cannot stand alone)`)
       continue
     }
-    // 2. The destination scan of this repository alone — the driver baseline
-    // (git's modified view, plans/0119) in place of 0108's every-tracked-line
-    // baseline, so a pristine upstream checkout the migration only read is
-    // never materialized — filtered to its own paths, the workspace's files
-    // never the destination's business, and run under the release posture.
-    const added = new Map([...await unitAddedLines(dir, [{ root, sha: await driverBaseline(root) }])].filter(([rel]) => rel === prefix || rel.startsWith(`${prefix}/`)))
+    // The unlanded-round refusal (plans/0173 D1): a repository under branch
+    // isolation whose history reaches no boundary commit carries the round's
+    // writing on its round branch instead — name it, never certify the
+    // empty range.
+    const boundary = await driverBoundary(root)
+    const isolated = (opts.isolate ?? []).some((entry) => prefix === entry || prefix.startsWith(`${entry}/`))
+    if (boundary.kind === "none" && isolated) {
+      const round = await currentRound(dir)
+      problems.push(`${prefix} reaches no driver or landing commit from HEAD — its round branch auto/${roundDirName(round)} holds the round's writing unlanded; land it (or merge it by hand), then re-run release`)
+      continue
+    }
+    // 2. The destination scan of this repository alone — the driver
+    // boundary (plans/0173 D1 over 0119's modified view): everything from
+    // the oldest boundary commit's parent to the worktree, whoever
+    // committed it — the person's release-remedy fix commits above the run
+    // are deliverable content like the run's own — filtered to its own
+    // paths, the workspace's files never the destination's business, and
+    // run under the release posture.
+    const added = new Map([...await unitAddedLines(dir, [{ root, sha: boundary.baseline }])].filter(([rel]) => rel === prefix || rel.startsWith(`${prefix}/`)))
     const scan = processReferenceScan(added, opts.scanExempt, { nested: [prefix], dir, release: true })
     problems.push(...scan.problems)
-    if (!scan.problems.length) certified.push(`✓ ${prefix} @ ${head.out.trim()} — no process references, no task ids, no paths outside its own root`)
+    if (!scan.problems.length) {
+      // The ✓ states what was scanned (plans/0173 D1): the boundary kind,
+      // the baseline it diffed from and the changed-file count — the
+      // certified state is checkable, not asserted.
+      const range = boundary.kind === "none" ? `HEAD (no driver or landing commit in history)` : `${boundary.baseline ? `baseline ${boundary.baseline.slice(0, 7)}` : "the empty tree"} (${boundary.kind} boundary)`
+      certified.push(`✓ ${prefix} @ ${head.out.trim()} — no process references, no task ids, no paths outside its own root (scanned ${added.size} changed file(s) since ${range})`)
+    }
   }
   return { problems, certified, nothing: undefined }
 }

@@ -3199,15 +3199,19 @@ if (command === "release") {
     process.exit(1)
   }
   let scanExempt: readonly string[] | undefined
+  let isolate: readonly string[] | undefined
   try {
-    scanExempt = (await loadProjectConfig(directory)).scanExempt
+    const config = await loadProjectConfig(directory)
+    scanExempt = config.scanExempt
+    isolate = config.isolate
   } catch {
     // An invalid config does not stop a read-only gate over the tree; the
     // scan simply runs without the project's exemptions (a stale exemption
     // can only over-report, never pass something the config would refuse).
     scanExempt = undefined
+    isolate = undefined
   }
-  const check = await releaseCheck(directory, { scanExempt })
+  const check = await releaseCheck(directory, { scanExempt, isolate })
   if (check.nothing !== undefined) {
     console.error(check.nothing)
     process.exit(1)

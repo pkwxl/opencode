@@ -390,7 +390,7 @@ describe("driverBaseline (plans/0119: git's modified view replaces the whole tre
     }
   })
 
-  test("the run of driver commits back from HEAD is the scan's range; a person commit on top closes it", async () => {
+  test("the run of driver commits back from HEAD is the scan's range; a person commit on top stays inside it (plans/0173 D1)", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, "seed.c"), "int s;\n")
@@ -408,13 +408,15 @@ describe("driverBaseline (plans/0119: git's modified view replaces the whole tre
       expect(added.has("first.c")).toBe(true)
       expect(added.has("second.c")).toBe(true)
       expect(added.has("seed.c")).toBe(false)
-      // A person commit on top of the run closes it: the baseline moves to
-      // their commit, the buried driver run stays unscanned.
+      // A person commit on top of the run is the migration's writing too
+      // (plans/0173 D1 — the 0119 walk's "the person closes the range"
+      // premise replaced): the boundary stays the seed, their commit scans.
       await Bun.write(join(dir, "person.c"), "// the T-009 slot\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-q", "-m", "person on top")
-      const top = (await git(dir, "rev-parse", "HEAD")).trim()
-      expect(await driverBaseline(dir)).toBe(top)
+      expect(await driverBaseline(dir)).toBe(seed)
+      const withPerson = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      expect(withPerson.has("person.c")).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

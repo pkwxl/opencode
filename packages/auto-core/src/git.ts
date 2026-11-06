@@ -496,7 +496,28 @@ export async function unitViolations(dir: string, baseline: UnitBaseline, exclud
       continue
     }
     if (head === sha) continue
+    // The ancestry check (plans/0173 D3, 0165-141): a baseline HEAD no
+    // longer contains means the history below the unit was rewound or
+    // rewritten — the range means nothing and the close-out must block on
+    // it, never count the empty range as clean. An empty baseline (the
+    // repository had no commits when the unit started) has nothing to
+    // contain — the foreign count below reads the full history.
+    if (sha) {
+      const ancestry = await baselineAncestry(root, sha)
+      if (ancestry !== true) {
+        problems.push(
+          ancestry === false
+            ? `${relative(dir, root) || "."}: history rewritten below the unit baseline (HEAD ${head} does not contain ${sha})`
+            : `${relative(dir, root) || "."}: the baseline ${sha} cannot be resolved against HEAD, close-out check failed`,
+        )
+        continue
+      }
+    }
     const foreign = await foreignCommits(root, sha)
+    if (foreign === undefined) {
+      problems.push(`${relative(dir, root) || "."}: the baseline..HEAD range cannot be judged (git log failed), close-out check failed`)
+      continue
+    }
     if (foreign) {
       problems.push(`${relative(dir, root) || "."}: ${foreign} non-driver commit(s) detected (no Auto-Stage trailer); external commits occurred during the unit`)
     }
@@ -643,75 +664,119 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?
 // "diff against the baseline" uses it as the empty baseline end.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// The count of commits without the Auto-Stage trailer inside the
-// `sha..<to>` range (= the number of external commits; to defaults to HEAD,
-// the unit close-out and recovery callers' shape). An empty-string sha means
-// the repository had no commits when the range started — check the full
-// history. Shared by unitViolations, the recovery-fidelity baseline check /
-// rollback, and `land`'s foreign-commit refusal over the round branch
-// (plans/0074 §2.3).
-export async function foreignCommits(root: string, sha: string, to: string = "HEAD"): Promise<number> {
+// The trailer block of a commit message (plans/0173 D2, 0165-140): the last
+// paragraph of the body, witnessed only when every line of it is
+// trailer-shaped (`Key: value`) — the one grammar of message()'s writer,
+// which always ends the body with a trailer paragraph. A prose paragraph
+// mentioning a trailer, a subject quoting it, or a body quoting another
+// commit's message above the last paragraph never yields a block (undefined,
+// the paragraph is not all trailers). The deliberate imitation door (any
+// writer can author a block) is the commit-provenance guard's family
+// (plans/0169 D4), not this reader's.
+export function trailerBlock(body: string): Map<string, string> | undefined {
+  const paragraphs = body.trimEnd().split(/\n[ \t]*\n/)
+  const last = paragraphs.at(-1)
+  if (last === undefined) return undefined
+  const block = new Map<string, string>()
+  for (const line of last.split("\n")) {
+    const mark = /^([A-Za-z0-9-]+):[ \t]+(\S.*)$/.exec(line.trim())
+    if (!mark) return undefined
+    if (!block.has(mark[1]!)) block.set(mark[1]!, mark[2]!.trim())
+  }
+  return block.size ? block : undefined
+}
+
+// The driver-commit witness every audit reader shares (plans/0173 D2): the
+// Auto-Stage value from the trailer block alone — a commit whose body's last
+// paragraph is a trailer block carrying Auto-Stage. git's own
+// %(trailers:key=Auto-Stage,valueonly) reads the same block; driverBaseline's
+// walk matches the same line with git's anchored --grep.
+export function driverStage(body: string): string | undefined {
+  return trailerBlock(body)?.get("Auto-Stage")
+}
+
+// The count of commits without the driver witness inside the `sha..<to>`
+// range (= the number of external commits; to defaults to HEAD, the unit
+// close-out and recovery callers' shape). An empty-string sha means the
+// repository had no commits when the range started — check the full history.
+// undefined = the log itself failed (an unresolvable baseline, a corrupt
+// repository — plans/0173 D3, 0165-141): the range cannot be judged, and the
+// callers surface it as a problem line, never as zero (P12). Shared by
+// unitViolations, the recovery-fidelity baseline check / rollback, and
+// `land`'s foreign-commit refusal over the round branch (plans/0074 §2.3).
+export async function foreignCommits(root: string, sha: string, to: string = "HEAD"): Promise<number | undefined> {
   const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..${to}`] : [to])])
+  if (bodies.code !== 0) return undefined
   return bodies.out
     .split("\0")
     .filter((body) => body.trim())
-    .filter((body) => !body.includes("Auto-Stage:")).length
+    .filter((body) => driverStage(body) === undefined).length
 }
 
-// The SHA a destination-wide scan diffs from: the repository's pre-driver
-// state, derived from git alone (plans/0119, the maintainer's ruling from
-// the cleanroom OOM — "We should not check the full tree, instead, check
-// those that has been modified which can be shown via git"). Walk HEAD's
-// history while commits carry the Auto-Stage trailer (the machine criterion
-// for a driver commit, foreignCommits' own) and return the first commit
-// without it: everything after that SHA is what the project wrote. HEAD
-// itself foreign → HEAD (the tracked side contributes nothing; the scan
-// reduces to uncommitted and untracked state); every commit a driver
-// commit, or a repository with none at all → the empty baseline (the whole
-// history is the project's writing). The log is read as a stream and git is
-// killed at the stop commit — a pristine upstream checkout (a kernel tree
-// the migration only reads) stops at HEAD without walking its history, and
-// no caller materializes a tree the project never touched. Driver commits
-// buried under a person's later commits sit outside the contiguous run and
-// stay unscanned — the same linear-range simplification foreignCommits and
-// `land`'s foreign-commit refusal already make; the person's commits are
-// the person's content, never the migration's ledger.
+// Whether a unit baseline sha is still an ancestor of HEAD (plans/0173 D3,// 0165-141): false means HEAD was rewound to or below the baseline (an
+// agent's `git reset --hard HEAD~N` mid-unit) or rewritten past it — the
+// `sha..HEAD` range means nothing and the audit must block on it. undefined
+// = the check itself failed (unreadable repository); both callers treat
+// non-ok as the rewritten verdict (conservative under uncertainty, P12).
+export async function baselineAncestry(root: string, sha: string): Promise<boolean | undefined> {
+  const check = await git(root, ["merge-base", "--is-ancestor", sha, "HEAD"])
+  if (check.code === 0) return true
+  return /not a valid commit|unknown revision|bad object/i.test(check.err) ? undefined : false
+}
+
+// The boundary of the driver run in a repository's history (plans/0173 D1,
+// 0165-004 — the S1): the OLDEST commit reachable first-parent from HEAD
+// that carries the driver witness or a landing subject, answered with its
+// first parent — everything inside the HEAD..baseline range is the
+// migration's writing, whoever committed it (the person's release-remedy
+// fix commits, an adopted or agent-made commit: deliverable content is P1's
+// subject whoever wrote it); everything below it is the pre-driver upstream,
+// never the migration's ledger (0119's maintainer ruling kept — and kept
+// cheap: git filters server-side through the anchored `--grep` forms, so a
+// pristine upstream the migration only read matches nothing and never
+// streams a full history into this process). The witnesses: a line starting
+// `Auto-Stage:` (driverStage's own line — the anchored grep matches per
+// line, so prose mentions and mid-line quotes never hit) or a line starting
+// `land auto/` (the landing subject, git-land's grammar: the squashed round
+// IS the migration's content). kind "none" = no boundary reachable — the
+// repository's committed history holds nothing of the run (a pristine
+// upstream; a history the person rebuilt); the baseline is HEAD itself, and
+// the release caller refuses on it under config isolate, where the writing
+// sits on the unlanded round branch (0074's landing commits stay
+// trailer-less — the person's to curate — and are recognized by subject).
+export type DriverBoundary = { baseline: string; kind: "driver" | "landing" | "none" }
+
+export async function driverBoundary(root: string): Promise<DriverBoundary> {
+  const head = await git(root, ["rev-parse", "HEAD"])
+  if (head.code !== 0 || !head.out.trim()) return { baseline: "", kind: "none" }
+  const log = await git(root, [
+    "log",
+    "--first-parent",
+    "--grep=^Auto-Stage:",
+    "--grep=^land auto/",
+    "--format=%H %P %s",
+    "HEAD",
+  ])
+  if (log.code !== 0) return { baseline: head.out.trim(), kind: "none" }
+  let oldest: { sha: string; parent: string; subject: string } | undefined
+  for (const line of log.out.split("\n").filter((entry) => entry.trim())) {
+    const [sha, parent, ...subject] = line.split(" ")
+    // git log walks newest-first: the last record seen is the oldest
+    // boundary — the walk's deepest edge, whatever newer boundaries it
+    // passed.
+    oldest = { sha: sha!, parent: parent ?? "", subject: subject.join(" ") }
+  }
+  if (oldest === undefined) return { baseline: head.out.trim(), kind: "none" }
+  return { baseline: oldest.parent, kind: oldest.subject.startsWith("land auto/") ? "landing" : "driver" }
+}
+
+// The SHA a destination-wide scan diffs from (plans/0119's ruling, re-ruled
+// by 0173 D1): the boundary's parent above — shared by the release scan and
+// the round-close ledger (0119 D2: both gates, one set). The boundary commit
+// itself is the migration's oldest writing, so it sits inside the scanned
+// range; "" (the boundary at the root) scans the whole history.
 export async function driverBaseline(root: string): Promise<string> {
-  const proc = Bun.spawn(["git", "-C", root, "log", "-z", "--format=%H %B", "HEAD"], {
-    stdout: "pipe",
-    stderr: "ignore",
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
-  })
-  // Each NUL-terminated record is "<sha> <subject>\n…<trailers>\n"; the SHA
-  // is the first token, the trailer check spans the whole body. A record
-  // without the trailer answers itself as the baseline and stops the walk.
-  let baseline: string | undefined
-  const inspect = (entry: string): boolean => {
-    const sha = entry.slice(0, entry.indexOf(" "))
-    if (sha && !entry.includes("Auto-Stage:")) baseline = sha
-    return baseline === undefined
-  }
-  const reader = proc.stdout.getReader()
-  const decode = new TextDecoder()
-  let carry = ""
-  try {
-    while (baseline === undefined) {
-      const { done, value } = await reader.read()
-      if (done) break
-      carry += decode.decode(value, { stream: true })
-      const entries = carry.split("\0")
-      carry = entries.pop() ?? ""
-      if (!entries.every(inspect)) break
-    }
-    // git -z terminates every record, the last included; a defensive pass in
-    // case one ever arrives unterminated.
-    if (baseline === undefined && carry.trim()) inspect(carry)
-  } finally {
-    await reader.cancel().catch(() => {})
-    proc.kill()
-    await proc.exited
-  }
-  return baseline ?? ""
+  return (await driverBoundary(root)).baseline
 }
 
 // —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md) ——
@@ -737,7 +802,26 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
       continue
     }
     if (head === sha) continue
+    // The same ancestry gate as unitViolations (plans/0173 D3): a rewound
+    // HEAD makes the range meaningless — the factual line says so, and the
+    // recovery ladder interprets (plans/0145 D1). An empty baseline (the
+    // unit started from no commits) has nothing to contain.
+    if (sha) {
+      const ancestry = await baselineAncestry(root, sha)
+      if (ancestry !== true) {
+        problems.push(
+          ancestry === false
+            ? `${rel}: history rewritten below the unit baseline (HEAD ${head} does not contain ${sha})`
+            : `${rel}: the baseline ${sha} cannot be resolved against HEAD, baseline check failed`,
+        )
+        continue
+      }
+    }
     const foreign = await foreignCommits(root, sha)
+    if (foreign === undefined) {
+      problems.push(`${rel}: the baseline..HEAD range cannot be judged (git log failed), baseline check failed`)
+      continue
+    }
     if (foreign > 0) {
       // Factual line only; the interpretation (adoption, no reuse, no
       // rollback) is the recovery ladder's (plans/0145 D1).
@@ -785,9 +869,28 @@ export async function rollbackUnit(
       const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
       const head = got?.code === 0 ? got.out.trim() : ""
       // External commits mixed in: this repository is not rolled back
-      // (rollback reclaims only the driver's own within-unit changes).
+      // (rollback reclaims only the driver's own within-unit changes). The
+      // same judgment holds for a range that cannot be judged at all and
+      // for a rewound HEAD (plans/0173 D3) — the repository goes to the
+      // human, never to a blind reset (the reset --soft below over a
+      // rewound HEAD would move HEAD forward and stash the reversal).
       if (entry && head && head !== entry.sha) {
+        if (entry.sha) {
+          const ancestry = await baselineAncestry(root, entry.sha)
+          if (ancestry === false) {
+            result.failures.push({ rel, error: `history rewritten below the unit baseline (HEAD ${head} does not contain ${entry.sha}); this repo is not rolled back, please handle manually` })
+            continue
+          }
+          if (ancestry === undefined) {
+            result.failures.push({ rel, error: `the baseline ${entry.sha} cannot be resolved against HEAD; this repo is not rolled back, please handle manually` })
+            continue
+          }
+        }
         const foreign = await foreignCommits(root, entry.sha)
+        if (foreign === undefined) {
+          result.failures.push({ rel, error: `the baseline..HEAD range cannot be judged (git log failed); this repo is not rolled back, please handle manually` })
+          continue
+        }
         if (foreign > 0) {
           result.failures.push({ rel, error: `${foreign} non-driver commit(s) detected (no Auto-Stage trailer); this repo is not rolled back, please handle manually` })
           continue
@@ -1367,9 +1470,43 @@ export async function git(root: string, args: string[]): Promise<{ code: number;
   // fail with "index.lock: File exists". Optional locks are exactly that —
   // optional: this env drops only the opportunistic refresh write, never the
   // locks commands require (add/commit/stash take theirs regardless).
-  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } })
+  // The driver's own variables are scrubbed from every git child's
+  // environment (plans/0173 D4, 0165-142): the target's git hooks run inside
+  // these children, and the switches layer's OPENCODE_AUTO_* (0059 X1's
+  // measured carrier — a project's pre-commit hook starting real agent
+  // sessions through OPENCODE_AUTO_AGENT) are the driver's alone, read by
+  // nothing but src/switches.ts in this process.
+  const env: NodeJS.ProcessEnv = { GIT_OPTIONAL_LOCKS: "0" }
+  for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("OPENCODE_AUTO_") && value !== undefined) env[key] = value
+  const proc = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe", env })
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
   return { code, out, err }
+}
+
+// The git hooks each repository under the target carries (plans/0173 D4,
+// 0165-142): a non-sample file under the repository's hooks directory, or a
+// core.hooksPath set inside the repository — the person's commit policy,
+// which the driver's commits honor too (the ruling) while the spawn scrubs
+// the driver's variables from their environment. Detection only (P8): the
+// caller's one teaching line names what runs and what a failure means; no
+// remediation is invented. Read-only, so it runs under dryrun as well.
+export async function hookReports(dir: string): Promise<string[]> {
+  const lines: string[] = []
+  for (const root of await repoRoots(dir)) {
+    const rel = relative(dir, root) || "."
+    const configured = await git(root, ["config", "--get", "core.hooksPath"])
+    const hooksDir = configured.code === 0 && configured.out.trim() ? resolve(root, configured.out.trim()) : join(root, ".git", "hooks")
+    const names = (await readdir(hooksDir).catch(() => []))
+      .filter((name) => !name.endsWith(".sample"))
+      .sort()
+    const inside = configured.code === 0 && configured.out.trim() ? hooksDir.startsWith(root) : true
+    if (names.length && inside) {
+      lines.push(
+        `⚠ ${rel} carries git hook(s): ${names.join(", ")} — they run on the driver's commits too; a failing hook halts the run as a commit failure. The driver's OPENCODE_AUTO_* variables are scrubbed from their environment`,
+      )
+    }
+  }
+  return lines
 }
 
 // git names paths physically: after `git -C <dir>` chdir resolves symlinks,
@@ -1504,13 +1641,16 @@ export type TaskFirstCommit = { first: string | undefined; older: boolean }
 export async function taskFirstCommit(root: string, taskId: string): Promise<TaskFirstCommit | undefined> {
   const log = await git(root, ["log", "-z", "--format=%H%x1f%B%x1e"]).catch(() => undefined)
   if (!log || log.code !== 0) return undefined
-  const trailer = `Auto-Task: ${taskId}`
   const corpus = await taskCorpusCommits(root, taskId)
   let first: string | undefined
   let older = false
   for (const entry of log.out.split("\x1e")) {
     const [sha, body] = entry.replaceAll("\0", "").split("\x1f")
-    if (!sha?.trim() || !(body ?? "").split("\n").some((line) => line.trim() === trailer)) continue
+    // The trailer block is the one grammar (plans/0173 D2): the Auto-Task
+    // key read from the body's last paragraph, never a whole-line match
+    // anywhere in the body (a quoted message above the block was the same
+    // accidental shape the Auto-Stage readers carried).
+    if (!sha?.trim() || trailerBlock(body ?? "")?.get("Auto-Task") !== taskId) continue
     // git log walks newest-first, so the last in-corpus hit is the oldest.
     if (corpus === undefined || corpus.has(sha.trim())) first = sha.trim()
     else older = true

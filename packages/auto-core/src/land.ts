@@ -184,7 +184,13 @@ export async function landUnit(dir: string, opts: LandOptions): Promise<LandOutc
     }
     // Refusal 2 — foreign commits mixed into the round branch's range
     // (commits without the Auto-Stage trailer): never landed automatically.
+    // A range that cannot be judged at all (plans/0173 D3) lands nothing
+    // either — conservative under uncertainty (P12).
     const foreign = await foreignCommits(root, base, branch)
+    if (foreign === undefined) {
+      problems.push(`${rel}: the ${base}..${branch} range cannot be judged (git log failed); foreign commits are never landed automatically — land by hand`)
+      continue
+    }
     if (foreign > 0) {
       problems.push(`${rel}: ${foreign} non-driver commit(s) on ${branch} since the isolation point (no Auto-Stage trailer); foreign commits are never landed automatically — land by hand`)
       continue

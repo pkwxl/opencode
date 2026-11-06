@@ -15,7 +15,7 @@ import { dirname, join } from "node:path"
 import type { AgentHost } from "../src/agent/types"
 import { ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
-import { beginUnit, changedFiles } from "../src/git"
+import { beginUnit, changedFiles, commitTree } from "../src/git"
 import { runAll } from "../src/loop"
 import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, removeRetiredNumberingRecord, type RunAllOpts } from "../src/loop-preflight"
 import { saveProgress } from "../src/resume"
@@ -351,6 +351,75 @@ describe("the remediation executor row at run start (plans/0172 D2, 0165-025)", 
     const { lines, result } = await capture(dir)
     expect("exit" in result).toBe(false)
     expect(lines).toEqual([])
+  })
+})
+
+describe("the run-start hooks notice (plans/0173 D4, 0165-142)", () => {
+  // The remediation executor describe's project/capture, local to this one.
+  async function project(): Promise<string> {
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  async function capture(dir: string): Promise<{ lines: string[]; result: Awaited<ReturnType<typeof preflight>> }> {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    let result: Awaited<ReturnType<typeof preflight>>
+    try {
+      result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    return { lines, result }
+  }
+
+  test("a hook present → one notice line naming it; none → silent (the byte-identical floor)", async () => {
+    const dir = await project()
+    const bare = await capture(dir)
+    expect("exit" in bare.result).toBe(false)
+    expect(bare.lines).toEqual([])
+    await writeFile(join(dir, ".git/hooks/pre-commit"), "#!/bin/sh\nexit 0\n")
+    await chmod(join(dir, ".git/hooks/pre-commit"), 0o755)
+    const hooked = await capture(dir)
+    expect("exit" in hooked.result).toBe(false)
+    const notice = hooked.lines.find((line) => line.startsWith("⚠ . carries git hook(s)"))
+    expect(notice).toBeDefined()
+    expect(notice).toContain("pre-commit")
+    expect(notice).toContain("OPENCODE_AUTO_* variables are scrubbed")
+  })
+
+  test("the spawn scrub: a hook capturing its environment sees no OPENCODE_AUTO_* (0059 X1's carrier closed)", async () => {
+    const dir = await project()
+    const seen = join(dir, "hook-env.txt")
+    await writeFile(join(dir, ".git/hooks/pre-commit"), `#!/bin/sh\nenv > "${seen}"\nexit 0\n`)
+    await chmod(join(dir, ".git/hooks/pre-commit"), 0o755)
+    process.env.OPENCODE_AUTO_AGENT = "the driver's own"
+    try {
+      await writeFile(join(dir, "work.txt"), "w\n")
+      const settled = await commitTree(dir, { id: "T-001", title: "t" }, { stage: "implement", subject: "T-001: work" })
+      expect(settled.ok).toBe(true)
+    } finally {
+      delete process.env.OPENCODE_AUTO_AGENT
+    }
+    const captured = await Bun.file(seen).text()
+    expect(captured).toContain("GIT_OPTIONAL_LOCKS=0")
+    expect(captured).not.toContain("OPENCODE_AUTO_")
   })
 })
 

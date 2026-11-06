@@ -28,6 +28,9 @@ import {
   taskChangedPaths,
   unitBaseline,
   unitViolations,
+  driverStage,
+  driverBoundary,
+  foreignCommits,
   writeLocalIdentity,
   scriptGuardSnapshot,
   scriptGuardCheck,
@@ -1520,6 +1523,127 @@ describe("scriptGuardSnapshot / scriptGuardCheck (the side-effect guard, plans/0
       // No auto-undo ran: the commit stands for the human.
       expect((await git(dir, "log", "--format=%s")).split("\n")[0]).toBe("scripted by the script")
       expect((await git(dir, "stash", "list")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// plans/0173 (0165-140/141, 0165-004): the driver witness is the trailer
+// block (one grammar for every audit reader), the audit range is checked
+// (a failed log or a rewound HEAD never answers zero), and the boundary walk
+// passes trailer-less commits (person fixes, landings) instead of stopping
+// at them.
+describe("driverStage / trailerBlock (plans/0173 D2, 0165-140)", () => {
+  test("the trailer paragraph witnesses; prose mentions, quoted bodies and colon-subjects never", () => {
+    expect(driverStage("work\n\nAuto-Task: T-001\nAuto-Stage: implement")).toBe("implement")
+    expect(driverStage("work\n\nAuto-Stage: carryover")).toBe("carryover")
+    // A prose paragraph mentioning the trailer is not a trailer block.
+    expect(driverStage("person: tweak\n\nNote: the driver's Auto-Stage: trailer is not on this one.")).toBeUndefined()
+    // A quoted message above the block: the last paragraph is the prose.
+    expect(driverStage("squash\n\nSquashed commit of the following:\n\nwork\n\nAuto-Stage: implement\n\nperson note")).toBeUndefined()
+    // A single-line colon subject parses as a block with another key.
+    expect(driverStage("Fix: the thing")).toBeUndefined()
+    // A prose line inside the last paragraph voids the block.
+    expect(driverStage("work\n\nAuto-Stage: implement\nbut this line is prose")).toBeUndefined()
+  })
+
+  test("foreignCommits counts by the block: the prose-mention commit is foreign, the trailer commit is not", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-witness-"))
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, "a"), "a")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "base")
+      const base = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "b"), "b")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "person: tweak\n\nNote: the driver's Auto-Stage: trailer is not on this one.")
+      await writeFile(join(dir, "c"), "c")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "driver\n\nAuto-Stage: implement\nAuto-Task: T-001")
+      expect(await foreignCommits(dir, base)).toBe(1)
+      expect(await foreignCommits(dir, "deadbeef")).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("the audited range (plans/0173 D3, 0165-141)", () => {
+  test("a rewound HEAD blocks unitViolations and baselineIntact, never counts the empty range as clean", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-rewind-"))
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      await writeFile(join(dir, "r"), "r")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "root")
+      await writeFile(join(dir, "a"), "a")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "base")
+      const base = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "b"), "b")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "driver b\n\nAuto-Stage: implement\nAuto-Task: T-001")
+      // The session's mid-unit undo: history rewound below the baseline —
+      // HEAD sits on the root, which never contained the baseline commit.
+      await git(dir, "reset", "--hard", "HEAD~2")
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      const baseline = [{ root: dir, sha: base }]
+      const line = `.: history rewritten below the unit baseline (HEAD ${head} does not contain ${base})`
+      expect(await unitViolations(dir, baseline)).toEqual([line])
+      expect(await baselineIntact(dir, baseline)).toEqual([line])
+      const rolled = await rollbackUnit(dir, baseline, { task: "T-001", unit: "T-001" })
+      expect(rolled.ok).toBe(false)
+      expect(rolled.failures[0]!.error).toContain("history rewritten below the unit baseline")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("driverBoundary: the oldest boundary's parent, landings recognized, none → HEAD, the root driver commit → empty baseline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-boundary-"))
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      // The root IS a driver commit: the whole history is the run's.
+      await writeFile(join(dir, "a"), "a")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "driver root\n\nAuto-Stage: implement")
+      expect(await driverBoundary(dir)).toEqual({ baseline: "", kind: "driver" })
+      // Person commits above the run stay inside: the boundary is still the
+      // root, the scan covers them.
+      await writeFile(join(dir, "b"), "b")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "person fix on top")
+      expect(await driverBoundary(dir)).toEqual({ baseline: "", kind: "driver" })
+      // A repository whose committed history is the person's alone.
+      const dir2 = await mkdtemp(join(tmpdir(), "auto-boundary2-"))
+      try {
+        await git(dir2, "init", "-q")
+        await git(dir2, "config", "user.email", "t@example.com")
+        await git(dir2, "config", "user.name", "t")
+        await writeFile(join(dir2, "a"), "a")
+        await git(dir2, "add", "-A")
+        await git(dir2, "commit", "-qm", "person history")
+        const head = (await git(dir2, "rev-parse", "HEAD")).trim()
+        expect(await driverBoundary(dir2)).toEqual({ baseline: head, kind: "none" })
+        // A landing subject is a boundary: the squashed round is the
+        // migration's content.
+        await writeFile(join(dir2, "b"), "b")
+        await git(dir2, "add", "-A")
+        const seed = (await git(dir2, "rev-parse", "HEAD")).trim()
+        await git(dir2, "commit", "-qm", "land auto/R-01: 3 commit(s) of round 1")
+        expect(await driverBoundary(dir2)).toEqual({ baseline: seed, kind: "landing" })
+      } finally {
+        await rm(dir2, { recursive: true, force: true })
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

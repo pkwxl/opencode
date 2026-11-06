@@ -392,6 +392,21 @@ describe("the sealed channel (D4): one diff check, the person's amendment the on
     expect(violated.join("\n")).toContain(record.sha.slice(0, 7))
   })
 
+  test("a person commit only mentioning the trailer in prose is the amendment, never the violation (plans/0173 D2)", async () => {
+    const { dir, phase, ctx } = await wallProject()
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    writeFileSync(join(dir, "docs/T-001/notes.md"), "# Notes (T-001)\n\nAmended, the message quoting the driver's mark.\n\n<!-- auto: eof -->\n")
+    await git(dir, "add", "-A")
+    // The last paragraph quotes the trailer mid-line — a person commit by
+    // grammar (no trailer block), however loud the mention.
+    await git(dir, "commit", "-qm", "person: note\n\nThis quotes the driver's Auto-Stage: implement marker in prose.")
+    const amended = await captureRun(async () => {
+      expect(await wallBoundary(ctx, phase)).toEqual([])
+      return 0
+    })
+    expect(amended.lines.join("\n")).toContain("person-committed amendment")
+  })
+
   test("the sealed paths join protect's declared set for the rest of the run", async () => {
     const { phase, ctx } = await wallProject()
     expect(await wallBoundary(ctx, phase)).toEqual([])

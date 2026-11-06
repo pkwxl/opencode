@@ -50,7 +50,7 @@ import { rm, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { taskDir } from "./docpaths"
 import { allowBase, boundaryAllowedTargets, coveringAllowKeys, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
-import { firstLine, git, scriptGuardSnapshot, type GitOps } from "./git"
+import { firstLine, git, scriptGuardSnapshot, type GitOps, driverStage } from "./git"
 import { allowWrite, protectAdditional, reprotect } from "./protect"
 import { loadPhaseTypes } from "./phases/custom"
 import { phaseArtifacts, phaseTitle, readPhases, type PhaseUnit } from "./phases"
@@ -336,7 +336,7 @@ export async function sealedChannelCheck(dir: string, record: WallRecord): Promi
     const sha = entry.slice(0, sep).trim()
     if (!sha) continue
     const body = entry.slice(sep + 1)
-    if (body.includes("Auto-Stage:")) {
+    if (driverStage(body) !== undefined) {
       const touched = await git(dir, ["show", "--name-only", "--format=", sha, "--", ...record.sealed])
       const files = touched.out.split("\n").map((line) => line.trim()).filter(Boolean)
       problems.push(

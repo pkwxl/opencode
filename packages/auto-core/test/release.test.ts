@@ -142,3 +142,87 @@ describe("releaseCheck (plans/0103 D2/D3)", () => {
     }),
   )
 })
+
+// plans/0173 D1 (0165-004 — the S1): the scan's baseline is the parent of
+// the oldest boundary commit reachable from HEAD, so the release loop's own
+// remedy commits — and any person or agent commit above the run — stay
+// inside the scanned range; a landed repository is recognized by its landing
+// subject; a repository under config isolate with no boundary reachable is
+// the unlanded round and refuses instead of certifying.
+describe("releaseCheck's driver boundary (plans/0173 D1)", () => {
+  test(
+    "a partial fix commit between two releases stays scanned: the second release still lists the rest (the S1 repro)",
+    withDir(async (dir) => {
+      await repo(dir)
+      await destination(dir, {
+        "src/a.rs": "use crate::t;\n\n// ported per docs/T-004/report.md\n",
+        "src/b.rs": "// decided in T-004\nfn b() {}\n",
+      })
+      const first = await releaseCheck(dir)
+      expect(first.problems.length).toBe(2)
+      // The person's remedy loop: fix one finding, commit (the only way
+      // past check 1), re-run — the rest must still be listed, never
+      // certified over.
+      writeFileSync(join(dir, "vendor", "src", "a.rs"), "use crate::t;\n\n// ported per the upstream ABI notes\n")
+      await git(join(dir, "vendor"), "add", "-A")
+      await git(join(dir, "vendor"), "commit", "-qm", "person: restate a")
+      const second = await releaseCheck(dir)
+      expect(second.certified).toEqual([])
+      expect(second.problems.length).toBe(1)
+      expect(second.problems[0]).toContain("src/b.rs")
+      expect(second.problems[0]).toContain("task id")
+      expect((await Bun.file(join(dir, "vendor", "src", "b.rs")).text()).includes("decided in T-004")).toBe(true)
+    }),
+  )
+
+  test(
+    "the ✓ line states what was scanned: the boundary kind, the baseline, the changed-file count",
+    withDir(async (dir) => {
+      await repo(dir)
+      await destination(dir, { "src/ok.c": "int ok;\n" })
+      const check = await releaseCheck(dir)
+      expect(check.certified).toHaveLength(1)
+      expect(check.certified[0]).toMatch(
+        /✓ vendor @ [0-9a-f]+ — no process references, no task ids, no paths outside its own root \(scanned 1 changed file\(s\) since baseline [0-9a-f]+ \(driver boundary\)\)$/,
+      )
+    }),
+  )
+
+  test(
+    "a landed repository is recognized by its landing subject: the squashed round is the migration's content and is scanned",
+    withDir(async (dir) => {
+      await repo(dir)
+      mkdirSync(join(dir, "vendor"), { recursive: true })
+      await repo(join(dir, "vendor"))
+      writeFileSync(join(dir, "vendor", "seed.txt"), "seed\n")
+      await git(join(dir, "vendor"), "add", "-A")
+      await git(join(dir, "vendor"), "commit", "-qm", "seed")
+      // The landing commit (plans/0074 §2.3): trailer-less by design, the
+      // round's net change as exactly one commit.
+      writeFileSync(join(dir, "vendor", "ported.rs"), "// ported per docs/T-004/report.md\n")
+      await git(join(dir, "vendor"), "add", "-A")
+      await git(join(dir, "vendor"), "commit", "-qm", "land auto/R-01: 3 commit(s) of round 1")
+      const check = await releaseCheck(dir)
+      expect(check.certified).toEqual([])
+      expect(check.problems).toHaveLength(1)
+      expect(check.problems[0]).toContain("ported.rs")
+    }),
+  )
+
+  test(
+    "a repository under config isolate with no boundary reachable refuses naming the round branch (the unlanded round)",
+    withDir(async (dir) => {
+      await repo(dir)
+      await destination(dir, { "src/ok.c": "int ok;\n" }, "person work, never the driver's")
+      const plain = await releaseCheck(dir, { isolate: ["vendor"] })
+      expect(plain.certified).toEqual([])
+      expect(plain.problems).toHaveLength(1)
+      expect(plain.problems[0]).toContain("auto/R-01")
+      // Outside the isolate set the same repository keeps 0119's person-
+      // content posture: nothing of the run in history, nothing scanned.
+      const outside = await releaseCheck(dir)
+      expect(outside.problems).toEqual([])
+      expect(outside.certified).toHaveLength(1)
+    }),
+  )
+})
