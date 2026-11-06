@@ -482,16 +482,16 @@ describe("the scoped variants over real git (plans/0099 stage B, D4/D7)", () => 
       await Bun.write(join(repo, "docs/T-001/new.md"), "fresh T-001\n")
       await Bun.write(join(repo, "docs/T-002/new.md"), "fresh T-002\n")
       const full = await unitChangedFiles(repo, baseline)
-      expect([...full].sort()).toEqual(["docs/T-001/a.md", "docs/T-001/new.md", "docs/T-002/b.md", "docs/T-002/new.md"])
+      expect([...full.files].sort()).toEqual(["docs/T-001/a.md", "docs/T-001/new.md", "docs/T-002/b.md", "docs/T-002/new.md"])
       // The absent and undefined parameters are the same whole-subtree question.
       expect(await unitChangedFiles(repo, baseline, undefined)).toEqual(full)
       const scoped = await unitChangedFiles(repo, baseline, ["docs/T-001/"])
-      expect([...scoped].sort()).toEqual(["docs/T-001/a.md", "docs/T-001/new.md"])
-      const lines = await unitAddedLines(repo, baseline, ["docs/T-001/"])
+      expect([...scoped.files].sort()).toEqual(["docs/T-001/a.md", "docs/T-001/new.md"])
+      const lines = (await unitAddedLines(repo, baseline, ["docs/T-001/"])).lines
       expect([...lines.keys()].sort()).toEqual(["docs/T-001/a.md", "docs/T-001/new.md"])
       expect(lines.get("docs/T-001/a.md")!.map((line) => line.text)).toContain("new line T-001")
-      const allLines = await unitAddedLines(repo, baseline)
-      expect([...allLines.keys()].sort()).toEqual([...full].sort())
+      const allLines = (await unitAddedLines(repo, baseline)).lines
+      expect([...allLines.keys()].sort()).toEqual([...full.files].sort())
     } finally {
       await rm(repo, { recursive: true, force: true })
     }

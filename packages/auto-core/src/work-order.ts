@@ -194,12 +194,12 @@ export async function adoptUnit(
   }
   problems.push(...checklistProblems(items))
   if (await unitQuiet(dir, baseline)) problems.push("no changes relative to HEAD (the standalone session left nothing to adopt)")
-  for (const rel of await unitChangedFiles(dir, baseline)) {
+  for (const rel of (await unitChangedFiles(dir, baseline)).files) {
     if (!rel.toLowerCase().endsWith(".md") || eofScanExempt(rel, [...(opts.scanExempt ?? [])])) continue
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
-  const refs = processReferenceScan(await unitAddedLines(dir, baseline), [...(opts.scanExempt ?? [])], { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
+  const refs = processReferenceScan((await unitAddedLines(dir, baseline)).lines, [...(opts.scanExempt ?? [])], { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
   // Recorded, never blocking — every finding family (plans/0103 D2 read
   // whole, its second addendum); release enforces. One aggregate line,
   // never the per-finding ledger (plans/0109 D6).

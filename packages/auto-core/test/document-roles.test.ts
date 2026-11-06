@@ -345,7 +345,7 @@ describe("unitAddedLines", () => {
       await Bun.write(join(dir, "a.c"), "// old docs/T-001/x.md\nint a;\n++ plus-prefixed content\nint b;\n")
       await Bun.write(join(dir, "new.c"), "one\ntwo\n")
       await rm(join(dir, "gone.c"))
-      const added = await unitAddedLines(dir, baseline)
+      const added = (await unitAddedLines(dir, baseline)).lines
       expect(added.get("a.c")).toEqual([
         { line: 3, text: "++ plus-prefixed content" },
         { line: 4, text: "int b;" },
@@ -364,7 +364,7 @@ describe("unitAddedLines", () => {
   })
 
   test("empty baseline (non-git / gate off) yields nothing from git", async () => {
-    expect((await unitAddedLines(join(tmpdir(), "nonexistent-dir"), [])).size).toBe(0)
+    expect((await unitAddedLines(join(tmpdir(), "nonexistent-dir"), [])).lines.size).toBe(0)
   })
 })
 
@@ -383,7 +383,7 @@ describe("driverBaseline (plans/0119: git's modified view replaces the whole tre
       expect(await driverBaseline(dir)).toBe(head)
       // The scan that follows sees only uncommitted/untracked state — the
       // committed person content is not the migration's ledger.
-      const added = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      const added = (await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])).lines
       expect(added.size).toBe(0)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -404,7 +404,7 @@ describe("driverBaseline (plans/0119: git's modified view replaces the whole tre
       await git(dir, "add", "-A")
       await git(dir, "commit", "-q", "-m", driverMessage("second driver write"))
       expect(await driverBaseline(dir)).toBe(seed)
-      const added = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      const added = (await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])).lines
       expect(added.has("first.c")).toBe(true)
       expect(added.has("second.c")).toBe(true)
       expect(added.has("seed.c")).toBe(false)
@@ -415,7 +415,7 @@ describe("driverBaseline (plans/0119: git's modified view replaces the whole tre
       await git(dir, "add", "-A")
       await git(dir, "commit", "-q", "-m", "person on top")
       expect(await driverBaseline(dir)).toBe(seed)
-      const withPerson = await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])
+      const withPerson = (await unitAddedLines(dir, [{ root: dir, sha: await driverBaseline(dir) }])).lines
       expect(withPerson.has("person.c")).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })

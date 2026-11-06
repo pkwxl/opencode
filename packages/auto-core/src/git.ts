@@ -621,7 +621,7 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
   return true
 }
 
-// This unit's list of git-changed files (the data source of the full-document
+// The unit's changed-file set (the data source of the full-document
 // eof-marker scan, session-boundary-hardening §4.6): each repository's
 // tracked changes over baseline..worktree (git diff <baseline> — this unit's
 // driver commits at handover boundaries during the unit also fall inside the
@@ -634,13 +634,22 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
 // filters by it, so blame never crosses units under doc-lane concurrency
 // (the baseline..worktree range contains the siblings' writes). Absent =
 // today's whole-subtree question, byte-identical.
-export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<Set<string>> {
+// unreadable (plans/0176 D2, 0165-034): at least one repository's toplevel
+// or diff read failed — the set is the same partial answer as before (the
+// failing repository contributes nothing), and a caller whose verdict rides
+// on completeness (the release posture) blocks on the flag; the round-time
+// callers keep the floor their own plans rule.
+export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<{ files: Set<string>; unreadable: boolean }> {
   const phys = await physicalDir(dir)
   const files = new Set<string>()
+  let unreadable = false
   for (const { root, sha } of baseline) {
     const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
     const toplevel = top?.code === 0 ? top.out.trim() : ""
-    if (!toplevel) continue
+    if (!toplevel) {
+      unreadable = true
+      continue
+    }
     // An empty-string baseline = the repository had no commits when the unit
     // started; compare against the empty tree (everything this unit posts
     // falls inside the range).
@@ -648,14 +657,17 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scop
     // outer one; its inner files are listed separately by that repository's
     // own diff (the same reasoning as statusEntries).
     const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", ...(scope ?? ["."])])
-    if (diff.code !== 0) continue
+    if (diff.code !== 0) {
+      unreadable = true
+      continue
+    }
     for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
   }
   for (const rel of await untrackedFiles(dir)) {
     if (scope !== undefined && !withinScopes(rel, scope)) continue
     files.add(rel)
   }
-  return files
+  return { files, unreadable }
 }
 
 // Lines this unit added, per file relative to the target directory (M2.3, the
@@ -669,9 +681,13 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline, scop
 // scope (plans/0099 D7): the diff gains the pathspec and the untracked walk
 // filters by it — under doc-lane concurrency the unit's attribution must be
 // its own writes alone. Absent = today's whole-subtree diff, byte-identical.
-export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<Map<string, AddedLine[]>> {
+// unreadable (plans/0176 D2, 0165-034): at least one repository's toplevel
+// or diff read failed — the map is the same partial answer as before, and
+// the release posture blocks on the flag (the round scans keep their floor).
+export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?: readonly string[]): Promise<{ lines: Map<string, AddedLine[]>; unreadable: boolean }> {
   const phys = await physicalDir(dir)
   const added = new Map<string, AddedLine[]>()
+  let unreadable = false
   const push = (rel: string, line: number, text: string) => {
     const list = added.get(rel) ?? []
     list.push({ line, text })
@@ -680,7 +696,10 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?
   for (const { root, sha } of baseline) {
     const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
     const toplevel = top?.code === 0 ? top.out.trim() : ""
-    if (!toplevel) continue
+    if (!toplevel) {
+      unreadable = true
+      continue
+    }
     const diff = await git(root, [
       "-c",
       "core.quotePath=false",
@@ -695,7 +714,10 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?
       "--",
       ...(scope ?? ["."]),
     ])
-    if (diff.code !== 0) continue
+    if (diff.code !== 0) {
+      unreadable = true
+      continue
+    }
     // A file header runs from `diff --git` to the first hunk; only there is a
     // `+++ ` line the new-side path (an added content line "++ x" also starts
     // with "+++ ").
@@ -735,7 +757,7 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?
     if (text.includes("\0")) continue
     text.split("\n").forEach((content, i) => push(rel, i + 1, content))
   }
-  return added
+  return { lines: added, unreadable }
 }
 
 // git's empty-tree hash (a fixed constant): a commit-less repository's

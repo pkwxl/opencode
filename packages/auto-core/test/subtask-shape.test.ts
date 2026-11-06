@@ -513,14 +513,15 @@ describe("unitChangedFiles (the D6 basis)", () => {
       await Bun.write(join(dir, "d.md"), "d\n")
       await rm(join(dir, "b.md"))
       const files = await unitChangedFiles(dir, baseline)
-      expect(files).toEqual(new Set(["a.md", "c.md", "d.md"]))
+      expect(files.unreadable).toBe(false)
+      expect(files.files).toEqual(new Set(["a.md", "c.md", "d.md"]))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   test("an empty baseline (non-git / gate off) returns the empty set", async () => {
-    expect(await unitChangedFiles(join(tmpdir(), "nonexistent-dir"), [])).toEqual(new Set())
+    expect((await unitChangedFiles(join(tmpdir(), "nonexistent-dir"), [])).files).toEqual(new Set())
   })
 })
 

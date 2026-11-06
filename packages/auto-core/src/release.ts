@@ -26,7 +26,7 @@
 // they are self-contained content, and stripping them would erase recorded
 // rationale — editorial work the person may do by choice, never a gate.
 // No state is written; routing stays a pure function of the tree.
-import { nestedRepoPrefixes, repoRoots, statusEntries, unitAddedLines, driverBoundary, git } from "./git"
+import { nestedRepoPrefixes, repoRoots, statusEntriesRead, unitAddedLines, driverBoundary, git } from "./git"
 import { currentRound } from "./phases"
 import { roundDirName } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
@@ -58,8 +58,16 @@ export async function releaseCheck(dir: string, opts: { scanExempt?: readonly st
   for (const root of roots) {
     const prefix = nestedRepoPrefixes(dir, [root])[0]!
     // 1. A clean tree: any entry (staged, unstaged or untracked) means the
-    // repository is mid-flight, not releasable.
-    const dirty = await statusEntries(dir, root)
+    // repository is mid-flight, not releasable. The strict read (plans/0176
+    // D1, 0165-034): an unreadable status is a blocking problem, never the
+    // legacy typed empty list a corrupt index produced while the ✓
+    // certified below — a destination whose git cannot be read cannot be
+    // certified at all.
+    const dirty = await statusEntriesRead(dir, root)
+    if (dirty === undefined) {
+      problems.push(`${prefix} is unreadable (git status failed; repair the repository, then re-run release)`)
+      continue
+    }
     if (dirty.length) {
       problems.push(`${prefix} holds ${dirty.length} uncommitted path(s) (e.g. ${dirty[0]!.rel}): commit or clean them, then re-run release`)
       continue
@@ -87,10 +95,19 @@ export async function releaseCheck(dir: string, opts: { scanExempt?: readonly st
     // are deliverable content like the run's own — filtered to its own
     // paths, the workspace's files never the destination's business, and
     // run under the release posture.
-    const added = new Map([...await unitAddedLines(dir, [{ root, sha: boundary.baseline }])].filter(([rel]) => rel === prefix || rel.startsWith(`${prefix}/`)))
-    const scan = processReferenceScan(added, opts.scanExempt, { nested: [prefix], dir, release: true })
-    problems.push(...scan.problems)
-    if (!scan.problems.length) {
+    const scan = await unitAddedLines(dir, [{ root, sha: boundary.baseline }])
+    if (scan.unreadable) {
+      // The scan's input could not be read (plans/0176 D2, 0165-034): a
+      // failed diff used to contribute no lines and no problem, and the ✓
+      // certified over the empty scan — the state the ✓ line states what
+      // was scanned cannot name.
+      problems.push(`${prefix} cannot be scanned (a git read over the destination failed; repair the repository, then re-run release)`)
+      continue
+    }
+    const added = new Map([...scan.lines].filter(([rel]) => rel === prefix || rel.startsWith(`${prefix}/`)))
+    const found = processReferenceScan(added, opts.scanExempt, { nested: [prefix], dir, release: true })
+    problems.push(...found.problems)
+    if (!found.problems.length) {
       // The ✓ states what was scanned (plans/0173 D1): the boundary kind,
       // the baseline it diffed from and the changed-file count — the
       // certified state is checkable, not asserted.

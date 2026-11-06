@@ -226,3 +226,23 @@ describe("releaseCheck's driver boundary (plans/0173 D1)", () => {
     }),
   )
 })
+
+// plans/0176 (0165-034, S19-02): a destination whose git cannot be read never
+// certifies — the clean-tree check reads strict and the scan blocks on its
+// input's unreadable state; the old gate printed its ⚠ lines and then the ✓
+// over the empty scan with exit 0.
+test(
+  "an unreadable destination (corrupt index) blocks, never certifies",
+  withDir(async (dir) => {
+    await repo(dir)
+    await destination(dir, { "src/a.rs": "//! The geometry slot.\npub fn a() {}\n" })
+    // The S19-02 repro's shape: a crashed tool mid-write, a half-copied
+    // repository — the index is garbage.
+    writeFileSync(join(dir, "vendor", ".git", "index"), "not an index")
+    const check = await releaseCheck(dir)
+    expect(check.certified).toEqual([])
+    expect(check.problems.length).toBeGreaterThan(0)
+    expect(check.problems.some((line) => line.includes("unreadable") || line.includes("cannot be scanned"))).toBe(true)
+    expect(check.problems.every((line) => !line.startsWith("✓"))).toBe(true)
+  }),
+)

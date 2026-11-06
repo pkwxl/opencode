@@ -52,7 +52,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Round user report (retired to optional) → `src/docpaths.ts` + `src/document/roles.ts` + `src/driver-helper.ts` (0081; 0109)
 - Survey phase and the human gate (`Gate: human`, `Fork:` holding for the person's scoped `Clarified: yes` — the trailing `## Release` region or the legacy flush-left line; the brief install mark-gated; near-miss forks and unreleased proposals holding) → `src/phases/registry.ts` + `src/phases.ts` + `src/loop-phase.ts` + `src/analysis.ts` + `src/loop-plan.ts` + `src/clarify.ts` + `templates/bundles/*/phases/survey.md` (0081; 0085; 0169)
 - Planning-input scaffold (`plan --scaffold`) → `src/intent/types.ts`/`src/intent/load.ts` + the shell's plan block (0081; 0158)
-- The release gate (clean-tree check + destination scan, read-only; the scanned range bounded by the oldest driver-or-landing commit's parent — 0173) → `src/release.ts` + `src/document/process-refs.ts` + the shell's release row (0103; 0119; 0173)
+- The release gate (clean-tree check + destination scan, read-only; the scanned range bounded by the oldest driver-or-landing commit's parent — 0173; the unreadable destination blocks, the scan inputs carrying their unreadable state — 0176) → `src/release.ts` + `src/document/process-refs.ts` + the shell's release row (0103; 0119; 0173; 0176)
 - The person-proxy brief (`driver-helper [dir]`) → `src/driver-helper.ts` + `src/plan.ts` + `src/phases.ts` + `src/round-close.ts` + the shell's row (0105; 0106; 0107; 0109)
 - Close and force-close → `src/close.ts` (0053)
 - Branch isolation and landing (config `isolate`, `land`) → `src/land.ts` + `src/git-land.ts` + the shell's land row (0073; 0074; 0155)

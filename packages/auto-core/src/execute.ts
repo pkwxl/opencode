@@ -1066,7 +1066,7 @@ export async function runSubtask(
       const prerequisites = checklistPrerequisites(items, index)
       const changed =
         split?.length && prerequisites.length
-          ? [...(await unitChangedFiles(dir, split))].filter((rel) => !splitStateFile(task.id, rel)).sort()
+          ? [...(await unitChangedFiles(dir, split)).files].filter((rel) => !splitStateFile(task.id, rel)).sort()
           : []
       return {
         siblings: items.flatMap((item, i) => (i + 1 === index ? [] : [`${subtaskId(i + 1)} ${checklistTitle(item.text)}${item.done ? " (done)" : ""}`])),
@@ -1319,12 +1319,12 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
   // terminator is no longer the last line fails too (the "appended after the
   // terminator" truncation shape), and the re-prompt feedback directs
   // restoring the terminal terminator.
-  for (const rel of await unitChangedFiles(dir, baseline)) {
+  for (const rel of (await unitChangedFiles(dir, baseline)).files) {
     if (!rel.toLowerCase().endsWith(".md") || shaped.has(rel) || eofScanExempt(rel, exempt)) continue
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
-  const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt, { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
+  const refs = processReferenceScan((await unitAddedLines(dir, baseline)).lines, exempt, { nested: nestedRepoPrefixes(dir, baseline.map((entry) => entry.root)), dir })
   // Destination containment is recorded, not blocking (plans/0103 D2, every
   // family since its second addendum): the release gate enforces it when
   // the person is ready to ship. One aggregate line, never the per-finding

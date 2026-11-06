@@ -67,7 +67,7 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
   const nestedRoots = (await repoRoots(dir)).filter((root) => root !== dir)
   const baseline: UnitBaseline = []
   for (const root of nestedRoots) baseline.push({ root, sha: await driverBaseline(root) })
-  const scan = processReferenceScan(await unitAddedLines(dir, baseline), opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
+  const scan = processReferenceScan((await unitAddedLines(dir, baseline)).lines, opts.scanExempt, { nested: nestedRepoPrefixes(dir, nestedRoots), dir })
   // The scan answers the count alone at round time — never a problem (every
   // family defers to release). Destination containment rides as one
   // aggregate warning (plans/0103 D2 recording, plans/0109 D6 shape): the
