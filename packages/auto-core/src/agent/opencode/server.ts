@@ -246,12 +246,22 @@ async function defaultSpawn(directory: string, inputs: SpawnInputs, log: Log): P
 export const opencodeHost: AgentHostFactory = (directory, options) =>
   manage(directory, options.server, { log: options.log, bin: options.bin, env: options.env, config: options.config })
 
-async function defaultConnect(url: string, directory: string, log: Log): Promise<Server> {
-  const healthy = await fetch(new URL("/api/health", url)).then(
+// The external server's health probe bound (plans/0218 D3, 0165-202): the
+// managed spawn fails loudly after 5 s; an external --server host that never
+// answers gets the same scale instead of riding the fetch default (~300 s).
+const CONNECT_HEALTH_TIMEOUT_MS = 5000
+
+export async function defaultConnect(url: string, directory: string, log: Log, healthTimeoutMs = CONNECT_HEALTH_TIMEOUT_MS): Promise<Server> {
+  let timedOut = false
+  const healthy = await fetch(new URL("/api/health", url), { signal: AbortSignal.timeout(healthTimeoutMs) }).then(
     (res) => res.ok,
-    () => false,
+    (error: unknown) => {
+      timedOut = error instanceof DOMException && error.name === "TimeoutError"
+      return false
+    },
   )
-  if (!healthy) throw new Error(`opencode server unavailable: ${url}`)
+  if (!healthy)
+    throw new Error(`opencode server unavailable: ${url}${timedOut ? ` (health check timed out after ${Math.round(healthTimeoutMs / 1000)}s — is the host reachable?)` : ""}`)
   return { client: createOpencodeClient({ baseUrl: url, directory, fetch: timeoutFetch({}, undefined, log) }), url, close: () => {} }
 }
 

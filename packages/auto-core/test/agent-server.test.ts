@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createServer, type Socket } from "node:net"
 import { createOpencodeServer, type OpencodeClient } from "@opencode-ai/sdk/v2"
-import { manage, opencodeHost, serverEnv, spawnOpencodeServer, timeoutFetch, withoutDeclaredTimeouts, type Server } from "../src/agent/opencode/server"
+import { defaultConnect, manage, opencodeHost, serverEnv, spawnOpencodeServer, timeoutFetch, withoutDeclaredTimeouts, type Server } from "../src/agent/opencode/server"
 
 // src/agent/opencode/server.ts (moved from src/server.ts in MA.3): server
 // lifecycle behind AgentHost, and the request timeout guard. Since the model
@@ -147,6 +148,53 @@ describe("manage", () => {
     expect(external.closed).toBe(0)
     handle.close()
     expect(external.closed).toBe(0)
+  })
+})
+
+describe("defaultConnect: the external server's health probe", () => {
+  let dir: string
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-server-connect-"))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("a host that accepts but never answers fails within the clock, the timeout taught (plans/0218 D3, 0165-202)", async () => {
+    // Pre-fix the probe carried no signal: an unreachable-but-unanswered
+    // --server host rode the fetch default (~300 s) looking like a hung run,
+    // where the managed spawn fails loudly in 5 s.
+    const sockets = new Set<Socket>()
+    const sock = createServer((socket) => {
+      sockets.add(socket)
+    })
+    await new Promise<void>((resolve) => sock.listen(0, "127.0.0.1", resolve))
+    const { port } = sock.address() as { port: number }
+    const url = `http://127.0.0.1:${port}`
+    const t0 = Date.now()
+    let error: unknown
+    try {
+      await defaultConnect(url, dir, log, 1000)
+    } catch (e) {
+      error = e
+    }
+    const elapsed = Date.now() - t0
+    // The aborted fetch leaves its never-answered connection server-side;
+    // destroy it so the close callback can fire.
+    for (const socket of sockets) socket.destroy()
+    await new Promise<void>((resolve) => sock.close(() => resolve()))
+    expect(elapsed).toBeLessThan(5000)
+    expect((error as Error).message).toBe(`opencode server unavailable: ${url} (health check timed out after 1s — is the host reachable?)`)
+  }, 10_000)
+
+  test("a refused connection keeps today's message — the timeout clause is the bound's alone (plans/0218 D3 floor)", async () => {
+    let error: unknown
+    try {
+      await defaultConnect("http://127.0.0.1:9", dir, log, 5000)
+    } catch (e) {
+      error = e
+    }
+    expect((error as Error).message).toBe("opencode server unavailable: http://127.0.0.1:9")
   })
 })
 

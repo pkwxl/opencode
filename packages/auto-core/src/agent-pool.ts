@@ -20,6 +20,7 @@
 // Sits below the session layer and above the agent domain (§12): it may name
 // the host factories, never the loop or a session-driving module.
 import type { AgentCapabilities, AgentClient, AgentEnv, AgentHost, AgentHostFactory } from "./agent/types"
+import { join } from "node:path"
 import { opencodeHost, OPENCODE_CAPABILITIES, scrubDriverEnv } from "./agent/opencode/server"
 import { claudeHost, CLAUDE_CAPABILITIES } from "./agent/claude/host"
 import { agentProfileFor, chooseAgent } from "./agent-choice"
@@ -29,6 +30,7 @@ import { log } from "./log"
 import { stepValidationLines } from "./model-step"
 import type { ModelEntry, ModelRegistry } from "./models-schema"
 import type { ClientSource, PermissionMode, ServerControl, SubtaskMode } from "./opts"
+import { externalDirectoryLive, OPENCODE_CONFIG_FILE } from "./external-dirs"
 import { dispatchAgentProfiles, routingFacts } from "./routing"
 import { shellAdapter } from "./shell"
 import { services } from "./services"
@@ -127,9 +129,27 @@ export class AgentStartError extends Error {
 // agent's own name, else `opencode` — which the routing facts carry as their
 // runAgent: unqualified session records and raw override values resolve
 // through it (§8.2).
+// Whether the target's opencode.json holds live permission.external_directory
+// entries (plans/0218 D1): the run-start degradation note's condition, read
+// once per run start through externalDirectoryLive — the wall family's own
+// reader, so the section's grammar has one home.
+async function declaredExternalDirectory(directory: string): Promise<boolean> {
+  const text = await Bun.file(join(directory, OPENCODE_CONFIG_FILE)).text().catch(() => undefined)
+  if (text === undefined) return false
+  const live = externalDirectoryLive(text)
+  return live !== undefined && Object.keys(live).length > 0
+}
+
 export async function startPool(directory: string, opts: StartPoolOpts): Promise<StartedPool> {
   // The permission preset reaches only agents without permission events (MA.4).
   const agent = chooseAgent(opts.agent)
+  // The target's declared external_directory posture (plans/0218 D1, 0165-033):
+  // live entries = the boundary a fleet that carries the posture nowhere cannot
+  // enforce, and the run-start note's condition. One read per run start,
+  // through the wall's own reader (one reader home); absent, malformed or
+  // unreadable = nothing declared — the wall and the config command families
+  // fail loud at their own moments.
+  const externalDirectoryDeclared = await declaredExternalDirectory(directory)
   if (!opts.registry || opts.managed) {
     // No registry, or a caller-supplied host: exactly the one-host era. The
     // host starts here, the `◇ agent:` line follows it, then the notes.
@@ -137,7 +157,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
       opts.managed ??
       (await (agent?.host ?? opencodeHost)(directory, { server: opts.server, permission: permissionPreset(opts.permission, opts.dryrun), log }))
     if (agent) log(`◇ agent: ${agent.name}`)
-    const degraded = degradeAgents([{ caps: host.client.capabilities, label: "" }], autoSwitches(), opts, false)
+    const degraded = degradeAgents([{ caps: host.client.capabilities, label: "" }], autoSwitches(), { ...opts, externalDirectoryDeclared }, false)
     for (const note of degraded.notes) log(`⚙ ${note}`)
     const profileName = agent?.name ?? "opencode"
     if (degraded.error) return { pool: singleHostPool(host, profileName), profileName, error: degraded.error }
@@ -196,7 +216,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   }
   if (!agents.length && startProfile !== undefined) agents.push({ caps: adapterCapabilities(startProfile.adapter), label: startProfile.name })
   if (agent) log(`◇ agent: ${agent.name}`)
-  const degraded = degradeAgents(agents, autoSwitches(), opts, true)
+  const degraded = degradeAgents(agents, autoSwitches(), { ...opts, externalDirectoryDeclared }, true)
   for (const note of degraded.notes) log(`⚙ ${note}`)
   if (degraded.error) return { error: degraded.error }
   clampSwitches(degraded.switches)

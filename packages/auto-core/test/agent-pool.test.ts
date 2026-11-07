@@ -480,6 +480,57 @@ describe("the capability intersection (§8.5)", () => {
       full.pool?.close()
     }
   })
+
+  test("a target declaring permission.external_directory under a non-carrying fleet starts with the teaching note (plans/0218 D1, 0165-033)", async () => {
+    // The init template ships the section, so every properly-initialized
+    // project under a fleet that carries the posture nowhere learns the
+    // divergence at run start — one ⚙ note of the family, naming the
+    // forcing agent under a registry.
+    const dir = await temp("auto-agent-pool-extdir-")
+    await writeFile(join(dir, "opencode.json"), JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow" } } }))
+    const a = fakeAgent({ limits: { "prov/a": 100_000 } })
+    registerAgentAdapter("fake-a", { host: fakeAgentHost(a).factory, capabilities: { ...FULL_CAPABILITIES, externalDirectory: false } })
+    const file = join(dir, "models.json")
+    const registryText = JSON.stringify(
+      { agents: { a: { adapter: "fake-a" } }, models: { a1: { agent: "a", model: "prov/a" } }, tiers: { deep: ["a1"], simple: ["a1"] } },
+    )
+    await writeFile(file, registryText)
+    const registry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    const started = await startPool(dir, { registry })
+    try {
+      expect(started.externalDirectory).toBe(false)
+      expect(lines).toContain(
+        "⚙ opencode.json's permission.external_directory does not reach this fleet's sessions; fake-a (a1) has none: the knowledge boundary's deny, its allows and any wall's standing deny are not carried into the sessions — run under the opencode agent (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) to carry the boundary into sessions",
+      )
+    } finally {
+      started.pool?.close()
+    }
+    // The same registry over a target with no opencode.json: no note — the
+    // declared section is the note's condition, never the fleet's fact alone.
+    const bare = await temp("auto-agent-pool-extdir-bare-")
+    lines.length = 0
+    const startedBare = await startPool(bare, { registry })
+    try {
+      expect(startedBare.externalDirectory).toBe(false)
+      expect(lines.some((line) => line.includes("external_directory"))).toBe(false)
+    } finally {
+      startedBare.pool?.close()
+    }
+    // The single-host arm threads the same read: a managed host whose client
+    // declares the limit over the declared target, the unlabeled note.
+    const b = fakeAgent({ limits: {}, capabilities: { externalDirectory: false } })
+    const managed = await fakeAgentHost(b).factory(dir, { permission: "deny", log: () => {} })
+    lines.length = 0
+    const single = await startPool(dir, { managed })
+    try {
+      expect(single.externalDirectory).toBe(false)
+      expect(lines).toContain(
+        "⚙ opencode.json's permission.external_directory does not reach this fleet's sessions: the knowledge boundary's deny, its allows and any wall's standing deny are not carried into the sessions — run under the opencode agent (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) to carry the boundary into sessions",
+      )
+    } finally {
+      single.pool?.close()
+    }
+  })
 })
 
 describe("preflight's bin check (§8.7)", () => {

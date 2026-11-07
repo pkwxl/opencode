@@ -6743,7 +6743,12 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       await commitFixture(dir)
       const advance = await agent.run(["transfer", dir])
       expect(advance.code, `${advance.out}\n${advance.err}`).toBe(0)
-      expect(advance.out.toLowerCase()).not.toContain("wall")
+      // The floor is no wall MACHINERY, not the bare word: the run-start
+      // external_directory note (plans/0218 D1) names a wall's standing deny
+      // among what a non-carrying fleet misses — a teaching line this fake
+      // claude fleet lawfully prints over the init-stamped section, never a
+      // wall act.
+      for (const marker of ["plan wall close", "wall-door:", "wall-sealed:", "the wall cannot close"]) expect(advance.out.toLowerCase()).not.toContain(marker)
       expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
       expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
       const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any

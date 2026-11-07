@@ -475,6 +475,63 @@ const echo = (proc: Fake, text: string) => {
   })
 }
 
+// A `claude -p` double whose stdin close does not end it at once — the
+// shapes plans/0218 D2 bounds (0165-136, 0157's deferred ceiling): "delayed"
+// exits on its own after a grace (the well-behaved child that is merely
+// slow), "wedged" never exits at all until the kill ladder takes it.
+function slowCloseSpawner(mode: "wedged" | "delayed", respond?: (proc: Fake, text: string) => void) {
+  const procs: Fake[] = []
+  const spawn: ClaudeSpawn = (args, options) => {
+    const queue: string[] = []
+    let wake: (() => void) | undefined
+    let closed = false
+    let settle: (value: { code: number | null; stderr: string }) => void = () => {}
+    const exited = new Promise<{ code: number | null; stderr: string }>((resolve) => (settle = resolve))
+    const proc: Fake = {
+      args,
+      env: options.env,
+      written: [],
+      ended: false,
+      killed: false,
+      write(line) {
+        proc.written.push(line)
+        respond?.(proc, JSON.parse(line).message.content[0].text)
+      },
+      end() {
+        proc.ended = true
+        if (mode === "delayed") setTimeout(() => proc.exit(0), 30)
+        // wedged: the close is ignored — only kill() ends it.
+      },
+      kill() {
+        proc.killed = true
+        queueMicrotask(() => proc.exit(143))
+      },
+      print(line) {
+        queue.push(JSON.stringify(line))
+        wake?.()
+      },
+      exit(code = 0, stderr = "") {
+        if (closed) return
+        closed = true
+        wake?.()
+        settle({ code, stderr })
+      },
+      lines: (async function* () {
+        for (;;) {
+          while (queue.length) yield queue.shift()!
+          if (closed) return
+          await new Promise<void>((resolve) => (wake = resolve))
+          wake = undefined
+        }
+      })(),
+      exited,
+    }
+    procs.push(proc)
+    return proc
+  }
+  return { spawn, procs }
+}
+
 const agentWith = (spawn: ClaudeSpawn, extra: Partial<Parameters<typeof claudeAgent>[0]> = {}) =>
   claudeAgent({ directory: "/work/dir", permission: "deny", spawn, contract: async () => ({ args: ["--contract"] }), projectsDir: "/nonexistent", ...extra })
 
@@ -586,6 +643,78 @@ describe("claudeAgent: process manager", () => {
     expect(all.filter((e) => e.type === "idle")).toHaveLength(1)
     expect(all.at(-2)).toMatchObject({ type: "part", part: { kind: "step-finish" } })
     expect(proc.ended).toBe(true)
+  })
+
+  test("the closing wait is bounded: a wedged child gets the kill ladder and the dispatch proceeds (plans/0218 D2, 0165-136)", async () => {
+    // The shape 0157 deferred as "needs its own P20-ceiling ruling": stdin
+    // closed at idle (the turn is done, nothing in flight), the child never
+    // exits — pre-fix the model-change prompt awaited live.done forever.
+    const { spawn, procs } = slowCloseSpawner("wedged", echo)
+    const logged: string[] = []
+    const agent = agentWith(spawn, { closeCeilingMs: 1000, log: (line) => logged.push(line) })
+    const id = ((await agent.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+    const ac = new AbortController()
+    const events = await agent.events(ac.signal)
+    await agent.prompt({ session: id, text: "one", model: "claude/sonnet" })
+    await collect(events, (e) => e.type === "idle")
+    expect(procs[0]!.ended).toBe(true)
+    expect(procs[0]!.killed).toBe(false)
+    // A model change between turns over the wedged closing process.
+    const sent = await agent.prompt({ session: id, text: "two", model: "claude/opus" })
+    expect(sent).toEqual({ ok: true, value: undefined })
+    expect(procs[0]!.killed).toBe(true)
+    expect(logged).toEqual(["⚠ a claude process did not exit 1s after its input closed; killing it (the session resumes on a new process)"])
+    // The message went to the new process, resumed on the changed model.
+    expect(procs).toHaveLength(2)
+    expect(procs[1]!.args.slice(8, 12)).toEqual(["--resume", id, "--model", "opus"])
+    expect(JSON.parse(procs[1]!.written[0]!).message.content[0].text).toBe("two")
+    await collect(events, (e) => e.type === "idle")
+    ac.abort()
+  }, 10_000)
+
+  test("the closing wait's floor: a child that exits on its own close is waited out — no ladder, no line (plans/0218 D2)", async () => {
+    const { spawn, procs } = slowCloseSpawner("delayed", echo)
+    const logged: string[] = []
+    const agent = agentWith(spawn, { closeCeilingMs: 1000, log: (line) => logged.push(line) })
+    const id = ((await agent.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+    const ac = new AbortController()
+    const events = await agent.events(ac.signal)
+    await agent.prompt({ session: id, text: "one", model: "claude/sonnet" })
+    await collect(events, (e) => e.type === "idle")
+    // The exit lands inside the grace (30 ms of 1000): the wait settles on
+    // live.done, byte-identical to the pre-ceiling behavior.
+    const sent = await agent.prompt({ session: id, text: "two", model: "claude/opus" })
+    expect(sent).toEqual({ ok: true, value: undefined })
+    expect(logged).toEqual([])
+    expect(procs[0]!.killed).toBe(false)
+    expect(procs[1]!.args.slice(10, 12)).toEqual(["--model", "opus"])
+    await collect(events, (e) => e.type === "idle")
+    ac.abort()
+  }, 10_000)
+
+  test("a model change reaching a mid-turn process is refused, never silently run on the fixed model (plans/0218 D4, 0165-203)", async () => {
+    const { spawn, procs } = spawner()
+    const agent = agentWith(spawn)
+    const id = ((await agent.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+    const ac = new AbortController()
+    const events = await agent.events(ac.signal)
+    // A turn is running on the process started with sonnet (busy until its
+    // result): a prompt naming another model must fail the call loudly —
+    // pre-fix it was silently written to the fixed-model process.
+    await agent.prompt({ session: id, text: "work", model: "claude/sonnet" })
+    const refused = await agent.promptAsync({ session: id, text: "switch", model: "claude/opus" })
+    expect(refused).toEqual({
+      ok: false,
+      error: new Error("a model change reached a claude process mid-turn (its model is fixed per process start); the message was not sent — send it without a model, or after the turn ends"),
+    })
+    expect(procs[0]!.written).toHaveLength(1)
+    // The floor: a steer naming the session's own model still goes through,
+    // byte-identical (today's driver only ever sends that shape).
+    const steered = await agent.promptAsync({ session: id, text: "hand over", model: "claude/sonnet" })
+    expect(steered).toEqual({ ok: true, value: undefined })
+    expect(procs[0]!.written).toHaveLength(2)
+    expect(procs).toHaveLength(1)
+    ac.abort()
   })
 
   test("abort kills the process and ends the turn; an unexpected exit is a retryable error", async () => {

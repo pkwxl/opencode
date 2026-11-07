@@ -15,8 +15,12 @@
 // |                                   | declares `externalDirectory: false` — the        |
 // |                                   | knowledge boundary, the 0122 allows and the     |
 // |                                   | wall's standing deny reach no claude session;   |
-// |                                   | a declared wall's close refuses; the section's  |
-// |                                   | translation is the adapter wave's question)     |
+// |                                   | a declared wall's close refuses and a target    |
+// |                                   | declaring the section gets the run-start note;  |
+// |                                   | the translation stays declined on P19 grounds — |
+// |                                   | plans/0218 D1, the settings-grammar claims      |
+// |                                   | unmeasured; a measured translation flips the    |
+// |                                   | declared value)                                  |
 // | --permission preset (MA.4)        | allow → --permission-mode bypassPermissions;     |
 // |                                   | deny / block → --permission-prompts none         |
 // | question tool                     | AskUserQuestion disallowed (capability off)      |

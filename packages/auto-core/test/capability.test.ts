@@ -135,6 +135,32 @@ describe("degrade: run-start clamp", () => {
     expect(degradeAgents([{ caps: OPENCODE_CAPABILITIES, label: "opencode" }, { caps: CLAUDE_CAPABILITIES, label: "claude (claude)" }], parseSwitches({}), {}, false).externalDirectory).toBe(false)
   })
 
+  test("a declared external_directory section over a non-carrying fleet: one run-start note teaching the loss and the remedy (plans/0218 D1, 0165-033)", () => {
+    // The floor first: without the declared-section flag (a target whose
+    // opencode.json holds no live entries, or a pre-0218 caller) the
+    // non-carrying fleet notes nothing — 0190 D1's byte-identical floor.
+    expect(degrade(CLAUDE_CAPABILITIES, parseSwitches({}), {}).notes.join("\n")).not.toContain("external_directory")
+    // The declared section + the non-carrying fleet: the note fires.
+    const got = degrade(CLAUDE_CAPABILITIES, parseSwitches({}), { externalDirectoryDeclared: true })
+    expect(got.externalDirectory).toBe(false)
+    expect(got.notes).toContain(
+      "opencode.json's permission.external_directory does not reach this fleet's sessions: the knowledge boundary's deny, its allows and any wall's standing deny are not carried into the sessions — run under the opencode agent (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) to carry the boundary into sessions",
+    )
+    // Under a registry the note names the forcing agent (the by() label
+    // every fleet note carries, 0055 §8.5).
+    const fleet = degradeAgents(
+      [{ caps: OPENCODE_CAPABILITIES, label: "opencode (m1)" }, { caps: CLAUDE_CAPABILITIES, label: "claude (m2)" }],
+      parseSwitches({}),
+      { externalDirectoryDeclared: true },
+      true,
+    )
+    expect(fleet.notes).toContain(
+      "opencode.json's permission.external_directory does not reach this fleet's sessions; claude (m2) has none: the knowledge boundary's deny, its allows and any wall's standing deny are not carried into the sessions — run under the opencode agent (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) to carry the boundary into sessions",
+    )
+    // A carrying fleet never notes it, declared section or not.
+    expect(degradeAgents([{ caps: OPENCODE_CAPABILITIES, label: "opencode" }], parseSwitches({}), { externalDirectoryDeclared: true }, false).notes.join("\n")).not.toContain("external_directory")
+  })
+
   test("--test-by-driver without steer has no fallback: startup error, dryrun exempt", () => {
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true }).error).toContain("--test-by-driver")
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true, dryrun: true }).error).toBeUndefined()

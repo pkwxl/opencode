@@ -48,7 +48,8 @@
 // opencode.json's permission.external_directory posture (0147's knowledge
 // boundary, 0122's allows, the wall's standing deny) into its sessions;
 // absent = it does not, and on a wall-declared project the wall's close
-// refuses while status renders the limit.
+// refuses, status renders the limit, and a run over a target declaring the
+// section starts with one teaching note (plans/0218 D1).
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -293,9 +294,10 @@ export type AgentCapabilities = {
   // knowledge boundary (the `/**` deny and the /tmp allowance), 0122's
   // root-symlink allows, and the sealed wall's standing deny reach the
   // session process through this. Absent = the adapter translates none of
-  // it (the claude adapter today — the translation's probe-verified ruling
-  // is the adapter wave's), so a declared wall's close refuses and status
-  // renders the limit; nothing else reads the flag.
+  // it (the claude adapter today — the translation declined on P19 grounds,
+  // plans/0218 D1, until its settings-grammar facts are measured), so a
+  // declared wall's close refuses, status renders the limit and a target
+  // declaring the section gets one run-start note.
   externalDirectory?: boolean
 }
 

@@ -23,9 +23,11 @@
 // | permission        | --permission becomes a PermissionPreset fixed at host start           |
 // | history           | a session's usage cannot be rebuilt → unknown (session-api)           |
 // | abort             | nothing: every abort is already best-effort                           |
-// | externalDirectory | no switch and no clamp (plans/0190 D1): a wall-declared project's    |
-// |                   | close refuses under such a fleet, and status renders the limit; a   |
-// |                   | wall-undeclared project is byte-identical (the flag forces nothing) |
+// | externalDirectory | no switch and no clamp (plans/0190 D1, 0218 D1): a  |
+// |                   | wall-declared project's close refuses under such a  |
+// |                   | fleet, status renders the limit, and a target whose |
+// |                   | opencode.json holds live external_directory entries |
+// |                   | gets one run-start note teaching the loss (0218 D1) |
 //
 // The usage tier is MA.2's matrix (src/usage.ts), not repeated here.
 //
@@ -59,11 +61,11 @@ type Degradation = {
   leadSplit?: false
   // false = no agent of the fleet carries opencode.json's
   // permission.external_directory posture into its sessions (plans/0190 D1):
-  // on a wall-declared project the wall's close refuses. Absent = every
-  // dispatch agent carries it. Not a switch and no run-start note of its
-  // own: a wall-undeclared project is byte-identical (nothing reads the
-  // fact), and the wall-declared project sees the limit at status and at
-  // the close itself.
+  // on a wall-declared project the wall's close refuses; a target whose
+  // opencode.json holds live external_directory entries gets one run-start
+  // note teaching the loss (plans/0218 D1 — the note is the fact's whole
+  // enforcement; the boundary's own moments hold the rest). Absent = every
+  // dispatch agent carries it.
   externalDirectory?: false
 }
 
@@ -81,6 +83,12 @@ type DegradeOpts = {
   // without mid-turn steer is fine there. Absent = the channel may run
   // (the conservative default keeps every pre-0083 caller's behavior).
   codeWork?: boolean
+  // The target's opencode.json holds live permission.external_directory
+  // entries (plans/0218 D1, read once at the run start by the pool through
+  // the wall's own reader): the run-start note's condition — the declared
+  // boundary a fleet that carries the posture nowhere cannot enforce.
+  // Absent = nothing declared, no note (every pre-0218 caller's floor).
+  externalDirectoryDeclared?: boolean
 }
 
 // Whether an agent can fork a session: a copy must exist (fork not "none")
@@ -193,6 +201,16 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
     notes.push(
       `the agent keeps no readable session history: a persisted fork base starts cold, a recovered session's usage counts as unknown${by(forced((c) => !c.history))}`,
     )
+  // The declared external_directory posture a non-carrying fleet cannot
+  // enforce (plans/0218 D1, 0165-033): the note fires only when the target
+  // declares the section (opts.externalDirectoryDeclared, the pool's one
+  // read) — a fleet that carries it, or a target without the section, stays
+  // byte-identical.
+  if (!caps.externalDirectory && opts.externalDirectoryDeclared) {
+    notes.push(
+      `opencode.json's permission.external_directory does not reach this fleet's sessions${by(forced((c) => c.externalDirectory !== true))}: the knowledge boundary's deny, its allows and any wall's standing deny are not carried into the sessions — run under the opencode agent (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) to carry the boundary into sessions`,
+    )
+  }
   const weakSteer = forced((c) => !c.steer)
   // The test channel's clamp (plans/0083 D9): the error fires only when the
   // run's phases include a code-producing type (the derived fact opts.codeWork,

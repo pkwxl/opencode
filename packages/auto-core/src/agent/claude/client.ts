@@ -44,9 +44,11 @@ export const CLAUDE_CAPABILITIES: AgentCapabilities = {
   // Declared, not silent (plans/0190 D1): the contract translation (0041
   // D6's key map) has no external_directory row, so 0147's knowledge
   // boundary, 0122's allows and the wall's standing deny reach no claude
-  // session — a declared wall's close refuses on this fact. Translating the
-  // section is the adapter wave's probe-verified question (0166 step 058);
-  // landing it flips this one declared value.
+  // session — a declared wall's close refuses and a target declaring the
+  // section gets the run-start note on this fact. Translating the section
+  // stays declined on P19 grounds (plans/0218 D1: the settings-grammar
+  // claims are unmeasured on every host this program can run); a measured
+  // translation flips this one declared value.
   externalDirectory: false,
 }
 
@@ -108,6 +110,9 @@ type ClaudeAgentOptions = {
   // Arguments from the target directory (contract, permissions); absent =
   // contract.ts contractArgs.
   contract?: (agent: string | undefined) => Promise<{ args: string[] } | { error: string }>
+  // The grace a closing process gets before the kill ladder takes it
+  // (plans/0218 D2), milliseconds; absent = CLOSE_CEILING_MS. A test seam.
+  closeCeilingMs?: number
 }
 
 type Live = {
@@ -168,6 +173,12 @@ export function claudeProjectsDir(overlay?: AgentEnv, base: Record<string, strin
 
 const fail = (error: unknown): AgentResult<never> => ({ ok: false, error })
 const done: AgentResult = { ok: true, value: undefined }
+
+// The grace a closing process gets before the kill ladder takes it (plans/
+// 0218 D2, 0165-136 — 0157's deferred P20 ceiling): the ladder's own scale,
+// so a child that ignores stdin close cannot hang a dispatch — SIGTERM on
+// the ceiling, SIGKILL 5 s later at the worst.
+const CLOSE_CEILING_MS = 5000
 
 export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(): void } {
   const { directory } = options
@@ -308,6 +319,21 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
     emit({ type: "idle", session: id })
   }
 
+  // Waits for a closing process to let go of the session, bounded (plans/
+  // 0218 D2): a child that never exits after its input closed gets the kill
+  // ladder at the ceiling — the process was idle (closing is set at idle or
+  // for a model change, both with no turn running), so nothing in flight is
+  // destroyed; the session resumes on the next process (--resume), and the
+  // await that follows the kill resolves through the same ladder.
+  const settleClosed = async (live: Live) => {
+    const ceiling = options.closeCeilingMs ?? CLOSE_CEILING_MS
+    const settled = await Promise.race([live.done.then(() => true), Bun.sleep(ceiling).then(() => false)])
+    if (settled) return
+    options.log?.(`⚠ a claude process did not exit ${Math.round(ceiling / 1000)}s after its input closed; killing it (the session resumes on a new process)`)
+    live.proc.kill()
+    await live.done
+  }
+
   // Hands a message to the session's live process, starting one if needed.
   // A prompt naming another model than the live process was started with
   // restarts it between turns (the model is fixed per process).
@@ -322,6 +348,14 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
     if (!s) return fail(new Error(`session not found: ${input.session}`))
     const wanted = input.model !== undefined ? input.model.slice(input.model.indexOf("/") + 1) : undefined
     let live = s.live && !s.live.exited ? s.live : undefined
+    // A model change reaching a mid-turn process is refused, never silently
+    // run on the fixed model (plans/0218 D4): the restart path below requires
+    // idle, and the alternative was a message on the wrong model with no
+    // signal.
+    if (live && live.busy && wanted !== undefined && wanted !== live.model)
+      return fail(
+        new Error("a model change reached a claude process mid-turn (its model is fixed per process start); the message was not sent — send it without a model, or after the turn ends"),
+      )
     if (live && !live.busy && wanted !== undefined && wanted !== live.model) {
       live.closing = true
       live.proc.end()
@@ -329,7 +363,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
     // A closing process finishes on its own; the message goes to the next one
     // (which resumes the session once this one has let go of it).
     if (live?.closing) {
-      await live.done
+      await settleClosed(live)
       live = undefined
     }
     if (signal?.aborted) return fail(signal.reason ?? new Error("dispatch aborted"))
