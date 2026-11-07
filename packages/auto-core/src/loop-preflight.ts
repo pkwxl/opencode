@@ -203,17 +203,25 @@ export type RunAllOpts = {
   // the parallel level). At 1 (the default) nothing changes for any project
   // whatever the level — the serial floor.
   maxSessions?: number
-  // --repair (plans/0079 §4): the bounded repair budget of this run — how
-  // many automatic repair rounds a FAIL verdict (a task report's Result line)
-  // or a held verdict gate may drive before blocking for the human, modeled
-  // on the bounded-recovery precedents (/exit, failover). Absent/0 = today's
-  // behavior: the first FAIL blocks (exit 2). Run-side width, never a config
-  // key; in force on the serial path and the doc lanes at tier 0 (plans/0099
-  // D3 carries the repair round into the doc loop's finishBlocked), never
-  // under worktree lanes or branch isolation (a repair round appends into
-  // the index the lanes schedule from) and never under a stop condition —
-  // plan and transfer carry no budget, and since plans/0101 D1 the verdict
-  // gates they meet sit past run's boundary stop.
+  // --repair (plans/0079 §4; the boundary restated by plans/0211 D3): the
+  // bounded repair budget of this run — how many automatic repair rounds a
+  // FAIL verdict (a task report's Result line) or a held verdict gate may
+  // drive before blocking for the human, modeled on the bounded-recovery
+  // precedents (/exit, failover). Absent/0 = today's behavior: the first
+  // FAIL blocks (exit 2). Run-side width, never a config key; in force
+  // wherever the FAIL or held gate is judged with no lane in flight — the
+  // serial path, both lane loops' serial degrades (after the lanes drained),
+  // the doc loop's finishBlocked (after the quiet wait; plans/0099 D3) and
+  // the two phase-level gates (after the task loop returned; plans/0079 §6)
+  // — and never under a stop condition (plan and transfer carry no budget,
+  // and since plans/0101 D1 the verdict gates they meet sit past run's
+  // boundary stop). A lane worker's own blocked exit never opens a round
+  // (the parent lands the committed work and stops for the person, 0068's
+  // matrix); the append itself — the index the lanes schedule from — is
+  // mutated only after the task loop returned, so no scheduler ever reads a
+  // mid-flight change (0079 §4's stated hazard, structurally absent at
+  // every site; the former "never under worktree lanes or branch isolation"
+  // confinement described a boundary the code never had).
   repair?: number
   // --stop-after (plans/0128): the task id whose completion ends this run —
   // the retry's guardrail in a fork environment, usable anywhere the serial

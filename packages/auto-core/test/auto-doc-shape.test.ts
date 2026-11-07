@@ -89,6 +89,35 @@ describe("ensureDecomposed merged understand+decompose artifact shape check (D5,
     }
   })
 
+  test("a kill between the decompose session's end and its commit (plans/0211 D4, 0165-106): the existing-checklist path lands the artifacts as the decompose commit — no session, the tree the first subtask's gate needs", async () => {
+    const dir = await docRepo()
+    try {
+      // The killed run's finished output, uncommitted: the kill window's
+      // scene (everything written, the `decompose` commit never reached).
+      await writeMergedArtifacts(dir)
+      const { client, calls } = scriptedClient([])
+      const plan = await reloadUnits(dir)
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir }, makeChain())
+      expect(result.type).toBe("ok")
+      expect(calls.prompts.length).toBe(0)
+      // The re-derivation: the same `decompose` stage commit the killed run
+      // owed — pre-fix nothing committed and the artifacts stayed as the
+      // dirt the first subtask's start gate named "leftover from an
+      // abandoned run or manual changes" (exit 2 over the driver's own
+      // decomposition).
+      const message = await git(dir, "log", "-1", "--pretty=%B")
+      expect(message).toContain("T-001 decompose")
+      expect(message).toContain("Auto-Stage: decompose")
+      expect(await git(dir, "show", "--name-only", "--pretty=", "HEAD")).toContain("docs/T-001/subtasks.md")
+      expect(await git(dir, "status", "--porcelain")).toBe("")
+      // The checklist still reads, unchanged by the commit.
+      const reloaded = await reloadUnits(dir)
+      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["subtask one Artifacts: docs/T-001/S01/index.md"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("context.md already exists but no decomposition: the merged session still runs (an existing digest is no longer an idempotent skip)", async () => {
     const dir = await docRepo()
     try {

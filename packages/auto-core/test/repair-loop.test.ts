@@ -11,6 +11,7 @@ import { join } from "node:path"
 import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { establishRound } from "../src/phases"
+import { clampSwitches } from "../src/switches"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -179,6 +180,39 @@ describe("repair (task level, m mode)", () => {
     expect(lines).toContain("✓ all tasks complete")
     // The tree is clean: the close and append commits settled everything.
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
+  })
+
+  test("the repair-appended landing runs the boundary hooks: the step pause lands at the failed task's own boundary, before the appended tasks run (plans/0211 D2, 0165-082)", async () => {
+    const f = await fixture("m", repairTurns(new Set(["T-002"])))
+    clampSwitches({ step: "task" })
+    const questions: string[] = []
+    try {
+      const { code } = await f.run({
+        repair: 1,
+        planInput: { text: "migrate the widget" },
+        // The auto-answering sideband: every task-boundary step pause records
+        // its label and releases — which labels paused names which arms ran
+        // the hooks.
+        repl: {
+          attach() {},
+          detach() {},
+          question: async (text: string) => {
+            questions.push(text)
+            return ""
+          },
+          close() {},
+        },
+      })
+      expect(code).toBe(0)
+      // The failed task's own landing (the repair round's closeUnit commit)
+      // paused — pre-fix that arm returned without the hook set and the
+      // first pause after it was the appended task's done boundary.
+      expect(questions.some((text) => text.includes("task T-002"))).toBe(true)
+      // The floor beside it: the ordinary done landings paused too.
+      expect(questions.some((text) => text.includes("task T-003"))).toBe(true)
+    } finally {
+      clampSwitches({ step: "off" })
+    }
   })
 
   test("no budget: the FAIL blocks once the fix loop is spent (exit 2, the task pending, the rounds named, the human's ways listed)", async () => {

@@ -119,6 +119,9 @@ export async function requireArtifact<T>(
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
+  // Whether the open progress record names this step (the reuse rung's own
+  // key, hoisted for the unit gate below — plans/0211 D5).
+  let openStepRecord = false
   // The recorded model of a resumed step under a registry (§6.2 continuation:
   // the first dispatch keeps it while it is usable), and the agent the
   // recorded session lives on (§8.2).
@@ -131,6 +134,10 @@ export async function requireArtifact<T>(
       recalled.phase?.kind === "step" &&
       recalled.phase.step === spec.step!.step &&
       recalled.phase.unit === spec.step!.unit
+    // The record names THIS step (plans/0211 D5): the unit gate's question —
+    // whose dirt is in the tree — is answered by the record, on the reuse
+    // rung and the fresh redo rung alike.
+    openStepRecord = openRecord
     if (openRecord && spec.restart) log(`↻ ${task.id} ${spec.kind} step restarting in a new session (${spec.restart})`)
     const sameStep = openRecord && !spec.restart
     if (sameStep) {
@@ -192,13 +199,17 @@ export async function requireArtifact<T>(
   }
   let feedback = ""
   // Commit boundary of an independent hidden task unit (spec.unitStart,
-  // plans/0021-commit-boundary-design.md P2): a resume reusing the original session
-  // (resumedSession) is exempt from the clean check — the dirty area is this unit's
-  // own artifact state; a fresh entry requires clean (driver-owned state file
-  // leftovers self-heal). Both record the SHA baseline.
+  // plans/0021-commit-boundary-design.md P2): an open record naming this step is
+  // exempt from the clean check — reusing the original session (resumedSession)
+  // or redoing the step fresh (plans/0211 D5: the record proves the dirty area
+  // is this unit's own interrupted artifact state, which the reset below clears;
+  // a pending /exit, a --new-session restart, a dead session, a strict-resume
+  // rollback or foreign-commit redo all take this arm). A fresh entry with no
+  // matching record requires clean (driver-owned state file leftovers
+  // self-heal). Both record the SHA baseline.
   let baseline: UnitBaseline | undefined
   if (spec.unitStart && opts.dir && !opts.dryrun) {
-    if (resumedSession) {
+    if (openStepRecord) {
       baseline = await git.unitBaseline(opts.dir)
     } else {
       const gate = await git.beginUnit(opts.dir, opts, task)

@@ -13,13 +13,16 @@
 // a collect problem. The end-to-end halves run on the native fake agent
 // over real git repositories (the loop harness); the pure halves in memory.
 import { afterEach, describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
 import { executeWhole } from "../src/execute"
+import { ExitRequested } from "../src/exit"
 import { noCommitGit } from "../src/git-ops"
+import { services } from "../src/services"
 import { unitBaseline, unitViolations } from "../src/git"
 import { loadPlan, next, runtimeParked, setParked, strandedParks, withParked, type Task } from "../src/tasks"
 import { unitProblems } from "../src/document/unit"
@@ -495,6 +498,69 @@ describe("the park through the phase loop (m mode, real repository)", () => {
     expect(code).toBe(2)
     expect(lines.some((line) => line.includes("mutual park: T-002 parks on T-003, T-003 parks on T-002"))).toBe(true)
     expect(lines.some((line) => line.includes("nothing is ready with parked units remaining"))).toBe(true)
+  })
+
+  // —— The parked landing's boundary machinery (plans/0211 D2, 0165-082) —— //
+
+  test("a /exit requested during a parked unit's session lands at the parked boundary itself, before the next unit runs (plans/0211 D2)", async () => {
+    const f = await loopFixture("m", (dir): FakeAgentOptions => ({
+      turn: (ctx) => {
+        const base = parkTurns(dir)(ctx)
+        // Arm the request exactly at the park turn: between it and the
+        // parked landing there is no other checkpoint, so where the exit
+        // lands names which arm ran the hooks.
+        if (ctx.text.includes("Dependency park:")) {
+          const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
+          if (id === "T-002") services().control.requestExit()
+        }
+        return base
+      },
+    }))
+    made.push(f)
+    await establishRound(f.dir, { phases: "m" })
+    await f.commit("round setup")
+    let caught: unknown
+    try {
+      await f.run({ planInput: { text: "migrate the widget" } })
+    } catch (error) {
+      caught = error
+    }
+    // The parked unit's own boundary — pre-fix the request waited through
+    // T-003's whole run and landed at its done boundary instead.
+    expect(caught).toBeInstanceOf(ExitRequested)
+    expect((caught as ExitRequested).label).toContain("task T-002")
+    expect((caught as ExitRequested).label).not.toContain("T-003")
+    // The blocker never dispatched: the exit preceded it.
+    expect(f.agent.prompts.some((prompt) => prompt.text.includes("its document is docs/T-003/todo.md"))).toBe(false)
+  })
+
+  test("a foreign commit during a parked unit's session fails its close-out audit at the parked landing (plans/0211 D2)", async () => {
+    let foreignDone = false
+    const f = await loopFixture("m", (dir): FakeAgentOptions => ({
+      turn: (ctx) => {
+        const base = parkTurns(dir)(ctx)
+        if (ctx.text.includes("Dependency park:")) {
+          const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
+          // Inside T-002's unit, after its baseline: a person's own commit —
+          // no Auto-Stage trailer, inside the unit's range, foreign to it.
+          if (id === "T-002" && !foreignDone) {
+            foreignDone = true
+            execFileSync("git", ["-C", dir, "commit", "--allow-empty", "-qm", "person commit during the parked unit"])
+          }
+        }
+        return base
+      },
+    }))
+    made.push(f)
+    await establishRound(f.dir, { phases: "m" })
+    await f.commit("round setup")
+    const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
+    // The parked arm runs the done arm's close-out audit: the foreign commit
+    // surfaces here — pre-fix the run completed (code 0) without ever
+    // checking the parked unit's range.
+    expect(code).toBe(2)
+    expect(lines.some((line) => line.includes("T-002 unit close-out check failed"))).toBe(true)
+    expect(lines.some((line) => line.includes("non-driver commit(s) detected"))).toBe(true)
   })
 })
 

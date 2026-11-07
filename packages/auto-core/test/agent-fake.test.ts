@@ -2956,7 +2956,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     }
   })
 
-  test("an agent that cannot fork (plans/0059 D7): the run start withholds the clause — the lead is ondemand's session, and a checklist it writes runs after it, unjudged", async () => {
+  test("an agent that cannot fork (plans/0059 D7): the run start withholds the clause — the lead is ondemand's session, and a checklist it writes is removed, never run as the person's (re-pinned by plans/0211 D1, 0165-017)", async () => {
     const { dir, outcome, prompts } = await run(
       (dir) => (ctx) => {
         if (ctx.n === 1) write(dir, "docs/T-001/subtasks.md", SPLIT)
@@ -2972,9 +2972,13 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts[0]).toContain("Context-budget protocol")
       expect(prompts[0]).not.toContain("Split rule")
       expect(prompts[0]).not.toContain("You are the lead session of this task")
-      // Not judged: no driver-written scope files, the items run on ticks.
-      expect(prompts).toHaveLength(3)
+      // No clause was offered, so the checklist the session wrote is not the
+      // person's: removed at the close-out, no item session dispatched
+      // (pre-0211 it ran "unjudged" — the defect 0165-017 measured).
+      expect(prompts).toHaveLength(1)
+      expect(existsSync(join(dir, "docs/T-001/subtasks.md"))).toBe(false)
       expect(existsSync(join(dir, "docs/T-001/S01"))).toBe(false)
+      expect(lines.some((line) => line.includes("though no split clause was offered"))).toBe(true)
       expect(lines.some((line) => line.includes("already holds a checklist"))).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -3021,6 +3025,67 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts[0]).toContain("Context-budget protocol")
       expect(prompts[0]).not.toContain("Split rule")
       expect(prompts[1]).toContain("- [ ] the extra step")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // —— The none scope's guard (plans/0211 D1, 0165-017) —— //
+
+  test("mode off: a checklist the whole session writes is never the person's — removed at the close-out with its scope files, no item session dispatched (plans/0211 D1)", async () => {
+    const { dir, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        if (ctx.n === 1) {
+          write(dir, "src/work.ts", "export const work = 1\n")
+          write(dir, "docs/T-001/subtasks.md", SPLIT)
+          write(dir, "docs/T-001/S01/todo.md", "Depends: none\nTouches: src/alpha.ts\n\n## Scope\n\nalpha\n\n## Artifacts\n\n- src/alpha.ts\n\n<!-- auto: eof -->\n")
+          return undefined
+        }
+        return undefined
+      },
+      { opts: { subtask: "off" } },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      // One session alone — the mode's own contract (off = one whole-task
+      // session under the handover protocol) holds: the agent-authored
+      // checklist never dispatches a session per item (pre-fix: three
+      // prompts, the checklist committed and run as the person's).
+      expect(prompts).toHaveLength(1)
+      expect(prompts.some((prompt) => prompt.includes("item 1 of that list only"))).toBe(false)
+      // The checklist and its scope file are removed, the removal line
+      // teaches the rule, and the close-out commit holds the session's work
+      // alone (the tree clean).
+      expect(existsSync(join(dir, "docs/T-001/subtasks.md"))).toBe(false)
+      expect(existsSync(join(dir, "docs/T-001/S01/todo.md"))).toBe(false)
+      expect(lines.some((line) => line.includes("though no split clause was offered"))).toBe(true)
+      // The close-out commit holds the session's work alone — not the
+      // checklist (pre-fix it rode the exec commit).
+      const execFiles = await git(dir, "show", "--name-only", "--pretty=", "HEAD")
+      expect(execFiles).toContain("src/work.ts")
+      expect(execFiles).not.toContain("docs/T-001/subtasks.md")
+      expect(execFiles).not.toContain("docs/T-001/S01/todo.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("mode off: a checklist committed before the run is the person's — it runs after the whole session, unchanged (the D1 floor)", async () => {
+    const { dir, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        if (ctx.text.includes("item 1 of that list only")) write(dir, "src/extra.ts", "export const extra = 1\n")
+        return undefined
+      },
+      { body: "Body.\n\n- [ ] the extra step\n", opts: { subtask: "off" } },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(2)
+      expect(prompts[0]).toContain("Context-budget protocol")
+      expect(prompts[1]).toContain("- [ ] the extra step")
+      // The committed checklist is untouched and never named by the guard.
+      expect(existsSync(join(dir, "docs/T-001/subtasks.md"))).toBe(true)
+      expect(lines.some((line) => line.includes("though no split clause was offered"))).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3253,7 +3318,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     }
   })
 
-  test("OPENCODE_AUTO_STEER=off: no notices, so no split clause either — a checklist the lead writes runs after it, as under ondemand", async () => {
+  test("OPENCODE_AUTO_STEER=off: no notices, so no split clause either — a checklist the lead writes is removed, never run as the person's (re-pinned by plans/0211 D1)", async () => {
     clampSwitches({ steer: false })
     try {
       const { dir, outcome, prompts } = await run((dir) => (ctx) => {
@@ -3266,9 +3331,14 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
         expect(outcome).toEqual({ type: "completed" })
         expect(prompts[0]).not.toContain("Split rule")
         expect(prompts[0]).not.toContain("Context-budget protocol")
-        // Not judged: no driver-written scope files, the items run on ticks.
-        expect(prompts).toHaveLength(3)
+        // No clause was offered (criterion (c) never fires without notices),
+        // so the checklist the session wrote is removed — no item session
+        // dispatched (pre-0211 it ran "as under ondemand" — the defect
+        // 0165-017 measured).
+        expect(prompts).toHaveLength(1)
+        expect(existsSync(join(dir, "docs/T-001/subtasks.md"))).toBe(false)
         expect(existsSync(join(dir, "docs/T-001/S01"))).toBe(false)
+        expect(lines.some((line) => line.includes("though no split clause was offered"))).toBe(true)
       } finally {
         await rm(dir, { recursive: true, force: true })
       }
@@ -3846,6 +3916,84 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
       expect(existsSync(join(repo, "docs", id, "done.md"))).toBe(true)
     }
     expect(await git(repo, "status", "--porcelain")).toBe("")
+  })
+
+  test("a FAIL with budget under the doc loop: the repair round opens at width 2 (never confined to serial) and the blocked-keep landing runs the boundary hooks (plans/0211 D2/D3, 0165-082/0165-083)", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    const failing = new Set(["T-001"])
+    const agent = make({
+      turn: (ctx) => {
+        if (ctx.text.includes("only performs the wrap-up")) {
+          const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
+          if (id) {
+            mkdirSync(join(repo, "docs", id), { recursive: true })
+            if (failing.has(id)) {
+              writeFileSync(
+                join(repo, "docs", id, "gaps.md"),
+                [
+                  `# Gaps (${id})`,
+                  "",
+                  "## Verified OK",
+                  "",
+                  "- The wrap-up session inspected the work against the task's acceptance statements.",
+                  "",
+                  "## Gaps",
+                  "",
+                  "### Gap 1 — the acceptance gap stands",
+                  "",
+                  "The required behavior is not delivered (src/widget.ts): do what the acceptance asks.",
+                  "",
+                  "Result: FAIL the acceptance gap",
+                  "",
+                ].join("\n"),
+              )
+            } else {
+              writeFileSync(
+                join(repo, "docs", id, "report.md"),
+                [`# Report (${id})`, "", "- every acceptance criterion: met (the fake agent inspected the unit's work).", "", "## Overall conclusion", "", "Done.", "", "Result: PASS", "", EOF_MARK, ""].join("\n"),
+              )
+            }
+          }
+          return undefined
+        }
+        if (ctx.text.includes("## Input: the task index as it stands")) {
+          const phaseDir = promptPhaseDir(ctx.text)
+          if (phaseDir) {
+            appendOneTask(repo, phaseDir)
+            // The appended repair task re-verifies clean.
+            failing.clear()
+          }
+          return undefined
+        }
+        return docTurns(repo)(ctx)
+      },
+    })
+    const questions: string[] = []
+    // Step mode rides the harness's own env override (a clamp would not
+    // survive runDocLoop's registry reset, which re-parses the memo).
+    const code = await runDocLoop(
+      { ...docCtx(repo, serverOf(agent), { repair: 1 }), repl: { attach() {}, detach() {}, question: async (text: string) => (questions.push(text), ""), close() {} } },
+      phase,
+      { OPENCODE_AUTO_STEP: "task" },
+    )
+    expect(code).toBe(0)
+    // D3's lock: the round opened under the doc loop at width 2 — the ruled
+    // boundary ("wherever the FAIL is judged with no lane in flight"), the
+    // case the confinement text claimed could not happen. (The appended
+    // tasks' run is the phase loop's own — repair-loop's suite owns that
+    // half; this harness drives the task loop alone, so the input stays set
+    // for the caller.)
+    expect(lines.some((line) => line.includes("repair round 1: the task report concluded"))).toBe(true)
+    expect(await Bun.file(join(repo, "docs", "T-001", "done.md")).text()).toContain("Closed: repair round 1")
+    // D2: the blocked-keep landing (the repair close) ran the hooks — the
+    // failed unit's own boundary paused; pre-fix that landing skipped them
+    // (T-001 never completes, so nothing else could pause under its name).
+    expect(questions.some((text) => text.includes("task T-001"))).toBe(true)
+    // The floor beside it: the ordinary done landing paused too.
+    expect(questions.some((text) => text.includes("task T-002"))).toBe(true)
   })
 
   test("plans/0126 D3: a doc-lane session's test request is refused with a steer — no script runs beside siblings, the loop completes", async () => {

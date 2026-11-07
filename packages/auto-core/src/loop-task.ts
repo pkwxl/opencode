@@ -518,6 +518,22 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
       taskBaseline = gate.baseline
     }
   }
+  // The unit's close-out audit over its start baseline (plans/0021 P3: the
+  // commit range must be all driver commits). The done arm's own check, run
+  // at every unit landing (plans/0211 D2): the parked arm (the park commit
+  // is the unit's landing while it waits) and the repair-appended arm (the
+  // closeUnit commit is its close) owed it the same — a foreign commit made
+  // during a parked unit's session was never checked. Returns 2 when
+  // violated, undefined when clean (or no baseline: dryrun / non-git).
+  const closeOutAudit = async (): Promise<number | undefined> => {
+    if (!taskBaseline) return undefined
+    const violations = await unitViolations(directory, taskBaseline)
+    if (!violations.length) return undefined
+    log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
+    for (const problem of violations) log(`  ${problem}`)
+    emitStatus({ type: "failure", message: `${task.id} unit close-out check failed (isolation boundary violated): ${violations.join("; ")}` })
+    return 2
+  }
   // The task bracket (P2b, src/run-status.ts): the task unit's start — the
   // gates above passed, beginUnit recorded the baseline, and the unit
   // transition itself was booked by begin() inside runTask.
@@ -544,9 +560,19 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // the loop returns to the pick. No wrapup (a parked task never reaches
     // it), no close-out, no terminal commit: the task is not complete, it
     // waits. The bracket's task-end event was already emitted by the
-    // pipeline; the boundary hooks run at the next unit as usual.
+    // pipeline. The park commit is this unit's landing (plans/0211 D2): the
+    // close-out audit and the boundary hooks run HERE — a safe point
+    // (everything committed, the unit waiting), not at the next unit's
+    // completion (a pending /exit or a step pause waited through a whole
+    // further unit otherwise, 0143's own complaint in this arm's shape).
     log(`⏸ ${task.id} parked on ${outcome.blocker} — its landed consumables release its successors; scheduling continues around it`)
     ctx.ran++
+    const parkedAudit = await closeOutAudit()
+    if (parkedAudit !== undefined) return parkedAudit
+    // the task-boundary hook set (step pause, /exit checkpoint, hibernate
+    // window, /failback consumption — taskBoundary's own comment carries the
+    // plans).
+    await taskBoundary(ctx, `task ${task.id} ${task.title}`)
     return 0
   }
   if (outcome.type === "blocked") {
@@ -562,7 +588,16 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // spent budget falls through to today's block (repairRoundAppend's
     // "block" above).
     const repaired = outcome.repair !== undefined ? await repairRoundAppend(ctx, { kind: "task", task, reason: outcome.repair.reason }) : "block"
-    if (repaired === "appended") return 0
+    if (repaired === "appended") {
+      // The repair round's close (plans/0211 D2): the closeUnit commit is
+      // this unit's landing — the done arm's audit and boundary hooks, so a
+      // pending /exit, a step pause or a hibernate window lands here instead
+      // of waiting through the appended tasks' whole run.
+      const repairAudit = await closeOutAudit()
+      if (repairAudit !== undefined) return repairAudit
+      await taskBoundary(ctx, `task ${task.id} ${task.title}`)
+      return 0
+    }
     await block(directory, task.id)
     log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
     // the proxy-answer highlight block (plans/0020-auto-resolve-design.md
@@ -646,15 +681,8 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
   // rename and the index tick were booked inside runTask's pipeline) — the
   // bracket closes before the isolation check below, which only reports.
   emitStatus({ type: "task-end", task: task.id, outcome: "completed" })
-  if (taskBaseline) {
-    const violations = await unitViolations(directory, taskBaseline)
-    if (violations.length) {
-      log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
-      for (const problem of violations) log(`  ${problem}`)
-      emitStatus({ type: "failure", message: `${task.id} unit close-out check failed (isolation boundary violated): ${violations.join("; ")}` })
-      return 2
-    }
-  }
+  const doneAudit = await closeOutAudit()
+  if (doneAudit !== undefined) return doneAudit
   // the task-boundary hook set (step pause, /exit checkpoint, hibernate
   // window, /failback consumption — taskBoundary's own comment carries the
   // plans).
@@ -1299,6 +1327,14 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         if (keep) {
           landings++
           await regressionBoundary(ctx, opts, phase)
+          // The boundary hooks in probe form beside it (plans/0211 D2): the
+          // repair round's close is this unit's landing — the keep arm owed
+          // the landing's hooks (a /exit seen here stops dispatching and
+          // takes effect after the drain, the landing's own rule).
+          await taskBoundary(ctx, `task ${task.id} ${task.title}`, () => {
+            scheduling = false
+            exitLabel = `task ${task.id} ${task.title}`
+          })
         } else {
           scheduling = false
           if (stop === undefined) stop = 2
@@ -1377,6 +1413,10 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         registry.live.delete(task.id)
         if (!keep) return 2
         await regressionBoundary(ctx, opts, phase)
+        // The boundary hooks beside it, plain form (plans/0211 D2): the
+        // flatten is one unit at a time — nothing is in flight, so the
+        // checkpoint may take effect directly, like the flatten's done arm.
+        await taskBoundary(ctx, `task ${task.id} ${task.title}`)
         continue
       }
       registry.live.delete(task.id)

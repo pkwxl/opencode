@@ -415,7 +415,12 @@ export async function executeWhole(
   const subtasksRel = taskDoc(task.id, "subtasks")
   const readSubtasks = async (): Promise<string> => Bun.file(join(planDir, subtasksRel)).text().catch(() => "")
   const clause = lead && steer !== undefined && opts.leadSplit !== false
-  const checklistBase = clause ? ((await headText(planDir, subtasksRel)) ?? (await readSubtasks())) : ""
+  // The stage's starting checklist, derived for EVERY whole-task scope
+  // (plans/0211 D1), not only the clause's: the committed copy is the
+  // person's — the base the clause's guard judges against and the none
+  // scope's guard restores. Without a commit to read (no git) it is the copy
+  // on disk, the same fallback both scopes share.
+  const checklistBase = (await headText(planDir, subtasksRel)) ?? (await readSubtasks())
   const splitOffered = clause && subtasks(checklistBase).length === 0
   if (clause && !splitOffered) {
     log(`• ${task.id} ${subtasksRel} already holds a checklist; the lead runs without its split clause, and the checklist runs after it`)
@@ -437,16 +442,26 @@ export async function executeWhole(
   }
   // A checklist the session wrote that nobody judged yet (the lead's own when
   // open, a new one after a rejection); its items when there is one.
+  // A checklist the session left that differs from the starting copy — the
+  // clause scopes judge it (judgeSplit below); the none scope removes it
+  // (plans/0211 D1: a checklist written outside any split clause is never
+  // the person's — the committed one the stage started from runs, if any).
   const unjudged = async () => {
-    if (split === "none") return []
     const raw = await readSubtasks()
     return raw !== checklistBase ? parseSplit(raw) : []
   }
+  // The none scope's removal line: no clause was offered, so there was
+  // nothing to judge — the checklist itself was not the person's to write.
+  const noneSplitLine = () =>
+    `↻ ${task.id} the session left ${subtasksRel} though no split clause was offered; ignored and removed (a checklist outside the lead's split clause is never the person's — the committed one the stage started from runs, if any)`
   // The guard (plans/0059 D4) over the checklist a session just left: taken
   // (the scope files written, a handover document of the lead removed — the
   // streams must not read it as their own), rejected with the reasons, or
-  // nothing to judge.
+  // nothing to judge. The none scope never reaches it (plans/0211 D1): no
+  // clause was offered, so there is nothing to take — its checklist is
+  // removed at the close-out below, never judged.
   const judgeSplit = async (): Promise<{ type: "taken"; count: number; used?: number } | { type: "rejected"; reason: string } | undefined> => {
+    if (split === "none") return undefined
     const items = await unjudged()
     if (!items.length) return undefined
     if (split === "rejected") {
@@ -578,7 +593,11 @@ export async function executeWhole(
       const left = await unjudged()
       if (left.length) {
         await dropSplit(left.length)
-        log(`↻ ${task.id} the session stopped before ${subtasksRel} was judged; the unjudged split was removed`)
+        log(
+          split === "none"
+            ? noneSplitLine()
+            : `↻ ${task.id} the session stopped before ${subtasksRel} was judged; the unjudged split was removed`,
+        )
       }
       return result
     }
@@ -634,7 +653,11 @@ export async function executeWhole(
       const left = await unjudged()
       if (left.length) {
         await dropSplit(left.length)
-        log(`↻ ${task.id} the session parked before ${subtasksRel} was judged; the unjudged split was removed`)
+        log(
+          split === "none"
+            ? noneSplitLine()
+            : `↻ ${task.id} the session parked before ${subtasksRel} was judged; the unjudged split was removed`,
+        )
       }
       await setParked(planDir, task.id, directive)
       // The park commit: the session's unified commit under the park's own
@@ -647,6 +670,19 @@ export async function executeWhole(
       log(`⏸ ${task.id} parked on ${directive}: its landed consumables release its successors; it resumes when ${directive} closes (the block and resume steps: ${handoffFile(task)})`)
       emitStatus({ type: "task-end", task: task.id, outcome: "parked", detail: `parked on ${directive}` })
       return { type: "parked", blocker: directive }
+    }
+    // The none scope's guard (plans/0211 D1): a checklist the session wrote
+    // outside any clause is removed before the commit — the stage's close-out
+    // holds the session's work alone, and the subtask loop never runs an
+    // agent-authored checklist as the person's (the mode off session's prompt
+    // already says "without decomposing it into subtasks"; this is the
+    // mechanical half of that instruction).
+    if (split === "none") {
+      const left = await unjudged()
+      if (left.length) {
+        await dropSplit(left.length)
+        log(noneSplitLine())
+      }
     }
     // The lead's split is judged before the commit, so the commit holds its
     // outcome: the lead's work with the checklist and the scope files when
@@ -736,7 +772,6 @@ export async function ensureDecomposed(
   opts: Opts,
   chain: SessionChain,
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
-  if (task.checklist?.length) return { type: "ok", task }
   const dir = plan.dir
   // The run's git service (git-ops.ts gitOf, the seam's one resolution
   // point).
@@ -748,6 +783,25 @@ export async function ensureDecomposed(
     (await Bun.file(join(dir, taskDoc(task.id, role))).text().catch(() => "")).trim()
   const readRaw = async (): Promise<string> => readDoc("subtasks")
   const existing = subtasks(await readRaw())
+  const subject = `${task.id} decompose ${shortTitle(task.title)}`
+  if (existing.length) {
+    // A kill between the decompose session's end and its `decompose` commit
+    // (plans/0211 D4): the artifacts on disk are that session's finished
+    // output — re-derived here as the stage's own commit BEFORE either
+    // injection path returns (the loaded checklist short-circuits below too),
+    // so the first subtask's start gate meets a clean tree (0149's run →
+    // re-run promise, never a "leftover from an abandoned run" stop over the
+    // driver's own decomposition). The tree's state is the guard: commitTree
+    // skips a clean repository, so an already-committed decomposition (or a
+    // hand-written checklist the clean gate proved committed) passes
+    // byte-identically.
+    const committed = await git.afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
+    if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
+  }
+  // The loaded checklist short-circuits here too — the disk read above it
+  // owns the kill-window commit (plans/0211 D4), so both injection paths
+  // return over a tree whose decomposition is committed.
+  if (task.checklist?.length) return { type: "ok", task }
   if (existing.length) {
     log(`↻ ${task.id} decomposition result ${subtasksFile} already exists; using its checklist directly`)
     return { type: "ok", task: await reloadTask(plan, task.id) }
@@ -756,7 +810,6 @@ export async function ensureDecomposed(
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the files; the files are a hard requirement.
   autobanner(`${task.id} ${task.title}: task understanding + decomposition`)
-  const subject = `${task.id} decompose ${shortTitle(task.title)}`
   nameSubject(chain, subject)
   // When a shape-check / missing-artifact re-prompt is dispatched through a
   // fork of the just-ended session (revised 2026-09-18), the next round carries

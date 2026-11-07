@@ -507,6 +507,46 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     }
   })
 
+  test("the fresh rung of a matching open record skips the unit gate: a dead session's own uncommitted partial artifact is cleared by the reset and the step redoes (plans/0211 D5, 0165-107)", async () => {
+    const { dir } = await seeded({ model: "kimi/k2" })
+    try {
+      // The killed step's own partial artifact, uncommitted — the caller's
+      // own contract ("a partly written handover is cleared by reset and
+      // rewritten"). Strict off, the session dead: no rollback, the redo
+      // rung — pre-fix the unit gate ran before the reset and stopped
+      // { type: "dirty", files: ["docs/R-01/P01-implement/handover.md"] }
+      // on the killed session's own output.
+      await mkdir(join(dir, "docs", "R-01", "P01-implement"), { recursive: true })
+      await writeFile(join(dir, "docs", "R-01", "P01-implement", "handover.md"), "# Handover\n\nhalf-written\n")
+      const { client, state } = stepClient("ses_plan_old", false)
+      let resetCalled = false
+      const handover = join(dir, "docs", "R-01", "P01-implement", "handover.md")
+      const value = await requireArtifact(
+        client,
+        planTask,
+        "planning prompt",
+        { dir },
+        {
+          ...spec(() => (resetCalled = true)),
+          unitStart: true,
+          // The real callers' reset shape: the step's own artifact removed.
+          reset: async () => {
+            resetCalled = true
+            await rm(handover, { force: true })
+          },
+        },
+        LOOSE,
+      )
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      expect(state.prompts).toEqual(["ses_new_1"])
+      expect(await Bun.file(handover).text().catch(() => "")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("external commits since the baseline → adopted as the current scene (plans/0145 D1): no reuse, no rollback, the step redone in a new session", async () => {
     // The person's hand-commit between the interruption and the re-run: the
     // recorded session's view is stale, but the run is not stopped for it —
