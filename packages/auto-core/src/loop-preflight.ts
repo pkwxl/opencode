@@ -14,6 +14,7 @@
 // Does not depend on loop.ts. Split out of src/loop.ts
 // (plans/0024-module-split-plan.md S14, pure move).
 import { mkdir, readdir, rm } from "node:fs/promises"
+import { hostname } from "node:os"
 import { join } from "node:path"
 import { checkAgentBins } from "./agent-pool"
 import { loopbackProxyWarning } from "./agent-env"
@@ -928,16 +929,35 @@ async function probeTierFacts(dir: string, lanes: LanesConfig | undefined): Prom
   }
 }
 
-// —— Orphan recovery (plans/0068 D14, stage S3) ——
+// —— Orphan recovery (plans/0068 D14, stage S3; the report-first and identity
+// reads restated by plans/0210 D4/D5) ——
+
+// The orphan wait's cadence (0210 D5): the poll keeps D14's 500 ms; the
+// notice repeats every 10 s, naming the pid and the manual way out — the
+// person is the terminal of every bounded wait (P20's tension clause).
+const ORPHAN_POLL_MS = 500
+const ORPHAN_NOTICE_MS = 10_000
 
 // The next parent run's preflight scan of the lane registry, ahead of any
 // scheduling of its own: for every registry entry left by a killed parent —
-//   - a live pid is awaited then landed: the workers are cattle, they finish,
-//     and the lane's committed work is never lost;
-//   - a dead pid with a worktree present is re-dispatched — the worker re-runs
-//     the same unit in the same worktree, resuming precisely through its own
-//     progress record — up to the attempts cap, after which the scene blocks
-//     naming the park path;
+//   - the worktree's report is read first, whatever the pid says: a written
+//     report is the worker's controlled exit (0068 D8's own letter — the
+//     report's ABSENCE is the orphan signal), landed or blocked on its
+//     verdict; a dead pid never overrides one (0210 D4 — the old pid-keyed
+//     read decided every controlled exit of a dead worker as a crash and
+//     re-ran finished units);
+//   - a report-less scene with a live pid is awaited then landed: the
+//     workers are cattle, they finish, and the lane's committed work is
+//     never lost — but only once the worktree's own run lock identifies the
+//     recorded pid (this host, the same number; 0210 D5 — a bare pid probe
+//     cannot tell the lane worker from a recycled pid after a restart or a
+//     scene copied from another host, and an unidentified live pid is one ⚠
+//     line and the crashed posture, never an unbounded hang); the wait
+//     repeats its notice line so its terminal is always the person;
+//   - a dead or unidentified pid with no report is re-dispatched — the
+//     worker re-runs the same unit in the same worktree, resuming precisely
+//     through its own progress record — up to the attempts cap, after which
+//     the scene blocks naming the park path;
 //   - a scene the recovery cannot own (a missing worktree, an unresolvable
 //     phase) blocks the same way.
 // After the records, the park's stragglers — worktree directories with no
@@ -956,13 +976,24 @@ export async function recoverOrphanLanes(gitOps: GitOps, dir: string): Promise<n
       log(`⏸ the lane record of ${record.unit} names ${record.worktree}, which no longer exists; remove the record (.auto/units.json) or restore the worktree and re-run`)
       return 2
     }
-    const alive = record.pid !== undefined && pidAlive(record.pid)
-    let report: LaneReport | undefined
-    if (alive) {
-      log(`↻ ${record.unit} a lane worker of the previous run is still executing in ${record.worktree} (pid ${record.pid}); awaiting its exit, then landing it`)
-      while (pidAlive(record.pid!)) await Bun.sleep(500)
-      report = await readLaneReport(park)
-      if (report === undefined) log(`⚠ the awaited worker of ${record.unit} exited without a report; treating its scene as a crashed lane and re-dispatching it in place`)
+    let report = await readLaneReport(park)
+    if (report === undefined && record.pid !== undefined && pidAlive(record.pid)) {
+      // The identity read (0210 D5): the worktree's own run lock — host, pid
+      // namespace, start time, 0183 D4's one liveness identity — must name
+      // the recorded pid on this host. An unreadable lock counts as live
+      // (conservative, P12, the same reading lockLines makes).
+      const holder = liveRunLock(park)
+      if (holder === "unreadable" || (holder !== undefined && holder.pid === record.pid && holder.host === hostname())) {
+        log(`↻ ${record.unit} a lane worker of the previous run is still executing in ${record.worktree} (pid ${record.pid}); awaiting its exit, then landing it`)
+        for (let waited = 0; pidAlive(record.pid!); waited += ORPHAN_POLL_MS) {
+          if (waited > 0 && waited % ORPHAN_NOTICE_MS === 0) log(`ℹ still awaiting the lane worker of ${record.unit} (pid ${record.pid}); if no lane worker is running, remove its record in .auto/units.json and re-run`)
+          await Bun.sleep(ORPHAN_POLL_MS)
+        }
+        report = await readLaneReport(park)
+        if (report === undefined) log(`⚠ the awaited worker of ${record.unit} exited without a report; treating its scene as a crashed lane and re-dispatching it in place`)
+      } else {
+        log(`⚠ ${record.unit} a live pid ${record.pid} is recorded, but the worktree's run lock does not name it on this host (a reused pid after a restart, or a scene from another host); treating the lane as crashed`)
+      }
     }
     // A dead worker (or an awaited one that crashed on its way out): the
     // re-dispatch loop, resumed through the worktree's own progress record,

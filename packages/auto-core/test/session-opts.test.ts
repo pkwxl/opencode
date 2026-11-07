@@ -230,9 +230,19 @@ describe("sessionOpts width keys (plans/0068 S5)", () => {
     expect(isolation.lane).toEqual({ unit: "T-001" })
   })
 
-  test("the doc-lane flag rides the task options of a doc-lane unit alone (plans/0126 D3 — the engine's test refusal key)", () => {
+  test("the doc-lane flag rides the task options of a doc-lane unit alone (plans/0126 D3 — the engine's test refusal key); a doc-lane unit carries no control (plans/0210 D2)", () => {
     const wide: SessionCtx = { ...ctx, opts: { ...ctx.opts, maxSessions: 2 } }
     expect(sessionOpts(wide, { site: "task", phase, docLane: true }).docLane).toBe(true)
     expect(sessionOpts(wide, { site: "task", phase }).docLane).toBeUndefined()
+    // 0210 D2: the field's only consumers are the four in-pipeline /exit
+    // probes, and a maybeExit there throws inside a sibling-shared pipeline
+    // — the exit belongs at the landing, in probe form. The key stays set
+    // (the builder's no-omissions rule), its value the doc-lane exception;
+    // every other task shape threads the run's control untouched.
+    const docLane = sessionOpts(wide, { site: "task", phase, docLane: true })
+    expect("control" in docLane).toBe(true)
+    expect(docLane.control).toBeUndefined()
+    expect(sessionOpts(wide, { site: "task", phase }).control).toBe(ctx.control)
+    expect(sessionOpts(wide, { site: "task", phase, stream: 1 }).control).toBe(ctx.control)
   })
 })

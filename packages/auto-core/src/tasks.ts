@@ -758,6 +758,24 @@ export async function resetInProgress(dir: string, except?: ReadonlySet<string>)
   return stale
 }
 
+// The flatten's single-leftover reset (plans/0210 D3): resetInProgress's
+// keep-set shape is preflight's (all marks but the keep-set, before the loop
+// is entered); the doc loop's recovery flatten owns the kept marks one by
+// one as it reads them, and a leftover with no active progress record is
+// executing nothing — its mark resets to pending right there so its dispatch
+// turn comes (readyUnits reads in_progress as busy forever; the pending mark
+// is what delivers 0099 D10's stated posture, the start gate judging the
+// unit's uncommitted work at its dispatch). Same transition event as the
+// preflight reset, one unit at a time.
+export async function resetUnitInProgress(dir: string, id: string): Promise<void> {
+  await updateTask(dir, id, (entry) => {
+    const next = { ...entry }
+    delete next.status
+    return next
+  })
+  emitStatus({ type: "unit-transition", unit: id, level: "task", from: "in_progress", to: "pending" })
+}
+
 // A block only records the status; its reason is in the run log.
 export async function block(dir: string, id: string): Promise<void> {
   let from: Status = "pending"

@@ -35,7 +35,7 @@ import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, dirtyStopLines, formatDuration, log } from "./log"
 import { sessionOpts } from "./opts"
-import { block, loadPlan, next, requireTask, strandedParks, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
+import { block, loadPlan, next, requireTask, resetUnitInProgress, strandedParks, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
 import { phaseKey, routePhase, type PhaseUnit } from "./phases"
 import {
   conflictRepair,
@@ -1136,6 +1136,12 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // The /exit label the drain ends at: set when the request is seen at a
     // landing boundary; thrown (maybeExit) after the last lane lands.
     let exitLabel: string | undefined
+    // The first pipeline rejection observed (0210 D1): a throw out of one
+    // doc unit's pipeline never abandons the siblings mid-drain — scheduling
+    // stops, every remaining pipeline is awaited and its landing runs, and
+    // the first error is rethrown once the in-flight set is empty (the drain
+    // rule for throws, 0068 §6.2's matrix extended to the in-process loop).
+    let failure: { error: unknown } | undefined
     let ordinal = 0
     let landings = 0
     // The drain waiters' recompute wake: a lane parking at its gate changes
@@ -1191,16 +1197,23 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // under docs/) and the effective-scope disjointness against everything
     // the registry holds live (the in-flight lanes' scopes and the recovery
     // leftovers'; the raw `touches` comparison readyUnits makes would miss
-    // a declaration reaching a sibling's own docs/T-NNN/). A run forcing
-    // the subtask pipeline (--subtask true — the hard override ignores the
-    // Decompose field) and a task with a taken split degrade serially:
-    // their execution is the subtask loop's, whose scans and close-outs are
-    // the serial world's (D1 clause 3's tier ≥ 1 story).
+    // a declaration reaching a sibling's own docs/T-NNN/). The unit's OWN
+    // registration never counts against it (0210 D3): the flatten
+    // pre-registers every leftover's scope, and a reset leftover must stay
+    // admissible to itself — its own scope's dirt is the START GATE's to
+    // judge (the D5 relaxation tolerates exactly the other live scopes),
+    // never the admission's; an ordinary dispatch never sees its own entry
+    // here (the registration follows the admission), so the floor is
+    // unchanged. A run forcing the subtask pipeline (--subtask true — the
+    // hard override ignores the Decompose field) and a task with a taken
+    // split degrade serially: their execution is the subtask loop's, whose
+    // scans and close-outs are the serial world's (D1 clause 3's tier ≥ 1
+    // story).
     const docAdmissible = (task: Task): boolean => {
       if (opts.subtask === "true" || task.split !== undefined) return false
       if (!docEligible(task)) return false
       const scope = docScope(task)
-      return [...registry.live.values()].every((other) => scopesDisjoint(scope, other))
+      return [...registry.live.entries()].every(([id, other]) => id === task.id || scopesDisjoint(scope, other))
     }
 
     // The ready set of one pass over the reloaded plan (D5's predicate over
@@ -1219,9 +1232,17 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     const dispatch = (task: Task, plan: Plan): void => {
       const scope = docScope(task)
       registry.live.set(task.id, scope)
+      // The live sibling scopes ride every dispatch, not only the flatten's
+      // drive (plans/0210 D3): a resumed unit's rollback verdict must meet
+      // the D10 refusal whenever sibling state is in the tree — a leftover's
+      // preserved half-work above all — never the tree-wide stash that would
+      // sweep it. The set is the registry's live scopes except the unit's
+      // own, read at dispatch (a lane dispatched before its sibling is the
+      // named residual — the guard at rollbackUnitState, 0165-019's home).
+      const siblings = [...registry.live.entries()].filter(([id]) => id !== task.id).map(([, other]) => other).flat()
       const lane: LiveDocLane = { task, scope, ordinal: ++ordinal, gate: false, resolved: false, done: Promise.resolve(), pipeline: Promise.resolve({ kind: "done" }) }
       inFlight.set(task.id, lane)
-      lane.pipeline = runDocUnit(ctx, phase, plan, task, registry, { scope, drain: drainOf(lane) })
+      lane.pipeline = runDocUnit(ctx, phase, plan, task, registry, { scope, drain: drainOf(lane), ...(siblings.length ? { siblingScopes: siblings } : {}) })
       lane.done = lane.pipeline.then(
         () => {
           lane.resolved = true
@@ -1314,13 +1335,18 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // dirt), then each one WITH an active progress record is driven one at a
     // time through runDocUnit — the resumed-run clean exemption is the
     // existing rule, and the unit's own scope dirt is its resumable state.
-    // A leftover WITHOUT an active record keeps today's posture when its
-    // dispatch turn comes: the start gate sees dirt no live scope covers
-    // and blocks for the human. A driven leftover's rollback verdict is
-    // refused while other leftovers remain (runTask's rollbackRefused,
-    // D10): the ladder's tree-wide stash would sweep their state — the
-    // refusal arrives as this loop's own blocked outcome and finishes
-    // exactly like a landing's (the block, the logged question, the
+    // A leftover WITHOUT an active record is executing nothing (P6: the
+    // in_progress mark is runtime state about a live session, and both its
+    // witnesses — the session and the record — are gone): the flatten owns
+    // its mark, resetting it to pending right here (0210 D3) so its dispatch
+    // turn comes — readyUnits reads in_progress as busy forever, the kept
+    // mark was the dead-end — and the start gate then judges its uncommitted
+    // work at that turn (0099 D10's stated posture, delivered: the gate
+    // tolerates exactly the OTHER live scopes' dirt). A driven leftover's
+    // rollback verdict is refused while other leftovers remain (runTask's
+    // rollbackRefused, D10): the ladder's tree-wide stash would sweep their
+    // state — the refusal arrives as this loop's own blocked outcome and
+    // finishes exactly like a landing's (the block, the logged question, the
     // interrupted-scene commit riding the unit's still-live scope; no
     // repair arm fires mid-flatten, a rollback verdict carries no repair
     // fact and nothing else has run yet). The declared-but-unwritten
@@ -1331,7 +1357,11 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     for (const task of leftovers) registry.live.set(task.id, docScope(task))
     for (const task of leftovers) {
       const recalled = await recallProgress(directory, task.id)
-      if (recalled?.active !== true) continue
+      if (recalled?.active !== true) {
+        await resetUnitInProgress(directory, task.id)
+        log(`↻ doc-lane recovery: ${task.id} has no active progress record; its in_progress mark reset to pending — the start gate judges its uncommitted work at its dispatch turn`)
+        continue
+      }
       const siblings = [...registry.live.entries()].filter(([id]) => id !== task.id).map(([, scope]) => scope).flat()
       const result = await runDocUnit(ctx, phase, flattenPlan, task, registry, {
         scope: registry.live.get(task.id)!,
@@ -1371,9 +1401,11 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           dispatch(task, plan)
         }
       }
-      // Nothing in flight: the drain is done (or never started) — return,
+      // Nothing in flight: the drain is done (or never started) — surface a
+      // recorded pipeline failure (D1: the siblings have all landed), return,
       // run the serial degrade, or the phase is complete.
       if (inFlight.size === 0) {
+        if (failure !== undefined) throw failure.error
         if (stop !== undefined || exitLabel !== undefined) {
           // A /exit seen at a landing takes effect here, after the drain —
           // maybeExit throws (runAll maps it); scheduling had already
@@ -1399,8 +1431,19 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           // Unreachable with a checked graph and nothing executing: every
           // not-done unit has an unmet dependency forever (an admission
           // reject the fill would have skipped leaves the ready set empty).
-          // Stop rather than spin.
-          log(`⏸ ${task.id} is not ready and nothing is executing; the dependency graph cannot progress — fix the task index manually and re-run`)
+          // Stop rather than spin. Post-flatten-ownership no in_progress doc
+          // unit reaches here (the flatten resets the unrecorded marks,
+          // preflight the others); should one ever remain, the line names it
+          // and the true home — the runtime mark in .auto/units.json, never
+          // the task index (0210 D3: the busy mark was the dead-end the old
+          // line's remedy could not help).
+          const skipped = plan.tasks.filter((unit) => unit.status === "in_progress")
+          log(
+            `⏸ ${task.id} is not ready and nothing is executing; the dependency graph cannot progress` +
+              (skipped.length
+                ? ` — ${skipped.map((unit) => unit.id).join(", ")} ${skipped.length === 1 ? "is" : "are"} still marked in_progress and never became dispatchable (a stale runtime mark in .auto/units.json, never a task-index problem; remove the mark and re-run)`
+                : ` — fix the task index manually and re-run`),
+          )
           emitStatus({ type: "task-end", task: task.id, outcome: "blocked", detail: "not ready with nothing executing" })
           return 2
         }
@@ -1411,9 +1454,31 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       }
       // Await any lane's pipeline; land it in this single-threaded
       // continuation — the mutex everything driver-exclusive funnels
-      // through (D3).
-      const first = await Promise.race([...inFlight.values()].map((lane) => lane.pipeline.then((result) => ({ lane, result }))))
+      // through (D3). The race wraps every pipeline with a rejection arm
+      // (D1): a rejected pipeline settles the race with its error instead
+      // of rejecting it — the loop keeps draining (scheduling already
+      // stopped), the fulfilled siblings land, and the first error is
+      // rethrown once the in-flight set is empty. The rejected lane's scope
+      // stays registry-live through the drain: its uncommitted writes are
+      // excluded from the siblings' landing commits — preserved for the
+      // person, never swept and never committed by a sibling.
+      const first = await Promise.race(
+        [...inFlight.values()].map((lane) =>
+          lane.pipeline.then(
+            (result): { lane: LiveDocLane; result: DocUnitResult } => ({ lane, result }),
+            (error: unknown): { lane: LiveDocLane; error: unknown } => ({ lane, error }),
+          ),
+        ),
+      )
       inFlight.delete(first.lane.task.id)
+      if ("error" in first) {
+        scheduling = false
+        if (failure === undefined) {
+          failure = { error: first.error }
+          log(`⚠ ${first.lane.task.id} doc lane failed: ${first.error instanceof Error ? first.error.message : String(first.error)}; scheduling stopped, draining its siblings before the failure surfaces`)
+        }
+        continue
+      }
       await land(first.lane, first.result)
     }
   } finally {

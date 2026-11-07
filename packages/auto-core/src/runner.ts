@@ -221,18 +221,20 @@ export async function runTask(
   }
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
   // D10's rollback refusal (plans/0099): a strict-resume rollback is
-  // tree-wide — under the recovery flatten, with sibling leftover doc units'
-  // state in the tree, honoring the verdict would sweep their dirt into this
-  // unit's stash and retract their landed shares. With siblings present the
-  // verdict becomes the human posture: a blocked outcome naming the unit, the
-  // ladder's reason and the sibling scopes. (The session-level rollback
-  // inside executeWhole's handover engine is not suppressed — D10 names the
-  // ladder's verdict; a killed flatten hitting that deeper rollback is the
-  // follow-up if a real kill ever surfaces it.)
+  // tree-wide — with sibling doc lanes' state in the tree (the recovery
+  // flatten's leftovers, or an in-flight lane beside this one — the dispatch
+  // sites thread the live sibling scopes since plans/0210 D3), honoring the
+  // verdict would sweep their dirt into this unit's stash and retract their
+  // landed shares. With siblings present the verdict becomes the human
+  // posture: a blocked outcome naming the unit, the ladder's reason and the
+  // sibling scopes. (The session-level rollback inside executeWhole's
+  // handover engine is not suppressed — D10 names the ladder's verdict; a
+  // lane hitting that deeper rollback is 0165-019's, guarded at
+  // rollbackUnitState.)
   const rollbackRefused = (why: string): Outcome => ({
     type: "blocked",
     question:
-      `${task.id} resume after interruption: ${why}. Strict resume would roll the unit back to its baseline, but the recovery flatten holds sibling doc lanes' state in the tree ` +
+      `${task.id} resume after interruption: ${why}. Strict resume would roll the unit back to its baseline, but sibling doc lanes' state is in the tree ` +
       `(${input.siblingScopes!.join(", ")}); a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely`,
   })
   // Strict resume (plans/0022-session-recovery-fidelity-design.md): when on,

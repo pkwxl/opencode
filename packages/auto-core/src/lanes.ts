@@ -48,7 +48,7 @@
 // whatever tier is active: it still forces the worktree lane machinery,
 // serially, under every tier (D10's closing rule).
 import { createHash } from "node:crypto"
-import { cp, mkdir, realpath, stat } from "node:fs/promises"
+import { cp, mkdir, realpath, rm, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
 import { checklistPrerequisites, subtaskId } from "./document/state"
@@ -913,6 +913,13 @@ export async function dispatchLane(
     if (!(await stat(reuse).then(() => true, () => false))) {
       return { type: "failed", error: `the lane record of ${task.id} names ${record.worktree}, which no longer exists; remove the record (.auto/units.json) or restore the worktree and re-run` }
     }
+    // The reused worktree may hold its previous attempt's report (an
+    // attempt that wrote its controlled exit and was re-dispatched anyway,
+    // or a landing that kept the scene): remove it before the spawn so the
+    // next read is this attempt's alone (plans/0210 D4) — a crashed
+    // re-dispatch must read "no report" (the orphan signal), never the
+    // previous attempt's verdict.
+    await rm(join(reuse, ".auto", "lane.json"), { force: true })
     log(
       instruction !== undefined
         ? `↻ ${task.id} re-dispatching its lane in the existing worktree ${record.worktree} with the merge instruction (merge ${instruction.merge} into ${branch}, resolve, exit normally)`

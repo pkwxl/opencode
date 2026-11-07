@@ -41,6 +41,7 @@ import { runTask } from "../src/runner"
 import { runTaskLoop, type LoopCtx } from "../src/loop-task"
 import { renderTaskIndex } from "../src/tasks"
 import { createGitOps } from "../src/git-ops"
+import type { GitOps } from "../src/git"
 import { EOF_MARK } from "../src/doccheck"
 import { UNSTATED_KEY_HOLD_MS } from "../src/keyring"
 import { WORKTREE_CHECK, forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
@@ -3724,7 +3725,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     return artifactTurns(repo)(ctx)
   }
 
-  const docCtx = (repo: string, server: LoopCtx["server"], opts: Partial<LoopCtx["opts"]> = {}): LoopCtx => {
+  const docCtx = (repo: string, server: LoopCtx["server"], opts: Partial<LoopCtx["opts"]> = {}, git: LoopCtx["git"] = createGitOps()): LoopCtx => {
     const holder = services()
     return {
       directory: repo,
@@ -3737,7 +3738,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
       repairs: 0,
       router: holder.router,
       control: holder.control,
-      git: createGitOps(),
+      git,
     }
   }
 
@@ -4061,6 +4062,113 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     expect(refusal).toContain("docs/T-002/")
     expect(await git(repo, "stash", "list")).toBe("")
     expect(await Bun.file(join(repo, "docs", "T-002", "notes.md")).text()).toBe("half-written by the killed run\n")
+  })
+
+  test("a driver-fault throw in one doc unit's pipeline: scheduling stops, the sibling drains and lands its committed work, then the error surfaces (plans/0210 D1, 0165-079)", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    const agent = make({ turn: docTurns(repo) })
+    // The concurrency latch keeps T-002 mid-execution at the moment T-001's
+    // close-out commit throws: T-001's execution prompt holds until T-002's
+    // has dispatched, then returns; T-002's turn is slowed so the sibling's
+    // rejection is observed while it is still in flight (the abandonment the
+    // bare Promise.race used to commit).
+    let release!: () => void
+    const t2Dispatched = new Promise<void>((resolve) => (release = resolve))
+    const plain = agent.client.prompt.bind(agent.client)
+    agent.client.prompt = async (input, signal) => {
+      const exec = !input.text.includes("only performs the wrap-up")
+      if (exec && input.text.includes("docs/T-002/todo.md")) {
+        release()
+        await Bun.sleep(300)
+        return plain(input, signal)
+      }
+      if (exec && input.text.includes("docs/T-001/todo.md")) await t2Dispatched
+      return plain(input, signal)
+    }
+    // The failing seam: T-001's first driver commit throws (a driver fault
+    // on the 0185 D1 channel — the class of throw the old race abandoned the
+    // siblings over).
+    const fault = "synthetic driver fault: the commit seam threw for T-001"
+    const base = createGitOps()
+    const throwing: GitOps = {
+      ...base,
+      commitTree: async (d, t, info, paths) => {
+        if (t.id === "T-001") throw new Error(fault)
+        return base.commitTree(d, t, info, paths)
+      },
+    }
+    let thrown: unknown
+    try {
+      await runDocLoop(docCtx(repo, serverOf(agent), {}, throwing), phase)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain(fault)
+    // The sibling drained and landed BEFORE the error surfaced: done,
+    // committed (its scope clean in git status), and the failed unit's own
+    // writes preserved as uncommitted dirt — never swept, never committed by
+    // the sibling's landing.
+    expect(existsSync(join(repo, "docs", "T-002", "done.md"))).toBe(true)
+    const status = await git(repo, "status", "--porcelain")
+    expect(status).not.toContain("docs/T-002")
+    expect(status).toContain("docs/T-001")
+    expect(lines.some((line) => line.includes("T-001 doc lane failed") && line.includes("draining its siblings"))).toBe(true)
+    // Let any pre-fix abandoned pipeline settle before the cleanup removes
+    // the directory under it.
+    await Bun.sleep(600)
+  })
+
+  test("the re-run after the flatten refusal (plans/0210 D3, 0165-009): the unrecorded leftover's mark resets, its dispatch turn comes, and the sibling's preserved half-work is never swept", async () => {
+    const { dir: repo, phase } = await docRepo([
+      { id: "T-001", touches: ["docs/T-001/"] },
+      { id: "T-002", touches: ["docs/T-002/"] },
+    ])
+    // The killed run's scene (progress.json is single-slot, so one of two
+    // in-flight units always lacks it): both units in_progress, both scopes
+    // dirty, T-001's record active over a dead session (the rollback
+    // verdict), T-002 the record-less sibling leftover.
+    await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-001": { status: "in_progress" }, "T-002": { status: "in_progress" } } }, null, 2)}\n`)
+    await mkdir(join(repo, "docs", "T-001"), { recursive: true })
+    await mkdir(join(repo, "docs", "T-002"), { recursive: true })
+    await Bun.write(join(repo, "docs", "T-001", "notes.md"), "half-written by the killed run\n")
+    await Bun.write(join(repo, "docs", "T-002", "notes.md"), "half-written by the killed run\n")
+    const sha = (await git(repo, "rev-parse", "--short", "HEAD")).trim()
+    await saveProgress(repo, { task: "T-001", session: "ses_dead", at: Date.now(), active: true, phase: { kind: "whole" }, baseline: [{ root: repo, sha }] })
+    const agent = make({ turn: docTurns(repo) })
+    // Run 1 — the flatten drives T-001 and its rollback verdict is refused
+    // while T-002 remains: blocked, exit 2 (the arm the composed-path test
+    // already pins).
+    const first = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(first).toBe(2)
+    // Run 2 — the person's re-run as taught. The old code dead-ended here:
+    // the unrecorded leftover stayed busy forever ("fix the task index
+    // manually") or, with the blocked sibling resumable, its unguarded
+    // rollback swept the leftover's half-work into a stash named for the
+    // other task (the R1-C sweep).
+    const second = await runDocLoop(docCtx(repo, serverOf(agent)), phase)
+    expect(second).toBe(2)
+    // The flatten owned the leftover: its mark reset to pending (the
+    // busy-read's dead-end gone), the reset line teaching the posture — an
+    // absent entry is the pending default, the same shape resetInProgress
+    // leaves at preflight.
+    expect(lines.some((line) => line.includes("T-002 has no active progress record"))).toBe(true)
+    expect(JSON.parse(await Bun.file(join(repo, ".auto", "units.json")).text()).tasks["T-002"]?.status ?? "pending").toBe("pending")
+    // Its dispatch turn came and the start gate judged its dirt (0099 D10's
+    // stated posture, delivered): the dirty-stop naming its file.
+    expect(lines.some((line) => line.includes("T-002 worktree not clean before startup"))).toBe(true)
+    expect(lines.some((line) => line.includes("docs/T-002/notes.md"))).toBe(true)
+    // The resumable sibling's rollback verdict was refused a second time —
+    // now through the dispatch-threaded sibling scopes — and no stash ever
+    // swept the leftover's preserved half-work.
+    expect(lines.filter((line) => line.includes("a rollback is tree-wide and would sweep it")).length).toBeGreaterThanOrEqual(2)
+    expect(await git(repo, "stash", "list")).toBe("")
+    expect(await Bun.file(join(repo, "docs", "T-002", "notes.md")).text()).toBe("half-written by the killed run\n")
+    // The old dead-end's line never printed.
+    expect(lines.some((line) => line.includes("the dependency graph cannot progress"))).toBe(false)
   })
 
   test("the D2 floors: the switch off and a phase with no doc-eligible units are the serial loop's own stream", async () => {

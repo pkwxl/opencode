@@ -539,6 +539,23 @@ describe("dispatchLane (§6.5 ①–⑤)", () => {
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].attempts).toBe(2)
   })
 
+  test("a re-dispatch removes the reused worktree's previous report before the spawn (plans/0210 D4, 0165-080)", async () => {
+    const task = await laneProject()
+    setShellProfile({ laneLauncher: () => stubWorker() })
+    const first = await dispatchLane(createGitOps(), dir, task)
+    if (first.type !== "spawned") throw new Error(first.error)
+    // The previous attempt's controlled-exit report sits in the reused
+    // worktree (a completed attempt re-dispatched anyway, or a landing that
+    // kept the scene): the re-dispatch must remove it, so a worker that
+    // crashes again reads "no report" (the orphan signal) — never the
+    // previous attempt's verdict as its own.
+    await writeLaneReport(first.worktree, reportOf("T-001"))
+    const second = await dispatchLane(createGitOps(), dir, task)
+    if (second.type !== "spawned") throw new Error(second.error)
+    expect(second.worktree).toBe(first.worktree)
+    expect(await Bun.file(join(first.worktree, ".auto", "lane.json")).exists()).toBe(false)
+  })
+
   test("a park straggler without a lane record fails the dispatch naming the path", async () => {
     const task = await laneProject()
     setShellProfile({ laneLauncher: () => stubWorker() })
@@ -1344,6 +1361,31 @@ async function deadPid(): Promise<number> {
   return proc.pid!
 }
 
+// The park's own run lock naming a worker pid on this host (0210 D5's
+// identity read): the shape a real lane worker leaves in its worktree —
+// runAll holds the lock of the directory it drives for the whole run.
+async function writeParkLock(park: string, pid: number): Promise<void> {
+  await mkdir(join(park, ".auto"), { recursive: true })
+  await Bun.write(
+    join(park, RUN_LOCK_FILE),
+    `${JSON.stringify({ pid, host: hostname(), command: "run", started: new Date().toISOString() })}\n`,
+  )
+}
+
+// One orphan-recovery pass with its log lines captured (the orphan tests'
+// observation channel, the cap test's own shape as a helper).
+async function recovering(gitOps: GitOps, d: string): Promise<{ code: number | undefined; lines: string[] }> {
+  const lines: string[] = []
+  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "))
+  })
+  try {
+    return { code: await recoverOrphanLanes(gitOps, d), lines }
+  } finally {
+    printed.mockRestore()
+  }
+}
+
 describe("recoverOrphanLanes (D14)", () => {
   test("a dead pid with a worktree present is re-dispatched in place and lands; the run continues", async () => {
     await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
@@ -1364,20 +1406,114 @@ describe("recoverOrphanLanes (D14)", () => {
     setShellProfile({ laneLauncher: undefined })
   })
 
-  test("a live pid is awaited then landed (the cattle property)", async () => {
+  test("a written report over a live pid lands at once — the report is the controlled-exit signal, the pid never overrides it (plans/0210 D4, 0165-080)", async () => {
     await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
-    // A live worker that already wrote its report and exits on its own: the
-    // recovery awaits the pid, then lands the report.
+    // A worker in its final exit window: the report is written, the process
+    // not yet gone. The recovery reads the report FIRST — landing it without
+    // awaiting the pid — and never re-dispatches the finished unit.
     const worker = Bun.spawn(["sleep", "1"])
-    await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, worker.pid!, reportOf("T-001"))
-    const started = Date.now()
-    const code = await recoverOrphanLanes(createGitOps(), dir)
-    expect(code).toBeUndefined()
-    // The await really waited for the worker's exit.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(900)
-    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
-    expect(await parkEntries()).toEqual([])
-    await worker.exited
+    try {
+      await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, worker.pid!, reportOf("T-001"))
+      const started = Date.now()
+      const run = await recovering(createGitOps(), dir)
+      expect(run.code).toBeUndefined()
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+      expect(await parkEntries()).toEqual([])
+      expect(await unitAttempts(dir, "T-001")).toBe(1)
+      // Landed without the await: no "still executing" line, and far less
+      // than the worker's 1 s lifetime elapsed.
+      expect(run.lines.some((line) => line.includes("still executing"))).toBe(false)
+      expect(Date.now() - started).toBeLessThan(900)
+    } finally {
+      await worker.exited
+    }
+  })
+
+  test("a report-less live pid is awaited then landed once the worktree's run lock identifies it (the cattle property, plans/0210 D5)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // A live, identified worker that has not written its report yet: the
+    // park's run lock names its pid on this host, so the wait is entered —
+    // the worker exits without a report, and the crashed posture's
+    // re-dispatch (the stub answers the finished unit's report) lands it.
+    const worker = Bun.spawn(["sleep", "1"])
+    try {
+      await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, worker.pid!)
+      await writeParkLock(join(dir, lanePark("T-001")), worker.pid!)
+      setShellProfile({
+        laneLauncher: (worktree, unit) => workingStub(writeLaneReport(worktree, reportOf(unit))),
+      })
+      const started = Date.now()
+      const run = await recovering(createGitOps(), dir)
+      expect(run.code).toBeUndefined()
+      // The await really waited for the worker's exit.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+      expect(run.lines.some((line) => line.includes("still executing in .auto/worktrees/T-001") && line.includes(`pid ${worker.pid}`))).toBe(true)
+      expect(run.lines.some((line) => line.includes("exited without a report"))).toBe(true)
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+      expect(await parkEntries()).toEqual([])
+    } finally {
+      setShellProfile({ laneLauncher: undefined })
+      await worker.exited
+    }
+  })
+
+  test("a live pid the worktree's run lock does not identify is the crashed posture, never a hang (plans/0210 D5, 0165-081)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // The finding's scene: the record names the pid of an unrelated live
+    // process (a recycled pid after a restart — here an 8 s sleep), the
+    // worktree's run lock names nothing. The bare pid probe must not wait
+    // on it: one mismatch line, the crashed posture, the re-dispatch lands.
+    const worker = Bun.spawn(["sleep", "8"])
+    try {
+      await crashScene({ id: "T-001", title: "the widget", file: "src/widget.ts" }, worker.pid!)
+      setShellProfile({
+        laneLauncher: (worktree, unit) => workingStub(writeLaneReport(worktree, reportOf(unit))),
+      })
+      const started = Date.now()
+      const run = await recovering(createGitOps(), dir)
+      expect(run.code).toBeUndefined()
+      expect(Date.now() - started).toBeLessThan(3000)
+      expect(run.lines.some((line) => line.includes("the worktree's run lock does not name it on this host"))).toBe(true)
+      expect(run.lines.some((line) => line.includes("still executing"))).toBe(false)
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+      expect(await parkEntries()).toEqual([])
+    } finally {
+      setShellProfile({ laneLauncher: undefined })
+      worker.kill()
+      await worker.exited
+    }
+  })
+
+  test("a dead pid over a written FAIL report surfaces its verdict — landed and blocked, no re-dispatch, no attempt booked (plans/0210 D4, 0165-080)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // The finding's repro shape: the worker wrote its controlled-exit FAIL
+    // report and died; a launcher that fails the test if called proves the
+    // recovery never re-dispatched the finished unit on the person's behalf.
+    await crashScene(
+      { id: "T-001", title: "the widget", file: "src/widget.ts" },
+      await deadPid(),
+      reportOf("T-001", { ok: false, result: "FAIL", blocked: "STALE-REASON the earlier attempt blocked" }),
+    )
+    setShellProfile({
+      laneLauncher: () => {
+        throw new Error("the recovery re-dispatched over a written report")
+      },
+    })
+    try {
+      const run = await recovering(createGitOps(), dir)
+      expect(run.code).toBe(2)
+      expect(run.lines.some((line) => line.includes("is blocked after its recovery") && line.includes("STALE-REASON"))).toBe(true)
+      expect(run.lines.some((line) => line.includes("re-dispatching"))).toBe(false)
+      expect(await unitAttempts(dir, "T-001")).toBe(1)
+      // The FAIL report's committed work still landed (failure keeps its
+      // commit) with the scene's ordinary teardown; the unit is blocked in
+      // the registry for the person.
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+      expect(await parkEntries()).toEqual([])
+      expect((JSON.parse(await unitsText(dir)).tasks["T-001"] as { status?: string }).status).toBe("blocked")
+    } finally {
+      setShellProfile({ laneLauncher: undefined })
+    }
   })
 
   test("a scene created under a pre-0191 spelling (the digest of a symlinked alias) is recovered and landed — the ladder reads git's own branch (plans/0191 D5, 0165-085)", async () => {
@@ -1484,16 +1620,30 @@ describe("recoverOrphanLanes (D14)", () => {
     await writeLaneReport(park, report)
     await begin(dir, unit)
     await setLane(dir, unit, { worktree: lanePark(unit), pid: await deadPid() })
-
-    const code = await recoverOrphanLanes(createGitOps(), dir)
-    // The recovery landed the finished stream instead of blocking: the
-    // stream's done file and its work are in the main tree, the scene
-    // cleaned, the run continues (undefined = no exit).
-    expect(code).toBeUndefined()
-    expect(await Bun.file(join(dir, "docs", "T-001", "S01", "done.md")).exists()).toBe(true)
-    expect(await Bun.file(join(dir, "src", "widget.ts")).text()).toContain("T-001.S01")
-    expect(await parkEntries()).toEqual([])
-    expect(await changedFiles(dir)).toEqual([])
+    // The launcher that fails the test if called (plans/0210 D4): the
+    // report is written, so the recovery must LAND it — the old path
+    // re-dispatched (the default launcher re-ran this very test file, wrote
+    // no report, and the landing silently consumed the report above: the
+    // stale read this test used to pass only through).
+    setShellProfile({
+      laneLauncher: () => {
+        throw new Error("the recovery re-dispatched over a written report")
+      },
+    })
+    try {
+      const code = await recoverOrphanLanes(createGitOps(), dir)
+      // The recovery landed the finished stream instead of blocking: the
+      // stream's done file and its work are in the main tree, the scene
+      // cleaned, the run continues (undefined = no exit).
+      expect(code).toBeUndefined()
+      expect(await Bun.file(join(dir, "docs", "T-001", "S01", "done.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "src", "widget.ts")).text()).toContain("T-001.S01")
+      expect(await parkEntries()).toEqual([])
+      expect(await changedFiles(dir)).toEqual([])
+      expect(await unitAttempts(dir, unit)).toBe(1)
+    } finally {
+      setShellProfile({ laneLauncher: undefined })
+    }
   })
 
   test("park stragglers with no registry entry are pruned; one holding a live run lock is left alone", async () => {

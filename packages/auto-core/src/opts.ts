@@ -399,7 +399,16 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       phase: site.phase,
       routing: ctx.routing,
       router: ctx.router,
-      control: ctx.control,
+      // A doc-lane unit never carries the run's control (plans/0210 D2): the
+      // field's only consumers are the four in-pipeline /exit probes
+      // (wrapup.ts's fix-handover and wrap-up-entry, execute.ts's whole and
+      // subtask handovers), and a maybeExit there throws inside a
+      // sibling-shared pipeline — the exit belongs at the landing, in probe
+      // form, where the loop defers it past the drain. No /exit channel
+      // exists at width ≥ 2 (preflight refuses --interactive, 0068 D11), so
+      // nothing observable changes today; the key stays set (the builder's
+      // no-omissions rule), its value is the doc-lane exception.
+      control: site.docLane === true ? undefined : ctx.control,
       git: ctx.git,
       // present only when the fleet cannot fork
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
