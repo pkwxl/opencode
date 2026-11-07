@@ -5,7 +5,7 @@
 // the concrete instance that validates the general mechanism.
 import { describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
@@ -150,6 +150,33 @@ describe("materializeIntentBundle", () => {
       // Idempotent re-materialization: the same bytes, no drift copy.
       await materializeIntentBundle(dir, bundle)
       expect(existsSync(join(dir, ".opencode/auto/phases/spec-read.md"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plans/0215 D3 (0165-157): materialization's writes are
+  // write-tmp-then-rename (the init-time twin of applySync's writes — the
+  // killed-materialization window 0214 D2 named). The read-only pack (a
+  // killed run's stale protect bit) is the deterministic stand-in for the
+  // crash mid-write: the pre-fix in-place Bun.write answers EACCES, the
+  // rename replaces the entry and re-materialization heals.
+  test("the files are replaced, not written in place: a read-only materialized pack is healed, not EACCES (plans/0215 D3)", async () => {
+    const dir = tempDir()
+    try {
+      const bundle = parseIntentBundle(CLEANROOM)
+      await materializeIntentBundle(dir, bundle)
+      const pack = join(dir, ".opencode/auto/intents/cleanroom.md")
+      chmodSync(pack, 0o444)
+      try {
+        await materializeIntentBundle(dir, bundle)
+      } finally {
+        chmodSync(pack, 0o644)
+      }
+      expect(readFileSync(pack, "utf8")).toBe(CLEANROOM["intents/cleanroom.md"]!)
+      // The tmp rode .auto/ and was consumed by the rename; the workdir's
+      // directory is not left behind (the lock's own discipline).
+      expect(existsSync(join(dir, ".auto"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -9,8 +9,8 @@
 // again; run does not clean it up (it naturally sinks inside gitignore), but
 // it belongs to the config layer, and reset removes it along with the rest.
 import { existsSync, statSync } from "node:fs"
-import { chmod } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { chmod, mkdir, rename, rmdir } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
 import { loadIntents } from "./intent/load"
 import { DEFAULT_INTENT, PARALLEL_LEVELS, TREE_LANES_SETTINGS, type LanesConfig, type LaneCacheRule, type ParallelLevel, type TreeLanesSetting } from "./intent/types"
 import { loadModes } from "./mode"
@@ -252,12 +252,13 @@ export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<Pr
   return { ...existing, ...given }
 }
 
-// The plain full write (Bun.write creates parent directories); called only by
-// init (outside the protect period), no atomic write needed. Best-effort
-// clears the read-only bit before writing: protect.ts chmods this file 0444
-// during run, the bit survives a killed run, and allowWrite relies on
-// module-level state and cannot help in a new process — without clearing it,
-// every init from then on fails with EACCES.
+// The plain full write of the persisted config; called only by init and
+// amend (outside the protect period) and by fix's apply — all through
+// saveConfigRecord's write-tmp-then-rename below. The rename replaces the
+// entry, so a stale read-only bit (protect.ts chmods this file 0444 during
+// run; the bit survives a killed run) no longer blocks the healing write —
+// rename needs the directory's write, not the file's (the pre-0215 in-place
+// write had to chmod first or fail EACCES forever).
 // The synonym canonicalizes here too (plans/0130 D1): whatever the CLI passed,
 // the file never gains a fresh "ondemand" — the load path's treatment of a
 // hand-edited one, applied at the write boundary (fix's raw record path
@@ -268,10 +269,30 @@ export async function saveProjectConfig(dir: string, config: ProjectConfig): Pro
 
 // Writes a raw config record as it is (`fix` rewrites the file from its own
 // record, so unknown keys and keys no rule names survive).
+//
+// Write-tmp-then-rename (plans/0215 D3, 0165-157): config.json is committed
+// state, and a kill mid-in-place-write leaves an unparsable file that blocks
+// the very commands that would rewrite it (init's loadOverwriteBaseline
+// throws, fix reports "not valid JSON" as manual — the healing commands
+// refuse to heal). The tmp lives in .auto/ — the driver workdir whose
+// untracked strays the ignore law declares never-dirt (0141) — takes its own
+// ordinal beside the pid (the concurrent-writers discipline of resume.ts),
+// and is chmod 0644 before the rename so the file's mode is exactly what the
+// pre-0215 write guaranteed.
+let writeSeq = 0
 export async function saveConfigRecord(dir: string, record: object): Promise<void> {
   const file = join(dir, CONFIG_FILE)
-  await chmod(file, 0o644).catch(() => {})
-  await Bun.write(file, JSON.stringify(record, null, 2) + "\n")
+  const tmp = join(dir, ".auto", `.config.json.${process.pid}.${++writeSeq}.tmp`)
+  await mkdir(join(dir, ".auto"), { recursive: true })
+  await mkdir(dirname(file), { recursive: true })
+  await Bun.write(tmp, JSON.stringify(record, null, 2) + "\n")
+  await chmod(tmp, 0o644).catch(() => {})
+  await rename(tmp, file)
+  // The person commands never leave the driver workdir's directory behind:
+  // a best-effort rmdir over an empty .auto (the lock's own discipline — it
+  // removes the directory only when it created it, and a fresh project
+  // stays without one until a driver runs).
+  await rmdir(join(dir, ".auto")).catch(() => {})
 }
 
 // For run's startup notice: the new file is missing while the legacy

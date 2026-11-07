@@ -36,9 +36,11 @@
 // charters, which is the person's call to make at a boundary, not the
 // tool's to forbid. The run-lock refusal is the shell's (the config-command
 // family rule); this module writes nothing but the managed files and the
-// sidecar — no git, the person commits.
-import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+// sidecar — no git, the person commits. A config that fails loading rejects
+// the plan (plans/0215 D2): the shell answers it with the config-command
+// family's exit 1, never a green nothing.
+import { chmod, mkdir, readdir, rename, rmdir } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { bundleFileMap, resolveIntentBundle, parseIntentBundle } from "./bundle"
 import { loadProjectConfig } from "./config"
 import {
@@ -91,11 +93,16 @@ type SyncEntry =
   // stamp: reported, never deleted.
   | { action: "extra"; path: string }
 
-type SyncPlan = {
+// Exported for the shells' sync rows (plans/0215 D2: the row catches the
+// plan's rejection over a broken config with the config-command family's
+// own shape).
+export type SyncPlan = {
   // The running bundle the plan syncs to; undefined on the nothing-to-do
   // paths (nothing names a bundle).
   bundle?: string
-  // Why there is nothing to sync; the shell prints it and exits 0.
+  // Why there is nothing to sync; the shell prints it and exits 0. Only
+  // ever the honest shapes: a config that fails loading rejects the plan
+  // instead (plans/0215 D2 — never a green nothing over a broken config).
   nothing?: string
   entries: SyncEntry[]
   // The file writes behind the actionable entries, in order; the sidecar
@@ -111,7 +118,9 @@ type SyncOpts = { fromBundle?: boolean }
 
 // Compute the whole plan without writing. A stamped project syncs by the
 // stamp's bundle name; an unstamped one bootstraps over the bundle the
-// config's intent key names (no stamp and no bundle → nothing to do).
+// config's intent key names (no stamp and no bundle → nothing to do — the
+// nothing verdict requiring a config that loads, plans/0215 D2: a broken
+// one rejects here and the shell answers exit 1).
 export async function planSync(dir: string, opts: SyncOpts = {}): Promise<SyncPlan> {
   const stampText = await Bun.file(join(dir, PROVENANCE_FILE)).text().catch(() => undefined)
   const stamp = stampText === undefined ? undefined : parseProvenanceStamp(stampText)
@@ -213,14 +222,13 @@ export async function planSync(dir: string, opts: SyncOpts = {}): Promise<SyncPl
 }
 
 // The bundle name the config's intent key resolves to (the bootstrap's
-// source): undefined when the intent names a plain pack, not a bundle.
+// source): undefined when the intent names a plain pack, not a bundle. A
+// config that fails loading propagates its error (plans/0215 D2): the
+// nothing-verdict requires a config that loads — swallowing the failure
+// here answered a broken config.json with "✓ nothing to sync" and exit 0
+// while run/status/amend exit 1 over the same file.
 async function bundleNameOfConfig(dir: string): Promise<string | undefined> {
-  let intent: string | undefined
-  try {
-    intent = (await loadProjectConfig(dir)).intent
-  } catch {
-    return undefined
-  }
+  const intent = (await loadProjectConfig(dir)).intent
   if (intent === undefined) return undefined
   return (await resolveIntentBundle(intent)) !== undefined ? intent : undefined
 }
@@ -269,8 +277,31 @@ async function openRoundWarning(dir: string): Promise<string | undefined> {
 // Apply exactly the plan's writes (the sidecar last). Never throws partway
 // silently: a failed write rejects and the shell reports it.
 export async function applySync(dir: string, plan: SyncPlan): Promise<void> {
-  for (const write of plan.writes) await Bun.write(join(dir, write.path), write.text)
-  if (plan.stampText !== undefined) await Bun.write(join(dir, PROVENANCE_FILE), plan.stampText)
+  for (const write of plan.writes) await writeManaged(dir, write.path, write.text)
+  if (plan.stampText !== undefined) await writeManaged(dir, PROVENANCE_FILE, plan.stampText)
+}
+
+// The managed files and the sidecar are committed state: write-tmp-then-
+// rename (plans/0215 D3, 0165-157), the same discipline as config.json and
+// the brief — a kill mid-in-place-write truncates a committed pack file. The
+// tmp lives in .auto/ (the driver workdir whose untracked strays the ignore
+// law declares never-dirt, 0141), takes its own ordinal beside the pid
+// (resume.ts's concurrent-writers discipline), and is chmod 0644 before the
+// rename (which also replaces a stale read-only bit a killed run left
+// behind — rename needs the directory's write, not the file's).
+let writeSeq = 0
+async function writeManaged(dir: string, rel: string, text: string): Promise<void> {
+  const target = join(dir, rel)
+  const tmp = join(dir, ".auto", `.${basename(target)}.${process.pid}.${++writeSeq}.tmp`)
+  await mkdir(dirname(tmp), { recursive: true })
+  await mkdir(dirname(target), { recursive: true })
+  await Bun.write(tmp, text)
+  await chmod(tmp, 0o644).catch(() => {})
+  await rename(tmp, target)
+  // Never leave the driver workdir's directory behind (the lock's own
+  // discipline): the rmdir rides only over an empty .auto — a live run's
+  // lock or a sibling's in-flight tmp keeps it standing.
+  await rmdir(dirname(tmp)).catch(() => {})
 }
 
 // The plan as the shell prints it (and the tests read it): one line per

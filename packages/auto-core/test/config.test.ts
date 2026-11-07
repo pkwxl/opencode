@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -269,6 +269,39 @@ describe("loadProjectConfig", () => {
       }
       await saveProjectConfig(dir, config)
       expect(await loadProjectConfig(dir)).toEqual(config)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plans/0215 D3 (0165-157): the config write is write-tmp-then-rename — a
+  // kill mid-in-place-write left unparsable state that blocked the very
+  // commands that would rewrite it (loadOverwriteBaseline throws, fix
+  // reports "not valid JSON" as manual). The deterministic oracle: the
+  // replacement swaps the inode (an in-place write keeps it), the bytes and
+  // mode are exactly the pre-fix form's, and the tmp is consumed by the
+  // rename. A foreign stale tmp (a killed earlier write) is never touched —
+  // each write takes its own ordinal.
+  test("saveConfigRecord replaces the file (write-tmp-then-rename), never writes it in place (plans/0215 D3)", async () => {
+    const dir = tempDir()
+    try {
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, contextLimit: 64 })
+      const file = join(dir, ".opencode", "auto", "config.json")
+      const before = statSync(file)
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, contextLimit: 128 })
+      const after = statSync(file)
+      expect(readFileSync(file, "utf8")).toBe(`${JSON.stringify({ ...CONFIG_DEFAULTS, contextLimit: 128 }, null, 2)}\n`)
+      expect(after.ino).not.toBe(before.ino)
+      expect(after.mode & 0o777).toBe(0o644)
+      // The tmp was consumed by the rename and the workdir's directory is
+      // not left behind (the lock's own discipline — a fresh project keeps
+      // no .auto until a driver runs).
+      expect(existsSync(join(dir, ".auto"))).toBe(false)
+      const stale = join(dir, ".auto", ".config.json.999999.999.tmp")
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(stale, "")
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, contextLimit: 256 })
+      expect(existsSync(stale)).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

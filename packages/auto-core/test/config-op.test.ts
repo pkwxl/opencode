@@ -9,7 +9,7 @@
 // ops.test.ts — pin the same sequence through their entries).
 import { describe, expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
-import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, symlink, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runConfigSequence, type ConfigOpIo, type ConfigOpWording } from "../src/config-op"
@@ -244,6 +244,30 @@ describe("runConfigSequence: amend's shape (0137, droppers, gates, wordings)", (
         expect(configured.scanExempt).toBeUndefined()
         expect(configured.isolate).toBeUndefined()
         expect(io.lines).toContain("✓ amended (the given keys); the other keys are unchanged. Review the change and commit it")
+      })
+    },
+  )
+
+  test(
+    "the brief revision replaces the file (write-tmp-then-rename): a read-only brief is healed, not a thrown EACCES (plans/0215 D3)",
+    async () => {
+      // The read-only brief (a killed run's stale protect bit) is the
+      // deterministic stand-in for the crash mid-write: the pre-fix
+      // in-place Bun.write answers EACCES out of the sequence, the rename
+      // replaces the entry and the revision lands.
+      await withDir(async (dir) => {
+        await runConfigSequence({ kind: "init", dir, keys: { explicit: {} }, io: makeIo(), wording: makeWording("cli") })
+        const brief = join(dir, ".opencode/auto/brief.md")
+        await Bun.write(brief, "first revision\n")
+        await chmod(brief, 0o444)
+        try {
+          const io = makeIo()
+          await runConfigSequence({ kind: "amend", dir, keys: { explicit: {} }, briefSeed: "second revision", io, wording: makeWording("cli") })
+          expect(await Bun.file(brief).text()).toBe("second revision\n")
+          expect(io.lines).toContain("replaced: .opencode/auto/brief.md (the brief, verbatim)")
+        } finally {
+          await chmod(brief, 0o644).catch(() => {})
+        }
       })
     },
   )

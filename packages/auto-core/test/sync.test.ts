@@ -8,7 +8,7 @@
 // overwrite; an open round warns and proceeds; config.json is never touched.
 import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
-import { readFileSync } from "node:fs"
+import { chmodSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { bundleFileMap, materializeIntentBundle, parseIntentBundle, registerIntentBundle, resolveIntentBundle, provenanceComparison, type IntentBundleFiles } from "../src/bundle"
@@ -296,10 +296,91 @@ describe("planSync: the unstamped bootstrap (plans/0100 D5)", () => {
   test("no stamp and a config naming no bundle: nothing to sync", async () => {
     const dir = project()
     try {
-      await withConfig(dir, "default")
+      // The config must load: the old fixture reused withConfig's
+      // bundle-shaped phases key ("survey,…"), which never validates in an
+      // unmaterialized project — the pre-fix swallowed catch answered that
+      // broken config with the green nothing (0165-156's own scene, green
+      // through the defect). The honest nothing-path needs a loading config
+      // naming a plain pack.
+      await Bun.write(join(dir, ".opencode/auto/config.json"), `${JSON.stringify({ ...CONFIG_DEFAULTS, intent: "default" }, null, 2)}\n`)
       const plan = await planSync(dir)
       expect(plan.nothing).toContain("no provenance stamp")
       expect(syncWritesAnything(plan)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// Plans/0215 D2 (0165-156): the nothing-verdict requires a config that
+// loads — bundleNameOfConfig's swallowed catch answered a broken config.json
+// with "✓ nothing to sync" and exit 0 while run/status/amend exit 1 over the
+// same file. The failure now propagates; the shell answers the family's
+// exit 1.
+describe("planSync's verdict over a broken config (plans/0215 D2)", () => {
+  test("an unparsable config rejects the plan, never the green nothing", async () => {
+    const dir = project()
+    try {
+      await withConfig(dir)
+      await Bun.write(join(dir, ".opencode/auto/config.json"), "{ not json")
+      expect(planSync(dir)).rejects.toThrow("not valid JSON")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a strict retired-key failure rejects the plan with the key's own teaching", async () => {
+    const dir = project()
+    try {
+      await Bun.write(
+        join(dir, ".opencode/auto/config.json"),
+        `${JSON.stringify({ ...CONFIG_DEFAULTS, intent: "faithful", phases: "survey,analysis,design,implement,test,acceptance", commit: false }, null, 2)}\n`,
+      )
+      expect(planSync(dir)).rejects.toThrow("commit: false is retired")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a stamped project never reads the config: sync proceeds over a broken config.json (the floor)", async () => {
+    const dir = project()
+    try {
+      await materializeIntentBundle(dir, parseIntentBundle(await faithfulFiles()))
+      await withConfig(dir)
+      await Bun.write(join(dir, ".opencode/auto/config.json"), "{ not json")
+      const plan = await planSync(dir)
+      expect(plan.bundle).toBe("faithful")
+      expect(plan.entries.every((item) => item.action === "current")).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// Plans/0215 D3 (0165-157): applySync's writes are write-tmp-then-rename —
+// the read-only managed file (a killed run's stale protect bit) is the
+// deterministic stand-in for the crash mid-write: the pre-fix in-place
+// Bun.write answers EACCES, the rename replaces the entry and the
+// fast-forward heals.
+describe("applySync's write discipline (plans/0215 D3)", () => {
+  test("the managed files and the sidecar are replaced, not written in place: a read-only pack is healed, not EACCES", async () => {
+    const dir = project()
+    try {
+      await materializeIntentBundle(dir, parseIntentBundle(await faithfulFiles()))
+      await withConfig(dir)
+      await ageToCharterless(dir)
+      const plan = await planSync(dir)
+      chmodSync(join(dir, PACK_PATH), 0o444)
+      try {
+        await applySync(dir, plan)
+      } finally {
+        chmodSync(join(dir, PACK_PATH), 0o644)
+      }
+      const binary = bundleFileMap(parseIntentBundle(await faithfulFiles()))
+      expect(readFileSync(join(dir, PACK_PATH), "utf8")).toBe(binary[PACK_PATH])
+      // The tmp rode .auto/ and was consumed by the rename; the workdir's
+      // directory is not left behind (the lock's own discipline).
+      expect(existsSync(join(dir, ".auto"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

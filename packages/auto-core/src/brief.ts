@@ -29,7 +29,8 @@
 // retired with this; a bare re-init writes no brief file (D11.1, §7 A5).
 // The headings are scaffolding the driver never parses (0052 §7); `fix`
 // writes under `## Source` / `## Target` when it moves the retired keys here.
-import { join } from "node:path"
+import { chmod, mkdir, rename, rmdir } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { allowWrite, reprotect } from "./protect"
 import { CLARIFIED_MARK } from "./document/roles"
 import { stripComments, stubbedText } from "./round-brief"
@@ -95,6 +96,30 @@ export function appendToSection(text: string, heading: string, body: string): st
   return [...lines.slice(0, last), "", body.trimEnd(), ...(rest.length ? ["", ...rest] : [])].join("\n") + "\n"
 }
 
+// The brief's whole-file writes all run through this one home — the install
+// below, fix's move write (config-fix.ts) and amend --brief (config-op.ts):
+// write-tmp-then-rename (plans/0215 D3, 0165-157), because brief.md is
+// committed state and a kill mid-in-place-write truncates the project's
+// constants. The tmp lives in .auto/ — the driver workdir whose untracked
+// strays the ignore law declares never-dirt (0141) — takes its own ordinal
+// beside the pid (resume.ts's concurrent-writers discipline), and is chmod
+// 0644 before the rename. The rename also replaces a stale read-only bit a
+// killed run left behind (rename needs the directory's write, not the
+// file's); the install's reprotect runs after it, on the new inode.
+let writeSeq = 0
+export async function writeBrief(dir: string, text: string): Promise<void> {
+  const target = join(dir, BRIEF_FILE)
+  const tmp = join(dir, ".auto", `.${basename(BRIEF_FILE)}.${process.pid}.${++writeSeq}.tmp`)
+  await mkdir(dirname(tmp), { recursive: true })
+  await mkdir(dirname(target), { recursive: true })
+  await Bun.write(tmp, text)
+  await chmod(tmp, 0o644).catch(() => {})
+  await rename(tmp, target)
+  // Never leave the driver workdir's directory behind (the lock's own
+  // discipline): the rmdir rides only over an empty .auto.
+  await rmdir(dirname(tmp)).catch(() => {})
+}
+
 // The commit seam the brief install runs through: the free commitTree of
 // git.ts and the run's git service share this shape, so the loop's install
 // (through ctx.git, the no-commit test double included) and the prelude's
@@ -136,7 +161,7 @@ export async function installBriefProposal(dir: string, source: string, proposal
   const equal = (await Bun.file(target).text().catch(() => "")) === `${proposal}\n`
   if (!equal) {
     await allowWrite(target)
-    await Bun.write(target, `${proposal}\n`)
+    await writeBrief(dir, `${proposal}\n`)
     await reprotect(target)
   }
   const settled = await commit(dir, { id: "PLAN", title: `brief install (${source})` }, {

@@ -19,7 +19,9 @@
 //     reported as skipped.
 //   - Files a person may have edited (opencode.json, brief.md) are only
 //     written when missing, as init does. Three exceptions: moving the retired
-//     source/destDir into brief.md (appends to its sections); inserting
+//     source/destDir into brief.md (appends to its sections, recognizing its
+//     own already-landed block so the interrupted move never appends twice —
+//     plans/0215 D1); inserting
 //     the root-symlink external_directory allows into opencode.json
 //     (plans/0122 — additive, exactly those allow entries, the person's
 //     rules kept and always winning the evaluation tie); and inserting the
@@ -33,7 +35,7 @@
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { provenanceComparison } from "./bundle"
-import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING } from "./brief"
+import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING, writeBrief } from "./brief"
 import {
   CONFIG_DEFAULTS,
   CONFIG_FILE,
@@ -146,6 +148,7 @@ async function planKeys(dir: string): Promise<KeyPlan> {
     record = Object.fromEntries(Object.entries(record).map(([name, value]) => [name === old ? key : name, value]))
   }
   let brief: string | undefined
+  let briefRead: string | undefined
   for (const [key, heading, lines] of [
     ["source", BRIEF_SOURCE_HEADING, sourceLines],
     ["destDir", BRIEF_TARGET_HEADING, targetLines],
@@ -153,11 +156,54 @@ async function planKeys(dir: string): Promise<KeyPlan> {
     if (!(key in record)) continue
     // The stub model retired (plans/0081 D11): a missing brief starts empty —
     // appendToSection adds the heading — and is no finding of its own.
-    brief ??= (await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)) ?? ""
-    brief = appendToSection(brief, heading, lines(record[key]))
+    if (brief === undefined) {
+      brief = (await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)) ?? ""
+      briefRead = brief
+    }
+    const body = lines(record[key])
+    // The interrupted-move shape (plans/0215 D1): applyFix writes the brief
+    // before the config, so a kill between the two writes leaves the moved
+    // value on disk while the config still holds the retired key — the
+    // re-derivation must recognize its own block, not append it again. A
+    // hand move following the retired-key message's own teaching lands the
+    // same bytes and is recognized the same way; a differently-worded value
+    // never matches and keeps the append below.
+    if (sectionHolds(brief, heading, body)) {
+      drop(key, `${key} is retired (the migration source and target are intent, not configuration)`, `its value already sits in ${BRIEF_FILE} under ${heading}; drop the key`)
+      continue
+    }
+    brief = appendToSection(brief, heading, body)
     drop(key, `${key} is retired (the migration source and target are intent, not configuration)`, `move its value into ${BRIEF_FILE} under ${heading}, then drop the key`)
   }
-  return { uninitialized: false, findings, record, brief }
+  // The brief text is returned only when a move actually changed it (plans/
+  // 0215 D1): the interrupted re-run derives the disk it already wrote, so
+  // its plan carries the config write alone.
+  return { uninitialized: false, findings, record, brief: brief !== undefined && brief !== briefRead ? brief : undefined }
+}
+
+// Whether the section already holds `body` as a byte-exact run of whole
+// lines (plans/0215 D1 — the move's recognition of its own landed block; the
+// section bounds are appendToSection's own grammar). Never a content match:
+// only the rendering the tool itself derives from the record can hit.
+function sectionHolds(text: string, heading: string, body: string): boolean {
+  const lines = text.split("\n")
+  const start = lines.findIndex((line) => line.trim() === heading)
+  if (start === -1) return false
+  let end = lines.findIndex((line, i) => i > start && /^#{1,2}\s/.test(line.trim()))
+  if (end === -1) end = lines.length
+  const section = lines.slice(start + 1, end)
+  const block = body.trimEnd().split("\n")
+  for (let i = 0; i + block.length <= section.length; i++) {
+    let holds = true
+    for (let j = 0; j < block.length; j++) {
+      if (section[i + j] !== block[j]) {
+        holds = false
+        break
+      }
+    }
+    if (holds) return true
+  }
+  return false
 }
 
 // The retired keys as brief text, worded like the retired phase-plan inputs.
@@ -186,7 +232,7 @@ export async function planFix(dir: string): Promise<FixPlan> {
   const writes: FixPlan["writes"] = []
   if (keys.brief !== undefined) {
     const brief = keys.brief
-    writes.push({ path: BRIEF_FILE, apply: () => Bun.write(join(dir, BRIEF_FILE), brief) })
+    writes.push({ path: BRIEF_FILE, apply: () => writeBrief(dir, brief) })
   }
   const record = keys.record
   if (!record) return { uninitialized: false, findings, writes, skipped: `${CONFIG_FILE} does not parse` }

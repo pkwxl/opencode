@@ -17,7 +17,7 @@ import {
   type ProjectConfig,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
-import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
+import { applySync, formatSyncPlan, planSync, syncWritesAnything, type SyncPlan } from "@opencode-ai/auto-core/sync"
 import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
@@ -2932,7 +2932,19 @@ if (command === "sync") {
     console.error(`nothing to sync: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}`)
     process.exit(1)
   }
-  const plan = await planSync(directory, { fromBundle: flags.has("from-bundle") && flags.get("from-bundle") !== "false" })
+  // A config that fails loading is the config-command family's exit 1
+  // (auto-core plans/0215 D2): land/status/amend's own shape — the error,
+  // the fix hint where a rule applies — never the green nothing the
+  // swallowed load failure used to answer with.
+  let plan: SyncPlan
+  try {
+    plan = await planSync(directory, { fromBundle: flags.has("from-bundle") && flags.get("from-bundle") !== "false" })
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
+    process.exit(1)
+  }
   if (plan.nothing !== undefined) {
     console.log(`✓ nothing to sync: ${plan.nothing}`)
     process.exit(0)

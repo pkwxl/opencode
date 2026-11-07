@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
@@ -198,6 +198,76 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(brief.startsWith("## Source\n")).toBe(true)
     expect(brief).toContain("`legacy`")
     expect(await readConfig(dir)).not.toHaveProperty("source")
+  })
+
+  // Plans/0215 D1 (0165-155): applyFix orders the brief write before the
+  // config write — correct, the value is never lost — so a kill between the
+  // two writes leaves the moved block on disk while the config still holds
+  // the retired key. The re-run's re-derivation must recognize its own
+  // block, never append it twice.
+  test("the source/destDir move is idempotent across the brief→config write gap: the interrupted re-run recognizes its own landed block (plans/0215 D1)", async () => {
+    await seedInit(dir, { ...CONFIG_DEFAULTS, source: { dir: "legacy", path: "pkg" }, destDir: "app" })
+    await Bun.write(join(dir, BRIEF), "Migrate the parser first.\n")
+    const first = await planFix(dir)
+    // The crash: only the brief write landed.
+    const briefWrite = first.writes.find((write) => write.path === BRIEF)!
+    await briefWrite.apply()
+    const landed = await Bun.file(join(dir, BRIEF)).text()
+    expect(landed).toContain("## Source")
+    // The re-run plans the config write alone: the brief already holds the
+    // moved blocks, and each finding's remedy states what fix will do.
+    const reRun = await planFix(dir)
+    expect(reRun.writes.map((write) => write.path)).toEqual([CONFIG])
+    expect(formatFixPlan(reRun)).toContain("source is retired (the migration source and target are intent, not configuration) → its value already sits in .opencode/auto/brief.md under ## Source; drop the key")
+    expect(formatFixPlan(reRun)).toContain("destDir is retired (the migration source and target are intent, not configuration) → its value already sits in .opencode/auto/brief.md under ## Target; drop the key")
+    await applyFix(reRun)
+    const brief = await Bun.file(join(dir, BRIEF)).text()
+    // Exactly once — the pre-fix re-run appended the same block again (the
+    // finding's own repro: "moved line occurrences after re-run: 2").
+    expect(brief.match(/Source-system directory/g)).toHaveLength(1)
+    expect(brief.match(/Migration-target directory/g)).toHaveLength(1)
+    expect(brief).toBe(landed)
+    expect(await readConfig(dir)).not.toHaveProperty("source")
+    expect(await readConfig(dir)).not.toHaveProperty("destDir")
+    expect((await planFix(dir)).findings).toEqual([])
+  })
+
+  // The D1 floor: the recognition is byte-exact over the tool's own
+  // rendering — a person's differently-worded value never matches and keeps
+  // today's append.
+  test("a differently-worded moved value never matches — the canonical block still lands beside it (plans/0215 D1)", async () => {
+    await seedInit(dir, { ...CONFIG_DEFAULTS, destDir: "app" })
+    await Bun.write(join(dir, BRIEF), "## Target\n\n- the deliverable goes to app, I think\n")
+    const plan = await planFix(dir)
+    expect(formatFixPlan(plan)).toContain("destDir is retired (the migration source and target are intent, not configuration) → move its value into .opencode/auto/brief.md under ## Target, then drop the key")
+    expect(plan.writes.map((write) => write.path)).toEqual([BRIEF, CONFIG])
+    await applyFix(plan)
+    expect(await Bun.file(join(dir, BRIEF)).text()).toBe(
+      "## Target\n\n- the deliverable goes to app, I think\n\n- Migration-target directory (relative to the working directory): `app` — migrated code is written here\n",
+    )
+    expect((await planFix(dir)).findings).toEqual([])
+  })
+
+  // Plans/0215 D3 (0165-157): the move's brief write is write-tmp-then-rename
+  // — the read-only brief (a killed run's stale protect bit) is the
+  // deterministic stand-in for the crash mid-write: the pre-fix in-place
+  // Bun.write answers EACCES, the rename replaces the entry and heals.
+  test("fix's brief write replaces the file: a read-only brief is healed, not EACCES (plans/0215 D3)", async () => {
+    await seedInit(dir, { ...CONFIG_DEFAULTS, source: { dir: "legacy", path: "pkg" } })
+    await Bun.write(join(dir, BRIEF), "Migrate the parser first.\n")
+    await chmod(join(dir, BRIEF), 0o444)
+    try {
+      const plan = await planFix(dir)
+      await applyFix(plan)
+      const brief = await Bun.file(join(dir, BRIEF)).text()
+      expect(brief).toContain("`legacy`")
+      expect(await readConfig(dir)).not.toHaveProperty("source")
+      // The tmp rode .auto/ and was consumed by the rename; the workdir's
+      // directory is not left behind (the lock's own discipline).
+      expect(await Bun.file(join(dir, ".auto")).exists()).toBe(false)
+    } finally {
+      await chmod(join(dir, BRIEF), 0o644).catch(() => {})
+    }
   })
 
   test("a legacy .auto/config.json mode with no config.json: config.json is written", async () => {

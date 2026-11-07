@@ -151,6 +151,9 @@ export const UNIT_LANE: readonly string[] = [
   // halves live in test/plan.test.ts's lanes.
   "test/analysis.test.ts",
   "test/append.test.ts",
+  // The project brief's direct home (plans/0215 D3): the install's write
+  // discipline over a temp directory, no repository, no spawn.
+  "test/brief.test.ts",
   "test/chain.test.ts",
   "test/chain-writes.test.ts",
   "test/classify.test.ts",

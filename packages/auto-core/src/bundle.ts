@@ -17,8 +17,8 @@
 // builtins plus the bundle's own types, so a refused parse writes nothing;
 // materialization then writes the original file texts verbatim.
 import { readFileSync } from "node:fs"
-import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { chmod, mkdir, readdir, rename, rmdir } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { PROVENANCE_FILE, compareProvenance, parseProvenanceStamp, provenanceStampOf, renderProvenanceStamp, type ProvenanceComparison } from "./provenance"
 import { parseIntentFile } from "./intent/load"
 import type { ParallelLevel } from "./intent/types"
@@ -192,23 +192,44 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
 // Write a parsed bundle's files into the target directory's
 // .opencode/auto/ surfaces; returns the repository-relative paths written.
 // The config stamps are the caller's (init's) to apply — materialization
-// writes files only, never config. Bun.write creates parent directories.
+// writes files only, never config. Each write is write-tmp-then-rename
+// (plans/0215 D3, 0165-157 — the init-time twin of applySync's writes; a
+// kill mid-in-place-write truncates a committed pack file): the tmp lives
+// in .auto/ (the driver workdir whose untracked strays the ignore law
+// declares never-dirt, 0141), takes its own ordinal beside the pid, and is
+// chmod 0644 before the rename; parent directories are created as
+// Bun.write would have created them.
 // Beside the files it lands the provenance sidecar (plans/0100 D1): the
 // committed record of exactly these bytes, so preflight/fix/status/sync can
 // later tell current from stale from person-edited against the running
 // binary's bundle. Re-running init rewrites it with the same digests.
+let writeSeq = 0
 export async function materializeIntentBundle(dir: string, bundle: IntentBundle): Promise<string[]> {
   const written: string[] = []
+  const workdir = join(dir, ".auto")
   const write = async (rel: string, text: string) => {
-    await Bun.write(join(dir, rel), text)
+    const target = join(dir, rel)
+    const tmp = join(workdir, `.${basename(target)}.${process.pid}.${++writeSeq}.tmp`)
+    await mkdir(dirname(tmp), { recursive: true })
+    await mkdir(dirname(target), { recursive: true })
+    await Bun.write(tmp, text)
+    await chmod(tmp, 0o644).catch(() => {})
+    await rename(tmp, target)
     written.push(rel)
   }
-  for (const [type, text] of Object.entries(bundle.files.phases)) {
-    await write(join(".opencode", "auto", "phases", `${type}.md`), text)
+  try {
+    for (const [type, text] of Object.entries(bundle.files.phases)) {
+      await write(join(".opencode", "auto", "phases", `${type}.md`), text)
+    }
+    if (bundle.files.pack !== undefined) await write(join(".opencode", "auto", "intents", `${bundle.name}.md`), bundle.files.pack)
+    if (bundle.files.mode !== undefined) await write(join(".opencode", "auto", "modes", `${bundle.name}.md`), bundle.files.mode)
+    await write(PROVENANCE_FILE, renderProvenanceStamp(provenanceStampOf(bundle.name, bundleFileMap(bundle))))
+  } finally {
+    // Never leave the driver workdir's directory behind (the lock's own
+    // discipline): the rmdir rides only over an empty .auto, so an in-flight
+    // sibling or a live run's lock keeps it standing.
+    await rmdir(workdir).catch(() => {})
   }
-  if (bundle.files.pack !== undefined) await write(join(".opencode", "auto", "intents", `${bundle.name}.md`), bundle.files.pack)
-  if (bundle.files.mode !== undefined) await write(join(".opencode", "auto", "modes", `${bundle.name}.md`), bundle.files.mode)
-  await write(PROVENANCE_FILE, renderProvenanceStamp(provenanceStampOf(bundle.name, bundleFileMap(bundle))))
   return written
 }
 

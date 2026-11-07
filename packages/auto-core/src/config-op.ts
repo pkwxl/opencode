@@ -26,7 +26,7 @@ import { ensurePointer } from "./agents-block"
 import { loadIntents } from "./intent/load"
 import type { IntentBundle } from "./bundle"
 import { materializeIntentBundle } from "./bundle"
-import { BRIEF_FILE } from "./brief"
+import { BRIEF_FILE, writeBrief } from "./brief"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { loadModes } from "./mode"
 import { currentRound, plannedPhaseUnits, readPhases, type PhaseState } from "./phases"
@@ -360,7 +360,7 @@ export async function runConfigSequence(input: ConfigOpInput): Promise<ProjectCo
   // has none): the text verbatim.
   if (input.briefSeed !== undefined) {
     const existed = await Bun.file(join(dir, BRIEF_FILE)).exists()
-    await Bun.write(join(dir, BRIEF_FILE), `${input.briefSeed.trimEnd()}\n`)
+    await writeBrief(dir, `${input.briefSeed.trimEnd()}\n`)
     line(
       existed
         ? `replaced: ${BRIEF_FILE} (the brief, verbatim)`
