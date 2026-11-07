@@ -41,7 +41,6 @@ import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
-import { releasedRoadmapRound } from "./roadmap"
 import { renderPhaseHandover } from "./prompt"
 import { appendAudit, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
@@ -443,10 +442,11 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // section in one act — on release the driver installs that section verbatim
 // into .opencode/auto/brief.md (brief.ts installBriefProposal, shared with
 // the pre-round analysis release of plans/0084; the run's git seam carries
-// the commit strategy). Idempotent: an installed equal brief writes nothing.
-// A survey released without a proposal installs nothing (the seed, an earlier
-// install or the default path's `a`-phase proposal remain the brief's
-// sources).
+// the commit strategy). Idempotent: an installed equal brief writes nothing
+// and still runs the commit (plans/0209 D2 — the interrupted install
+// recovered by the re-run). A survey released without a proposal installs
+// nothing (an earlier install or the default path's `a`-phase proposal
+// remain the brief's sources).
 async function installApprovedBrief(ctx: LoopCtx, phase: PhaseUnit): Promise<void> {
   const survey = phaseSurveyDoc(phase)
   const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")

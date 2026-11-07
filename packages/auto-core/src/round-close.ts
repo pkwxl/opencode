@@ -50,13 +50,26 @@ export type RoundClose = {
   problems: string[]
   // Advisory: the recorded containment count, a skipped build.
   warnings: string[]
+  // A build is configured but this caller runs none (plans/0209 D4, the
+  // read-only briefs): the close gate runs it on the next advance. Never
+  // rendered as "no build command configured" — the caller says what it
+  // skipped instead of borrowing the build-less project's warning.
+  buildSkipped?: boolean
 }
 
 // scanExempt = config scanExempt (plans/0059 X2): deliverable paths whose
 // process-shaped strings are content, skipped by the destination scan too.
-export async function roundCloseProblems(dir: string, round: number, opts: { build?: string; scanExempt?: readonly string[] } = {}): Promise<RoundClose> {
+// buildSkipped (plans/0209 D4): a build is configured but this caller runs
+// none — no build runs, the "no build command configured" warning is
+// omitted (false where a build exists), and the result carries the marker.
+export async function roundCloseProblems(
+  dir: string,
+  round: number,
+  opts: { build?: string; scanExempt?: readonly string[]; buildSkipped?: boolean } = {},
+): Promise<RoundClose> {
   const problems: string[] = []
   const warnings: string[] = []
+  let buildSkipped = false
   // 1. The destinations' driver-written content: an empty baseline per
   // repository made every tracked line "added" (0108's whole-tree form); the
   // 0119 ruling narrows the same scan to git's modified set — the driver
@@ -79,7 +92,9 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
     warnings.push(`containment: ${scan.deferredCount} reference(s) recorded for release (process-document references, task ids, paths outside a destination's own root) — restate what each anchored in place and remove the pointer when the destination ships, never delete the record it anchored; the release gate lists and enforces them`)
   }
   // 2. Build.
-  if (opts.build) {
+  if (opts.buildSkipped) {
+    buildSkipped = true
+  } else if (opts.build) {
     const failure = await runBuild(dir, opts.build)
     if (failure) problems.push(`build: ${failure}`)
   } else {
@@ -96,7 +111,7 @@ export async function roundCloseProblems(dir: string, round: number, opts: { bui
       `close listing: ${brief} \`${ROUND_CLOSE_HEADING}\` is empty — list the decisions restated into the target's own documentation and those accepted as lost`,
     )
   }
-  return { problems, warnings }
+  return { problems, warnings, ...(buildSkipped ? { buildSkipped } : {}) }
 }
 
 // Run the build in the target directory; undefined = exit 0, else why not.

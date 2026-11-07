@@ -245,6 +245,29 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
+    "buildSkipped (plans/0209 D4, 0165-105): a caller that runs no build over a configured project says so — no borrowed build-less warning, no build run, the marker returned",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      await establishRound(dir, { phases: "am" })
+      writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      writeReport(dir, 1)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round")
+      // The opt alone: neither the build-less project's warning (false where
+      // a build exists) nor a run — the marker alone says what was skipped.
+      const skipped = await roundCloseProblems(dir, 1, { buildSkipped: true })
+      expect(skipped).toEqual({ problems: [], warnings: [], buildSkipped: true })
+      // The opt wins over a command: no build runs, a failing command
+      // produces no problem.
+      expect(await roundCloseProblems(dir, 1, { build: "exit 3", buildSkipped: true })).toEqual({ problems: [], warnings: [], buildSkipped: true })
+      // The floor: without the opt the build-less warning is unchanged and
+      // still true, and a command runs as before.
+      expect(await roundCloseProblems(dir, 1)).toEqual({ problems: [], warnings: ["build: no build command configured (config `build`); the target build was not checked"] })
+      expect((await roundCloseProblems(dir, 1, { build: "exit 3" })).problems).toHaveLength(1)
+    }),
+  )
+
+  test(
     "scan exemptions (config scanExempt, plans/0059 X2): an exempted destination path is left out of the destination scan",
     withDir(async (dir) => {
       await gitRepo(dir)

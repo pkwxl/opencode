@@ -349,4 +349,106 @@ describe("the round-brief proposals (plans/0115)", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // Plans/0209 D1 (0165-016): the proposal structured like the round.md it
+  // becomes — the stub's own hint invites `####` sections, and round.md's own
+  // stub is three `##` sections. The terminator is the round-shaped head
+  // alone; every other sub-heading is body.
+  test("sub-headings inside a proposal are its body — the sectioned proposal parses whole (plans/0209 D1)", async () => {
+    const sectioned = [
+      WITH_BRIEFS.replace(
+        "Port the retry ladder and the protocol strings with their tests.\n\n- Acceptance: the e2e suite passes on the ported core.",
+        ["#### Goal", "", "Port the retry ladder and the protocol strings with their tests.", "", "#### Acceptance criteria", "", "- the e2e suite passes on the ported core", "- the protocol strings byte-checked", "", "#### Release criteria", "", "No process reference in the deliverable."].join("\n"),
+      ),
+    ].join("\n")
+    const briefs = roundBriefProposals(sectioned)
+    expect(briefs.get(1)).toContain("#### Goal")
+    expect(briefs.get(1)).toContain("#### Release criteria")
+    expect(briefs.get(1)).toContain("byte-checked")
+    expect(briefs.get(1)).toContain("No process reference in the deliverable.")
+    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    // The grammar checks pass: no false "holds no content" for a proposal
+    // opening with a sub-heading, no near-miss named, nothing stranded.
+    expect(roundBriefNearMisses(sectioned)).toEqual([])
+    expect(analysisProblems(sectioned, BUILTIN_PHASE_TYPES)).toEqual([])
+    // The install path composes: the released sectioned proposal carries
+    // its sections verbatim.
+    const dir = mkdtempSync(join(tmpdir(), "analysis-sectioned-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, "docs/analysis.md"), `${sectioned}\nClarified: yes\n`)
+      const proposal = await releasedRoundBriefProposal(dir, 1)
+      expect(proposal).toContain("#### Acceptance criteria")
+      expect(proposal).toContain("#### Release criteria")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a `##` heading ends the section — exact heads after it are stranded, a named problem and the round's open note (plans/0209 D1)", async () => {
+    const stranded = [
+      RELEASED.replace("\nClarified: yes", ""),
+      "## Round briefs",
+      "",
+      "### R-01",
+      "",
+      "Port the core.",
+      "",
+      "## Notes",
+      "",
+      "Drafting notes live here.",
+      "",
+      "### R-02",
+      "",
+      "The acceptance pass.",
+      "",
+    ].join("\n")
+    // R-01 keeps its body to the `##` heading; R-02 never parses.
+    const briefs = roundBriefProposals(stranded)
+    expect(briefs.get(1)).toBe("Port the core.")
+    expect(briefs.has(2)).toBe(false)
+    // The release scan names the stranded heads (capped naming, the family
+    // convention), teaching the move.
+    const problems = analysisProblems(stranded, BUILTIN_PHASE_TYPES)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain("round-brief proposals after the section's end: `### R-02`")
+    expect(problems[0]).toContain("a `##` heading ends `## Round briefs`")
+    // No section or nothing after its end: the floor.
+    expect(roundBriefProposals(RELEASED).size).toBe(0)
+    const noneAfter = WITH_BRIEFS
+    expect(analysisProblems(noneAfter, BUILTIN_PHASE_TYPES)).toEqual([])
+    // The round's open: the note's second arm names the stranded head of the
+    // round being opened (released document, living governance); rounds the
+    // stranded heads do not name stay quiet.
+    const dir = mkdtempSync(join(tmpdir(), "analysis-stranded-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, "docs/analysis.md"), stranded)
+      expect(await roundBriefNearMissNote(dir, 2)).toBeUndefined()
+      await Bun.write(join(dir, "docs/analysis.md"), `${stranded}\nClarified: yes\n`)
+      const note = await roundBriefNearMissNote(dir, 2)
+      expect(note).toContain("round-brief proposal(s) after the section's end")
+      expect(note).toContain("`### R-02`")
+      expect(note).toContain("move each above the heading that ends the section")
+      // The near-miss arm and the stranded arm compose when both name the
+      // round (the near-miss inside the section, the stranded head after its
+      // end); the near-miss sentence keeps its own bytes.
+      const both = stranded.replace("## Notes", "#### R-02 x\n\nAlso drafted.\n\n## Notes")
+      await Bun.write(join(dir, "docs/analysis.md"), `${both}\nClarified: yes\n`)
+      const composed = await roundBriefNearMissNote(dir, 2)
+      expect(composed).toContain("round-brief heading(s) that do not parse — `#### R-02 x`")
+      expect(composed).toContain("round-brief proposal(s) after the section's end — `### R-02`")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the stub teaches the heading levels (plans/0209 D1)", () => {
+    const stub = renderAnalysisStub()
+    expect(stub).toContain("Sub-headings inside a proposal (`#### Acceptance criteria`) are its body")
+    // The hint wraps at the comment width — assert each side of the wrap.
+    expect(stub).toContain("a `##` -->\n<!-- heading ends this section, so keep every proposal above any later `##` heading")
+    // The comment-only stub still parses to nothing.
+    expect(roundBriefProposals(stub).size).toBe(0)
+  })
 })

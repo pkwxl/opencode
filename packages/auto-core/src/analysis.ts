@@ -56,21 +56,26 @@ export const ROUND_BRIEFS_HEADING = "## Round briefs"
 
 const ROUND_BRIEF_HEAD = /^###\s+R-(\d+)$/
 // Headings under the section that look like a round brief but do not parse —
-// the near-miss discipline (a `#### R-05` or `### R-5` reads as drafted to
-// its author, installs nothing as its own round, and — since plans/0158 D3 —
-// never rides into the preceding subsection's installed body either).
+// the near-miss discipline (a `#### R-05 notes`, an `### R-05 — port` reads
+// as drafted to its author, installs nothing as its own round, and — since
+// plans/0158 D3 — never rides into the preceding subsection's installed body
+// either; the unpadded `### R-5` form is legal, the roadmap's rule — 0115
+// D2's enumeration slip, corrected by plans/0209 D1).
 const ROUND_BRIEF_NEAR = /^\s*#{3,6}\s*R-\d+\b/
 
 // The `### R-NN` proposal bodies under `## Round briefs`, comments stripped:
 // round → body ("" when the subsection holds no content — a problem
-// analysisProblems names). A heading-shaped line that is not an exact
-// `### R-NN` head (a `#### R-06 notes`, an `### R-6 x`) terminates the
-// current subsection instead of joining its body: a near-miss drafted after
-// a valid subsection never rides verbatim into that round's installed brief
-// — the living-governance flow (0115: a subsection added to a released
-// document later installs at that round's open) never re-checks the release
-// grammar, so the extractor alone holds the line here (plans/0158 D3). Pure,
-// so the problems and the install path share one extraction.
+// analysisProblems names). The body is free markdown (0115 D2): only a
+// round-shaped head (a `#### R-06 notes`, an `### R-6 x` — ROUND_BRIEF_NEAR)
+// terminates the current subsection, so a near-miss drafted after a valid
+// subsection never rides verbatim into that round's installed brief; every
+// other sub-heading (`#### Acceptance criteria`, any `#{3,6}` line naming no
+// round) is body — the sectioned proposal the stub's own hint invites rides
+// whole (plans/0209 D1, amending 0158 D3's every-heading terminator: it
+// guarded the near-miss shape by silently eating the natural brief shape).
+// A level-1/2 heading ends the whole section — proposals after it are lost,
+// named by roundBriefLostHeadings. Pure, so the problems and the install
+// path share one extraction.
 export function roundBriefProposals(text: string): Map<number, string> {
   const lines = stripComments(text).split("\n")
   const start = lines.findIndex((line) => line.trim() === ROUND_BRIEFS_HEADING)
@@ -87,8 +92,8 @@ export function roundBriefProposals(text: string): Map<number, string> {
     if (head) {
       settle()
       current = { round: Number(head[1]!), body: [] }
-    } else if (/^#{3,6}\s/.test(trimmed)) {
-      // A heading-shaped line that is not an exact head ends the current
+    } else if (ROUND_BRIEF_NEAR.test(trimmed)) {
+      // A round-shaped head that is not an exact head ends the current
       // subsection: the body collection stops until the next exact head,
       // so a near-miss never rides into another round's installed brief.
       settle()
@@ -103,6 +108,27 @@ export function roundBriefProposals(text: string): Map<number, string> {
   }
   settle()
   return found
+}
+
+// Exact `### R-NN` heads stranded after the section's end: a `##`/`#` heading
+// ends `## Round briefs`, so every exact head beyond it reads as drafted but
+// never parses — the install-at-open flow (0115) and the release scan (which
+// runs only at the project start) both miss them. Named as a problem at the
+// release and taught at the stranded round's open (roundBriefNearMissNote's
+// second arm, plans/0209 D1). [] when the section or no head after its end
+// exists.
+export function roundBriefLostHeadings(text: string): string[] {
+  const lines = stripComments(text).split("\n")
+  const start = lines.findIndex((line) => line.trim() === ROUND_BRIEFS_HEADING)
+  if (start === -1) return []
+  const lost: string[] = []
+  let ended = false
+  for (const line of lines.slice(start + 1)) {
+    const trimmed = line.trim()
+    if (/^#{1,2}\s/.test(trimmed)) ended = true
+    else if (ended && ROUND_BRIEF_HEAD.test(trimmed)) lost.push(trimmed)
+  }
+  return lost
 }
 
 // The near-miss heads under the section: headings that look like a round
@@ -137,15 +163,16 @@ export async function releasedRoundBriefProposal(dir: string, round: number): Pr
 }
 
 // A released near-miss heading that names the round being opened (plans/0158
-// D3): the heading never parses as the round's proposal (and never rides
-// into the preceding round's installed brief), so the round opens on the
-// round-start gate as though nothing was drafted — the release scan that
-// would have named it runs only at the project start, and the
-// living-governance flow never re-checks. One teaching line at that open,
-// the detection record (P8); undefined when the document holds no such
-// heading — heads naming other rounds stay silent here and surface at their
-// own rounds' opens, so a document is never scanned loud for a round it is
-// not opening.
+// D3), and — since plans/0209 D1 — an exact head stranded past the section's
+// end: neither ever installs as the round's proposal (the near-miss never
+// parses; the stranded head sits after the `##` heading that ends the
+// section), so the round opens on the round-start gate as though nothing was
+// drafted — the release scan that would have named them runs only at the
+// project start, and the living-governance flow never re-checks. One teaching
+// line at that open, the detection record (P8); undefined when the document
+// holds neither shape naming the round — heads naming other rounds stay
+// silent here and surface at their own rounds' opens, so a document is never
+// scanned loud for a round it is not opening.
 export async function roundBriefNearMissNote(dir: string, round: number): Promise<string | undefined> {
   const raw = await Bun.file(join(dir, ANALYSIS_DOC)).text().catch(() => undefined)
   if (raw === undefined || !clarifiedMark(raw)) return undefined
@@ -153,11 +180,25 @@ export async function roundBriefNearMissNote(dir: string, round: number): Promis
     const id = /R-(\d+)/.exec(head)
     return id !== null && Number(id[1]) === round
   })
-  if (!heads.length) return undefined
-  return (
-    `ℹ ${ANALYSIS_DOC} carries round-brief heading(s) that do not parse — ${heads.map((head) => `\`${head}\``).join("; ")} ` +
-    `read as drafted for ${roundDirName(round)} but never install as its brief; write each as \`### R-NN\` (the round id alone on the line) and commit`
-  )
+  const stranded = roundBriefLostHeadings(raw).filter((head) => {
+    const id = /R-(\d+)/.exec(head)
+    return id !== null && Number(id[1]) === round
+  })
+  if (!heads.length && !stranded.length) return undefined
+  const parts: string[] = []
+  if (heads.length) {
+    parts.push(
+      `${ANALYSIS_DOC} carries round-brief heading(s) that do not parse — ${heads.map((head) => `\`${head}\``).join("; ")} ` +
+        `read as drafted for ${roundDirName(round)} but never install as its brief; write each as \`### R-NN\` (the round id alone on the line) and commit`,
+    )
+  }
+  if (stranded.length) {
+    parts.push(
+      `${ANALYSIS_DOC} carries round-brief proposal(s) after the section's end — ${stranded.map((head) => `\`${head}\``).join("; ")} ` +
+        `read as drafted for ${roundDirName(round)} but never install (a \`##\` heading ends \`## Round briefs\`); move each above the heading that ends the section and commit`,
+    )
+  }
+  return `ℹ ${parts.join("; ")}`
 }
 
 // The stub the first plan writes: every section carries only a comment hint,
@@ -211,11 +252,13 @@ export function renderAnalysisStub(): string {
     "## Round briefs",
     "",
     "<!-- Optional: one `### R-NN` subsection per round, its body that round's brief (goal, -->",
-    "<!-- acceptance criteria, release criteria — the content of docs/R-NN/round.md). The driver -->",
-    "<!-- installs the round's proposal verbatim when the round opens; a round without a proposal -->",
-    "<!-- keeps the round-start gate, where you write its round.md by hand. A subsection may be -->",
-    "<!-- drafted into this living document between rounds — added, committed, and installed at -->",
-    "<!-- that round's open. -->",
+    "<!-- acceptance criteria, release criteria — the content of docs/R-NN/round.md). -->",
+    "<!-- Sub-headings inside a proposal (`#### Acceptance criteria`) are its body; a `##` -->",
+    "<!-- heading ends this section, so keep every proposal above any later `##` heading. The -->",
+    "<!-- driver installs the round's proposal verbatim when the round opens; a round without a -->",
+    "<!-- proposal keeps the round-start gate, where you write its round.md by hand. A subsection -->",
+    "<!-- may be drafted into this living document between rounds — added, committed, and -->",
+    "<!-- installed at that round's open. -->",
     "",
   ].join("\n")
 }
@@ -316,13 +359,15 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
   }
   // The optional round-brief proposals (plans/0115 D2): only when the section
   // is present — an absent section is the byte-identical floor. A drafted but
-  // empty subsection reads as planned and would install nothing, and a
-  // near-miss heading never parses as its round's proposal — since plans/0158
-  // D3 it terminates the subsection it follows instead of riding verbatim
-  // into that round's installed brief (the near-miss discipline of the
-  // roadmap's decorated bullets; this release-time naming is complemented by
-  // the install path's roundBriefNearMissNote for near-misses drafted into a
-  // released document later, which this scan never re-reads).
+  // empty subsection reads as planned and would install nothing, a near-miss
+  // heading never parses as its round's proposal (since plans/0158 D3 it
+  // terminates the subsection it follows instead of riding verbatim into that
+  // round's installed brief; since plans/0209 D1 the terminator is the
+  // round-shaped head alone — every other sub-heading is body), and an exact
+  // head stranded after the section's end (plans/0209 D1) reads as drafted
+  // but never parses — the release-time namings complemented by the install
+  // path's roundBriefNearMissNote for shapes drafted into a released document
+  // later, which this scan never re-reads.
   const briefs = roundBriefProposals(text)
   if (briefs.size || roundBriefNearMisses(text).length) {
     const empty = [...briefs.entries()].filter(([, body]) => !body).map(([round]) => `### R-${String(round).padStart(2, "0")}`)
@@ -333,6 +378,12 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
     if (nearBriefs.length) {
       problems.push(`round-brief proposal headings that do not parse (each proposal is one heading \`### R-NN\` — the round id alone, nothing else on the line): ${nearBriefs.slice(0, 3).map((head) => `\`${head}\``).join("; ")}${nearBriefs.length > 3 ? ` (+${nearBriefs.length - 3} more)` : ""}`)
     }
+  }
+  const stranded = roundBriefLostHeadings(text)
+  if (stranded.length) {
+    problems.push(
+      `round-brief proposals after the section's end: ${stranded.slice(0, 3).map((head) => `\`${head}\``).join(", ")}${stranded.length > 3 ? ` (+${stranded.length - 3} more)` : ""} — a \`##\` heading ends \`## Round briefs\`, so these never install; move each proposal above the heading that ends the section (or demote that heading below \`##\`) and commit`,
+    )
   }
   return problems
 }

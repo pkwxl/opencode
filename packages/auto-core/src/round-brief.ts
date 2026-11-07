@@ -104,7 +104,9 @@ export function closeSection(text: string): string | undefined {
 // the round-close gate reads is in place by construction. The three-part
 // discipline of the stub (Goal / Acceptance criteria / Release criteria) stays
 // the guidance's bar — the body is the person's released words, structured as
-// they structured them.
+// they structured them (sub-headings included: since plans/0209 D1 the
+// extractor keeps every sub-heading that names no round, so a sectioned
+// proposal installs whole and this line's "verbatim" is true of it).
 export function renderInstalledRoundBrief(round: number, proposal: string): string {
   return [`# Round ${roundDirName(round)}`, "", proposal.trimEnd(), "", ROUND_CLOSE_HEADING, "", ...CLOSE_HINT, ""].join("\n")
 }

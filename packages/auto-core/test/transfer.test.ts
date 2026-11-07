@@ -876,6 +876,42 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     expect(subjects.some((subject) => subject.startsWith("PLAN formulate"))).toBe(true)
   })
 
+  test("a sectioned proposal installs whole — its sub-headings are body, the verbatim line true of it (0209 D1, 0165-016)", async () => {
+    const dir = await cleanRepo()
+    // The stub's own invited shape: the proposal structured like the round.md
+    // it becomes, `####` sections under the head. Pre-0209 the first
+    // sub-heading ended the subsection — the release held the proposal as
+    // "holds no content" (a proposal opening with a sub-heading), or the body
+    // before the first sub-heading installed with the rest dropped while the
+    // success line said "installed verbatim".
+    const SECTIONED = [
+      "\n## Round briefs\n",
+      "\n### R-01\n",
+      "\n#### Goal\n",
+      "\nPort the core with the retry ladder intact.\n",
+      "\n#### Acceptance criteria\n",
+      "\n- the e2e suite passes on the ported core\n",
+      "\n#### Release criteria\n",
+      "\nNo process reference in the deliverable.\n",
+    ].join("")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + SECTIONED)
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    // The installed round.md carries every section verbatim under the title,
+    // the Close stub in place by construction.
+    const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
+    expect(round.startsWith("# Round R-01\n")).toBe(true)
+    expect(round).toContain("#### Goal")
+    expect(round).toContain("Port the core with the retry ladder intact.")
+    expect(round).toContain("#### Acceptance criteria")
+    expect(round).toContain("- the e2e suite passes on the ported core")
+    expect(round).toContain("#### Release criteria")
+    expect(round).toContain("No process reference in the deliverable.")
+    expect(round).toContain("## Close")
+  })
+
   test("the release consumptions commit their own write surface: the person's uncommitted dirt never rides the brief install or the round-start commit (0207 D1, 0165-013)", async () => {
     const dir = await cleanRepo()
     // The person's in-flight work beside the release: a half-done edit and a

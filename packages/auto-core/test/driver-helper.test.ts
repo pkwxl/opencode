@@ -263,6 +263,13 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     // A configured build is named as deliberately not run by the brief.
     const built = await renderHelperBrief(dir, { phases: "mt", build: "make check" })
     expect(built).toContain("ℹ this brief did not run the config build (`make check`) — the close gate runs it on the next opencode-auto transfer")
+    // 0209 D4 (0165-105): the skip is named once, by the brief's own ℹ line —
+    // the checks the brief ran never borrow the build-less project's warning
+    // (pre-0209 the ⚠ "no build command configured" rode beside it, a
+    // configured project read as build-less).
+    expect(built.some((line) => line.includes("build: no build command configured"))).toBe(false)
+    // The build-less floor: the warning is true there and stays.
+    expect(lines.some((line) => line.includes("build: no build command configured"))).toBe(true)
   })
 
   test("row 6 (0106, re-keyed by 0108, 0109 and 0103's second addendum) — the recorded containment count carries every family; the scanExempt fork rides the held close", async () => {
@@ -329,6 +336,25 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(lines).toContain(`next: extend ## Roadmap of docs/analysis.md with the next round's line (\`- R-02 <phases> — <goal>\`, its phases value the round establishes under), commit, then re-run: opencode-auto transfer ${dir}`)
     expect(lines.some((line) => line.startsWith("- docs/analysis.md — extend its `## Roadmap`"))).toBe(true)
     expect(lines).toContain(`- opencode-auto transfer ${dir}`)
+  })
+
+  test("the complete round's pass line states exactly what the brief checked (0209 D4, 0165-105)", async () => {
+    const dir = await repo()
+    write(dir, ANALYSIS_DOC, ANALYSIS(["- R-01 mt — port the core", "- R-02 mt — the acceptance pass"], true))
+    await completeRound(dir, "mt")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "round complete")
+    // The floor: a build-less project's pass line is byte-identical, and the
+    // build-less warning is true there.
+    const plain = await renderHelperBrief(dir, { phases: "mt" })
+    expect(plain.some((line) => line.includes("round R-01 is complete and passes its close checks — the next transfer opens R-02 and stops at its round-start gate"))).toBe(true)
+    expect(plain.some((line) => line.includes("passes its close checks,"))).toBe(false)
+    // A configured build: the one check the brief skipped is named — the
+    // next transfer runs it at its own close gate (pre-0209 the line claimed
+    // an uncaveated "passes its close checks" over the skipped build).
+    const built = await renderHelperBrief(dir, { phases: "mt", build: "make check" })
+    expect(built.some((line) => line.includes("round R-01 is complete and passes its close checks, except the build, not run by this brief — the next transfer opens R-02 and stops at its round-start gate"))).toBe(true)
+    expect(built.some((line) => line.includes("build: no build command configured"))).toBe(false)
   })
 
   test("row 8 — a failed task: the gaps channel, the close/run --repair recovery", async () => {
@@ -511,10 +537,14 @@ describe("driver-helper: the blocks (plans/0105 D3)", () => {
     expect(lines).toContain(GUIDANCE.DRIVER_PRIMER)
     expect(lines).toContain(GUIDANCE.ASSIST_RULE)
     expect(text).toContain("Everything beyond the person's instruction is stop-and-ask: enumerate what is unknown, ask the person, keep undecided points open — never invent the person's answer.")
-    // The round report's needs-attention section rides POLICY when present.
+    // 0209 D5(f), 0165-191: the report's needs-attention free-content scan is
+    // deleted — 0109 retired the report's mandate, no template or prompt
+    // writes the heading, and a person-commissioned report is never read: a
+    // report carrying the phrase renders nothing in POLICY (the standing
+    // decisions above carry the surface).
     write(dir, reportForUserPath(1), `# Round report\n\n## Needs your attention\n\n- one open question\n\n${EOF_MARK}\n`)
     const withReport = await renderHelperBrief(dir, { phases: "mt" })
-    expect(withReport).toContain("Recorded defaults this state already carries: the needs-attention section of docs/R-01/report-for-user.md — the round's provisional defaults and AUTO-RESOLVE decisions, each phrased by its project consequence.")
+    expect(withReport.some((line) => line.includes("needs-attention section"))).toBe(false)
   })
 
   test("an uninitialized directory refuses (the install-prompts shape)", async () => {

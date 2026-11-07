@@ -102,7 +102,7 @@ import { choiceMark, readBlockageDocs, rejectedMark } from "./blockage"
 import { provenanceComparison } from "./bundle"
 import { CONFIG_FILE } from "./config"
 import { planFix } from "./config-fix"
-import { ANALYSIS_DOC, reportForUserPath, roundBriefPath, roundDirName, taskDoc } from "./docpaths"
+import { ANALYSIS_DOC, roundBriefPath, roundDirName, taskDoc } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { changedFiles, nestedRepoPrefixes, repoRoots } from "./git"
 import { liveRunLock, lockStatusLine } from "./lock"
@@ -182,7 +182,7 @@ const ROLE_LINES = [
   "Your mandate is the person's instruction and nothing else. This brief and the stop lines name the person's options at each stop, never a runway: a command your instruction names is in scope, and every stop a command reaches is your report point — report what the stop names and wait for the person. Never chain a further advance because a line says `next:` (that line addresses the person), and never take a person gate's review act on your own momentum — the person takes it, or the instruction delegates it in so many words. The person re-renders this brief for the new stop: `opencode-auto driver-helper <dir>`.",
   "Hard rules (the existing gates — protect, the clean-tree start gates, the close-out SHA audit, the P1 and containment scans — already enforce them; they bind this session exactly the same):",
   "- never write into `.auto/`, never tick an index line (`docs/R-NN/phases.md`, a phase's `tasks.md`), never rename a `todo.md` → `done.md` — those writes are the driver's alone;",
-  "- never edit `.opencode/auto/brief.md` or `AGENTS.md` — the brief is driver-written state (seeded by `init/amend --brief`, installed from an approved proposal), and AGENTS.md is rendered from the config;",
+  "- never edit `.opencode/auto/brief.md` or `AGENTS.md` — the brief is driver-written state (installed from an approved proposal; `amend --brief` the person's rare revision channel), and AGENTS.md is rendered from the config;",
   "- while a run holds the run lock (STATE names it when live), write nothing — wait for the run to end;",
   // 0107 D2 — the round brief is the person's own writing; the former
   // wording ("the round-start round.md review commit the canonical one")
@@ -229,16 +229,19 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person's own writing for the new round — they write it and commit it (the commit is the review act); the drafting can travel the released analysis instead: a \`### R-NN\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, committed, installs verbatim when the round opens — this hand-written file is the round's own when no proposal covers it; the pen discusses on request and never fills or commits it`
   const planInputChannel = (phase: PhaseUnit): string =>
     `${planInputPath(phase)} — the phase's planning input, free-form markdown (the active pack's scaffold: ${bin} plan ${dir} --scaffold prints it); written by the person, committed unchanged by the driver; a changed text restarts the open construction`
-  // Row 6's renderer: the close checks (minus the build — the caveat names it
-  // when configured; detection matches the gate on everything else), the
-  // refusal lines verbatim, the channels and the recovery. Returns whether
-  // the gate held (the caller falls through to the open rhythm when not).
-  // 0106: the held close is also where the process-reference scanExempt fork
-  // rides (0106 D3) — the channel the field round showed a proxy session
-  // could not discover anywhere in the target. The round report channel
-  // retired with the report's mandate (plans/0109 D1/D5).
+  // Row 6's renderer: the close checks (minus the build — `buildSkipped`
+  // tells roundCloseProblems so a configured build renders neither the
+  // build-less warning nor a silent pass, and the caveat names it; detection
+  // matches the gate on everything else), the refusal lines verbatim, the
+  // channels and the recovery. Returns whether the gate held (the caller
+  // falls through to the open rhythm when not — its pass line carries the
+  // same caveat, plans/0209 D4). 0106: the held close is also where the
+  // process-reference scanExempt fork rides (0106 D3) — the channel the
+  // field round showed a proxy session could not discover anywhere in the
+  // target. The round report channel retired with the report's mandate
+  // (plans/0109 D1/D5).
   const roundCloseRow = async (closed: number): Promise<boolean> => {
-    const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt })
+    const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt, buildSkipped: opts.build !== undefined })
     if (!close.problems.length) return false
     stopLines.push(...roundCloseRefusalLines(dir, closed, closed + 1, close, "transfer"))
     if (opts.build) stopLines.push(`ℹ this brief did not run the config build (\`${opts.build}\`) — the close gate runs it on the next ${bin} transfer`)
@@ -371,7 +374,12 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           channels.push(`${ANALYSIS_DOC} — extend its \`## Roadmap\` with the next round's line (\`- ${roundDirName(round + 1)} <phases> — <goal>\`, its phases value the round establishes under)`)
           recovery.push(`${bin} transfer ${dir}`)
         } else {
-          facts.push(`round ${roundDirName(round)} is complete and passes its close checks — the next transfer opens ${roundDirName(round + 1)} and stops at its round-start gate`)
+          // Plans/0209 D4: the checks this brief ran are the checks it
+          // names — a configured build was skipped, so the pass line says
+          // so (the next transfer runs it at its own close gate).
+          facts.push(
+            `round ${roundDirName(round)} is complete and passes its close checks${opts.build ? ", except the build, not run by this brief" : ""} — the next transfer opens ${roundDirName(round + 1)} and stops at its round-start gate`,
+          )
           uncommittedByDesign = true
           channels.push(`after that transfer: ${roundBriefChannel(round + 1)}`)
           recovery.push(`${bin} transfer ${dir}`)
@@ -530,15 +538,12 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     }
   }
 
-  // POLICY's recorded defaults: the held forks (row 4) and the round report's
-  // needs-attention section — where provisional defaults and AUTO-RESOLVE
-  // decisions surface for the person's considered answer.
-  {
-    const report = await Bun.file(join(dir, reportForUserPath(round))).text().catch(() => undefined)
-    if (report?.includes("Needs your attention")) {
-      defaults.push(`the needs-attention section of ${reportForUserPath(round)} — the round's provisional defaults and AUTO-RESOLVE decisions, each phrased by its project consequence`)
-    }
-  }
+  // POLICY's recorded defaults: the held forks (row 4) and the standing
+  // decisions above — where provisional defaults and AUTO-RESOLVE decisions
+  // surface for the person's considered answer. (The round report's
+  // needs-attention section was a third source until plans/0109 retired the
+  // report's mandate; its free-content scan — a phrase no template or prompt
+  // writes — was deleted by plans/0209 D5, 0165-191(f), never registered.)
 
   // —— The six blocks, in D3's order ——
   // 0106 D4: the glyph reading rule, rendered whenever a stop line carries

@@ -407,6 +407,57 @@ describe("renderStatus roadmap supersession (plans/0114 D2; divergence-only sinc
   })
 })
 
+describe("renderStatus awaiting clarification (plans/0081 D14.3; the ruled condition since 0209 D3, 0165-104)", () => {
+  // The re-work bundle's survey type, as `init --intent` materializes it.
+  const SURVEY_TYPE = ["# Survey", "", "Gate: human", "Phase-artifacts: survey.md", "", "## plan duties", "", "Inventory-level reading only.", "", "<!-- auto: eof -->", ""].join("\n")
+
+  // A round whose first phase is the human-gated survey with its tasks
+  // seeded (each done unless named pending).
+  async function surveyRound(tasks: Array<[string, boolean]>): Promise<PhaseUnit> {
+    await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/phases/survey.md"), SURVEY_TYPE)
+    const [phase] = await syncPhaseIndex(dir, 1, "survey,implement")
+    await Bun.write(
+      join(dir, phase!.dir, "tasks.md"),
+      renderTaskIndex("R-01.P01", tasks.map(([id, done]) => ({ id, title: `task ${id}`, done }))),
+    )
+    for (const [id, done] of tasks) {
+      await mkdir(join(dir, "docs", id), { recursive: true })
+      await Bun.write(join(dir, "docs", id, done ? "done.md" : "todo.md"), `# ${id}: task ${id}\nPhase: R-01.P01\n\nbody\n\n<!-- auto: eof -->\n`)
+    }
+    return phase!
+  }
+
+  const noteOf = (lines: string[]) => lines.find((line) => line.includes("awaiting your clarification"))
+
+  test("tasks all done, the survey present with open forks: the note fires, the real dir in the release command", async () => {
+    const phase = await surveyRound([["T-001", true]])
+    await Bun.write(join(dir, phase.dir, "survey.md"), "# Survey\n\nThe reference's map.\n\nFork: scope — the journal too; Recommend: the core only.\n")
+    const lines = await renderStatus(dir)
+    const note = noteOf(lines)
+    expect(note).toBeDefined()
+    // The real directory renders — pre-0209 the line printed the `<dir>`
+    // placeholder literally.
+    expect(note).toContain(`clarify ${dir} writes and commits the line`)
+    expect(note).not.toContain("<dir>")
+    expect(note).toContain("resolve the Fork: lines of its survey.md")
+  })
+
+  test("a pending task keeps the note quiet — the round is not waiting on the person yet", async () => {
+    await surveyRound([["T-001", true], ["T-002", false]])
+    await Bun.write(join(dir, "docs/R-01/P01-survey/survey.md"), "# Survey\n\nFork: scope — the journal too; Recommend: the core only.\n")
+    expect(noteOf(await renderStatus(dir))).toBeUndefined()
+  })
+
+  test("a missing survey is not the person's state: no note (the survey is the session's to write)", async () => {
+    await surveyRound([["T-001", true]])
+    // Tasks all done, the survey never written — pre-0209 the note fired
+    // here, teaching the person to resolve forks in a document that does
+    // not exist.
+    expect(noteOf(await renderStatus(dir))).toBeUndefined()
+  })
+})
+
 describe("renderStatus in-flight lanes section (plans/0068 D13, S4)", () => {
   test("lane registry entries open the tree with one section line per lane, worktree and pid beside the unit", async () => {
     await seedUnits(dir, "## T-001: a [pending]\nA.\n\n## T-002: b [pending]\nB.\n")

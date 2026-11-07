@@ -45,8 +45,8 @@ export const BRIEF_TARGET_HEADING = "## Target"
 export const BRIEF_PROPOSAL_HEADING = "## Project brief"
 
 // The brief as planning input: undefined when the file is missing, empty or
-// holds only comments (comment-only text injects nothing — a seed or a
-// generated brief always carries real text).
+// holds only comments (comment-only text injects nothing — an installed or
+// amended brief always carries real text).
 export async function projectBriefText(dir: string): Promise<string | undefined> {
   const raw = await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)
   return raw === undefined ? undefined : stubbedText(raw)
@@ -113,26 +113,32 @@ type BriefCommitter = (
 // plans/0084): write the proposal verbatim into .opencode/auto/brief.md — one
 // mechanical copy, a driver-exclusive write through protect (D6c), its own
 // `brief-install` commit — and return the log lines. Idempotent: an installed
-// equal brief writes nothing and logs nothing. `source` names the document
-// the proposal was approved in (the survey of a human-gated phase, or the
-// pre-round project analysis) for the log line, the commit subject and —
-// since plans/0207 D1 (0165-013) — the commit's pathspec: the install
-// commits exactly `[BRIEF_FILE, source]`, the brief plus the document the
-// approval was read from (a hand-released document still uncommitted rides
-// the install as its evidence; a released-and-committed one contributes
-// nothing), never the person's unrelated uncommitted work — the release
-// consumptions run ahead of the clean gate, and what they fold is unlisted
-// otherwise. Inside the loop the tree is clean, so the pathspec is
-// behavior-neutral there except that the install no longer absorbs the
-// completion rename that precedes it — the transition commit keeps the
-// phase's close-out booking. The commit failure is a warning line, never a
-// throw — the caller's stop owns the exit code.
+// equal brief writes nothing — and still runs the commit (plans/0209 D2,
+// 0165-103: the interrupted-install shape, the family member installRound-
+// Brief's own recovery — a kill between the write and the commit leaves the
+// brief uncommitted, and the re-run's commit over the pathspec stages it;
+// commitTree skips a clean repository, so the no-op re-run is identical in
+// tree and log). `source` names the document the proposal was approved in
+// (the survey of a human-gated phase, or the pre-round project analysis) for
+// the log line, the commit subject and — since plans/0207 D1 (0165-013) —
+// the commit's pathspec: the install commits exactly `[BRIEF_FILE, source]`,
+// the brief plus the document the approval was read from (a hand-released
+// document still uncommitted rides the install as its evidence; a released-
+// and-committed one contributes nothing), never the person's unrelated
+// uncommitted work — the release consumptions run ahead of the clean gate,
+// and what they fold is unlisted otherwise. Inside the loop the tree is
+// clean, so the pathspec is behavior-neutral there except that the install
+// no longer absorbs the completion rename that precedes it — the transition
+// commit keeps the phase's close-out booking. The commit failure is a
+// warning line, never a throw — the caller's stop owns the exit code.
 export async function installBriefProposal(dir: string, source: string, proposal: string, commit: BriefCommitter): Promise<string[]> {
   const target = join(dir, BRIEF_FILE)
-  if ((await Bun.file(target).text().catch(() => "")) === `${proposal}\n`) return []
-  await allowWrite(target)
-  await Bun.write(target, `${proposal}\n`)
-  await reprotect(target)
+  const equal = (await Bun.file(target).text().catch(() => "")) === `${proposal}\n`
+  if (!equal) {
+    await allowWrite(target)
+    await Bun.write(target, `${proposal}\n`)
+    await reprotect(target)
+  }
   const settled = await commit(dir, { id: "PLAN", title: `brief install (${source})` }, {
     stage: "brief-install",
     subject: `PLAN brief install the approved project brief (from ${source})`,

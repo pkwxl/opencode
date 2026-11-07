@@ -11,14 +11,15 @@
 // one read-model section the lanes design adds, present exactly while a
 // parent run holds lanes (a killed parent's leftovers show here too, which
 // is the recovery story's first line).
-import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { join } from "node:path"
+import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, phaseSurveyDoc, readPhases } from "./phases"
 import { phasesLine } from "./banner"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { provenanceComparison } from "./bundle"
 import { awaitingFormulation } from "./formulate"
 import { loadProjectConfig } from "./config"
 import { provenanceFindings } from "./provenance"
-import { phasesDiverge, releasedRoadmapRound } from "./roadmap"
+import { supersedingPhases } from "./roadmap"
 import { shellAdapter, shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
@@ -112,16 +113,15 @@ export async function renderStatus(dir: string): Promise<string[]> {
   // The roadmap supersession (plans/0114 D2, divergence-only since 0136): a
   // released roadmap line covering the current round is that round's phase
   // list (plans/0101 D5) — the config key then never applies to the round.
-  // The note surfaces only a real divergence (phasesDiverge resolves both
-  // values through the establishment registry): an agreeing pair is the
-  // designed state and names nothing, so nobody reads agreement as drift.
-  // The line names the round's own channel so nobody amends the key "to clean
-  // up". m mode never consults the roadmap; a config-governed round (no
-  // analysis, unreleased, or the roadmap plans no line for it) names
-  // nothing — the key is its live establishment authority.
+  // The note surfaces only a real divergence (supersedingPhases, roadmap.ts's
+  // one composition — the same derivation config-fix's finding reads): an
+  // agreeing pair is the designed state and names nothing, so nobody reads
+  // agreement as drift. The line names the round's own channel so nobody
+  // amends the key "to clean up". m mode never consults the roadmap; a
+  // config-governed round (no analysis, unreleased, or the roadmap plans no
+  // line for it) names nothing — the key is its live establishment authority.
   const config = await loadProjectConfig(dir).catch(() => undefined)
-  const covered = config !== undefined && config.phases !== "m" ? await releasedRoadmapRound(dir, round) : undefined
-  const superseded = covered !== undefined && (await phasesDiverge(dir, config!.phases, covered)) ? covered : undefined
+  const superseded = config !== undefined && config.phases !== "m" ? await supersedingPhases(dir, config.phases, round) : undefined
   if (superseded !== undefined) {
     lines.push(
       `ℹ phases (config "${config!.phases}"): ${roundDirName(round)}'s line establishes "${superseded.phases}" under the roadmap of ${ANALYSIS_DOC} — the config value never applies to this round; reshape by moving its \`${roundDirName(round)} <phases> — <goal>\` line there`,
@@ -141,20 +141,30 @@ export async function renderStatus(dir: string): Promise<string[]> {
       continue
     }
     // The awaiting-clarification note (plans/0081 D14.3): a human-gated phase
-    // whose tasks are all done but whose survey still records open forks —
-    // the round is waiting on the person, and status says so, naming the
-    // reshape channel beside the release (plans/0101 D6 — the held boundary
-    // is the designed reshape moment; the one channel since plans/0137: the
-    // roadmap line, a round becoming covered the moment its line exists).
-    // Beside it the review-seam note
-    // (plans/0101 D3/D4): the current phase's plan task stands constructed
-    // and not yet run — the round waits on the person's dispatch (plan) or
-    // its rejection (fix the todo's inputs, re-run transfer).
-    const awaiting = !state.done.has(phase.id) && (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
+    // whose tasks are all done, whose survey exists and still records open
+    // forks (or a proposed brief) — the round is waiting on the person, and
+    // status says so, naming the reshape channel beside the release (plans/
+    // 0101 D6 — the held boundary is the designed reshape moment; the one
+    // channel since plans/0137: the roadmap line, a round becoming covered
+    // the moment its line exists). The missing-survey state is not this
+    // note's (plans/0209 D3, 0165-104: the survey is the session's to write,
+    // never the person's — 0081 D14 — so an unstarted survey phase renders
+    // plain, and the tasks-all-done condition keeps the in-writing survey
+    // quiet too). Beside it the review-seam note (plans/0101 D3/D4): the
+    // current phase's plan task stands constructed and not yet run — the
+    // round waits on the person's dispatch (plan) or its rejection (fix the
+    // todo's inputs, re-run transfer).
+    const surveyPresent = await Bun.file(join(dir, phaseSurveyDoc(phase))).exists()
+    const awaiting =
+      !state.done.has(phase.id) &&
+      tasks.length > 0 &&
+      tasks.every((task) => task.status === "done") &&
+      surveyPresent &&
+      (await phaseGateProblems(dir, phase, phaseGates(phase))).some((problem) => problem.startsWith("clarification:"))
     const awaitingPlan = phase === current ? awaitingFormulation(tasks, phase) !== undefined : false
     const reshapeNote = `where the findings reshape the round, move or add its \`${roundDirName(round)} <phases> — <goal>\` line in ${ANALYSIS_DOC} (the unstarted phases re-derive at the next transfer)`
     lines.push(
-      `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\` (${shellProfile().bin} clarify <dir> writes and commits the line); ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with `plan`, or fix the todo's inputs and re-run `transfer`)" : ""}`,
+      `  [${mark}] ${phaseLabel(phase)}${awaiting ? ` (awaiting your clarification — resolve the Fork: lines of its survey.md, or accept their \`Recommend:\` defaults with \`Clarified: yes\` (${shellProfile().bin} clarify ${dir} writes and commits the line); ${reshapeNote})` : ""}${awaitingPlan ? " (plan task awaiting your review — dispatch with \`plan\`, or fix the todo's inputs and re-run \`transfer\`)" : ""}`,
     )
     for (const task of tasks) {
       const checklist = task.checklist ?? []

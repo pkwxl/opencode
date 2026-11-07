@@ -1079,6 +1079,34 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
   )
 
   test(
+    "row 0d's interrupted install: an equal brief on disk still commits on the re-run (0209 D2, 0165-103)",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS)
+      // The kill between the write and the commit: brief.md on disk, equal to
+      // the approved proposal, uncommitted (the interrupted-install shape the
+      // family's other members recover by re-running the same commit).
+      // Pre-0209 the re-run returned [] before committing — the dirty file
+      // left for the next unit start's clean gate or an unrelated driver
+      // commit.
+      mkdirSync(join(dir, ".opencode", "auto"), { recursive: true })
+      writeFileSync(join(dir, ".opencode", "auto", "brief.md"), "A faithful port of the core into the monorepo, tests included.\n")
+      const result = await planPrelude(dir, { phases: "m" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      // The install pass still logs its line and runs its commit: compare,
+      // write when different, always commit — the re-run's commit stages the
+      // brief over the install's pathspec.
+      expect(result.type === "stop" && result.lines[0]).toBe("✓ approved project brief installed: docs/analysis.md `## Project brief` section → .opencode/auto/brief.md")
+      const subjects = await git(dir, "log", "--format=%s")
+      expect(subjects).toContain("PLAN brief install the approved project brief (from docs/analysis.md)")
+      // brief.md is committed — no dirty file left for the next clean gate.
+      expect((await git(dir, "status", "--porcelain")).includes(".opencode/auto/brief.md")).toBe(false)
+    }),
+  )
+
+  test(
     "row 0d's round-start commit carries the establishment's write surface alone: the person's dirt never rides it (0207 D1, 0165-013)",
     withDir(async (dir) => {
       analysisOn()
