@@ -5,7 +5,9 @@ coding-agent session opened in the target directory — there is nothing to fill
 the driver (`opencode-auto run`) executing the next task through the decompose pipeline (`--subtask true`): it
 first confirms the run boundary — the previous task is complete and the next task has not started — then
 automatically determines the next task and runs it, launching a child session for task understanding and
-decomposition, then sequentially one child session per subtask in the generated list, and between child sessions
+decomposition, then sequentially one child session per subtask in the generated list, and finally a fresh
+verification child session over the task's whole committed range — with a fix session and a re-verification
+for every gap list it writes — and between child sessions
 performing every driver action itself: the artifact checks, the driver's state writes (checklist ticks, the
 todo.md → done.md renames) and the unified commit. All implementation work happens in child sessions launched
 through the host coding agent's subagent facility; the driver session itself writes no implementation code. The
@@ -27,7 +29,9 @@ specified below.
    gate); a dirty tree is the person's to commit or clean first.
 5. You can launch child sessions (your platform's subagent facility) that work in this same directory. Otherwise
    stop: the whole design rests on them.
-6. Read the config's `wrapup` key (default true): false skips Stage 3's report session.
+6. Read the config's `wrapup` key (default true): it decides whether a passing verification also
+   writes the task's wrap-up report (`docs/T-NNN/report.md`) — the verification itself always
+   runs.
 7. The config's `testByDriver` and `handoverTest` keys are both unset: this suite has no driver process to run
    the test script or relay its result. Either key set → stop: the person runs the driver itself
    (`opencode-auto run`) for this task, or `amend`s the config.
@@ -35,8 +39,9 @@ specified below.
 ## Confirm the boundary, pick the task
 
 - The current phase's index: config `phases: "m"` is the no-phase mode — `docs/R-01/P01-implement/tasks.md`;
-  anything else is the phased mode — the latest round (the highest `docs/R-NN/` holding a `phases.md`), first phase
-  whose `phases.md` line is not marked ` (closed: …)` and whose directory holds a `tasks.md`.
+  anything else is the phased mode — the latest round (the highest `docs/R-NN/` holding a `phases.md`), first
+  phase whose `phases.md` line is unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion) and
+  whose directory holds a `tasks.md`.
 - Unit files win over the index tick: a task with `docs/T-NNN/todo.md` is pending, with `done.md` is done (exactly
   one of the two — neither or both is an inconsistent index, stop and report). Take the first pending task in index
   order whose `Depends:` (the field in its document; without the field the task before it in the index;
@@ -84,8 +89,10 @@ Commit subjects and stages (T-NNN = the task, S<nn> = the two-digit subtask numb
 
 - Stage 1: subject `T-NNN decompose <task title>`, Auto-Stage `decompose`.
 - Stage 2, per subtask: subject `T-NNN S<nn> <subtask short title>`, Auto-Stage `subtask <n>`.
-- Stage 3: subject `T-NNN wrapup <task title>`, Auto-Stage `wrapup`; the completion commit afterwards: subject
-  `T-NNN done <task title>`, Auto-Stage `done`.
+- Stage 3: the wrap-up report's commit (a passing verification, the `wrapup` key true): subject
+  `T-NNN wrapup <task title>`, Auto-Stage `wrapup`; a fix round's share (Stage 3's fix loop): subject
+  `T-NNN fix <round>.<session> <task title>`, Auto-Stage `execute`; the completion commit afterwards:
+  subject `T-NNN done <task title>`, Auto-Stage `done`.
 
 Terminator discipline, checked everywhere below: every Markdown document a child session created or rewrote in full
 must end, once finished, with a line holding only `<!-- auto: eof -->` as its last line of body text (only blank
@@ -221,42 +228,148 @@ Loop:
 4. Pass → the driver writes: rename `docs/T-NNN/S<nn>/todo.md` → `done.md`, tick the item in subtasks.md
    (`- [ ]` → `- [x]`), commit (`T-NNN S<nn> …`), then continue the loop.
 
-## Stage 3 — wrap-up and close-out
+## Stage 3 — verification and close-out
 
-Skip the report session when the config's `wrapup` is false; go straight to the close-out.
+The subtask sessions are finished; whether their output genuinely completes the task is judged by a fresh
+verification session — a pair of eyes that has inspected none of the work so far — over the task's whole
+committed range, never by the subtask sessions' own claims. A verification that finds gaps leads, through
+`docs/T-NNN/gaps.md`, to one fix session and a re-verification: the same protocol `run`'s master control runs
+at its loop's steps 5–6, over this pipeline's commit grammar.
 
-Launch the child session with:
+The task's baseline: the parent of the task's first commit carrying the `Auto-Task: T-NNN` trailer (the oldest
+`git log --grep="Auto-Task: T-NNN"` hit's parent — the decompose commit is the first). The unit's entire output
+is the committed range `<baseline>..HEAD`, this repository and every nested one.
 
-```text
-You are the wrap-up session for task T-NNN. You write no implementation code.
+The config's `wrapup` key fills the verification child's wrap-up line: true (the default) → `WRITE`, false →
+`SKIP` (no report, no wrap-up commit — the verification itself runs either way).
 
-<the full task document docs/T-NNN/todo.md, verbatim>
+The loop — a verification round, then while gaps remain:
 
-The subtask checklist of this task, with its ticks:
-<docs/T-NNN/subtasks.md, verbatim>
+1. Before launching: delete `docs/T-NNN/report.md` and `docs/T-NNN/gaps.md` when present — each round's verdict
+   keys on that round's session writes alone, never on a file an earlier round or a work session left.
+2. Launch exactly one fresh verification child session (the unit cycle's rules hold: the baseline HEAD check,
+   one feedback relaunch on a failed check, then stop and report):
 
-Write docs/T-NNN/report.md, this task's wrap-up report: one line per subtask — number + one-sentence conclusion +
-artifact path (docs/T-NNN/S<nn>/index.md) or code location — without copying or rewriting the subtask artifacts,
-then two sections of your own, overall conclusion and open issues.
-Write the result line as the last line of body text of the report (before the terminator), on a line of its own:
-`Result: PASS` or `Result: FAIL <one-sentence reason>` — a protocol string, written exactly as given, never
-translated, bolded or list-marked.
-Write PASS only when every check the task requires was actually run or observed, with the evidence in this report;
-a non-acceptance task whose goal was met may omit the line. Every Markdown document you create ends with a line
-holding only <!-- auto: eof --> as its last line of body text. Do not run git commit or any commit command; end the
-session as soon as the report is written.
-```
+   ```text
+   You are the verification session for task T-NNN: a fresh pair of eyes judging whether the task's subtask
+   sessions genuinely completed it. You write no implementation code and you fix nothing — a finding is
+   reported, not repaired.
 
-Check: `docs/T-NNN/report.md` exists, is non-trivial, ends with the terminator. Failure → one feedback re-run, then
-stop and report.
+   Read first: docs/T-NNN/todo.md — the task document (title line, Phase: field, ## Goal / ## Scope /
+   ## Acceptance). It is the standard you verify against.
 
-Then read the report's result line (the last line starting with `Result:`):
+   The unit's entire output is the committed range <baseline>..HEAD (this repository and every nested one).
+   Verify — all hard checks:
 
-- `Result: FAIL …` → commit the report (`T-NNN wrapup …`) and stop for the person: a FAIL is not completion — the
-  person accepts the task with `close` or plans the rework. Do not tick the task done.
-- PASS, or no result line → the close-out: rename `docs/T-NNN/todo.md` → `done.md`, tick the task's line in the
-  phase's `tasks.md` (`- [ ] T-NNN` → `- [x] T-NNN`), and if `.auto/units.json` holds a record for this task, remove
-  that record; commit these writes (`T-NNN done <task title>`, Auto-Stage `done`).
+   1. The range holds only the unit's own commits: every commit in <baseline>..HEAD carries the
+      `Auto-Task: T-NNN` trailer and this pipeline's subject grammar — `T-NNN decompose …`, `T-NNN S<nn> …`
+      (the subtask shares), `T-NNN fix <round>.<session> …` (fix-round shares, when fix rounds ran).
+      Anything else in the range is a hard failure — report it as such.
+   2. The driver's state files are untouched: docs/T-NNN/todo.md still present, no done.md, the task's index
+      line still unticked.
+   3. The task's required actions: every ## Scope item acted on and every ## Acceptance criterion actually
+      met — judged from the work itself, never from the subtask sessions' claims. Verify by inspection: read
+      the range's diff (`git diff <baseline>..HEAD`, each repository) and the deliverables against what the
+      task requires. Do not re-run the acceptance's executable checks (its tests, the typecheck or build) —
+      the last subtask session already ran the task's full acceptance verification and repaired what it
+      found. Never accept a claim you have not inspected yourself.
+   4. Every Markdown file created or modified in this unit ends with a line holding only <!-- auto: eof -->
+      as its last line of body text.
+   5. Process documents are not design dependencies: lines this unit added to deliverable files (every path
+      outside the process documents `docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/`, and outside
+      `AGENTS.md` and `.opencode/`) must not reference those process paths. `AUTO-*` marker lines inside code
+      comments are fine when self-contained. A bare task id in a comment is acceptable in the workspace tree;
+      inside a nested repository — a shipped, self-contained deliverable such as a migration destination — it
+      is a failure, as is any path leading outside that repository's own root.
+
+   By outcome:
+   - All checks pass → write docs/T-NNN/report.md, the task's wrap-up report (the wrap-up line is <WRITE|SKIP>):
+     one short section per acceptance criterion — what was done, with the evidence (your inspection and its
+     outcome, the artifact path or code location) — then two sections of your own, overall conclusion and open
+     issues. Write the result line as the last line of body text of the report (before the terminator), on a
+     line of its own: `Result: PASS` — a protocol string, written exactly as given, never translated, bolded
+     or list-marked. Under SKIP write no report at all. Every Markdown document you create ends with a line
+     holding only <!-- auto: eof --> as its last line of body text.
+   - Any check fails → write no report. Write docs/T-NNN/gaps.md: first a compact summary of what you verified
+     as OK (so the fix session does not redo it), then one entry per gap as a `### Gap N — <one-line title>`
+     heading under a `## Gaps` heading (N counting 1, 2, …; the entry under its heading names the missing or
+     wrong required action, where — files —, and what exactly to do) — ending with
+     `Result: FAIL <one-sentence reason>` as that file's last line of body text (no terminator in that file).
+     A fix session then closes exactly the listed gaps and the verification re-runs from scratch.
+
+   Do not run git commit or any commit command; do not create, rename or delete any state file — the verdict's
+   two named writes above are your only writes. End your reply with the verdict line, on a line of its own:
+   `Verification: PASS` or `Verification: INCOMPLETE` (protocol strings, verbatim). End the session as soon as
+   the verdict is delivered. Your final reply is the driver's only intake from you — keep it to a few lines
+   around the verdict line; the details belong in report.md / gaps.md on disk.
+   ```
+
+3. Read the verification's verdict — the last line of its reply. A reply without the verdict line → one
+   feedback relaunch ("end your reply with the verdict line"), then stop and report. Shape-check the verdict's
+   own writes: PASS requires the report (WRITE only) non-trivial, terminated, its last `Result:` line
+   `Result: PASS`; INCOMPLETE requires the gap list non-empty, carrying at least one `### Gap N —` heading
+   under `## Gaps`, its last line `Result: FAIL …`. A malformed verdict write → one feedback relaunch naming
+   the deficiency, then stop and report.
+4. `Verification: PASS` → the close-out:
+   1. Delete `docs/T-NNN/gaps.md` when present: a fixed round's gap list is uncommitted transient state —
+      removed from disk alone, landing in no commit.
+   2. WRITE only: commit the report (`T-NNN wrapup <task title>`, Auto-Stage `wrapup`). SKIP: no report, no
+      wrap-up commit.
+   3. The completion writes: rename `docs/T-NNN/todo.md` → `done.md`, tick the task's line in the phase's
+      `tasks.md` (`- [ ] T-NNN` → `- [x] T-NNN`), and if `.auto/units.json` holds a record for this task,
+      remove that record; commit these writes (`T-NNN done <task title>`, Auto-Stage `done`).
+5. `Verification: INCOMPLETE` → measure, then fix:
+   1. Count the gap list's `### Gap N` headings — the count the progress rule measures. The loop's best count
+      is the minimum its FAILs have measured; the first FAIL only seeds it. This round made progress only
+      when a later FAIL's count is strictly lower than the best — same count, grown count or a re-fall to a
+      count the loop already saw is no progress. Once two consecutive fix rounds made no progress, stop and
+      report: the work stays landed as the fix shares, the last gap list stays on disk for the person — the
+      person accepts the task with `close` or plans the rework. Do not tick the task done. (A loop that keeps
+      making progress keeps going: from N seed gaps it runs at most 2N+2 fix rounds before it passes or
+      blocks.)
+   2. Launch one fix child session — round <r>, one past the highest `T-NNN fix <r>.<n>` subject already in
+      the log (round 1 when none exists):
+
+      ```text
+      You are the fix session for task T-NNN: its verification session judged the work incomplete and listed
+      the gaps — you close exactly those gaps. The tree holds the work so far; build on it, do not restart,
+      and do not redo what the verification already accepted.
+
+      Read first: docs/T-NNN/gaps.md — the verification's gap list (a compact summary of what was verified as
+      OK, then one entry per gap as a `### Gap N — <one-line title>` heading under a `## Gaps` heading: the
+      required action that is missing or wrong, where — files —, and what exactly to do) — and
+      docs/T-NNN/todo.md, the task document, for the goal and acceptance behind the gaps.
+
+      Work: close every listed gap — plus anything one obviously requires — and nothing else: no refactoring,
+      no "improvements" to the parts the verification accepted, no new scope. Re-check the gaps you closed:
+      run the checks that target your own changes (their tests, the typecheck or build of what you touched),
+      not the full suite.
+
+      Other tasks belong to other sessions — do not touch them. The todo.md → done.md renames and the index
+      ticks of phases, tasks and subtasks are the DRIVER's alone; do not create, rename or delete
+      docs/T-NNN/todo.md or done.md or any docs/T-NNN/S<nn>/ state file. Do not edit or write
+      docs/T-NNN/gaps.md or report.md — both belong to the verification channel; the next verification round
+      rewrites them. A decision of your own must leave a record in the relevant document or code comment: a
+      call that should have been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option>
+      (<reason>)` line, any other call an `AUTO-DECISION: <decision> (<reason>)` line. Do not run git commit
+      or any commit command — the driver lands your work as its own commit when you end. Every Markdown
+      document you create (or rewrite in full) ends with a line holding only <!-- auto: eof --> as its last
+      line of body text. End the session as soon as the gaps are closed and re-checked, so the re-verification
+      can start from scratch. Your final reply goes back to the driver — keep it to a few lines (which gaps
+      you closed, where).
+      ```
+
+   3. Checks: the session changed something besides the gap list itself (`git status --porcelain` lists more
+      than `docs/T-NNN/gaps.md`) — a zero-write fix session closed nothing → one feedback relaunch, then stop
+      and report; every Markdown file it created or modified ends with the terminator. Pass → land the fix
+      share: the unified commit with `docs/T-NNN/gaps.md` unstaged
+      back out first (`git restore --staged docs/T-NNN/gaps.md` when it exists — the gap list stays on disk,
+      never in a commit), subject `T-NNN fix <round>.<session> <task title>` (<session> one past the highest
+      `T-NNN fix <round>.<n>` subject already in the log for that round — 1 when none exists), Auto-Stage
+      `execute`.
+   4. Re-verify: back to step 1 — the fresh verification round judges the whole task from scratch again (the
+      gaps closed exempt nothing else), and the next FAIL's count is measured against the loop's best per
+      step 5.1.
 
 ## Hands off — driver-adjacent rules
 
@@ -264,12 +377,15 @@ Then read the report's result line (the last line starting with `Result:`):
   round/phase documents (`docs/R-NN/round.md`, `phases.md`).
 - Never edit `.opencode/auto/config.json`, `AGENTS.md`, or anything under `.auto/` except the `units.json` record
   removal above.
-- You make no edits of your own to task content: apart from the state writes (ticks, renames, the cleanup) and the
-  commits, everything on disk was written by child sessions.
+- You make no edits of your own to task content: apart from the state writes (ticks, renames, the cleanup), the
+  verification round's reserved-file deletions, and the commits, everything on disk was written by child
+  sessions.
 - The worktree must end clean: anything left uncommitted at the end is committed as the close-out commit, or the
-  run stops and reports.
+  run stops and reports — the one tolerated residue is the fix loop's uncommitted gap list at a stop (the
+  person's input, never absorbed into a commit).
 
 ## Finish
 
-Report: the task executed, each subtask's one-line outcome with its commit subject, the wrap-up verdict, and what
-the person should review (the report, the subtask artifacts, the commit list). Then stop.
+Report: the task executed, each subtask's one-line outcome with its commit subject, each verification's verdict
+and the fix rounds spent, the wrap-up verdict, and what the person should review (the report, the subtask
+artifacts, the commit list). Then stop.

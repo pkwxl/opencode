@@ -148,13 +148,19 @@ describe("manual-driver prompt ratchet", () => {
 
   test("protocol strings: terminator, verdicts, result lines, record markers", () => {
     for (const name of FILES) expect(text(name), name).toContain("<!-- auto: eof -->")
-    for (const name of ["run.md", "run-verify.md"]) {
+    // plans/0200 D1: the verdict strings' carrier set grows to the subtask
+    // companions — their Stage 3 verification child answers on the same frozen
+    // channel run-verify.md answers on (`Verification: PASS` /
+    // `Verification: INCOMPLETE`), never a vocabulary of its own.
+    for (const name of ["run.md", "run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
       expect(text(name), name).toContain("`Verification: PASS`")
       expect(text(name), name).toContain("`Verification: INCOMPLETE`")
     }
     // The result line carries wrapup.md's protocol wording. run-verify's
     // report is written only after every hard check passed, so it states
-    // the PASS form alone; the pipeline wrap-up children can write FAIL.
+    // the PASS form alone; the companions' verification writes the FAIL
+    // form too — as the gap list's own closing line (plans/0200 D1), never
+    // a report's (a FAIL writes no report).
     expect(text("run-verify.md"), "run-verify.md").toContain("`Result: PASS`")
     for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
       expect(text(name), name).toContain("`Result: PASS`")
@@ -165,6 +171,100 @@ describe("manual-driver prompt ratchet", () => {
       expect(text(name), name).toContain("`AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`")
       expect(text(name), name).toContain("`AUTO-DECISION: <decision> (<reason>)`")
     }
+  })
+
+  // plans/0200 D1 (0165-005 / S25-01): the subtask companions' Stage 3 is the
+  // task-level verification loop — the same whole-unit protocol run.md's loop
+  // steps 5–6 run, over the subtask pipeline's commit grammar — not the
+  // pre-0083 narrative wrap-up that closed the task on the wrap-up session's
+  // own reading of the checklist (the S1: completion judged by self-report).
+  // The driver-role session owns every commit and state write (children never
+  // commit — the companions' own constitutional division); the verification
+  // child is a fresh pair of eyes over the committed range; a FAIL's gap list
+  // is the driver's countable grammar (0146 D1) and stays uncommitted (the
+  // manual suite's gap lifecycle, run.md's); the fix loop runs under the
+  // best-count progress rule (0146 D3 as re-ruled by 0198 D1).
+  test("the subtask companions' Stage 3 is the task-level verification loop (plans/0200 D1)", () => {
+    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
+      const doc = text(name)
+      // The verification charter: inspection of the range, never claims.
+      expect(doc, name).toContain("a fresh pair of eyes")
+      expect(doc, name).toContain("never from the subtask sessions' claims")
+      expect(doc, name).toContain("Do not re-run the acceptance's executable checks")
+      expect(doc, name).toContain("the parent of the task's first commit carrying the `Auto-Task: T-NNN` trailer")
+      // The round-scoped verdict (0170 D1 carried): the reserved files are
+      // deleted at each round's dispatch, the verdict keys on that round's
+      // own writes.
+      expect(doc, name).toContain("keys on that round's session writes alone")
+      // The countable gap grammar and its closing line.
+      expect(doc, name).toContain("`### Gap N — <one-line title>`")
+      expect(doc, name).toContain("`## Gaps` heading")
+      expect(doc, name).toContain("`docs/T-NNN/gaps.md`")
+      // The fix loop: the share grammar (0148 D1, the driver's nextFixSession
+      // derivation — max+1 from the log, never a landed count), the stage,
+      // and the gap list kept out of every commit.
+      expect(doc, name).toContain("T-NNN fix <round>.<session> <task title>")
+      expect(doc, name).toContain("Auto-Stage `execute`")
+      expect(doc, name).toContain("`git restore --staged docs/T-NNN/gaps.md`")
+      expect(doc, name).toContain("the gap list stays on disk")
+      expect(doc, name).toContain("never in a commit")
+      // The progress rule's manual statement: the loop's best (0198 D1), the
+      // strictly-lower test, the two-consecutive stop, the 2N+2 bound.
+      expect(doc, name).toContain("strictly lower than the best")
+      expect(doc, name).toContain("two consecutive fix rounds made no progress")
+      expect(doc, name).toContain("2N+2 fix rounds")
+      // The retired narrative close must not return: no per-subtask verdict
+      // distilled by the wrap-up session, no PASS written on the sessions'
+      // own "run or observed" claims.
+      expect(doc, name).not.toContain("one line per subtask")
+      expect(doc, name).not.toContain("Write PASS only when every check the task requires was actually run or observed")
+    }
+  })
+
+  // plans/0200 D3 (0165-053 / S25-07): the companions' phase selector is
+  // run.md's — the first UNTICKED line. The `(closed: …)` suffix the old
+  // selector keyed on is a digest rendering of a person-closed phase
+  // (phases.ts D16), never a state the phase close-out writes; the tick is
+  // the completion record, so a normally completed earlier phase no longer
+  // wins the pick over the current phase.
+  test("the companions' phase selector is the unticked line (plans/0200 D3)", () => {
+    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
+      const doc = text(name).replaceAll("\n", " ").replace(/  +/g, " ")
+      expect(doc, name).toContain("unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion)")
+      expect(text(name), name).not.toContain("(closed: …")
+    }
+    // The selector is run.md's own sentence, lockstep across the suite.
+    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
+    expect(run).toContain("unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion)")
+  })
+
+  // plans/0200 D2 (0165-048 / S25-02): resume's decomposition gate reads the
+  // unit state — exactly one of todo.md / done.md per item, the tick's
+  // agreement — never todo.md alone, which rejected exactly the state a
+  // completed subtask leaves (the normal interrupted shape this file exists
+  // to recover).
+  test("resume's decomposition gate reads the unit state, not one file name (plans/0200 D2)", () => {
+    const resume = text("resume-subtasks.md")
+    expect(resume).toContain("For every checklist item n (S01 = item 1), exactly one of")
+    expect(resume).toContain("earlier items legitimately hold `done.md` alone")
+    expect(resume).toContain("must be ticked `- [x]` in `subtasks.md`")
+    // The retired gate rule — every item's todo.md must exist — must not
+    // return: it is the defect.
+    expect(resume).not.toContain("For every checklist item n, `docs/T-NNN/S<nn>/todo.md` (S01 = item 1) exists")
+  })
+
+  // plans/0200 D4 (0165-164 / S25-09): the re-entry is keyed on the
+  // verification state and idempotent — an existing report is committed only
+  // when uncommitted, the completion writes only when pending, a committed
+  // FAIL report stops for the person with no git write (the old path
+  // recommitted it unconditionally).
+  test("resume's re-entry is keyed on the verification state and idempotent (plans/0200 D4)", () => {
+    const resume = text("resume-subtasks.md")
+    expect(resume).toContain("decided by the verification state:")
+    expect(resume).toContain("commit the report only when it is still uncommitted")
+    expect(resume).toContain("the no-progress streak one")
+    // The retired unconditional verdict path must not return.
+    expect(resume).not.toContain("follow Stage 3's verdict rules directly")
   })
 
   test("the trailer grammar and the stage vocabulary", () => {
