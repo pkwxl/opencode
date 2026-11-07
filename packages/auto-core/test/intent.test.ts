@@ -320,5 +320,44 @@ describe("guarantees parsing (parseGuaranteeAsserts / guaranteesProblem)", () =>
     expect(guaranteesProblem(full)).toBeUndefined()
     expect(parseGuaranteeAsserts(full)).toEqual([{ template: "whole", kind: "must", literals: ["boundary"] }])
   })
+
+  // 0220 D3 (0165-046): an assert naming an unknown template or phase matches
+  // no render and silently checks nothing — preflight rejects both with the
+  // available values named. templates is the caller-threaded vocabulary
+  // (preflight passes the live library names plus the retired phase-plan
+  // assembly key); omitted = the template half unchecked, the phase half
+  // still enforced (the phaseTag range is complete from the parameters).
+  test("an assert on an unknown template is rejected when the vocabulary is supplied, naming the available values (0220 D3)", () => {
+    const typo = packWithAsserts('whloe: must "boundary"')
+    // Without the vocabulary the template half stays unchecked (the floor for
+    // library-blind callers; production preflight always supplies it).
+    expect(guaranteesProblem(typo)).toBeUndefined()
+    const vocabulary = ["phase-plan", "whole", "subtask", "wrapup"]
+    expect(guaranteesProblem(typo, [], vocabulary)).toMatch(/intent pack "x" asserts on unknown template "whloe"/)
+    expect(guaranteesProblem(typo, [], vocabulary)).toMatch(/prompt template name in effect \(phase-plan, whole, subtask, wrapup\)/)
+    expect(guaranteesProblem(typo, [], vocabulary)).toMatch(/or the formulation assembly key "phase-plan"/)
+    // Known names pass, the retired phase-plan key included
+    expect(guaranteesProblem(packWithAsserts('whole: must "boundary"\nphase-plan: must-not "code migration"'), [], vocabulary)).toBeUndefined()
+    // An overlay- or registration-added name is as valid as a built-in: the
+    // vocabulary is whatever the run's library holds.
+    expect(guaranteesProblem(packWithAsserts('deploy: must "boundary"'), [], [...vocabulary, "deploy"])).toBeUndefined()
+  })
+
+  test("an assert with an unknown phase qualifier is rejected whatever the vocabulary — the qualifier is the render's phase tag (0220 D3)", () => {
+    // A custom id the project did not declare
+    const undeclared = packWithAsserts('phase-plan(spec-read): must "boundary"')
+    expect(guaranteesProblem(undeclared)).toMatch(/intent pack "x" asserts on template "phase-plan" with an unknown phase qualifier "spec-read"/)
+    expect(guaranteesProblem(undeclared)).toMatch(/a builtin preset letter \(a\|d\|m\|t\|v\|k\)/)
+    expect(guaranteesProblem(undeclared)).toMatch(/this project declares no custom phase types/)
+    expect(guaranteesProblem(undeclared, ["spec-read"])).toBeUndefined()
+    expect(guaranteesProblem(undeclared, ["audit"])).toMatch(/declared custom type id \(audit\)/)
+    // A builtin's type id never matches a render (renders carry the letter):
+    // the same silent inertness under a different spelling, rejected with the
+    // letter spelling taught.
+    const typeId = packWithAsserts('whole(implemint): must "boundary"')
+    expect(guaranteesProblem(typeId)).toMatch(/unknown phase qualifier "implemint"/)
+    expect(guaranteesProblem(packWithAsserts('whole(analysis): must "boundary"'))).toMatch(/unknown phase qualifier "analysis"/)
+    expect(guaranteesProblem(packWithAsserts('whole(a): must "boundary"'))).toBeUndefined()
+  })
 })
 

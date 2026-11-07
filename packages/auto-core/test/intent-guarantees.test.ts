@@ -23,6 +23,7 @@ import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { guaranteesProblem, guaranteeViolation, parseGuaranteeAsserts, resolvedVerifyPlan, verifyPlanCharterText } from "../src/intent/guarantees"
 import { loadIntents, packSubsection, parseIntentFile } from "../src/intent/load"
+import { promptTemplateNames } from "../src/template"
 import type { IntentPack } from "../src/intent/types"
 import { loadModes, type ModeSpec } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
@@ -261,7 +262,11 @@ describe("the per-phase charter channel (plans/0097 D1; keys canonicalized to ty
     for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
       const b = await stamped(name)
       try {
-        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type))).toBeUndefined()
+        // 0220 D3: the census also proves the bundles' assert targets live in
+        // the real vocabulary (the library names plus the phase-plan
+        // assembly key) — a shipped typo would fail here, not only at a
+        // materialized project's preflight.
+        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type), ["phase-plan", ...promptTemplateNames()])).toBeUndefined()
         const resolved = resolvedVerifyPlan(b.pack, phaseType("test"))
         expect(resolved.global).toBeDefined()
         expect(resolved.phase).toBeDefined()
@@ -284,7 +289,11 @@ describe("the per-phase charter channel (plans/0097 D1; keys canonicalized to ty
     for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
       const b = await stamped(name)
       try {
-        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type))).toBeUndefined()
+        // 0220 D3: the census also proves the bundles' assert targets live in
+        // the real vocabulary (the library names plus the phase-plan
+        // assembly key) — a shipped typo would fail here, not only at a
+        // materialized project's preflight.
+        expect(guaranteesProblem(b.pack, b.entries.filter((entry) => entry.origin === "project").map((entry) => entry.type), ["phase-plan", ...promptTemplateNames()])).toBeUndefined()
         const closing = b.entries.at(-1)!
         const resolved = resolvedVerifyPlan(b.pack, closing)
         expect(resolved.global).toBeDefined()

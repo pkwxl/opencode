@@ -82,7 +82,7 @@ import { createServices, type RunServices } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, setSwitchModelRegistry, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
-import { usePromptLibrary } from "./template"
+import { promptTemplateNames, usePromptLibrary } from "./template"
 import { restoreTestHandoffs } from "./testrun"
 
 export type RunAllOpts = {
@@ -422,12 +422,17 @@ export async function preflight(
     return { exit: 1 }
   }
   // The guarantees contract's grammar (plans/0080 §2; the per-phase charter
-  // family's key grammar, plans/0097 D1): a pack that declares `### asserts`
-  // with malformed lines, or a `### verify-plan-<key>` whose suffix names no
-  // phase, fails here as a usage error, ahead of any render — the same
-  // load-style strictness the pack file itself gets.
+  // family's key grammar, plans/0097 D1; the assert targets' vocabulary,
+  // plans/0220 D3): a pack that declares `### asserts` with malformed lines,
+  // an assert naming a template the run cannot render or a phase tag no
+  // render carries, or a `### verify-plan-<key>` whose suffix names no phase,
+  // fails here as a usage error, ahead of any render — the same load-style
+  // strictness the pack file itself gets. The template vocabulary is the
+  // loaded library's names plus the retired `phase-plan` assembly key
+  // (plans/0095 D4), read here after usePromptLibrary so target-directory
+  // overlays and shell registrations are in it.
   {
-    const problem = guaranteesProblem(renderFacts!.pack, customTypes)
+    const problem = guaranteesProblem(renderFacts!.pack, customTypes, ["phase-plan", ...promptTemplateNames()])
     if (problem !== undefined) {
       log(problem)
       return { exit: 1 }

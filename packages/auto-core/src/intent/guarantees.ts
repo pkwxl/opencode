@@ -35,6 +35,9 @@
 // optional (<phase>) qualifier restricts the line to renders whose ctx carries
 // that `phase` var — a builtin type's preset letter (`m`) or a custom type's
 // id (`spec-read`). Unqualified lines apply to every render of the template.
+// Both targets are validated against the run's vocabulary at preflight
+// (guaranteesProblem, plans/0220 D3) — a target that matches no render is an
+// assert that silently checks nothing.
 // `must` literals must appear in the composed prompt; `must-not` literals
 // must not. Literals are short stable anchors pinned to the intent's own
 // pack/mode/duty text on purpose: editing that text without updating the
@@ -178,20 +181,49 @@ function verifyPlanKeys(pack: IntentPack): string[] {
 
 // Preflight-side validation (loop-preflight.ts): the first problem with a
 // pack's declared guarantees, undefined when clean. Parsing the asserts is
-// half the check; the other half is the per-phase charter family's key
+// one third; the second is the assert targets' vocabulary (plans/0220 D3) —
+// every assert's template must be a name the run can render (the caller
+// threads the live template names: promptTemplateNames() plus the retired
+// `phase-plan` key, whose asserts still bind the formulation todo assembly,
+// plans/0095 D4 — guaranteesProblem itself stays library-blind, the intent
+// layer owning no template state) and every `(<phase>)` qualifier must be a
+// value a render's ctx actually carries (a builtin preset letter or a
+// declared custom type id — phaseTag's range; a builtin's type id never
+// matches, renders carry the letter), because guaranteeViolation compares by
+// exact equality and a target that matches no render is an assert that
+// silently checks nothing. The third is the per-phase charter family's key
 // grammar — every `verify-plan-*` suffix must be a phase type id (the
 // builtins' or a declared custom's) or, as a legacy spelling, a builtin's
 // preset letter, so a typo'd key is a strict usage error naming the pack
 // (parsed-strictly culture; other unknown `###` keys under `## guarantees`
 // keep today's tolerance). A pack declaring both spellings for one builtin
 // type is a duplication error, never silent precedence (plans/0100 D10).
-// customTypes is the project's declared custom phase type ids; precedence and
-// verify-plan bodies stay prose, nothing else to validate.
-export function guaranteesProblem(pack: IntentPack, customTypes: readonly string[] = []): string | undefined {
+// customTypes is the project's declared custom phase type ids; templates is
+// the caller-supplied assert-template vocabulary (omitted = the template half
+// unchecked, the phase half and key grammar still enforced — the vocabulary
+// is a fact about the run's library the preflight caller owns); precedence
+// and verify-plan bodies stay prose, nothing else to validate.
+export function guaranteesProblem(pack: IntentPack, customTypes: readonly string[] = [], templates?: readonly string[]): string | undefined {
+  let asserts: GuaranteeAssert[] | undefined
   try {
-    parseGuaranteeAsserts(pack)
+    asserts = parseGuaranteeAsserts(pack)
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
+  }
+  if (asserts !== undefined) {
+    if (templates !== undefined) {
+      for (const assert of asserts) {
+        if (!templates.includes(assert.template)) {
+          return `intent pack "${pack.name}" asserts on unknown template "${assert.template}" — the target is a prompt template name in effect (${templates.join(", ")}) or the formulation assembly key "phase-plan"; a target that matches no render is an assert that silently checks nothing, so check the spelling`
+        }
+      }
+    }
+    const phaseTags = [...PHASE_LETTERS, ...customTypes]
+    for (const assert of asserts) {
+      if (assert.phase !== undefined && !phaseTags.includes(assert.phase)) {
+        return `intent pack "${pack.name}" asserts on template "${assert.template}" with an unknown phase qualifier "${assert.phase}" — the qualifier is the render's phase tag: a builtin preset letter (${PHASE_LETTERS.join("|")})${customTypes.length ? ` or a declared custom type id (${customTypes.join(", ")})` : " (this project declares no custom phase types)"}; a builtin keys by its letter, a custom type by its id`
+      }
+    }
   }
   const keys = verifyPlanKeys(pack)
   for (const entry of BUILTIN_PHASE_TYPES) {

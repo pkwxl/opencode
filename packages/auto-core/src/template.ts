@@ -150,23 +150,44 @@ const embedded: Record<string, string> = {
 // duties, governance) — marker-free by definition, it lives in intent packs
 // and is never guarded here. Everything currently listed below is tier-1.
 const PROTOCOL_MARKERS: Record<string, string[]> = {
-  decompose: ["- [ ]", "context.md", "todo.md"],
-  "decompose-a": ["- [ ]", "context.md", "todo.md"],
-  "decompose-d": ["- [ ]", "context.md", "todo.md"],
-  "decompose-k": ["- [ ]", "context.md", "todo.md"],
-  "decompose-m": ["- [ ]", "context.md", "todo.md"],
-  "decompose-t": ["- [ ]", "context.md", "todo.md"],
-  "decompose-v": ["- [ ]", "context.md", "todo.md"],
-  "handoff-steer": ["Status: continue", "Status: done"],
+  // The decompose family's full grammar (plans/0220 D1): the checklist format,
+  // the context.md / todo.md artifact paths (M1.0 merged session, plans/0030),
+  // the `Artifacts:` declaration token (declaredArtifacts in
+  // document/spec.ts — an override dropping it teaches a decomposition whose
+  // checklist parses to zero declared-output specs, silently removing every
+  // per-subtask existence/shape check), and the scope file's two section
+  // headings (SUBTASK_TODO_SECTIONS, the shape checker's anchors). The sets
+  // are pinned to the parser's own grammar by test/template.test.ts.
+  decompose: ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-a": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-d": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-k": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-m": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-t": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  "decompose-v": ["- [ ]", "context.md", "todo.md", "Artifacts:", "## Scope", "## Artifacts"],
+  // The execution family's handover and split protocols (plans/0220 D2): the
+  // status values are what handoffStatus (document/roles.ts) parses a handover
+  // document by — an override teaching none sends a due session to the
+  // handover wall with no protocol (handoverVerdict retries once, then
+  // blocks) — and {{handoffFile}} is the steer's one write target.
+  "handoff-steer": ["Status: continue", "Status: done", "{{handoffFile}}"],
   // A stream of auto's split, sent alone into a fork of the lead (plans/0059
   // D5): the item line is the stream's whole assignment, and its handover
-  // carries the status protocol like handoff-steer.
-  // AUTO-DECISION: fanout gets tier-1 markers although whole and subtask have none (an override dropping the item line would send a fork no assignment, and the status line is a string the driver parses, as in handoff-steer)
-  fanout: ["{{subtask}}", "Status: continue", "Status: done"],
+  // carries the status protocol and path like handoff-steer.
+  fanout: ["{{subtask}}", "Status: continue", "Status: done", "{{handoffFile}}"],
   // The verification loop's fix session (plans/0083 D4): the gap list path
   // and the task block are the session's whole assignment — an override
-  // dropping either sends the fix at nothing.
-  fix: ["{{taskBlock}}", "{{gapsFile}}"],
+  // dropping either sends the fix at nothing — and the fix round carries the
+  // same budget-handover protocol as subtask.
+  fix: ["{{taskBlock}}", "{{gapsFile}}", "Status: continue", "Status: done", "{{handoffFile}}"],
+  // The whole-task session: every status handoffStatus parses (park is
+  // whole's alone — the dependency-park directive), the handover and split
+  // file paths, and the adaptive split's two protocol fields (Depends:/
+  // Artifacts:, both driver-parsed from subtasks.md lines) — an override may
+  // re-voice them, never silently drop the channels.
+  whole: ["Status: park", "Status: continue", "Status: done", "{{handoffFile}}", "{{subtasksFile}}", "Depends:", "Artifacts:"],
+  // A subtask session's own budget-handover protocol (the close-out block).
+  subtask: ["Status: continue", "Status: done", "{{handoffFile}}"],
   // The plan-step consistency verifier (plans/0080 §5): the driver parses the
   // reply's `Consistent:` line verbatim, and an override must still show the
   // charter and the prompt under review — a verdict without both is a check
@@ -216,9 +237,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // round-tripped as literals (filled at send time by the driver, the figures
   // do not exist at render time) — an override dropping them or the handoff
   // path would steer a notice with no content. The wind-down band carries the
-  // full status protocol like handoff-steer.
+  // full status protocol like handoff-steer, and its {{remaining}} figure is
+  // the notice's whole point (plans/0220 D2).
   "usage-note-info": ["{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
-  "usage-note-winddown": ["Status: continue", "Status: done", "{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
+  "usage-note-winddown": ["Status: continue", "Status: done", "{{used}}", "{{pct}}", "{{wall}}", "{{remaining}}", "{{handoffFile}}"],
   // The wrap-up = verification session (plans/0083): the two verdict forms of
   // the single result line, plus the FAIL channel's target — an override
   // dropping gaps.md converts every FAIL verdict into a hidden blockage (the
@@ -229,9 +251,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // either steers a resumption at nothing.
   "park-release": ["{{blocker}}", "{{handoffFile}}"],
 }
-// (decompose family: the checklist format plus the context.md / todo.md
-// artifact paths are what the driver validates the session output against —
-// M1.0 merged understand+decompose session, plans/0030.)
 
 // An override still carrying a pre-flip spelling (`状态: 继续`, …) fails here:
 // the dual-read layer was retired with the legacy layouts (M3.7, root open

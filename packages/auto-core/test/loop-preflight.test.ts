@@ -1072,3 +1072,77 @@ describe("preflight: the guarantees charter-key grammar (plans/0097 D1; ids cano
     expect(lines.some((line) => line.includes('declares both "### verify-plan-test" and "### verify-plan-t"'))).toBe(true)
   })
 })
+
+describe("preflight: the assert targets' vocabulary (plans/0220 D3)", () => {
+  // Same initialized project shape as the charter-key suite: an active intent
+  // pack whose `### asserts` section is the surface under judgment. The
+  // template vocabulary preflight threads is the loaded library's names plus
+  // the retired phase-plan assembly key (plans/0095 D4); the phase
+  // vocabulary is the phaseTag range — builtin preset letters plus the
+  // project's declared custom phase type ids.
+  async function assertRepo(asserts: string): Promise<string> {
+    const dir = await freshRepo()
+    dirs.push(dir)
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
+    await Bun.write(join(dir, ".opencode/auto/intents/charter.md"), `# charter\n\n## guarantees\n\n### asserts\n\n${asserts}\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  async function runAssert(dir: string) {
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, { intent: "charter" })
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      return { result, lines }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+  }
+
+  test("an assert naming an unknown template exits 1 with the vocabulary named (a typo'd target checks nothing)", async () => {
+    const dir = await assertRepo('whloe: must "boundary"')
+    const { result, lines } = await runAssert(dir)
+    expect(result).toEqual({ exit: 1 })
+    expect(lines.some((line) => line.includes('asserts on unknown template "whloe"'))).toBe(true)
+    // The remedy names the available values: the caller's ordering puts the
+    // assembly key first, the library's names after it.
+    expect(lines.some((line) => line.includes("the target is a prompt template name in effect (phase-plan,"))).toBe(true)
+    expect(lines.some((line) => line.includes("silently checks nothing"))).toBe(true)
+  })
+
+  test("an assert with an unknown phase qualifier exits 1 teaching the phaseTag spelling; a declared custom id passes", async () => {
+    const dir = await assertRepo('phase-plan(implemint): must "boundary"')
+    const { result, lines } = await runAssert(dir)
+    expect(result).toEqual({ exit: 1 })
+    expect(lines.some((line) => line.includes('unknown phase qualifier "implemint"'))).toBe(true)
+    expect(lines.some((line) => line.includes("a builtin preset letter (a|d|m|t|v|k)"))).toBe(true)
+    expect(lines.some((line) => line.includes("this project declares no custom phase types"))).toBe(true)
+    // A builtin's type id is the same inertness under a different spelling:
+    // renders carry the letter.
+    const typeId = await assertRepo('whole(analysis): must "boundary"')
+    const typeRun = await runAssert(typeId)
+    expect(typeRun.result).toEqual({ exit: 1 })
+    expect(typeRun.lines.some((line) => line.includes('unknown phase qualifier "analysis"'))).toBe(true)
+    // The letter spelling and the retired assembly key both pass; the run
+    // proceeds past the guarantees check.
+    const clean = await assertRepo('whole: must "boundary"\nphase-plan(m): must-not "code migration"')
+    const cleanRun = await runAssert(clean)
+    expect("exit" in cleanRun.result).toBe(false)
+  })
+})

@@ -271,9 +271,22 @@ describe("renderDecompose (per-phase templates decompose-<phase>)", () => {
       writeFileSync(join(overlay, "decompose-m.md"), "Custom decompose prompt that lost the checklist protocol")
       expect(() => usePromptLibrary(dir)).toThrow(/decompose-m\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/- \[ \]/)
-      writeFileSync(join(overlay, "decompose-m.md"), "Custom decompose prompt keeping the protocol: - [ ] items, artifacts context.md and each todo.md")
+      // 0220 D1 (0165-044): the old fixture ("artifacts context.md") blessed
+      // an overlay with no `Artifacts:` token and no scope-file headings as
+      // protocol-complete — the guard's own gap. The protocol-keeping fixture
+      // carries the real grammar, and its render (through decOf, the render
+      // exit) shows the grammar reaching the session.
+      writeFileSync(
+        join(overlay, "decompose-m.md"),
+        "Custom decompose prompt keeping the protocol: checklist items `- [ ]` each ending with `Artifacts: <path list>`, the context.md digest, each subtask's todo.md carrying ## Scope and ## Artifacts sections",
+      )
       usePromptLibrary(dir)
-      expect(decOf(plan, task)).toBe("Custom decompose prompt keeping the protocol: - [ ] items, artifacts context.md and each todo.md")
+      expect(decOf(plan, task)).toBe(
+        "Custom decompose prompt keeping the protocol: checklist items `- [ ]` each ending with `Artifacts: <path list>`, the context.md digest, each subtask's todo.md carrying ## Scope and ## Artifacts sections",
+      )
+      for (const anchor of ["- [ ]", "Artifacts:", "context.md", "todo.md", "## Scope", "## Artifacts"]) {
+        expect(decOf(plan, task)).toContain(anchor)
+      }
       // Phase templates not overridden still come from the built-ins
       expect(decOf(plan, task, { phase: key("a") })).toContain("Split by problem/open question/subsystem/risk surface")
     } finally {

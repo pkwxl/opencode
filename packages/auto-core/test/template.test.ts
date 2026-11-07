@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parsePartials, promptTemplateNames, registerPartial, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
+import { SUBTASK_TODO_SECTIONS } from "../src/document/spec"
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 
 // Restore built-ins only after each case, so overlay state never leaks into other test files.
@@ -268,9 +269,13 @@ describe("target-directory overrides (.opencode/auto/prompts/)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}")
+      // subtask carries the budget-handover protocol (0220 D2): a same-named
+      // override keeps it, only the voice changes.
+      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}; on a context wall hand over via {{handoffFile}} ending `Status: continue` or `Status: done`")
       usePromptLibrary(dir)
-      expect(renderTemplate("subtask", { subtask: "Task A" })).toBe("Custom subtask prompt: Task A")
+      expect(renderTemplate("subtask", { subtask: "Task A", handoffFile: "docs/T-001/handover.md" })).toBe(
+        "Custom subtask prompt: Task A; on a context wall hand over via docs/T-001/handover.md ending `Status: continue` or `Status: done`",
+      )
       // A non-overridden template still loads the built-in
       expect(renderTemplate("dryrun", {})).toContain("permission pre-check")
     } finally {
@@ -285,10 +290,10 @@ describe("target-directory overrides (.opencode/auto/prompts/)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}\n\n<!-- auto: eof -->\n")
+      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}; hand over via {{handoffFile}} ending `Status: continue` or `Status: done`\n\n<!-- auto: eof -->\n")
       writeFileSync(join(overlay, "dryrun.md"), "End with `<!-- auto: eof -->`")
       usePromptLibrary(dir)
-      expect(renderTemplate("subtask", { subtask: "A" })).toBe("Custom subtask prompt: A")
+      expect(renderTemplate("subtask", { subtask: "A", handoffFile: "h.md" })).toBe("Custom subtask prompt: A; hand over via h.md ending `Status: continue` or `Status: done`")
       // Only a line holding the terminator alone is dropped; inline mentions stay prompt text.
       expect(renderTemplate("dryrun", {})).toBe("End with `<!-- auto: eof -->`")
     } finally {
@@ -310,6 +315,12 @@ describe("target-directory overrides (.opencode/auto/prompts/)", () => {
       usePromptLibrary(undefined)
       writeFileSync(join(overlay, "handoff-steer.md"), "handover without any status line")
       expect(() => usePromptLibrary(dir)).toThrow(/handoff-steer\.md is missing required protocol content: Status: continue, Status: done/)
+      usePromptLibrary(undefined)
+      // 0220 D2: the statuses alone are not the protocol — {{handoffFile}} is
+      // the steer's one write target; keeping the strings while dropping the
+      // path teaches a handover with nowhere to land.
+      writeFileSync(join(overlay, "handoff-steer.md"), "handover: write the progress, last line `Status: continue` or `Status: done`")
+      expect(() => usePromptLibrary(dir)).toThrow(/handoff-steer\.md is missing required protocol content: \{\{handoffFile\}\}/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -337,6 +348,119 @@ describe("target-directory overrides (.opencode/auto/prompts/)", () => {
       expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
       expect(() => usePromptLibrary(dir)).toThrow(/todo\.md/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // 0220 D1 (0165-044): the decompose family's guard covers the whole grammar
+  // it protects — the `Artifacts:` declaration token (declaredArtifacts) and
+  // the scope file's SUBTASK_TODO_SECTIONS headings beside the checklist
+  // format and artifact paths. The pin is tied to the parser's own constants,
+  // so the three-way parser/template/marker correspondence cannot drift
+  // silently again.
+  test("all seven decompose variants guard the Artifacts protocol, pinned to SUBTASK_TODO_SECTIONS + the declaredArtifacts token (0220 D1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      // A protocol-free overlay of every variant names all six anchors — the
+      // full marker set, in table order.
+      for (const name of ["decompose", "decompose-a", "decompose-d", "decompose-k", "decompose-m", "decompose-t", "decompose-v"]) {
+        writeFileSync(join(overlay, `${name}.md`), "a custom decompose prompt that dropped the whole protocol")
+        expect(() => usePromptLibrary(dir)).toThrow(
+          new RegExp(`${name}\\.md is missing required protocol content: - \\[ \\], context\\.md, todo\\.md, Artifacts:, ## Scope, ## Artifacts`),
+        )
+        usePromptLibrary(undefined)
+        rmSync(join(overlay, `${name}.md`))
+      }
+      // The scope-heading family alone: the checklist format, paths and
+      // Artifacts: token kept, SUBTASK_TODO_SECTIONS dropped — the missing
+      // list is exactly the parser's two section headings.
+      writeFileSync(join(overlay, "decompose.md"), "custom decompose: checklist - [ ] items, context.md digest, each todo.md, items end with `Artifacts:` declarations")
+      expect(() => usePromptLibrary(dir)).toThrow(new RegExp(`missing required protocol content: ${SUBTASK_TODO_SECTIONS.map((s) => s.replace(/^#+ /, "#+ ")).join(", ")}`))
+      usePromptLibrary(undefined)
+      // The declaration token alone: everything else kept — the missing list
+      // is exactly the declaredArtifacts token (its loss is zero parsed
+      // declaration specs, 0035 D2's warned silent degradation).
+      writeFileSync(join(overlay, "decompose.md"), "custom decompose: checklist - [ ] items, context.md digest, each todo.md with ## Scope and ## Artifacts sections")
+      expect(() => usePromptLibrary(dir)).toThrow(/missing required protocol content: Artifacts:/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // 0220 D2 (0165-045): the execution family's handover and split protocols
+  // are tier-1 — whole's park/continue/done, the split grammar and paths;
+  // subtask/fix's budget-handover status pair and path; fanout's and
+  // handoff-steer's handover path (its status arm is the test above). Every
+  // rejection lists exactly what the overlay dropped; every acceptance
+  // renders the enabled branch, so the protocol appears in the composed
+  // prompt, not only in the raw source.
+  test("whole/subtask/fix/fanout overrides dropping the handover or split protocol are rejected; protocol-keeping overrides render it (0220 D2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "whole.md"), "custom whole prompt with no handover or split channels")
+      expect(() => usePromptLibrary(dir)).toThrow(
+        /whole\.md is missing required protocol content: Status: park, Status: continue, Status: done, \{\{handoffFile\}\}, \{\{subtasksFile\}\}, Depends:, Artifacts:/,
+      )
+      usePromptLibrary(undefined)
+      rmSync(join(overlay, "whole.md"))
+      // subtask keeps the status pair but drops the path
+      writeFileSync(join(overlay, "subtask.md"), "custom subtask prompt ending handovers with `Status: continue` or `Status: done`, no file named")
+      expect(() => usePromptLibrary(dir)).toThrow(/subtask\.md is missing required protocol content: \{\{handoffFile\}\}/)
+      usePromptLibrary(undefined)
+      rmSync(join(overlay, "subtask.md"))
+      // fix keeps its assignment pair but drops the fix round's handover protocol
+      writeFileSync(join(overlay, "fix.md"), "custom fix prompt: {{taskBlock}} against {{gapsFile}}, no handover grammar")
+      expect(() => usePromptLibrary(dir)).toThrow(/fix\.md is missing required protocol content: Status: continue, Status: done, \{\{handoffFile\}\}/)
+      usePromptLibrary(undefined)
+      rmSync(join(overlay, "fix.md"))
+      // fanout keeps the stream line and statuses but drops the path
+      writeFileSync(join(overlay, "fanout.md"), "custom stream prompt: {{subtask}}, hand over ending `Status: continue` or `Status: done`, no file named")
+      expect(() => usePromptLibrary(dir)).toThrow(/fanout\.md is missing required protocol content: \{\{handoffFile\}\}/)
+      usePromptLibrary(undefined)
+      rmSync(join(overlay, "fanout.md"))
+      // Accepted overlays keep the protocol and render it: whole with the
+      // budget/adaptive branches' strings on the record, fix and fanout with
+      // the handover branch's. All written before the one library load (the
+      // load is idempotent per directory).
+      writeFileSync(
+        join(overlay, "whole.md"),
+        [
+          "Custom whole voice.",
+          "Hand over via {{handoffFile}}, last line `Status: continue` or `Status: done`; park with `Status: park <blocker task id>`.",
+          "Split: write {{subtasksFile}}, one line per stream `- [ ] <title>: <assignment> Depends: none Artifacts: <paths>`.",
+        ].join("\n"),
+      )
+      writeFileSync(
+        join(overlay, "fix.md"),
+        "Custom fix voice: close {{gapsFile}} gaps on {{taskBlock}}; hand over via {{handoffFile}} ending `Status: continue` or `Status: done`.",
+      )
+      writeFileSync(
+        join(overlay, "fanout.md"),
+        "Custom stream voice: {{subtask}}; hand over via {{handoffFile}} ending `Status: continue` or `Status: done`.",
+      )
+      usePromptLibrary(dir)
+      const whole = renderTemplate("whole", { handoffFile: "docs/T-001/handover.md", subtasksFile: "docs/T-001/subtasks.md" })
+      for (const anchor of ["Status: park", "Status: continue", "Status: done", "docs/T-001/handover.md", "docs/T-001/subtasks.md", "Depends:", "Artifacts:"]) {
+        expect(whole).toContain(anchor)
+      }
+      const fix = renderTemplate("fix", { taskBlock: "# T-001", gapsFile: "docs/T-001/gaps.md", handoffFile: "docs/T-001/handover.md" })
+      for (const anchor of ["Status: continue", "Status: done", "docs/T-001/handover.md", "docs/T-001/gaps.md"]) {
+        expect(fix).toContain(anchor)
+      }
+      const fanout = renderTemplate("fanout", { subtask: "S01 do the work", handoffFile: "docs/T-001/S01/handover.md" })
+      for (const anchor of ["S01 do the work", "Status: continue", "Status: done", "docs/T-001/S01/handover.md"]) {
+        expect(fanout).toContain(anchor)
+      }
+      // The winddown note's remaining figure is the notice's whole point
+      // (the finding's family note): an overlay dropping it is rejected.
+      usePromptLibrary(undefined)
+      writeFileSync(join(overlay, "usage-note-winddown.md"), "[DRIVER] context: {{used}} tokens ({{pct}}% of {{wall}}); hand over via {{handoffFile}} ending `Status: continue` or `Status: done`.")
+      expect(() => usePromptLibrary(dir)).toThrow(/usage-note-winddown\.md is missing required protocol content: \{\{remaining\}\}/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
