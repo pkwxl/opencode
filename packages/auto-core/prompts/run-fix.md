@@ -11,8 +11,9 @@ so far — build on it, do not restart, and do not redo what the verification al
 and continue from where it says the work stands.
 
 Read first: `docs/<task id>/gaps.md` — the verification's gap list (a compact summary of what it verified as
-OK, then one entry per gap: the required action that is missing or wrong, where — files —, and what exactly to
-do) — and `docs/<task id>/todo.md`, the task document, for the goal and acceptance behind the gaps.
+OK, then one entry per gap as a `### Gap N — <one-line title>` heading under a `## Gaps` heading: the
+required action that is missing or wrong, where — files —, and what exactly to do) — and
+`docs/<task id>/todo.md`, the task document, for the goal and acceptance behind the gaps.
 
 ## Work
 

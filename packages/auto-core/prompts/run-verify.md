@@ -108,9 +108,11 @@ else — and overwrite that gap list with the current one.
 - Any check fails → your reply ends, on a line of its own, with `Verification: INCOMPLETE` (verbatim). Commit
   nothing and touch no state files. Write `docs/<task id>/gaps.md` (overwriting whatever is there): the gap
   list a fix session will act on — first a compact summary of what you verified as OK (so the fix session does
-  not redo it), then one entry per gap: what required action is missing or wrong, where (files), and what
-  exactly to do. That gap list carries no terminator — its last line of body text is simply its last entry, the
-  same file shape the driver's own verification loop uses. Every other Markdown document you create ends with
+  not redo it), then one entry per gap as a `### Gap N — <one-line title>` heading under a `## Gaps` heading
+  (N counting 1, 2, …; the entry under its heading names the missing or wrong required action, where —
+  files —, and what exactly to do) — ending with `Result: FAIL <one-sentence reason>` as that file's last
+  line of body text, no terminator in that file: the same file shape the driver's own verification loop
+  uses, the countable form its fix budget measures. Every other Markdown document you create ends with
   the terminator as above. Do not write report.md.
 
 End the session as soon as the verdict is delivered — on PASS, once the close-out above is done as well. Your

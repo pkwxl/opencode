@@ -253,8 +253,11 @@ iteration.
    ordinal: `<task id> exec <short title> [<k>]`, `<k>` one past the count of this task's landed exec shares
    (you count your own landings; a restarted master control derives it from the log the same way). The
    fix-round subject carries the round and the session instead (`<task id> fix <round>.<session>`, the
-   session the round's landed fix shares count — a restarted master control derives it from the log the
-   same way). A share landed without a handover document carries no ordinal. The title is the task's
+   session one past the highest `<task id> fix <round>.<n>` subject already in the log for that round —
+   across every repository the target holds, a round's commits landing in any of them, 1 when none
+   exists; the numbering keys on the log's highest, never on a count of landings, so sparse indices stay
+   sparse — a restarted master control derives it from the log the same way). A share landed without a
+   handover document carries no ordinal. The title is the task's
    short form — its leading words, the task id identifies the unit — truncated so the subject, ordinal
    included, stays within 100 characters; the trailers are written
    verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
@@ -309,14 +312,22 @@ iteration.
    - `INCOMPLETE` → the gap list is `docs/T-NNN/gaps.md` (the verification wrote it). First confirm no
      close-out happened and the state files are untouched (`todo.md` present, no `done.md`, the index line
      unticked, no wrapup or done commits atop the shares — a verification that committed or wrote them on
-     INCOMPLETE is a hard failure, stop and report). The fix budget is progress, not a count: count the
-     gap entries each verification's list carries — a round that shrank the count buys the loop another
-     round; once two consecutive fix rounds closed no gap (the count stopped shrinking), stop and report:
-     the work stays landed as the unit's share commits and reverting it is the person's call.
+     INCOMPLETE is a hard failure, stop and report). Then shape-check the verdict's own write: the list
+     non-empty, carrying at least one `### Gap N —` heading under `## Gaps`, its last line
+     `Result: FAIL …` — a malformed verdict write gets one feedback relaunch of the verification child
+     naming the deficiency, then stop and report. The fix budget is progress, not a count: count the
+     list's `### Gap N` headings alone — the countable form the fix budget measures. The loop's best
+     count is the minimum its FAILs have measured; the first FAIL only seeds it. A round made progress
+     only when a later FAIL's count is strictly lower than the best — same count, grown count or a
+     re-fall to a count the loop already saw is no progress. Once two consecutive fix rounds made no
+     progress, stop and report: the work stays landed as the unit's share commits and reverting it is
+     the person's call. (A loop that keeps making progress keeps going: from N seed gaps it runs at
+     most 2N+2 fix rounds before it passes or blocks.)
      Otherwise launch the fix child session (`run-fix.md` with `<task id>` and `<session budget>` filled —
      the session reads the gap list itself), then land its share exactly as step 3 does, with the fix-round
-     subject `<task id> fix <round>.<session> <short title>` (`<round>` the fix round, `<session>` the
-     round's landed fix shares count) and the same
+     subject `<task id> fix <round>.<session> <short title>` (`<round>` the fix round, `<session>` one
+     past the highest `<task id> fix <round>.<n>` subject already in the log for that round, across every
+     repository the target holds — 1 when none exists) and the same
      trailers, check its handover exactly as step 4 does (`Status: continue` → relaunch the fix child; no
      handover document or `Status: done` → the round's fix sessions are finished; the same progress rule
      as step 4's governs the round's fix sessions — a progressing handoff continues, a second consecutive
@@ -461,8 +472,9 @@ The loop under `single`, the deltas:
   then take run-verify's checks over the committed range yourself — the range grammar, the state files,
   the diff against the acceptance, the terminator — and on pass perform its close-out exactly as written
   (the wrap-up report, the done rename, the index tick, the commits). On a failed check write the gap
-  list and run the fix rounds yourself under run-fix.md — while the gap count shrinks, stopping after two
-  consecutive rounds that close no gap — re-verifying after each. The
+  list in run-verify's countable form and run the fix rounds yourself under run-fix.md — while the
+  loop's best count is strictly lowered, stopping after two consecutive no-progress rounds —
+  re-verifying after each. The
   verdict line's child-to-master channel is empty here — record the verdicts in the Finish report
   instead, and name the loss honestly there: the verifications ran in the session that did the work, no
   fresh pair of eyes among them; the person's review is the independent check this mode does not have,

@@ -156,11 +156,11 @@ describe("manual-driver prompt ratchet", () => {
       expect(text(name), name).toContain("`Verification: PASS`")
       expect(text(name), name).toContain("`Verification: INCOMPLETE`")
     }
-    // The result line carries wrapup.md's protocol wording. run-verify's
-    // report is written only after every hard check passed, so it states
-    // the PASS form alone; the companions' verification writes the FAIL
-    // form too — as the gap list's own closing line (plans/0200 D1), never
-    // a report's (a FAIL writes no report).
+    // The result line carries wrapup.md's protocol wording. Every
+    // verification write states the PASS form in its report and the FAIL
+    // form as the gap list's own closing line — plans/0200 D1 carried it to
+    // the subtask companions (the loop below), plans/0201 D2 to run-verify
+    // (the 0201 D2 arm) — never a report's (a FAIL writes no report).
     expect(text("run-verify.md"), "run-verify.md").toContain("`Result: PASS`")
     for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
       expect(text(name), name).toContain("`Result: PASS`")
@@ -265,6 +265,69 @@ describe("manual-driver prompt ratchet", () => {
     expect(resume).toContain("the no-progress streak one")
     // The retired unconditional verdict path must not return.
     expect(resume).not.toContain("follow Stage 3's verdict rules directly")
+  })
+
+  // plans/0201 D1 (0165-049 / S25-03): the manual fix subject's <session>
+  // derives from the log — one past the highest `<task id> fix <round>.<n>`
+  // subject already in the log for that round, across every repository the
+  // target holds, 1 when none exists — the driver's nextFixSession
+  // derivation, never a landed count (the count numbered a fresh round's
+  // first session 0, repeated the share after `fix 1.1` as 1 again, and
+  // renumbered the sparse indices a context-wall handover legitimately
+  // leaves). Sparse indices stay sparse: the numbering keys on the log's
+  // highest, never on a count of landings.
+  test("the manual fix subject's ordinal derives from the log, never a landed count (plans/0201 D1)", () => {
+    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
+    // Both derivation sites teach the max+1 log derivation: loop step 3's
+    // share-ordinal paragraph and step 6's INCOMPLETE landing sentence.
+    const hits = run.match(/one past the highest `<task id> fix <round>\.<n>` subject already in the log/g) ?? []
+    expect(hits.length, "run.md carries the log derivation in both fix-subject sites").toBe(2)
+    expect(run).toContain("across every repository the target holds")
+    expect(run).toContain("1 when none exists")
+    expect(run).toContain("sparse indices stay sparse")
+    // The retired count-based derivation must not return: it is the defect.
+    expect(run).not.toContain("the round's landed fix shares count")
+  })
+
+  // plans/0201 D2 (0165-050 / S25-04): the whole-task gap channel carries the
+  // driver's countable grammar — the verification child writes `## Gaps` with
+  // one `### Gap N — <one-line title>` heading per gap and the closing
+  // `Result: FAIL` line, the fix child reads the same form, and the master
+  // shape-checks the verdict's write, counts the headings alone and applies
+  // the best-count progress rule in 0198 D1's terms (run.md's pre-0198
+  // progress sentences were the last stale copies — 0200's residual,
+  // discharged here).
+  test("the whole-task gap channel is the driver's countable grammar, counted mechanically (plans/0201 D2)", () => {
+    const verify = text("run-verify.md").replaceAll("\n", " ").replace(/  +/g, " ")
+    // The write grammar: the countable headings, the closing verdict line,
+    // no terminator in that file.
+    expect(verify).toContain("`### Gap N — <one-line title>` heading under a `## Gaps` heading")
+    expect(verify).toContain("`Result: FAIL <one-sentence reason>`")
+    expect(verify).toContain("no terminator in that file")
+    // The retired freeform shape must not return: it is the defect (the same
+    // list was two entries to a prose reader and zero to the count).
+    expect(verify).not.toContain("its last line of body text is simply its last entry")
+    // The fix child reads the same form (the driver's fix template's own
+    // description of the list).
+    expect(text("run-fix.md").replaceAll("\n", " ").replace(/  +/g, " ")).toContain(
+      "`### Gap N — <one-line title>` heading under a `## Gaps` heading: the",
+    )
+    // The master: the shape gate (one feedback relaunch, then stop), the
+    // mechanical count over the headings alone, the best-count progress rule
+    // in 0198 D1's terms — loop step 6 and the single-mode copy alike.
+    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
+    expect(run).toContain("at least one `### Gap N —` heading under `## Gaps`")
+    expect(run).toContain("one feedback relaunch of the verification child")
+    expect(run).toContain("`### Gap N` headings alone")
+    expect(run).toContain("strictly lower than the best")
+    expect(run).toContain("the minimum its FAILs have measured")
+    expect(run).toContain("two consecutive fix rounds made no progress")
+    expect(run).toContain("2N+2 fix rounds")
+    expect(run).toContain("while the loop's best count is strictly lowered")
+    // The retired pre-0198 readings must not return.
+    expect(run).not.toContain("a round that shrank the count buys the loop another round")
+    expect(run).not.toContain("the count stopped shrinking")
+    expect(run).not.toContain("while the gap count shrinks")
   })
 
   test("the trailer grammar and the stage vocabulary", () => {
