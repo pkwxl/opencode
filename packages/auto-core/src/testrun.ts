@@ -337,17 +337,36 @@ function testChannelOffFor(opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">
   return !(opts.testByDriver && codeWork(opts.phase?.entry))
 }
 
-// Consume a test-request marker no machinery will serve. Returns the reason
-// the channel is off (for the caller's own surfaces — the fix round blocks on
-// it, 0142 D2), undefined when there is nothing to drop.
-export async function consumeDeadTestMarker(dir: string, opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">, label: string): Promise<string | undefined> {
+// The unservable marker's consume and its one wording (plans/0142 D1; the
+// split for the adopt step, plans/0206 D1): the run flows log the line and
+// keep the reason (consumeDeadTestMarker below); the adopt step carries the
+// line in its own outcome lines — the command's result output, not the run's
+// log stream, is its canonical surface. One wording, two presentations, no
+// double print. Returns undefined when there is nothing to drop.
+export async function dropDeadTestMarker(
+  dir: string,
+  opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">,
+  label: string,
+): Promise<{ why: string; line: string } | undefined> {
   if (!testChannelOffFor(opts)) return undefined
   const marker = join(scriptTmpDir(dir), "test.sh")
   if (!(await Bun.file(marker).exists())) return undefined
   await rm(marker, { force: true })
   const why = opts.testByDriver ? `the phase (${opts.phase?.entry.type ?? "implement"}) is not a code-work phase` : "--test-by-driver is off"
-  log(`⚠ ${label} left tmp/test.sh — a driver-test request — but ${why}, so the channel will never serve it; the request was not executed and the marker was consumed (a leftover would read as wiring for later sessions)`)
-  return why
+  return {
+    why,
+    line: `⚠ ${label} left tmp/test.sh — a driver-test request — but ${why}, so the channel will never serve it; the request was not executed and the marker was consumed (a leftover would read as wiring for later sessions)`,
+  }
+}
+
+// Consume a test-request marker no machinery will serve. Returns the reason
+// the channel is off (for the caller's own surfaces — the fix round blocks on
+// it, 0142 D2), undefined when there is nothing to drop.
+export async function consumeDeadTestMarker(dir: string, opts: Pick<Opts, "testByDriver" | "dryrun" | "phase">, label: string): Promise<string | undefined> {
+  const dropped = await dropDeadTestMarker(dir, opts, label)
+  if (dropped === undefined) return undefined
+  log(dropped.line)
+  return dropped.why
 }
 
 // --test-by-driver's single test execution = consume the request marker +

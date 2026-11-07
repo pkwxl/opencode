@@ -245,7 +245,8 @@ only the legacy `.auto/config.json`), the `run` / `amend` / `init` message appen
 
 **init validates everything, then writes** (auto-core plans/0052 D7): option values, modes, the prefix
 guardrail (read-only: no completed phase is lost, no phase directory containing existing work is deleted;
-re-syncing the phase index belongs to `plan`), the target directory's prompt-library overrides
+re-syncing the phase index belongs to the round lifecycle — `transfer`'s committed re-derivation, with
+`plan` keeping m mode's re-sync shape), the target directory's prompt-library overrides
 (`.opencode/auto/prompts/`) and the intent packs are all validated before the first write — any failure is
 exit code 1 with the config layer untouched (no config.json, no contract or AGENTS.md block refresh, no
 brief.md). The **commit-capability prerequisite** follows the same discipline:
@@ -744,8 +745,9 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   reshapes by moving or adding its `- R-NN <phases> — <goal>` line in `docs/analysis.md` (an uncovered
   round becomes covered the moment its line exists; `amend --phases` is retired, the config key
   init-stamped machinery). Where the line's phases diverge from the key, `status` and `fix` record it
-  as an informational note — nothing to repair; an agreeing line prints nothing. Started or completed
-  phases are immutable; mid-phase the advance refuses without re-deriving, naming the boundary. The
+     as an informational note — nothing to repair; an agreeing line prints nothing. Started or completed
+     phases are immutable; mid-phase the advance applies the moved line ahead of its nothing-to-advance
+     refusal (the drift cleared, the refusal names `run`, and that run starts). The
   survey gate's release is the designed first use: where the inventory contradicts the round's cold
   tail, reshape with the findings in hand and let the next boundary apply it.
 - **Refusals and options**: `m` mode refuses outright (exit 1 — its `plan`/`run` shapes stand, no
@@ -822,15 +824,16 @@ opencode-auto run <dir>             # review (edit/strike tasks directly if need
    - **Open the next round** (m mode): when the previous round is fully complete, first run the
      round-close check (G8): failing → print the problem list (one `✗` line each), exit code `2`;
      passing → print warnings, establish the new round and stop at the round-start gate, exit code `0`.
-   - **Phase index drift re-sync**: when the ruling phases value changed after the round was
-     established and the current round is not complete, the not-yet-started tail of phase directories
-     is re-synced. Mid-phase (the drifted round's phase holding work) this is `plan`'s uncommitted
-     shape — changes stay in the worktree, it stops for review and commit, exit code `0` (with a
-     planning input it refuses first — re-sync without input, commit, then come back with input);
-     `run` never re-syncs: on drift it stops with exit code `1` and points at `plan`. At a boundary
-     the reshape is `transfer`'s instead: the re-derivation commits on the driver's own `phase-sync`
-     commit ahead of the construction (see [the advance command](#the-advance-command-transfer)) —
-     a mid-phase advance refuses without re-deriving, naming the boundary (`amend --phases` itself is retired, plans/0137 — the roadmap line the one reshape channel).
+   - **Phase index drift**: when the ruling phases value changed after the round was established
+     and the current round is not complete, the not-yet-started tail of phase directories differs
+     from it. `plan` never writes the reshape (phased): it refuses with exit code `1` naming
+     `transfer` as the apply — the planning-input, `--new-task` and work-order channels hear the
+     same refusal with their own resumption named. `run` never re-syncs either: on drift it stops
+     with exit code `1` and points at `transfer`. The reshape's one apply is the advance's
+     committed re-derivation — on the driver's own `phase-sync` commit ahead of the construction
+     at a boundary, and in the mid-phase arm ahead of its nothing-to-advance refusal, so a
+     mid-phase `run` restart keeps its exit (see [the advance command](#the-advance-command-transfer);
+     `amend --phases` itself is retired, plans/0137 — the roadmap line the one reshape channel).
    - **Notice-and-exit**: a blocked route → exit code `1`; the phase already planned (`run` takes over;
      exit code `0` when there is no input, keeping `plan && run` chainable) or an empty task index in `m`
      mode (hinting to list tasks by hand or use `-p`/`--file`) → print the notice and exit. In a phased
@@ -939,7 +942,10 @@ attended shape — a decision that is yours to make is taken as a recorded provi
 listed in the round report's needs-attention section for your considered answer, and you are at the
 keyboard to review them as you go. `plan [dir] --adopt <T-NNN>` is the driver-side closer for
 the externally-driven unit: it re-checks readiness, runs the standard close-out validation and the
-test-handover protocol, performs the ticks and the `todo.md` → `done.md` rename, and lands the unified
+test-handover protocol — under the same channel condition the exported order taught
+(`--test-by-driver` on and a code-work phase; a marker your session left where the channel is
+off is consumed and surfaced with a `⚠` line in the adopt's own output, never executed), performs
+the ticks and the `todo.md` → `done.md` rename, and lands the unified
 commit — a hand-commit inside a unit's range would break the SHA-baseline audit, so adopt is the
 required closer. The two flags are mutually exclusive, and each refuses `-p`/`--file`, `--append`,
 `--new-task` and `--force-close` (a work order neither plans nor closes; every other command refuses
@@ -2042,8 +2048,9 @@ an unknown type key is a usage error at run start.
   the flow state derivable; once the current round is complete the guardrail lifts and the new value
   applies to the next round `transfer` establishes (`plan` in `m` mode).
   A compatible new value no longer rewrites the index on the spot: the difference between index and new
-  value is left as **drift** for `plan` to re-sync (rewriting
-  the not-yet-started tail of phase directories; `run` exits 1 on drift and points at `plan`). An
+  value is left as **drift** for `transfer` to re-derive on its own commit (rewriting
+  the not-yet-started tail of phase directories; `plan` refuses on drift naming `transfer`, and `run`
+  exits 1 on drift pointing there too — m mode never drifts, its single phase). An
   unparseable index line, an
   unknown or duplicated type, or a phase directory with both or neither of `todo.md`/`done.md` is likewise
   an environment error

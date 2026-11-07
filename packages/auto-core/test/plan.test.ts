@@ -214,44 +214,44 @@ describe("phaseTailDrift (D34)", () => {
   )
 })
 
-describe("planPrelude: row 3, the phase-index drift (D34)", () => {
+describe("planPrelude: row 3, the phase-index drift (D34; phased re-ruled by 0206 D2)", () => {
   test(
-    "re-syncs the unstarted tail, leaves the change uncommitted and stops for review (exit 0)",
+    "phased refuses before any write naming transfer as the reshape's apply (exit 1); the drift exists in both directions, nothing written either way",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "amt" })
       await completePhase(dir, (await phasesOf(dir))[0]!)
       await commitAll(dir)
-      const result = await planPrelude(dir, { phases: "amv" })
-      expect(result).toEqual({
+      const before = await read(dir, "docs/R-01/phases.md")
+      // The replace shape (P03-test → P03-acceptance under "amv") and, in
+      // the same fixture, the shrink shape ("am" drops the tail phase): both
+      // refuse, nothing written — plan no longer owns the reshape's apply
+      // (the advance's committed re-derivation is the one writer, 0101 D6;
+      // the uncommitted sync left phases.md dirty for the advance's own
+      // preflight and taught a re-run that refused naming transfer).
+      const replaced = await planPrelude(dir, { phases: "amv" })
+      expect(replaced).toEqual({
         type: "stop",
-        code: 0,
+        code: 1,
         lines: [
-          `✓ phase index of round R-01 re-synced to config phases (P03-test → P03-acceptance); ` +
-            `review docs/R-01/phases.md, commit, then re-run: opencode-auto plan ${dir}`,
+          `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit — run: opencode-auto transfer ${dir}`,
         ],
       })
-      expect(await read(dir, "docs/R-01/phases.md")).toContain("- [x] P01 analysis\n- [ ] P02 implement\n- [ ] P03 acceptance\n")
-      expect(await exists(dir, "docs/R-01/P03-test")).toBe(false)
-      // Uncommitted like any round setup: the re-sync is what git reports.
-      expect(await git(dir, "status", "--porcelain")).toContain("docs/R-01/phases.md")
-    }),
-  )
-
-  test(
-    "the extend and shrink tails render their pairs; the done prefix keeps its ticks",
-    withDir(async (dir) => {
-      await establishRound(dir, { phases: "am" })
-      const extended = await planPrelude(dir, { phases: "amk" })
-      expect(extended.type === "stop" && extended.lines[0]).toContain("re-synced to config phases (+ P03-knowledge)")
-      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-knowledge"])
+      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
+      expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       const shrunk = await planPrelude(dir, { phases: "am" })
-      expect(shrunk.type === "stop" && shrunk.lines[0]).toContain("re-synced to config phases (P03-knowledge dropped)")
-      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement"])
+      expect(shrunk.type === "stop" && shrunk.code).toBe(1)
+      expect(shrunk.type === "stop" && shrunk.lines[0]).toBe(
+        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit — run: opencode-auto transfer ${dir}`,
+      )
+      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
+      // An unstarted phase holds no directory yet (it is created when the
+      // phase starts) — the byte-identical index is the no-write proof.
     }),
   )
 
   test(
-    "input is refused before any write (D5)",
+    "input is refused before any write (D5) — the refusal names transfer and the input's resumption",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "amt" })
       const before = await read(dir, "docs/R-01/phases.md")
@@ -260,12 +260,30 @@ describe("planPrelude: row 3, the phase-index drift (D34)", () => {
         type: "stop",
         code: 1,
         lines: [
-          `the phase index of round R-01 differs from config phases: ` +
-            `run opencode-auto plan ${dir} without input to re-sync it, commit the change, then pass the input.`,
+          `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit ` +
+            `(run: opencode-auto transfer ${dir}), then pass the input.`,
         ],
       })
       expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
       expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
+    }),
+  )
+
+  test(
+    "the --export / --adopt channel teaches the same apply with its own resumption",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      const before = await read(dir, "docs/R-01/phases.md")
+      const result = await planPrelude(dir, { phases: "amv", export: "T-001" })
+      expect(result).toEqual({
+        type: "stop",
+        code: 1,
+        lines: [
+          `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit ` +
+            `(run: opencode-auto transfer ${dir}), then take the work order again.`,
+        ],
+      })
+      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
     }),
   )
 
@@ -319,13 +337,17 @@ describe("planPrelude: row 3, the phase-index drift (D34)", () => {
         `nothing is constructed for R-01.P01 analysis yet — transfer constructs its plan task and stops for your review; run: opencode-auto transfer ${dir}`,
       )
       expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
-      // The person edits the line — the documents-decide channel: the tail
-      // re-syncs, the stop naming the roadmap as the authority moved.
+      // The person edits the line — the documents-decide channel: the drift
+      // now refuses naming transfer, the roadmap named as the authority
+      // moved (0206 D2: the advance's committed re-derivation applies it,
+      // never plan's uncommitted sync).
       writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests", "- R-01 am — port the core"))
       const moved = await planPrelude(dir, { phases: "am" })
-      expect(moved.type === "stop" && moved.code).toBe(0)
-      expect(moved.type === "stop" && moved.lines[0]).toContain("re-synced to the roadmap of docs/analysis.md (P03-test dropped)")
-      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement"])
+      expect(moved.type === "stop" && moved.code).toBe(1)
+      expect(moved.type === "stop" && moved.lines[0]).toBe(
+        `the phase index of round R-01 differs from the roadmap of docs/analysis.md: transfer re-derives the unstarted tail on its own commit — run: opencode-auto transfer ${dir}`,
+      )
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
     }),
   )
 })
@@ -694,13 +716,16 @@ describe("planPrelude: --new-task (row 11, plans/0058)", () => {
       code: 1,
       lines: [`round R-01 is not established yet: run opencode-auto plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`],
     })
-    // Row 3: a drift is re-synced first; the task waits.
+    // Row 3: a drift refuses naming transfer first (0206 D2); the task waits.
     await establishRound(dir, { phases: "amt" })
     const before = await read(dir, "docs/R-01/phases.md")
     expect(await planPrelude(dir, { phases: "amv", newTask: TITLE })).toEqual({
       type: "stop",
       code: 1,
-      lines: [`the phase index of round R-01 differs from config phases: run opencode-auto plan ${dir} without --new-task to re-sync it, commit the change, then add the task again.`],
+      lines: [
+        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit ` +
+          `(run: opencode-auto transfer ${dir}), then add the task again.`,
+      ],
     })
     expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
   }))
@@ -847,7 +872,7 @@ describe("run's drift stop (D34)", () => {
   // agent contract and a committed round — the stop the drift check makes
   // precedes the agent pool's start, so no agent has to exist.
   test(
-    "runAll exits 1 naming plan and writes nothing; a value the sync refuses stops with the guard's error",
+    "runAll exits 1 naming transfer and writes nothing; a value the sync refuses stops with the guard's error",
     withDir(async (dir) => {
       const { runAll } = await import("../src/loop")
       await establishRound(dir, { phases: "amt" })
@@ -860,7 +885,7 @@ describe("run's drift stop (D34)", () => {
       expect(stopped.code).toBe(1)
       expect(stopped.lines).toContain(
         `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from config phases ` +
-          `(P01-analysis, P02-implement, P03-acceptance): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+          `(P01-analysis, P02-implement, P03-acceptance): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
       )
       expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
       expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
@@ -896,7 +921,7 @@ describe("run's drift stop (D34)", () => {
       expect(stopped.code).toBe(1)
       expect(stopped.lines).toContain(
         `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from the roadmap of docs/analysis.md ` +
-          `(P01-analysis, P02-implement): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+          `(P01-analysis, P02-implement): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
       )
       expect(stopped.lines.some((line) => line.includes("differs from config phases"))).toBe(false)
     }),

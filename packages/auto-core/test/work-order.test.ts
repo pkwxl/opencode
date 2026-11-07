@@ -177,7 +177,10 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       mkdirSync(join(dir, "tmp"), { recursive: true })
       await Bun.write(join(dir, "tmp", "test.sh"), "test/check.sh\n")
       const headBefore = (await git(dir, "rev-parse", "HEAD")).trim()
-      const result = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      // testByDriver on over the m-mode implement phase: the channel's
+      // derived condition serves, the handover executes (the P10 floor of
+      // plans/0206 D1 — byte-identical under a serving channel).
+      const result = await planPrelude(dir, { phases: "m", adopt: "T-002", testByDriver: true })
       expect(result.type).toBe("stop")
       if (result.type !== "stop") return
       expect(result.code).toBe(0)
@@ -313,7 +316,7 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       await Bun.write(join(dir, "test", "check.sh"), "exit 3\n")
       mkdirSync(join(dir, "tmp"), { recursive: true })
       await Bun.write(join(dir, "tmp", "test.sh"), "test/check.sh\n")
-      const result = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      const result = await planPrelude(dir, { phases: "m", adopt: "T-002", testByDriver: true })
       expect(result.type).toBe("stop")
       if (result.type !== "stop") return
       expect(result.code).toBe(1)
@@ -323,6 +326,85 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       expect(result.lines.some((line) => line.includes("dest/src/notes.md: missing last-line terminator"))).toBe(true)
       expect(await Bun.file(join(dir, "tmp", "test.sh")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs", "T-002", "todo.md")).exists()).toBe(true)
+    }),
+  )
+
+  test(
+    "the channel gate: with the driver test channel off, the session's marker is consumed and surfaced, never executed (plans/0206 D1)",
+    withDir(async (dir) => {
+      await fixture(dir, [
+        { id: "T-001", done: true },
+        { id: "T-002" },
+      ])
+      // The standalone session's work and its test request — the request
+      // written against the work order's own teaching (the channel is off,
+      // the preamble carries no TEST_PRINCIPLE), the 0165-094 shape: the
+      // adopt served what the export declared unservable.
+      mkdirSync(join(dir, "src"), { recursive: true })
+      writeFileSync(join(dir, "src", "feature.ts"), "export const feature = 1\n")
+      await Bun.write(join(dir, "docs", "T-002", "report.md"), SESSION_REPORT)
+      mkdirSync(join(dir, "test"), { recursive: true })
+      await Bun.write(join(dir, "test", "check.sh"), "echo should-not-run\n")
+      mkdirSync(join(dir, "tmp"), { recursive: true })
+      await Bun.write(join(dir, "tmp", "test.sh"), "test/check.sh\n")
+      const result = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      expect(result.type).toBe("stop")
+      if (result.type !== "stop") return
+      expect(result.code).toBe(0)
+      // Consumed, never executed: the marker gone, no archived run, no
+      // output — and the ⚠ rides the adopt's own outcome lines (the
+      // command's result output, not a log line), ahead of the adopted line.
+      expect(await Bun.file(join(dir, "tmp", "test.sh")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "tmp", "test.1.out")).exists()).toBe(false)
+      expect(result.lines[0]).toBe(
+        "⚠ T-002 left tmp/test.sh — a driver-test request — but --test-by-driver is off, so the channel will never serve it; " +
+          "the request was not executed and the marker was consumed (a leftover would read as wiring for later sessions)",
+      )
+      expect(result.lines.some((line) => line.startsWith("✓ T-002 adopted"))).toBe(true)
+    }),
+  )
+
+  test(
+    "the channel gate: the phase's type gates it too — testByDriver on over a non-code phase consumes the marker, the ⚠ riding a blocked adopt",
+    withDir(async (dir) => {
+      // A phased round whose current phase is analysis (not code work): the
+      // export renders TEST_PRINCIPLE under testByDriver, but the channel's
+      // derived condition (0083 D9: the flag AND the phase's code work) is
+      // off for the phase — the adopt serves the same condition the session
+      // was taught.
+      await establishRound(dir, { phases: "amt" })
+      const phase = (await readPhases(dir))!.phases[0]!
+      await Bun.write(join(dir, phase.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "task T-001" }]))
+      mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+      await Bun.write(join(dir, "docs", "T-001", "todo.md"), taskDoc("T-001"))
+      await commitAll(dir)
+      // The session's work (a FAIL report blocks the validation — the ⚠
+      // must ride the blocked arm's lines the same way) and its request.
+      mkdirSync(join(dir, "src"), { recursive: true })
+      writeFileSync(join(dir, "src", "feature.ts"), "export const feature = 1\n")
+      await Bun.write(
+        join(dir, "docs", "T-001", "report.md"),
+        ["# T-001 report", "", "The verification failed and the gap is not closed.", "", "Result: FAIL the checks do not pass", "", "<!-- auto: eof -->", ""].join("\n"),
+      )
+      mkdirSync(join(dir, "test"), { recursive: true })
+      await Bun.write(join(dir, "test", "check.sh"), "echo should-not-run\n")
+      mkdirSync(join(dir, "tmp"), { recursive: true })
+      await Bun.write(join(dir, "tmp", "test.sh"), "test/check.sh\n")
+      const result = await planPrelude(dir, { phases: "amt", adopt: "T-001", testByDriver: true })
+      expect(result.type).toBe("stop")
+      if (result.type !== "stop") return
+      expect(result.code).toBe(1)
+      // Never executed (no archived run), the marker consumed, the ⚠ first
+      // in the blocked lines with the phase named as the reason.
+      expect(await Bun.file(join(dir, "tmp", "test.sh")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "tmp", "test.1.out")).exists()).toBe(false)
+      expect(result.lines[0]).toBe(
+        "⚠ T-001 left tmp/test.sh — a driver-test request — but the phase (analysis) is not a code-work phase, so the channel will never serve it; " +
+          "the request was not executed and the marker was consumed (a leftover would read as wiring for later sessions)",
+      )
+      expect(result.lines[1]).toContain("T-001 adopt blocked")
+      expect(result.lines[1]).toContain("the task report concluded Result: FAIL")
+      expect(await Bun.file(join(dir, "docs", "T-001", "todo.md")).exists()).toBe(true)
     }),
   )
 

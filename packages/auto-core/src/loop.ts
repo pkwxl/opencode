@@ -187,12 +187,14 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
         emitStatus({ type: "failure", message: phaseFlowBlockedText(route.reason) })
         return 1
       }
-      // A phase-index drift (plans/0053 D34): the phases value in force (the
-      // roadmap line, else config `phases`) changed after the round was
-      // established, so the index's unstarted tail no longer matches it. run
-      // does not re-sync (Q4): the sync is a lifecycle step, and lifecycle
-      // belongs to plan — a silent re-sync here would start work on a phase
-      // list nobody reviewed. A value the sync would refuse (dropping a
+      // A phase-index drift (plans/0053 D34; the apply's home re-ruled by
+      // plans/0101 D6 / 0206): the phases value in force (the roadmap line,
+      // else config `phases`) changed after the round was established, so
+      // the index's unstarted tail no longer matches it. run does not
+      // re-sync (Q4): the sync is a lifecycle step, and the phased
+      // lifecycle's apply is the advance's committed re-derivation — a
+      // silent re-sync here would start work on a phase list nobody
+      // reviewed. A value the re-derivation would refuse (dropping a
       // completed phase, a directory that holds work) stops the same way,
       // with plannedPhaseUnits's own error.
       const { bin } = shellProfile()
@@ -203,7 +205,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
           log(
             `⏸ the phase index of round ${roundDirName(drift.round)} (${sides(drift.index)}) differs from ` +
               `${authority.roadmap ? `the roadmap of ${ANALYSIS_DOC}` : "config phases"} (${sides(drift.planned)}): ` +
-              `run ${bin} plan ${directory} to re-sync its unstarted phases`,
+              `run ${bin} transfer ${directory} to re-derive its unstarted phases`,
           )
           return 1
         }

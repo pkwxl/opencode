@@ -1843,8 +1843,8 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(badAmend.err).toContain("by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
       // A compatible value passes: the completed phase survives; init/amend no
       // longer rewrite the tail phases — the new value's difference from the
-      // index surfaces as a drift for plan's re-sync route to handle (its
-      // behavior is D34's)
+      // index surfaces as a drift for the advance to re-derive on its own
+      // commit (plans/0206; plan refuses naming transfer, m mode aside)
       await commitFixture(dir)
       const ok = await runCli(["init", dir, "--phases", "admt"])
       expect(ok.code).toBe(0)
@@ -4422,14 +4422,16 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
   })
 })
 
-// The phase-index drift at CLI level (auto-core plans/0053 D34): a hand-edited
-// docs/R-NN/phases.md whose unstarted tail disagrees with config `phases`. run
-// never re-syncs (lifecycle is plan's — a silent re-sync would start work on a
-// phase list nobody reviewed) and exits 1 naming plan; plan re-syncs the tail,
-// leaves the change uncommitted like any round setup and stops for review.
-// Both stops precede any agent, so no fixture agent is needed.
-describe("CLI: the phase-index drift (auto-core plans/0053 D34)", () => {
-  test("run exits 1 naming plan on a hand-edited index and writes nothing; plan re-syncs it with its exit-0 line", async () => {
+// The phase-index drift at CLI level (auto-core plans/0053 D34; the apply
+// re-homed by plans/0206): a hand-edited docs/R-NN/phases.md whose unstarted
+// tail disagrees with config `phases`. run never re-syncs (Q4 — a silent
+// re-sync would start work on a phase list nobody reviewed) and exits 1
+// naming transfer; plan never writes the reshape (phased): it refuses exit 1
+// naming transfer as the apply — the committed re-derivation is the advance's
+// alone (pinned with its mid-phase arm in auto-core's transfer suite). Both
+// stops precede any agent, so no fixture agent is needed.
+describe("CLI: the phase-index drift (auto-core plans/0053 D34; 0206)", () => {
+  test("run exits 1 naming transfer on a hand-edited index and writes nothing; plan refuses before any write naming transfer", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-drift-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
@@ -4444,29 +4446,29 @@ describe("CLI: the phase-index drift (auto-core plans/0053 D34)", () => {
       expect(stopped.code).toBe(1)
       expect(stopped.out).toContain(
         `⏸ the phase index of round R-01 (P01-analysis, P02-implement) differs from config phases ` +
-          `(P01-analysis, P02-implement, P03-test): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+          `(P01-analysis, P02-implement, P03-test): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
       )
       // run wrote nothing: the index keeps the hand edit, the phase directory stays.
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
       expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
       // Input on the drift route is refused before any write (D5): the
-      // re-synced tail must be reviewed before anything plans into it.
+      // refusal names the apply and the input's own resumption.
       const refused = await runCli(["plan", dir, "-p", "input"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain(
-        `the phase index of round R-01 differs from config phases: run opencode-auto plan ${dir} without input to re-sync it, commit the change, then pass the input.`,
+        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit ` +
+          `(run: opencode-auto transfer ${dir}), then pass the input.`,
       )
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
-      // plan without input re-syncs the tail and stops for review (exit 0),
-      // the change left uncommitted like any round setup. The re-synced index
-      // is the canonical render again, done ticks preserved.
-      const resync = await runCli(["plan", dir])
-      expect(resync.code).toBe(0)
-      expect(resync.out).toContain(
-        `✓ phase index of round R-01 re-synced to config phases (+ P03-test); ` +
-          `review docs/R-01/phases.md, commit, then re-run: opencode-auto plan ${dir}`,
+      // plan without input refuses the same way, nothing written — the
+      // uncommitted re-sync that taught "re-run: plan" is retired, and no
+      // dirty phases.md is left for the advance's own preflight.
+      const bare = await runCli(["plan", dir])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain(
+        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit — run: opencode-auto transfer ${dir}`,
       )
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n- [ ] P03 test\n")
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
       expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })

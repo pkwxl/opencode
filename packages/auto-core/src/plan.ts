@@ -89,8 +89,10 @@ type PlanPrelude = { type: "loop" } | PlanStop
 //   2. the round is complete → phased: refuse exit 1 naming transfer (the
 //      round close and the next opening are transfer's shapes 3/4); m mode
 //      never reaches here (its single phase stays open);
-//   3. the round's phase index drifted from the phases value → re-sync the
-//      unstarted tail (uncommitted), stop for review;
+//   3. the round's phase index drifted from the phases value → phased:
+//      refuse exit 1 before any write naming transfer as the reshape's
+//      apply (plans/0206 D2); m mode keeps the D34 uncommitted re-sync
+//      (unreachable — its tail is the single phase);
 //   4. the route is blocked → exit 1;
 //   5. an open step record → the loop finishes it first;
 //  14. --round → the assisted round-brief preparation stop: the AGENTS.md
@@ -362,34 +364,52 @@ export async function planPrelude(dir: string, opts: {
     if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${surface.plan(dir)}`])
     for (const line of executionLines(executed)) log(line)
   }
-  // Row 3 (plans/0053 D34): the phase index drifted from the phases value in
-  // force — config `phases` changed after the round was established, or (since
-  // plans/0101 D5) the released roadmap's line for this round moved. plan owns
-  // the re-sync (run refuses to, Q4): syncPhaseIndex replaces the unstarted
-  // tail, the change stays uncommitted like any round setup, and the stop asks
-  // for the review. The comparison value is the D5 resolution (the roadmap's
-  // line over config), so a roadmap-established round is never drift against
-  // config, and only a move of the ruling document reshapes the tail. Input
-  // is refused before the write (plans/0053 D5): the input would plan into a
-  // tail nobody has reviewed yet. A value the sync refuses (dropping a
-  // completed phase, a directory that holds work) surfaces as the error
-  // plannedPhaseUnits throws.
+  // Row 3 (plans/0053 D34; the phased arm re-ruled by plans/0206 D2): the
+  // phase index drifted from the phases value in force — config `phases`
+  // changed after the round was established, or (since plans/0101 D5) the
+  // released roadmap's line for this round moved. 0101 D4 made every phased
+  // state that is not the dispatch transfer's and D6 gave the reshape one
+  // apply — the advance's committed re-derivation — so the phased arm refuses
+  // before any write, naming transfer as the apply (the bare re-sync was the
+  // pre-0101 residue: a second writer whose uncommitted phases.md the
+  // advance's own preflight then stopped on, teaching a re-run that refused
+  // naming transfer). m mode keeps the D34 shape — syncPhaseIndex replaces
+  // the unstarted tail, the change stays uncommitted like any round setup,
+  // and the stop asks for the review — unreachable today (phaseTailDrift
+  // never reports an m-mode tail, the single phase), kept for that mode's
+  // own rhythm alone. The comparison value is the D5 resolution (the
+  // roadmap's line over config), so a roadmap-established round is never
+  // drift against config, and only a move of the ruling document reshapes
+  // the tail. Input is refused before the write (plans/0053 D5): the input
+  // would plan into a tail nobody has reviewed yet. A value the sync refuses
+  // (dropping a completed phase, a directory that holds work) surfaces as
+  // the error plannedPhaseUnits throws — the same guard the advance's
+  // re-derivation meets.
   // The resolve → drift → sync sequence is shared with transfer's
-  // rederiveTail (applyTailDrift); plan's D5 flag refusals ride the
-  // hook so input is still refused before any write, and the uncommitted
-  // review stop below stays plan's own.
+  // rederiveTail (applyTailDrift); plan's D5 flag refusals ride the hook so
+  // input is still refused before any write, and the uncommitted review stop
+  // below stays plan's own (the m-mode arm alone).
+  const driftAction = opts.input
+    ? "pass the input"
+    : opts.newTask !== undefined
+      ? "add the task again"
+      : opts.export !== undefined || opts.adopt !== undefined
+        ? "take the work order again"
+        : undefined
   const applied = await applyTailDrift(
     dir,
     round,
     opts.phases,
     (drift, from) =>
-      opts.input
-        ? driftRefusal(dir, drift, from, "input", "pass the input")
-        : opts.newTask !== undefined
-          ? driftRefusal(dir, drift, from, "--new-task", "add the task again")
-          : opts.export !== undefined || opts.adopt !== undefined
-            ? driftRefusal(dir, drift, from, "--export / --adopt", "take the work order again")
-            : undefined,
+      manual
+        ? opts.input
+          ? driftRefusal(dir, drift, from, "input", "pass the input")
+          : opts.newTask !== undefined
+            ? driftRefusal(dir, drift, from, "--new-task", "add the task again")
+            : opts.export !== undefined || opts.adopt !== undefined
+              ? driftRefusal(dir, drift, from, "--export / --adopt", "take the work order again")
+              : undefined
+        : transferDriftRefusal(dir, drift, from, driftAction),
   )
   if (applied.type === "blocked") return stop(1, [phaseFlowBlockedLine(applied.reason)])
   if (applied.type === "refused") return stop(1, [applied.line])
@@ -558,7 +578,16 @@ export async function planPrelude(dir: string, opts: {
       })
       return stop(0, [order])
     }
-    const adopted = await adoptUnit(dir, plan, task, { scanExempt: opts.scanExempt, idleMs: opts.idleMs, maxMs: opts.maxMs })
+    const adopted = await adoptUnit(dir, plan, task, {
+      scanExempt: opts.scanExempt,
+      idleMs: opts.idleMs,
+      maxMs: opts.maxMs,
+      // The channel's gate facts, the same two the export renders into the
+      // work order (plans/0206 D1): the adopt serves the test request under
+      // the condition it was taught under.
+      testByDriver: opts.testByDriver,
+      phase: phaseKey(route.phase),
+    })
     return adopted.ok ? stop(0, adopted.lines) : stop(adopted.code, adopted.lines)
   }
   if (!manual) {
@@ -713,7 +742,8 @@ export function driftPairs(drift: PhaseTailDrift): string {
   return pairs.join(", ")
 }
 
-// Row 3's stop line (D34): what the re-sync changed, then the same
+// Row 3's stop line (D34 — the m-mode arm alone since plans/0206 D2, phased
+// refusing naming transfer): what the re-sync changed, then the same
 // review-and-commit gate a round setup stops at. `from` names the authority
 // re-synced to — config phases, or the roadmap line that moved (plans/0101
 // D5).
@@ -726,7 +756,24 @@ function resyncLine(dir: string, drift: PhaseTailDrift, from: string): string {
   )
 }
 
-// Row 3's drift refusals (D5): the re-synced tail must be reviewed and
+// Row 3's phased refusal (plans/0101 D4/D6, enacted by plans/0206 D2): the
+// reshape's apply is the advance's — transfer re-derives the unstarted tail
+// on its own committed rewrite — so plan refuses before any write (the
+// uncommitted re-sync left phases.md dirty for the advance's preflight and
+// taught a re-run that refused naming transfer). `action` is the channel's
+// own resumption once the advance has re-derived (and, at a boundary,
+// constructed); absent for the bare run, whose next step is the advance
+// itself.
+function transferDriftRefusal(dir: string, drift: PhaseTailDrift, from: string, action?: string): string {
+  const surface = surfaceOf()
+  return (
+    `the phase index of round ${roundDirName(drift.round)} differs from ${from}: transfer re-derives the unstarted tail on its own commit` +
+    (action !== undefined ? ` (run: ${surface.transfer(dir)}), then ${action}.` : ` — run: ${surface.transfer(dir)}`)
+  )
+}
+
+// Row 3's drift refusals (D5 — the m-mode arm's ladder since plans/0206 D2,
+// unreachable today beside it): the re-synced tail must be reviewed and
 // committed before anything plans into it — one gate, three channels.
 // `flag` names the input form this route refuses (the person re-runs plan
 // without it to re-sync), `action` the channel's own resumption once the

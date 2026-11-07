@@ -33,7 +33,9 @@
 // Since plans/0101 D6 every construct path opens with the re-derivation of
 // the round's unstarted tail — the person's reshape applied — and the one
 // reshape channel is the roadmap line (plans/0137 retired `amend --phases`):
-// the reshape and its apply are one seam.
+// the reshape and its apply are one seam. Since plans/0206 D3 the mid-phase
+// refusal arm re-derives the same way ahead of its own stop, so the apply is
+// the advance's in every state, never plan's uncommitted sync.
 // The lock is taken here and held across the pre-checks and the loop (runAll
 // re-enters it per process), the plan --force-close precedent; the
 // clean-tree refusals are preflight's (the advance runs only on a committed
@@ -153,6 +155,15 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   if (route.type === "plan") return await advanceToReview(directory, round, opts)
   if (route.type === "execute") {
     if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, round, opts)
+    // The mid-phase arm re-derives first (plans/0206 D3, amending 0101 D6's
+    // deferral): the tail reshape's one apply is the advance's own committed
+    // rewrite wherever the state stops it, so the refusal plan and run name
+    // this command for is true mid-phase too — and a mid-phase run restart
+    // (run's drift stop → here) keeps its exit: the re-derivation clears the
+    // drift, the refusal names run, that run starts. No drift (the common
+    // mid-phase transfer) writes nothing — the arm refuses byte-identically.
+    const reshaped = await rederiveTail(directory, round, opts)
+    if (reshaped !== undefined) return reshaped
     log(nothingToAdvanceLine(directory, route.phase, route.plan.tasks.filter((task) => task.status !== "done").length))
     return 2
   }

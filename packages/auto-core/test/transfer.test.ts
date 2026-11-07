@@ -735,7 +735,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
-  test("mid-phase nothing reshapes: the advance refuses without re-deriving", async () => {
+  test("mid-phase re-derives first (0206 D3), then refuses naming run — the apply is the advance's in every state", async () => {
     const dir = await repo()
     const state = await (async () => {
       await establishRound(dir, { phases: "implement", round: 1 })
@@ -743,13 +743,24 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     })()
     await pendingTaskPhase(dir, "implement", state.phases[0]!)
     // A reshaping value arriving mid-phase (a moved roadmap line — the
-    // person's document has no hold): the advance still refuses without
-    // applying it — the reshape is the boundary's, the index untouched.
+    // person's document has no hold): the advance applies it on its own
+    // commit before its refusal — plan no longer re-syncs (0206 D2), so
+    // this arm is the mid-phase run restart's only exit; the refusal that
+    // follows names run, and that run starts, the drift cleared.
     const out = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
     expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P02-analysis)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("re-derived"))).toBe(false)
-    expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).not.toContain("analysis")
+    expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P02 analysis")
+    expect(await git(dir, "log", "--format=%s")).toContain("PLAN resync R-01 tail to config phases (+ P02-analysis)")
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    // The plain re-run without a further move: no drift, nothing re-derived,
+    // the refusal byte-identical (the P10 floor — a mid-phase transfer that
+    // always existed writes nothing).
+    const again = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    expect(again.code).toBe(2)
+    expect(again.lines.some((line) => line.includes("re-derived"))).toBe(false)
+    expect(again.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
   })
 
   test("started and ticked phases are immutable: a moved roadmap line that would drop them fails naming them, nothing written", async () => {

@@ -34,12 +34,13 @@ import { checklistProblems, scanSubtaskStates } from "./document/state"
 import { commitTree, headText, nestedRepoPrefixes, shortTitle, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, unitViolations } from "./git"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
+import type { PhaseKey } from "./phases/registry"
 import { renderWhole, type PhaseEntry } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { shellProfile } from "./shell"
 import { scriptTmpDir } from "./script"
 import { autoSwitches } from "./switches"
-import { latestTestSeq, resolveTestScript, runTestScript, type TestRun } from "./testrun"
+import { dropDeadTestMarker, latestTestSeq, resolveTestScript, runTestScript, type TestRun } from "./testrun"
 import { markDone, prerequisites, promptViews, subtasks, type Plan, type Task } from "./tasks"
 
 // The render inputs that come from the run's config, exactly as any render
@@ -118,15 +119,26 @@ type AdoptOutcome = { ok: boolean; code: 0 | 1 | 2; lines: string[] }
 // The adopt step: the driver half for a unit a standalone session executed.
 // Order (plans/0076 §2.3):
 //   1. the test handover first — tmp/test.sh is the session's request, and it
-//      is consumed and executed whatever the validation finds: a blocked
+//      is consumed and served whatever the validation finds: a blocked
 //      validation must not strand the session's last request, and a leftover
 //      marker would be misread by the next driver run as a live session's
-//      request (testrun.ts's own warning). The exit code and the merged
-//      output path are reported back — the verdict belongs to the session
-//      that reads the output, never to the driver (script.ts's own rule).
-//      tmp/ is gitignored, so this writes nothing the commit below would
-//      sweep; "a failing validation blocks without writes" is about the
-//      driver's state writes, which all sit behind the validation gate.
+//      request (testrun.ts's own warning). Serving goes through the channel's
+//      own derived condition (plans/0083 D9, enacted for the adopt step by
+//      plans/0206 D1): the config flag AND the phase's code work — the same
+//      two facts the export rendered into the work order, so the channel the
+//      session was taught and the channel the adopt serves are one. A marker
+//      left where the channel is off is consumed and surfaced through the
+//      unservable-request seam (plans/0142 D1), never executed — an
+//      agent-authored script must not run under the driver's process,
+//      outside the agent host's permission posture, in exactly the
+//      configurations where the project declared the driver runs none; the ⚠
+//      line rides the outcome lines like the executed handover's report.
+//      Under a serving channel the exit code and the merged output path are
+//      reported back — the verdict belongs to the session that reads the
+//      output, never to the driver (script.ts's own rule). tmp/ is
+//      gitignored, so this writes nothing the commit below would sweep; "a
+//      failing validation blocks without writes" is about the driver's state
+//      writes, which all sit behind the validation gate.
 //   2. validation, all checks before any driver write:
 //      - state-file grammar through unitProblems: the task level is
 //        loadPlan's own throw (the caller catches it); the subtask level is
@@ -153,36 +165,46 @@ type AdoptOutcome = { ok: boolean; code: 0 | 1 | 2; lines: string[] }
 //      commit range must be all driver commits.
 // The baseline (the ledger snapshot) is re-derived here, never trusted from
 // the export: everything the session wrote sits in baseline..worktree,
-// because the constitution forbids it to commit.
+// because the constitution forbids it to commit. The gate facts (the same
+// two the export renders, plans/0206 D1): the config's testByDriver and the
+// route's phase — a phase-less call resolves onto implement, the no-phase
+// convention runExecSession itself uses.
 export async function adoptUnit(
   dir: string,
   plan: Plan,
   task: Task,
-  opts: { scanExempt?: readonly string[]; idleMs?: number; maxMs?: number } = {},
+  opts: { scanExempt?: readonly string[]; idleMs?: number; maxMs?: number; testByDriver?: boolean; phase?: PhaseKey } = {},
 ): Promise<AdoptOutcome> {
   const { bin } = shellProfile()
   const baseline = await unitBaseline(dir)
-  // 1. The test handover (the idle loop's replacement).
+  // 1. The test handover (the idle loop's replacement) under the channel's
+  // gate: consumed-and-surfaced where the channel is off, executed where it
+  // serves.
   const testLines: string[] = []
   const tmp = scriptTmpDir(dir)
   if (await Bun.file(join(tmp, "test.sh")).exists()) {
-    const test: TestRun = {
-      dir,
-      tmp,
-      handoffFile: "",
-      handover: false,
-      limit: 0,
-      seq: await latestTestSeq(tmp),
-      task,
-      unit: task.id,
-      subject: `${task.id} exec ${shortTitle(task.title)}`,
-      label: task.id,
-      handovers: 0,
-      startUsed: 0,
+    const dropped = await dropDeadTestMarker(dir, { testByDriver: opts.testByDriver, phase: opts.phase }, task.id)
+    if (dropped !== undefined) {
+      testLines.push(dropped.line)
+    } else {
+      const test: TestRun = {
+        dir,
+        tmp,
+        handoffFile: "",
+        handover: false,
+        limit: 0,
+        seq: await latestTestSeq(tmp),
+        task,
+        unit: task.id,
+        subject: `${task.id} exec ${shortTitle(task.title)}`,
+        label: task.id,
+        handovers: 0,
+        startUsed: 0,
+      }
+      const pending = await resolveTestScript(test)
+      const info = await runTestScript(test, { idleMs: opts.idleMs, maxMs: opts.maxMs }, pending.script, pending.seq, pending.refused)
+      testLines.push(`⚙ test handover executed (exit code ${info.code}); the merged output is in ${info.out} — the standalone session judges the result, not the driver`)
     }
-    const pending = await resolveTestScript(test)
-    const info = await runTestScript(test, { idleMs: opts.idleMs, maxMs: opts.maxMs }, pending.script, pending.seq, pending.refused)
-    testLines.push(`⚙ test handover executed (exit code ${info.code}); the merged output is in ${info.out} — the standalone session judges the result, not the driver`)
   }
   // 2. Validation (a failure blocks with no driver write).
   const problems: string[] = []
