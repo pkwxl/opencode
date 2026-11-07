@@ -6,6 +6,7 @@
 // suspension — plus the two new templates' protocol anchors and the D13
 // collect lint extracted into document/roles.ts.
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -333,6 +334,29 @@ describe("the 0082 templates (_mode-brief, diagnose)", () => {
     expect(brief).toContain("planning-input")
     expect(brief).toContain("only the gate re-running clears it")
     expect(brief).not.toMatch(/\{\{|\}\}/)
+  })
+
+  test("the exit-code line states the full frozen vocabulary — every code of the owner's line (AGENTS.md), 3's pause and 143/129's supervisor stop named (0165-162, ruling 0216 D3)", () => {
+    const brief = renderModeBrief()
+    // The vocabulary's single owner: this package's AGENTS.md operational
+    // exit-codes line (P13). The ratchet: a code added to the frozen set
+    // goes red here until the brief carries it — vocabulary, template and
+    // pin move in one change.
+    const owner = readFileSync(join(import.meta.dir, "..", "AGENTS.md"), "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("- Exit codes (P13):"))
+    expect(owner, "AGENTS.md's operational exit-codes line — the vocabulary's single owner").toBeDefined()
+    const codes = [...owner!.matchAll(/`(\d+)`/g)].map((m) => m[1]!)
+    expect(codes).toEqual(["0", "1", "2", "3", "130", "143", "129"])
+    for (const code of codes) {
+      expect(brief, `exit code ${code} of the frozen set`).toMatch(new RegExp(`\\s${code}\\s`))
+    }
+    // The finding's own subject: pre-fix the brief named 0/1/2/130 only, so
+    // a diagnosis session could misclassify a deliberate paused run as an
+    // anomalous block.
+    expect(brief).toContain("3 a deliberate `/exit` pause at a safe boundary (re-run to recover)")
+    expect(brief).toContain("143 SIGTERM or 129 SIGHUP, the supervisor's stop")
+    expect(brief).toContain("2 blocked or reverted to pending for human")
   })
 
   test("the diagnosis prompt carries the mode brief, the dossier and the strict format; its read-only charter line is the discipline (D4)", () => {

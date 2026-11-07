@@ -23,7 +23,7 @@ Constraints:
 2. The `todo.md` → `done.md` renames and the index ticks are maintained by DRIVER alone; do not create, rename or delete `docs/T-002/todo.md` or `done.md`.
 3. Do not edit docs/T-002/gaps.md or docs/T-002/report.md, and do not write them — both belong to the verification channel alone; the next verification round removes whatever sits at those names and writes them from scratch.
 4. A decision of your own must leave a record in the relevant document or code comment: a call that should have been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other call an `AUTO-DECISION: <decision> (<reason>)` line.
-5. Do not run git commit or any commit command — DRIVER performs the close-out commits once the re-verification passes.
+5. Do not run git commit or any commit command — DRIVER commits each finished fix session's batch at the session's own end (a handover included), before the fresh re-verification judges the round and decides the task's completion.
 6. Every Markdown document you create (or rewrite in full) ends, once finished, with a line holding only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow).
 
 End the session as soon as the gaps are closed and re-checked, so the re-verification can start from scratch. Your final reply goes back to DRIVER — keep it to a few lines (which gaps you closed, where); the details live in the files you wrote.

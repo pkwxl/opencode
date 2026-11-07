@@ -96,7 +96,7 @@ Do not issue the same call again before you have written these out.
    - Split by acceptance dimension (functional conformance, documentation completeness, environment and runtime, regression and the like),
      one item per dimension;
    - Each item produces one verification record (how it was verified, the evidence, the conclusion), written to its own file under docs/;
-   - Verify and record only, do not fix anything (a gap is reported through the task report's result line — `Result: FAIL` stops the run for a person to plan the fix);
+   - Verify and record only, do not fix anything (a gap is reported through `Result: FAIL` ending the verification's gap list — DRIVER answers it with its own bounded fix loop, and only two consecutive fix rounds closing no gap stop the run for a person);
 
 ### k knowledge extraction
 

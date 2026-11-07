@@ -19,8 +19,10 @@ them, so a remediation can be proposed against the real mechanics instead of gue
 
 ## Gates and exit codes
 
-The run exits 0 complete / 1 usage or environment error / 2 blocked for human attention / 130 force-quit.
-The gates that can block: the render gate (a prompt violating the intent's declared asserts), plan
+The run exits 0 complete / 1 usage or environment error / 2 blocked or reverted to pending for human
+attention / 3 a deliberate `/exit` pause at a safe boundary (re-run to recover) / 130 force-quit by two
+consecutive Ctrl+C / 143 SIGTERM or 129 SIGHUP, the supervisor's stop through the same force-terminate
+cleanup. The gates that can block: the render gate (a prompt violating the intent's declared asserts), plan
 verification (a composed planning prompt contradicting the intent charter `### verify-plan`), the survey
 clarification gate (open `Fork:` questions), the round-close gate, the verdict/acceptance gates, and the
 SHA baseline at unit close-out. A blocked run keeps the tree committed; the person resolves the cause and

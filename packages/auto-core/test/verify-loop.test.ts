@@ -543,7 +543,7 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
-  test("a fix session's self-directed handover (plans/0130 D2): a fresh Status: continue document under the wall hands the round over, the continuation reads it, and the round commits once", async () => {
+  test("a fix session's self-directed handover (plans/0130 D2): a fresh Status: continue document under the wall hands the round over, the continuation reads it, and each session's batch commits at its own boundary", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
@@ -580,6 +580,12 @@ describe("the verification loop (0083 D1–D7)", () => {
       expect(promptText(calls.prompts[1]!)).toContain("Context-budget protocol")
       expect(promptText(calls.prompts[2]!)).toContain("The previous fix session ended with a context-budget handover")
       expect(promptText(calls.prompts[2]!)).toContain("docs/T-001/handoff.md")
+      // The fix prompt teaches the durability boundary the log below shows
+      // (plans/0148 D1, the copy half landed by 0216 D1): each finished
+      // session's batch commits at its own end — never held for the round's
+      // re-verification to pass.
+      expect(promptText(calls.prompts[1]!)).toContain("DRIVER commits each finished fix session's batch at the session's own end")
+      expect(promptText(calls.prompts[1]!)).not.toContain("once the re-verification passes")
       // The handover split the round's sessions, and each session's batch is
       // durable at its own boundary (plans/0148 D1): the handing-over session
       // commits `fix 1.1` carrying the handover document with the work it

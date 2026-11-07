@@ -45,7 +45,7 @@ This session completes the task-background understanding and the subtask decompo
    - Split by acceptance dimension (functional conformance, documentation completeness, environment and runtime, regression and the like),
      one item per dimension;
    - Each item produces one verification record (how it was verified, the evidence, the conclusion), written to its own file under docs/;
-   - Verify and record only, do not fix anything (a gap is reported through the task report's result line — `Result: FAIL` stops the run for a person to plan the fix);
+   - Verify and record only, do not fix anything (a gap is reported through `Result: FAIL` ending the verification's gap list — DRIVER answers it with its own bounded fix loop, and only two consecutive fix rounds closing no gap stop the run for a person);
 5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each item opens with a
    short title and a colon (the other subtask sessions see only the titles of the items that are not theirs); the description must be
    self-contained (the executing session can finish the item from it alone, plus the item's todo.md, the shared-context

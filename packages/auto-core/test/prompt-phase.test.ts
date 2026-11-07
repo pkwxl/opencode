@@ -77,6 +77,21 @@ describe("renderFormulationTodo, phased (the formulation task's single input, pl
     expect(phasePlan({ phase: L("k") })).toContain("Split by knowledge artifact")
   })
 
+  test("the v acceptance duty teaches the lifecycle the driver runs (0165-161, ruling 0216 D2): FAIL opens DRIVER's bounded fix loop, only its exhausted budget stops for the person", () => {
+    const text = phasePlan({ phase: L("v") })
+    expect(text).toContain("Verify and record only, do not fix anything")
+    // The FAIL sentence names the gap list — on FAIL no report is written at
+    // all — and the bounded fix loop the wrap-up protocol itself states
+    // (plans/0083 D5, 0146 D2/D3, 0198 D1): one voice for one protocol.
+    expect(text).toContain("`Result: FAIL` ending the verification's gap list")
+    expect(text).toContain("DRIVER answers it with its own bounded fix loop")
+    expect(text).toContain("only two consecutive fix rounds closing no gap stop the run for a person")
+    // The retired lifecycle — a person stop at every FAIL, the gap reported
+    // through "the task report's result line" — is gone from the duty.
+    expect(text).not.toContain("stops the run for a person to plan the fix")
+    expect(text).not.toContain("the task report's result line")
+  })
+
   test("planning input (plans/0053 D11): its block follows the round brief and precedes the mode preamble; absent or blank, nothing renders", () => {
     const inputPath = "docs/R-01/P02-implement/plan-input.md"
     const text = phasePlan({ phase: L("m"), round: "Goal: ship the parser.", input: "Port the lexer first.\n", inputPath, mode: migrate })
